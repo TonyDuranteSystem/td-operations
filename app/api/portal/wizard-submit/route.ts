@@ -212,161 +212,180 @@ export async function POST(req: NextRequest) {
       submissionId = (sub as Record<string, unknown> | null)?.id as string || null
     }
 
-    // ─── 4b. BANKING WIZARD — PDF + Drive + Notifications (inline, no background job) ───
+    // ─── 4b. BANKING WIZARD — fire-and-forget background work, return immediately ───
+    // wizard_progress is already saved as 'submitted' in step 2. Return success
+    // to the client right away — Drive PDF, notifications, CRM task, and SD
+    // stage advance all run in the background. This prevents false-negative
+    // "Invio fallito" errors caused by slow Drive API calls or connection drops
+    // while the server was still processing (data was already persisted).
     if (wizard_type === 'banking_payset' || wizard_type === 'banking_relay') {
       const provider = wizard_type === 'banking_relay' ? 'Relay (USD)' : 'Payset (EUR)'
+      const capturedData = data
+      const capturedAccountId = account_id
+      const capturedContactId = contact_id
+      const capturedWizardType = wizard_type
+      const capturedProgressId = progress_id
+      const capturedCompanyName = companyName
 
-      // Get account Drive folder
-      let driveFolderId: string | null = null
-      let compName = companyName
-      if (account_id) {
-        const { data: acct } = await supabaseAdmin
-          .from('accounts')
-          .select('drive_folder_id, company_name')
-          .eq('id', account_id)
-          .single()
-        driveFolderId = acct?.drive_folder_id ?? null
-        if (!compName) compName = acct?.company_name ?? ''
-      }
-
-      // Generate PDF + save to Drive
-      if (driveFolderId) {
-        try {
-          const { saveFormToDrive } = await import('@/lib/form-to-drive')
-          const uploadPaths = extractUploadPaths(data)
-          const result = await saveFormToDrive(wizard_type, data, uploadPaths, driveFolderId, {
-            token: submissionToken || wizard_type,
-            submittedAt: new Date().toISOString(),
-            companyName: compName,
-          })
-
-          // Create document record for the summary PDF
-          if (result.summaryFileId) {
-            const slug = compName.replace(/\s+/g, '_')
-            await supabaseAdmin.from('documents').insert({
-              file_name: `Banking_${wizard_type === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
-              drive_file_id: result.summaryFileId,
-              document_type_name: 'Banking Application',
-              category: 4, // Banking
-              confidence: 'high',
-              status: 'classified',
-              account_id: account_id || null,
-              contact_id: contact_id || null,
-            })
+      // Fire-and-forget: Drive PDF, portal chat, CRM task, SD advance, action_log
+      ;(async () => {
+        // Get account Drive folder — wrapped so any throw stays in background
+        let driveFolderId: string | null = null
+        let compName = capturedCompanyName
+        if (capturedAccountId) {
+          try {
+            const { data: acct } = await supabaseAdmin
+              .from('accounts')
+              .select('drive_folder_id, company_name')
+              .eq('id', capturedAccountId)
+              .single()
+            driveFolderId = acct?.drive_folder_id ?? null
+            if (!compName) compName = acct?.company_name ?? ''
+          } catch (e) {
+            console.error('[wizard-submit] Banking accounts query error:', e)
           }
-        } catch (e) {
-          console.error('[wizard-submit] Banking PDF/Drive error:', e)
         }
-      }
 
-      // Portal chat notification — message to the account
-      if (account_id) {
-        try {
-          await supabaseAdmin.from('portal_messages').insert({
-            account_id,
-            sender_type: 'system',
-            sender_id: null,
-            message: `Banking application submitted: ${provider}. Our team will review and submit it on your behalf.`,
-          })
-        } catch (e) {
-          console.error('[wizard-submit] Chat notification error:', e)
-        }
-      }
-
-      // CRM task for staff — idempotent: skip if a task for this provider already exists
-      if (account_id) {
-        try {
-          const taskTitle = `Review banking application (${provider}) — ${compName}`
-          const { data: existingTask } = await supabaseAdmin
-            .from('tasks')
-            .select('id')
-            .eq('account_id', account_id)
-            .eq('task_title', taskTitle)
-            .neq('status', 'Done')
-            .limit(1)
-            .maybeSingle()
-
-          if (!existingTask) {
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            await supabaseAdmin.from('tasks').insert({
-              task_title: taskTitle,
-              assigned_to: 'Luca',
-              status: 'To Do',
-              priority: 'High',
-              category: 'KYC',
-              description: `Client submitted ${provider} banking application via portal wizard. Review the data and submit to the provider.`,
-              account_id,
-              created_by: 'System',
+        // Generate PDF + save to Drive
+        if (driveFolderId) {
+          try {
+            const { saveFormToDrive } = await import('@/lib/form-to-drive')
+            const uploadPaths = extractUploadPaths(capturedData)
+            const result = await saveFormToDrive(capturedWizardType, capturedData, uploadPaths, driveFolderId, {
+              token: submissionToken || capturedWizardType,
+              submittedAt: new Date().toISOString(),
+              companyName: compName,
             })
+
+            // Create document record for the summary PDF
+            if (result.summaryFileId) {
+              const slug = compName.replace(/\s+/g, '_')
+              await supabaseAdmin.from('documents').insert({
+                file_name: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
+                drive_file_id: result.summaryFileId,
+                document_type_name: 'Banking Application',
+                category: 4, // Banking
+                confidence: 'high',
+                status: 'classified',
+                account_id: capturedAccountId || null,
+                contact_id: capturedContactId || null,
+              })
+            }
+          } catch (e) {
+            console.error('[wizard-submit] Banking PDF/Drive error:', e)
           }
-        } catch (e) {
-          console.error('[wizard-submit] Task creation error:', e)
         }
-      }
 
-      // Advance Banking Fintech service delivery: Data Collection → Application Submitted
-      if (account_id) {
-        try {
-          const { data: sd } = await supabaseAdmin
-            .from('service_deliveries')
-            .select('id, stage, stage_history')
-            .eq('account_id', account_id)
-            .eq('service_type', 'Banking Fintech')
-            .eq('status', 'active')
-            .limit(1)
-            .maybeSingle()
-
-          if (sd && sd.stage === 'Data Collection') {
-            const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
-            history.push({
-              event: 'banking_wizard_submitted',
-              at: new Date().toISOString(),
-              note: `${provider} banking form submitted via portal wizard`,
+        // Portal chat notification — message to the account
+        if (capturedAccountId) {
+          try {
+            await supabaseAdmin.from('portal_messages').insert({
+              account_id: capturedAccountId,
+              sender_type: 'system',
+              sender_id: null,
+              message: `Banking application submitted: ${provider}. Our team will review and submit it on your behalf.`,
             })
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            await supabaseAdmin
+          } catch (e) {
+            console.error('[wizard-submit] Chat notification error:', e)
+          }
+        }
+
+        // CRM task for staff — idempotent: skip if a task for this provider already exists
+        if (capturedAccountId) {
+          try {
+            const taskTitle = `Review banking application (${provider}) — ${compName}`
+            const { data: existingTask } = await supabaseAdmin
+              .from('tasks')
+              .select('id')
+              .eq('account_id', capturedAccountId)
+              .eq('task_title', taskTitle)
+              .neq('status', 'Done')
+              .limit(1)
+              .maybeSingle()
+
+            if (!existingTask) {
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+              await supabaseAdmin.from('tasks').insert({
+                task_title: taskTitle,
+                assigned_to: 'Luca',
+                status: 'To Do',
+                priority: 'High',
+                category: 'KYC',
+                description: `Client submitted ${provider} banking application via portal wizard. Review the data and submit to the provider.`,
+                account_id: capturedAccountId,
+                created_by: 'System',
+              })
+            }
+          } catch (e) {
+            console.error('[wizard-submit] Task creation error:', e)
+          }
+        }
+
+        // Advance Banking Fintech service delivery: Data Collection → Application Submitted
+        if (capturedAccountId) {
+          try {
+            const { data: sd } = await supabaseAdmin
               .from('service_deliveries')
-              .update({ stage: 'Application Submitted', stage_history: history, updated_at: new Date().toISOString() })
-              .eq('id', sd.id)
+              .select('id, stage, stage_history')
+              .eq('account_id', capturedAccountId)
+              .eq('service_type', 'Banking Fintech')
+              .eq('status', 'active')
+              .limit(1)
+              .maybeSingle()
+
+            if (sd && sd.stage === 'Data Collection') {
+              const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
+              history.push({
+                event: 'banking_wizard_submitted',
+                at: new Date().toISOString(),
+                note: `${provider} banking form submitted via portal wizard`,
+              })
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+              await supabaseAdmin
+                .from('service_deliveries')
+                .update({ stage: 'Application Submitted', stage_history: history, updated_at: new Date().toISOString() })
+                .eq('id', sd.id)
+            }
+          } catch (e) {
+            console.error('[wizard-submit] SD advance error:', e)
           }
-        } catch (e) {
-          console.error('[wizard-submit] SD advance error:', e)
         }
-      }
 
-      // Update banking_submissions record so MCP tools see current data
-      if (account_id) {
+        // Update banking_submissions record so MCP tools see current data
+        if (capturedAccountId) {
+          try {
+            const providerSlug = capturedWizardType === 'banking_relay' ? 'relay' : 'payset'
+            await supabaseAdmin
+              .from('banking_submissions')
+              .update({
+                submitted_data: capturedData,
+                status: 'completed',
+                updated_at: new Date().toISOString(),
+              })
+              .eq('account_id', capturedAccountId)
+              .eq('provider', providerSlug)
+          } catch (e) {
+            console.error('[wizard-submit] banking_submissions update error:', e)
+          }
+        }
+
+        // Log to action_log for CRM Recent Activity feed
         try {
-          const providerSlug = wizard_type === 'banking_relay' ? 'relay' : 'payset'
-          await supabaseAdmin
-            .from('banking_submissions')
-            .update({
-              submitted_data: data,
-              status: 'completed',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('account_id', account_id)
-            .eq('provider', providerSlug)
+          await supabaseAdmin.from('action_log').insert({
+            actor: 'portal_wizard',
+            action_type: 'form_submitted',
+            table_name: 'wizard_progress',
+            record_id: capturedProgressId || null,
+            account_id: capturedAccountId || null,
+            summary: `Banking application submitted: ${provider} — ${compName}`,
+            details: { wizard_type: capturedWizardType, provider },
+          })
         } catch (e) {
-          console.error('[wizard-submit] banking_submissions update error:', e)
+          console.error('[wizard-submit] action_log error:', e)
         }
-      }
+      })().catch(err => console.error('[wizard-submit] Banking background task error:', err))
 
-      // Log to action_log for CRM Recent Activity feed
-      try {
-        await supabaseAdmin.from('action_log').insert({
-          actor: 'portal_wizard',
-          action_type: 'form_submitted',
-          table_name: 'wizard_progress',
-          record_id: progress_id || null,
-          account_id: account_id || null,
-          summary: `Banking application submitted: ${provider} — ${compName}`,
-          details: { wizard_type, provider },
-        })
-      } catch (e) {
-        console.error('[wizard-submit] action_log error:', e)
-      }
-
+      // Return success immediately — data is already persisted in wizard_progress (step 2)
       return NextResponse.json({ success: true, provider: wizard_type })
     }
 

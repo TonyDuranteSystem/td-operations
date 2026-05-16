@@ -49,6 +49,13 @@ interface InvoiceDetail {
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
   payment_methods: PaymentMethod[]
+  seller: {
+    company_name: string | null
+    invoice_logo_url: string | null
+    ein_number: string | null
+    state_of_formation: string | null
+    address: string | null
+  } | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -474,6 +481,45 @@ export default function InvoiceDetailPage() {
 
       {/* Invoice Card */}
       <div className="bg-white rounded-xl border shadow-sm">
+        {/* Seller header — mirrors PDF layout: logo + company name + address left, invoice ref right */}
+        {invoice.seller && (
+          <div className="p-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 border-b bg-zinc-50 rounded-t-xl">
+            <div className="flex items-start gap-4">
+              {invoice.seller.invoice_logo_url && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={invoice.seller.invoice_logo_url}
+                  alt="Company logo"
+                  className="h-12 w-auto object-contain shrink-0"
+                />
+              )}
+              <div>
+                <p className="text-lg font-bold text-blue-600 leading-tight">
+                  {invoice.seller.company_name ?? '—'}
+                </p>
+                {invoice.seller.address && (
+                  <p className="text-xs text-zinc-500 mt-0.5">{invoice.seller.address}</p>
+                )}
+                {(invoice.seller.state_of_formation || invoice.seller.ein_number) && (
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {[
+                      invoice.seller.state_of_formation,
+                      invoice.seller.ein_number ? `EIN: ${invoice.seller.ein_number}` : null,
+                    ].filter(Boolean).join('  ·  ')}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="sm:text-right shrink-0">
+              <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Invoice</p>
+              <p className="text-base font-semibold text-zinc-900">{invoice.invoice_number}</p>
+              <span className={`inline-block text-xs font-medium px-2.5 py-0.5 rounded-full mt-1 ${STATUS_COLORS[invoice.status] ?? 'bg-zinc-100 text-zinc-700'}`}>
+                {invoice.status}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Customer + Dates */}
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-6 border-b">
           <div>
