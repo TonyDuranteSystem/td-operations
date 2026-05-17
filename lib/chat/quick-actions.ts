@@ -20,6 +20,7 @@
 
 import type { CrmRole } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { type PrimitiveHandler, validatePrimitiveHandler } from "@/lib/chat/handler-primitives"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -38,10 +39,13 @@ export interface QuickActionMetadata {
   requires_all?: string[]
   /** At least ONE listed token must be present (OR). Defaults to []. */
   requires_any?: string[]
-  /** Slug of the client-side handler. */
-  handler: string
-  /** Free-form params passed to the handler. */
-  handler_params?: Record<string, unknown>
+  /**
+   * Discriminated-union handler. The `kind` selects a primitive verb;
+   * remaining fields are kind-specific (modal_id+modal_params, method+url+body,
+   * url+target, action+params). See lib/chat/handler-primitives.ts for the
+   * full vocabulary and the Principle of Flexibility in the master plan.
+   */
+  handler: PrimitiveHandler
 }
 
 export interface QuickAction {
@@ -139,7 +143,13 @@ export function groupForRender(
  * (defense in depth — a single malformed row never crashes the whole menu).
  *
  * Required keys: surface (string), order (number), icon (string),
- * handler (string).
+ * handler (object — discriminated union, validated by validatePrimitiveHandler).
+ *
+ * The handler must reference a primitive kind that is BOTH known and
+ * IMPLEMENTED today (see IMPLEMENTED_PRIMITIVES in handler-primitives.ts).
+ * A catalog row referencing a documented-but-not-yet-shipped primitive
+ * (e.g. api_call before its first consumer) is rejected here so it never
+ * reaches the UI in a half-working state.
  */
 export function validateMetadata(raw: unknown): QuickActionMetadata | null {
   if (!raw || typeof raw !== "object") return null
@@ -148,7 +158,9 @@ export function validateMetadata(raw: unknown): QuickActionMetadata | null {
   if (typeof m.surface !== "string" || m.surface.length === 0) return null
   if (typeof m.order !== "number" || !Number.isFinite(m.order)) return null
   if (typeof m.icon !== "string" || m.icon.length === 0) return null
-  if (typeof m.handler !== "string" || m.handler.length === 0) return null
+
+  const handler = validatePrimitiveHandler(m.handler)
+  if (!handler) return null
 
   // Optional fields — only validate when present.
   if (m.requires_all !== undefined && !isStringArray(m.requires_all)) return null
@@ -157,11 +169,8 @@ export function validateMetadata(raw: unknown): QuickActionMetadata | null {
     const p = m.permission as Record<string, unknown> | null
     if (p && p.role_in !== undefined && !isStringArray(p.role_in)) return null
   }
-  if (m.handler_params !== undefined && (m.handler_params === null || typeof m.handler_params !== "object")) {
-    return null
-  }
 
-  return m as unknown as QuickActionMetadata
+  return { ...m, handler } as unknown as QuickActionMetadata
 }
 
 function isStringArray(v: unknown): v is string[] {
