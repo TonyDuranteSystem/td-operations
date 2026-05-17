@@ -18,6 +18,30 @@ export function filterActionsByRole(
 }
 
 /**
+ * Filter actions by the current SD stage (Slice 9). Actions without
+ * `visible_when.sd_stage` are always visible (backwards-compatible).
+ * When `visible_when.sd_stage` is set, the action is visible only if the
+ * current stage matches (single string match, or array-of-strings any-of).
+ *
+ * If currentSdStage is null/undefined (e.g. the workflow task doesn't have a
+ * linked SD yet, or task_meta.sd_stage hasn't been seeded), actions with
+ * sd_stage predicates are HIDDEN — defensive default. Actions without
+ * predicates remain visible regardless.
+ */
+export function filterActionsByStage(
+  actions: WorkflowActionDefinition[],
+  currentSdStage: string | null | undefined,
+): WorkflowActionDefinition[] {
+  return actions.filter((a) => {
+    const required = a.visible_when?.sd_stage
+    if (required === undefined) return true // no predicate → always visible
+    if (!currentSdStage) return false // predicate set but stage unknown → hide
+    if (typeof required === "string") return required === currentSdStage
+    return required.includes(currentSdStage)
+  })
+}
+
+/**
  * Split a list of actions into a primary (explicit primary if present, else
  * the first) and the rest.
  */

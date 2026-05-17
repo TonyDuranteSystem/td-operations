@@ -325,6 +325,47 @@ export async function createSD(
     throw new Error("[createSD] insert returned null — unexpected dbWrite behavior")
   }
 
+  // ─── Slice 9: dispatch sd_created workflows ──────────────────────────
+  //
+  // Auto-spawn workflow tasks for SD-lifecycle workflows (closure_progress,
+  // formation_progress, onboarding_progress) whose triggered_by predicate
+  // matches the new SD's service_type. Fire-and-forget with try/catch so any
+  // dispatcher failure does NOT roll back the SD insert — createSD must
+  // remain robust for callers that don't care about workflows.
+  //
+  // The dispatcher's own idempotency check (task_meta.service_delivery_id)
+  // ensures retries can't spawn duplicate workflow tasks. Service types
+  // with no matching task_workflows row return no_trigger_match (silent).
+  try {
+    const { dispatchWorkflowForSdCreated } = await import(
+      "@/lib/tasks/dispatch-workflow-for-event"
+    )
+    await dispatchWorkflowForSdCreated({
+      delivery: {
+        id: row.id,
+        service_type: row.service_type,
+        stage: row.stage,
+        account_id: row.account_id,
+        contact_id: row.contact_id,
+      },
+      build_task_meta: async () => ({
+        service_delivery_id: row.id,
+        account_id: row.account_id,
+        contact_id: row.contact_id,
+        sd_stage: row.stage,
+        service_type: row.service_type,
+      }),
+      task_title: `${row.service_type} — ${row.service_name || row.service_type}`,
+      description: `Service delivery created: ${row.service_type}. Use the action buttons below to advance the lifecycle.`,
+      actor: "createSD:auto-spawn",
+    })
+  } catch (err) {
+    console.warn(
+      `[createSD] workflow dispatcher failed (non-fatal) for SD ${row.id} (${row.service_type}):`,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+
   return {
     id: row.id,
     service_type: row.service_type,

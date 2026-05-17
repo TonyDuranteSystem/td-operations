@@ -45,6 +45,28 @@ const ConfirmSchema = z.object({
   summary: z.string().optional(),
 })
 
+/**
+ * Optional visibility predicate for an action button. When set, the TaskCard
+ * only renders this action when the predicate matches the task's current
+ * state. Slice 9 introduces this for multi-stage SD-lifecycle workflows
+ * (formation_progress, closure_progress, onboarding_progress) so Luca sees
+ * only the buttons relevant to the SD's current stage.
+ *
+ * Today the only supported predicate is `sd_stage` (matches against
+ * task_meta.sd_stage, which the dispatcher seeds at spawn and the
+ * chain.advance_sd_stage handler updates after each transition). Forward-
+ * compatible: add new keys for new predicates (e.g. workflow_state, role,
+ * task_meta_field) — actions without `visible_when` stay always-visible
+ * (backwards-compatible).
+ *
+ * Accepted shapes for sd_stage:
+ *   { sd_stage: "EIN Application" }            — single stage match
+ *   { sd_stage: ["State Filing", "EIN Application"] }  — any of the listed
+ */
+const VisibleWhenSchema = z.object({
+  sd_stage: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+})
+
 export const WorkflowActionDefinitionSchema = z.object({
   slug: z.string().min(1),
   label_admin: z.string().min(1),
@@ -56,6 +78,7 @@ export const WorkflowActionDefinitionSchema = z.object({
   handler_params: z.record(z.string(), z.unknown()).optional(),
   requires_input: RequiresInputSchema.optional(),
   confirm: ConfirmSchema.optional(),
+  visible_when: VisibleWhenSchema.optional(),
   on_success_status: TaskStatusSchema,
   on_success_meta: z.record(z.string(), z.unknown()).optional(),
 })

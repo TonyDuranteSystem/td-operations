@@ -117,6 +117,17 @@ export interface WorkflowActionDefinition {
     | WorkflowInputFieldSpec
     | { fields: WorkflowInputFieldSpec[] }
   confirm?: { preview_template?: string; summary?: string }
+  /**
+   * Optional visibility predicate (Slice 9). When set, TaskCard only renders
+   * this action when the predicate matches the task's current state.
+   * - `sd_stage`: matches against task_meta.sd_stage (seeded by dispatcher at
+   *   spawn, updated by chain.advance_sd_stage after each transition).
+   *   Accepts a single stage or an array (matches any).
+   * Actions without `visible_when` are always visible (backwards-compatible).
+   */
+  visible_when?: {
+    sd_stage?: string | string[]
+  }
   /** Coarse status to set when this action succeeds (one of the 5 enum values). */
   on_success_status: TaskStatus
   /** Per Decision A: declarative writes to task_meta on success (e.g. workflow_state). */

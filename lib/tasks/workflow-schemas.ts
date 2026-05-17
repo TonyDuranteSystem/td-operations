@@ -106,11 +106,36 @@ const TaxFormReviewV1 = z.object({
 
 export type TaxFormReviewV1Meta = z.infer<typeof TaxFormReviewV1>
 
+// ── sd_progress_v1 (Slice 9) ───────────────────────────────────────────
+//
+// Shared task_meta shape for ALL SD-lifecycle workflows spawned by the
+// sd_created dispatcher source (closure_progress, formation_progress,
+// onboarding_progress). The dispatcher seeds these fields from the new
+// SD's row at spawn time.
+//
+// sd_stage is the canonical "current stage" key read by the TaskCard's
+// visibility_predicate filter — kept in sync by chain.advance_sd_stage
+// after every transition via task_meta_patch.
+//
+// account_id / contact_id are nullable: formation SDs may not have an
+// account yet (created by formation_confirm during the lifecycle), and
+// closure SDs may carry contact_id only (no LLC account if pre-account).
+const SdProgressV1 = z.object({
+  service_delivery_id: z.string().uuid(),
+  service_type: z.string().min(1),
+  sd_stage: z.string().min(1),
+  account_id: z.string().uuid().nullable().optional(),
+  contact_id: z.string().uuid().nullable().optional(),
+})
+
+export type SdProgressV1Meta = z.infer<typeof SdProgressV1>
+
 export const WORKFLOW_SCHEMAS: Record<string, ZodTypeAny> = {
   itin_review_v1: ItinReviewV1,
   banking_review_v1: BankingReviewV1,
   banking_physical_v1: BankingPhysicalV1,
   tax_form_review_v1: TaxFormReviewV1,
+  sd_progress_v1: SdProgressV1,
 }
 
 /** Returns the schema for a given task_meta_schema name, or null if not registered. */
