@@ -119,3 +119,38 @@ describe("matchesFilter", () => {
     expect(matchesFilter({ a: 1, b: 2 }, { a: 1 })).toBe(false)
   })
 })
+
+// ── Slice 9: sd_created trigger variant ────────────────────────────────────
+
+describe("parseTriggeredBy — sd_created (Slice 9)", () => {
+  it("parses a valid sd_created trigger with service_type filter", () => {
+    const result = parseTriggeredBy({
+      source: "sd_created",
+      filter: { service_type: "Company Formation" },
+    })
+    expect(result).not.toBeNull()
+    expect(result?.source).toBe("sd_created")
+    if (result?.source === "sd_created") {
+      expect(result.filter.service_type).toBe("Company Formation")
+    }
+  })
+
+  it("returns null when sd_created is missing required filter", () => {
+    expect(parseTriggeredBy({ source: "sd_created" })).toBeNull()
+  })
+
+  it("returns null when sd_created filter is missing service_type", () => {
+    expect(parseTriggeredBy({ source: "sd_created", filter: {} })).toBeNull()
+  })
+
+  it("returns null when service_type is empty string", () => {
+    expect(parseTriggeredBy({ source: "sd_created", filter: { service_type: "" } })).toBeNull()
+  })
+
+  it("does NOT confuse sd_created with form_submission (different sources)", () => {
+    const fs = parseTriggeredBy({ source: "form_submission", table: "x" })
+    const sd = parseTriggeredBy({ source: "sd_created", filter: { service_type: "Company Closure" } })
+    expect(fs?.source).toBe("form_submission")
+    expect(sd?.source).toBe("sd_created")
+  })
+})

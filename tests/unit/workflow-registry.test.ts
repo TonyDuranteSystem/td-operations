@@ -60,6 +60,12 @@ const REGISTERED_HANDLERS = [
   // Flexibility. Adding a new banking provider is SQL only.
   "banking.approve_form",
   "tax.approve_and_apply",
+  // Slice 9 — SD-lifecycle (closure / formation / onboarding)
+  // sd.mark_complete is a generic primitive parameterized by handler_params
+  // (spawn_next_sds + send_review_request) — shared across all 3 workflows.
+  "closure.approve_data",
+  "formation.confirm_ein_received",
+  "sd.mark_complete",
 ] as const
 
 describe("workflow-registry — current handler set", () => {

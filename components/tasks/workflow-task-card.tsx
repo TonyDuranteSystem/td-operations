@@ -6,7 +6,7 @@ import { ChevronDown, Clock, MoreHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { parseWorkflowSnapshot } from '@/lib/tasks/workflow-snapshot-schema'
-import { filterActionsByRole, splitPrimary } from '@/lib/tasks/workflow-task-card-logic'
+import { filterActionsByRole, filterActionsByStage, splitPrimary } from '@/lib/tasks/workflow-task-card-logic'
 import { ActionConfirmModal } from '@/components/tasks/action-confirm-modal'
 import { WorkflowErrorBoundary } from '@/components/tasks/workflow-error-boundary'
 import { getAttachmentTemplate } from '@/components/tasks/attachment-templates'
@@ -79,9 +79,19 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
     [task.workflow_snapshot],
   )
 
+  // Current SD stage from task_meta (Slice 9). Seeded by dispatcher at
+  // workflow spawn (sd_created trigger), updated by chain.advance_sd_stage
+  // after each transition via task_meta_patch. Used to filter action buttons
+  // via visible_when.sd_stage so Luca only sees buttons relevant to the
+  // current stage of a multi-stage workflow (formation/closure/onboarding).
+  const currentSdStage =
+    task.task_meta && typeof task.task_meta === 'object'
+      ? ((task.task_meta as Record<string, unknown>).sd_stage as string | undefined)
+      : undefined
+
   const visibleActions = useMemo(
-    () => filterActionsByRole(snapshot.actions, role),
-    [snapshot.actions, role],
+    () => filterActionsByStage(filterActionsByRole(snapshot.actions, role), currentSdStage),
+    [snapshot.actions, role, currentSdStage],
   )
   const { primary, rest } = useMemo(() => splitPrimary(visibleActions), [visibleActions])
 

@@ -7,7 +7,11 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { filterActionsByRole, splitPrimary } from "@/lib/tasks/workflow-task-card-logic"
+import {
+  filterActionsByRole,
+  filterActionsByStage,
+  splitPrimary,
+} from "@/lib/tasks/workflow-task-card-logic"
 import type { WorkflowActionDefinition } from "@/lib/tasks/types"
 
 function makeAction(overrides: Partial<WorkflowActionDefinition> = {}): WorkflowActionDefinition {
@@ -75,5 +79,69 @@ describe("splitPrimary", () => {
     const out = splitPrimary([a])
     expect(out.primary?.slug).toBe("a")
     expect(out.rest).toEqual([])
+  })
+})
+
+// ── Slice 9: filterActionsByStage (visibility predicate) ───────────────────
+
+describe("filterActionsByStage (Slice 9)", () => {
+  it("always-visible actions (no visible_when) pass through regardless of stage", () => {
+    const actions = [makeAction({ slug: "a" }), makeAction({ slug: "b" })]
+    expect(filterActionsByStage(actions, "Data Collection").map((x) => x.slug)).toEqual(["a", "b"])
+    expect(filterActionsByStage(actions, undefined).map((x) => x.slug)).toEqual(["a", "b"])
+    expect(filterActionsByStage(actions, null).map((x) => x.slug)).toEqual(["a", "b"])
+  })
+
+  it("predicate matches single string stage", () => {
+    const actions = [
+      makeAction({ slug: "filing", visible_when: { sd_stage: "State Filing" } }),
+      makeAction({ slug: "ein", visible_when: { sd_stage: "EIN Application" } }),
+    ]
+    expect(filterActionsByStage(actions, "State Filing").map((x) => x.slug)).toEqual(["filing"])
+    expect(filterActionsByStage(actions, "EIN Application").map((x) => x.slug)).toEqual(["ein"])
+    expect(filterActionsByStage(actions, "Closing")).toEqual([])
+  })
+
+  it("predicate matches array-of-strings (any-of)", () => {
+    const actions = [
+      makeAction({
+        slug: "multi",
+        visible_when: { sd_stage: ["State Filing", "EIN Application"] },
+      }),
+      makeAction({ slug: "single", visible_when: { sd_stage: "Closing" } }),
+    ]
+    expect(filterActionsByStage(actions, "EIN Application").map((x) => x.slug)).toEqual(["multi"])
+    expect(filterActionsByStage(actions, "State Filing").map((x) => x.slug)).toEqual(["multi"])
+    expect(filterActionsByStage(actions, "Closing").map((x) => x.slug)).toEqual(["single"])
+    expect(filterActionsByStage(actions, "Other")).toEqual([])
+  })
+
+  it("hides actions with sd_stage predicate when currentSdStage is null/undefined/empty", () => {
+    const actions = [
+      makeAction({ slug: "always" }),
+      makeAction({ slug: "gated", visible_when: { sd_stage: "State Filing" } }),
+    ]
+    expect(filterActionsByStage(actions, null).map((x) => x.slug)).toEqual(["always"])
+    expect(filterActionsByStage(actions, undefined).map((x) => x.slug)).toEqual(["always"])
+    expect(filterActionsByStage(actions, "").map((x) => x.slug)).toEqual(["always"])
+  })
+
+  it("composes with filterActionsByRole — role filter first, then stage", () => {
+    const adminOnlyGated = makeAction({
+      slug: "admin_only_gated",
+      permission: { role_in: ["admin"] },
+      visible_when: { sd_stage: "State Filing" },
+    })
+    const teamAlways = makeAction({ slug: "team_always" })
+    const all = [adminOnlyGated, teamAlways]
+    // Team viewer at State Filing: should see only team_always
+    const teamView = filterActionsByStage(filterActionsByRole(all, "team"), "State Filing")
+    expect(teamView.map((x) => x.slug)).toEqual(["team_always"])
+    // Admin viewer at State Filing: both visible
+    const adminView = filterActionsByStage(filterActionsByRole(all, "admin"), "State Filing")
+    expect(adminView.map((x) => x.slug)).toEqual(["admin_only_gated", "team_always"])
+    // Admin viewer at other stage: only team_always (gated action hidden by stage)
+    const adminOther = filterActionsByStage(filterActionsByRole(all, "admin"), "Closing")
+    expect(adminOther.map((x) => x.slug)).toEqual(["team_always"])
   })
 })

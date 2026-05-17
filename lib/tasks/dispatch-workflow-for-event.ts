@@ -272,3 +272,181 @@ export async function dispatchWorkflowForFormCompletion<T extends Record<string,
     task_id: spawn.task_id,
   }
 }
+
+// ─── SD-created dispatcher (Slice 9) ─────────────────────────────────────
+
+export interface DispatchSdCreatedParams {
+  /** The new SD row, freshly inserted by createSD. */
+  delivery: {
+    id: string
+    service_type: string
+    stage: string | null
+    account_id?: string | null
+    contact_id?: string | null
+  }
+  /** Build task_meta for the matched workflow. The returned shape MUST satisfy
+   *  the workflow's task_meta_schema Zod check. */
+  build_task_meta: (matched: MatchedWorkflow) => Promise<Record<string, unknown>>
+  /** Task title for the spawned workflow task. */
+  task_title: string
+  description?: string
+  /** Free-form actor string for action_log. */
+  actor: string
+}
+
+/**
+ * Find the workflow whose triggered_by matches the new SD's service_type
+ * (source='sd_created') and spawn the corresponding workflow task. Same
+ * defensive contract as dispatchWorkflowForFormCompletion:
+ *   - ambiguous match → loud log + spawned=false
+ *   - no match → spawned=false (caller can ignore — many SD types have no workflow)
+ *   - meta_invalid / snapshot_invalid / spawn_failed → spawned=false with reason
+ *
+ * Always-on idempotency: uses task_meta.service_delivery_id as the dedup key.
+ * Two SD inserts for the same SD id (unlikely, but a retry could cause it)
+ * → second call returns reason='already_spawned' with the existing task_id.
+ */
+export async function dispatchWorkflowForSdCreated(
+  params: DispatchSdCreatedParams,
+): Promise<DispatchResult> {
+  const { delivery, build_task_meta, actor } = params
+
+  // ── 0. Idempotency: don't spawn a 2nd workflow for the same SD ──────────
+  {
+    const { data: existing } = await supabaseAdmin
+      .from("tasks")
+      .select("id, workflow_slug")
+      .eq(`task_meta->>service_delivery_id` as never, delivery.id as never)
+      .not("workflow_slug" as never, "is", null)
+      .limit(1)
+      .maybeSingle()
+    if (existing) {
+      const row = existing as unknown as { id: string; workflow_slug: string | null }
+      return {
+        spawned: false,
+        reason: "already_spawned",
+        task_id: row.id,
+        workflow_slug: row.workflow_slug ?? undefined,
+      }
+    }
+  }
+
+  // ── 1. Fetch candidate task_workflows rows for sd_created ───────────────
+  const { data: rows, error } = await supabaseAdmin
+    .from("catalog_entries")
+    .select("slug, metadata")
+    .eq("catalog_id", "task_workflows")
+    .eq("status", "active")
+    .eq("metadata->triggered_by->>source", "sd_created")
+    // PostgREST JSONB path: keys unquoted, `->` for object navigation, `->>` for text at the end.
+    .eq("metadata->triggered_by->filter->>service_type", delivery.service_type)
+
+  if (error) {
+    console.warn(`[dispatch-workflow-sd-created] catalog query failed for ${delivery.service_type}:`, error.message)
+    return { spawned: false, reason: "no_trigger_match" }
+  }
+
+  // ── 2. Parse + validate ────────────────────────────────────────────────
+  const matches: MatchedWorkflow[] = []
+  for (const row of rows ?? []) {
+    const metadata = row.metadata as Record<string, unknown> | null
+    const triggered = parseTriggeredBy(metadata?.triggered_by)
+    if (!triggered || triggered.source !== "sd_created") {
+      console.warn(`[dispatch-workflow-sd-created] ${row.slug}: malformed triggered_by, skipping`)
+      continue
+    }
+    // service_type already matched at SQL level; no further filter check needed.
+    let snapshot: WorkflowSnapshot
+    try {
+      snapshot = parseWorkflowSnapshot({ ...(metadata as Record<string, unknown>), slug: row.slug })
+    } catch (parseErr) {
+      console.warn(
+        `[dispatch-workflow-sd-created] ${row.slug}: workflow_snapshot malformed, skipping:`,
+        parseErr instanceof Error ? parseErr.message : String(parseErr),
+      )
+      continue
+    }
+    matches.push({ slug: row.slug, snapshot, raw_metadata: metadata as Record<string, unknown> })
+  }
+
+  if (matches.length === 0) return { spawned: false, reason: "no_trigger_match" }
+  if (matches.length > 1) {
+    const slugs = matches.map((m) => m.slug)
+    console.warn(
+      `[dispatch-workflow-sd-created] AMBIGUOUS trigger match for service_type='${delivery.service_type}': ${slugs.join(", ")}. ` +
+        `Fix catalog data so only one workflow matches.`,
+    )
+    return { spawned: false, reason: "ambiguous", candidates: slugs }
+  }
+
+  const matched = matches[0]
+
+  // ── 3. Build + validate task_meta ──────────────────────────────────────
+  let taskMeta: Record<string, unknown>
+  try {
+    taskMeta = await build_task_meta(matched)
+  } catch (err) {
+    return {
+      spawned: false,
+      reason: "spawn_failed",
+      workflow_slug: matched.slug,
+      spawn_error: `build_task_meta threw: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+
+  // Seed sd_stage so TaskCard's visibility_predicate filter works on first render.
+  if (!("sd_stage" in taskMeta) && delivery.stage) {
+    taskMeta.sd_stage = delivery.stage
+  }
+  // Carry the SD id so idempotency on retry catches duplicates.
+  if (!("service_delivery_id" in taskMeta)) {
+    taskMeta.service_delivery_id = delivery.id
+  }
+
+  const schemaName = (matched.raw_metadata.task_meta_schema as string | undefined) ?? null
+  const schema = getWorkflowSchema(schemaName)
+  if (schema) {
+    const parsed = schema.safeParse(taskMeta)
+    if (!parsed.success) {
+      return {
+        spawned: false,
+        reason: "meta_invalid",
+        workflow_slug: matched.slug,
+        meta_error: parsed.error.message,
+      }
+    }
+  }
+
+  // ── 4. Spawn the workflow task ─────────────────────────────────────────
+  const spawn = await createWorkflowTask({
+    workflow_slug: matched.slug,
+    workflow_snapshot: matched.raw_metadata,
+    task_meta: taskMeta,
+    task_title: params.task_title,
+    description: params.description ?? null,
+    assigned_to: (matched.raw_metadata.default_assignee as string) ?? "Luca",
+    priority: (matched.raw_metadata.default_priority as "Urgent" | "High" | "Normal" | "Low") ?? "High",
+    status: "To Do",
+    account_id: delivery.account_id ?? null,
+    contact_id: delivery.contact_id ?? null,
+    delivery_id: delivery.id,
+    actor,
+    summary: `Workflow ${matched.slug} task created (sd_created trigger)`,
+    details: { workflow_slug: matched.slug, service_type: delivery.service_type, service_delivery_id: delivery.id },
+  })
+
+  if (!spawn.success) {
+    return {
+      spawned: false,
+      reason: "spawn_failed",
+      workflow_slug: matched.slug,
+      spawn_error: spawn.error,
+    }
+  }
+
+  return {
+    spawned: true,
+    workflow_slug: matched.slug,
+    task_id: spawn.task_id,
+  }
+}

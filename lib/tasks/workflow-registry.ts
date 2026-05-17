@@ -48,6 +48,15 @@ import { itinConfirmNumberReceived } from "./workflow-handlers/itin-confirm-numb
 import { bankingApproveForm } from "./workflow-handlers/banking-approve-form"
 import { taxApproveAndApply } from "./workflow-handlers/tax-approve-and-apply"
 
+// Service + generic SD-lifecycle handlers (Slice 9 — closure/formation/onboarding).
+// One generic primitive (sd.mark_complete, parameterized by handler_params)
+// + two service-specific handlers where MCP wrapping or coordinated multi-write
+// needs in-handler logic. Most stage transitions in Slice 9 workflows reuse
+// chain.advance_sd_stage with handler_params.target_stage — zero new code.
+import { closureApproveData } from "./workflow-handlers/closure-approve-data"
+import { formationConfirmEinReceived } from "./workflow-handlers/formation-confirm-ein-received"
+import { sdMarkComplete } from "./workflow-handlers/sd-mark-complete"
+
 /**
  * Slice 2: 5 task.* + 9 chain.* handlers registered.
  * Slice 4 will add 'itin.approve_and_send' and 'itin.recall_and_recorrect'.
@@ -82,6 +91,10 @@ const HANDLERS: Record<string, WorkflowHandler> = {
   // Service-specific (Slice 8 — banking + tax)
   "banking.approve_form": bankingApproveForm,
   "tax.approve_and_apply": taxApproveAndApply,
+  // Slice 9 — SD-lifecycle (closure / formation / onboarding)
+  "closure.approve_data": closureApproveData,
+  "formation.confirm_ein_received": formationConfirmEinReceived,
+  "sd.mark_complete": sdMarkComplete,
 }
 
 /** Look up a handler by slug. Returns null if not registered. */

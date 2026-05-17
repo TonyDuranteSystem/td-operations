@@ -43,15 +43,39 @@ const FormSubmissionTrigger = z.object({
   filter: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 })
 
+/**
+ * Triggered when a service_deliveries row is inserted (Slice 9). Used by
+ * SD-lifecycle workflows (closure_progress, formation_progress,
+ * onboarding_progress) that should auto-spawn the moment an SD of the
+ * relevant service_type is created — regardless of which call site created
+ * it (form-completed route, MCP tool, formation_setup job, manual CRM).
+ *
+ * - filter.service_type: REQUIRED. Match against the new SD's service_type
+ *   (e.g. "Company Formation", "Company Closure", "Client Onboarding").
+ *
+ * The createSD hook in lib/operations/service-delivery.ts calls the
+ * dispatcher after every successful insert; the dispatcher scans for
+ * task_workflows rows whose triggered_by matches and spawns the workflow
+ * task with task_meta seeded from the new SD.
+ */
+const SdCreatedTrigger = z.object({
+  source: z.literal("sd_created"),
+  filter: z.object({
+    service_type: z.string().min(1),
+  }),
+})
+
 // ─── Discriminated union (extend by adding new triggers + union members) ─
 
 export const TriggeredBySchema = z.discriminatedUnion("source", [
   FormSubmissionTrigger,
-  // Future: SdCreatedTrigger, PaymentReceivedTrigger, ManualOnlyMarker, etc.
+  SdCreatedTrigger,
+  // Future: PaymentReceivedTrigger, SignatureSignedTrigger, ManualOnlyMarker, etc.
 ])
 
 export type TriggeredBy = z.infer<typeof TriggeredBySchema>
 export type FormSubmissionTriggerT = z.infer<typeof FormSubmissionTrigger>
+export type SdCreatedTriggerT = z.infer<typeof SdCreatedTrigger>
 
 // ─── Parse / match helpers ───────────────────────────────────────────────
 

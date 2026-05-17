@@ -74,7 +74,9 @@ export const chainAdvanceSdStage: WorkflowHandler = async (
     return {
       success: true,
       side_effects: [{ kind: "sd.no_op", detail: `Already at stage '${targetStage}'` }],
-      task_meta_patch: { sd_stage_at_action: targetStage },
+      // sd_stage is the canonical "current stage" key read by TaskCard's
+      // visibility_predicate filter (Slice 9). Kept in sync with the SD.
+      task_meta_patch: { sd_stage_at_action: targetStage, sd_stage: targetStage },
     }
   }
 
@@ -123,6 +125,8 @@ export const chainAdvanceSdStage: WorkflowHandler = async (
     task_meta_patch: {
       sd_stage_at_action: result.to_stage,
       sd_stage_advanced_from: result.from_stage,
+      // sd_stage = canonical current stage (read by TaskCard visibility filter)
+      sd_stage: result.to_stage,
     },
     result: { from_stage: result.from_stage, to_stage: result.to_stage },
   }
