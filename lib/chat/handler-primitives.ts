@@ -166,39 +166,19 @@ export function validatePrimitiveHandler(raw: unknown): PrimitiveHandler | null 
 }
 
 // ── Template interpolation (used by api_call / navigate / client_action) ──
+//
+// The string-level interpolators live in lib/template-interpolation.ts since
+// Slice 8 — workflow handlers are now a second consumer. Re-exported here so
+// existing chat callers (api_call dispatcher, body template builder) keep
+// their import paths unchanged.
 
-/**
- * Interpolate `{token}` placeholders in a string from the context map.
- * Tokens not present in context are LEFT AS-IS (defense-in-depth: caller
- * decides whether missing tokens are fatal — see `interpolateStringStrict`).
- *
- * Supported syntax: `{name}` — alphanumeric, underscore, dot (for nested
- * paths in response interpolation, e.g. `{response.task_id}`).
- */
-export function interpolateString(template: string, context: Record<string, unknown>): string {
-  return template.replace(/\{([a-zA-Z0-9_.]+)\}/g, (match, key) => {
-    const value = resolvePath(context, key)
-    if (value === undefined || value === null) return match
-    return String(value)
-  })
-}
+import {
+  interpolateString,
+  interpolateStringStrict,
+  resolvePath,
+} from "@/lib/template-interpolation"
 
-/**
- * Strict variant: returns null if ANY referenced token is missing or null.
- * Used at api_call dispatch time so we never send a request with literal
- * `{account_id}` in the URL or body.
- */
-export function interpolateStringStrict(
-  template: string,
-  context: Record<string, unknown>,
-): string | null {
-  const tokens = Array.from(template.matchAll(/\{([a-zA-Z0-9_.]+)\}/g)).map((m) => m[1])
-  for (const token of tokens) {
-    const value = resolvePath(context, token)
-    if (value === undefined || value === null || value === "") return null
-  }
-  return interpolateString(template, context)
-}
+export { interpolateString, interpolateStringStrict }
 
 /**
  * Interpolate all string-typed leaf values in a record. Non-string leaves
@@ -285,17 +265,6 @@ export function interpolateBodyTemplate(
     out[k] = interpolateString(v, context)
   }
   return out
-}
-
-/** Resolve a dot-path like "response.task_id" against an object. */
-function resolvePath(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.split(".")
-  let cur: unknown = obj
-  for (const part of parts) {
-    if (cur === null || cur === undefined || typeof cur !== "object") return undefined
-    cur = (cur as Record<string, unknown>)[part]
-  }
-  return cur
 }
 
 // ── on_success post-action behavior shape ────────────────────────────────

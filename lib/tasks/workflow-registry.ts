@@ -40,6 +40,14 @@ import { itinApproveAndSend } from "./workflow-handlers/itin-approve-and-send"
 import { itinRecallAndRecorrect } from "./workflow-handlers/itin-recall-and-recorrect"
 import { itinConfirmNumberReceived } from "./workflow-handlers/itin-confirm-number-received"
 
+// Service-specific handlers (Slice 8 — banking + tax).
+// One banking handler (not per-provider) — provider-specific copy lives in
+// task_workflows.metadata.actions[].handler_params.followup_task per
+// the Principle of Flexibility: adding a new banking provider is a SQL
+// row insert, never a code change.
+import { bankingApproveForm } from "./workflow-handlers/banking-approve-form"
+import { taxApproveAndApply } from "./workflow-handlers/tax-approve-and-apply"
+
 /**
  * Slice 2: 5 task.* + 9 chain.* handlers registered.
  * Slice 4 will add 'itin.approve_and_send' and 'itin.recall_and_recorrect'.
@@ -71,6 +79,9 @@ const HANDLERS: Record<string, WorkflowHandler> = {
   "itin.approve_and_send": itinApproveAndSend,
   "itin.recall_and_recorrect": itinRecallAndRecorrect,
   "itin.confirm_number_received": itinConfirmNumberReceived,
+  // Service-specific (Slice 8 — banking + tax)
+  "banking.approve_form": bankingApproveForm,
+  "tax.approve_and_apply": taxApproveAndApply,
 }
 
 /** Look up a handler by slug. Returns null if not registered. */

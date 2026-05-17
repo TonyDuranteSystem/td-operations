@@ -27,6 +27,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { advanceStageIfAt } from "@/lib/operations/service-delivery"
+import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
 
@@ -94,6 +95,7 @@ export async function POST(req: NextRequest) {
           if (Object.keys(updates).length > 0) {
             updates.updated_at = new Date().toISOString()
             await dbWrite(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 contacts.update; extract to lib/operations/contact.ts per dev_task fda76fd3
               supabaseAdmin.from("contacts").update(updates).eq("id", sub.contact_id),
               "contacts.update"
             )
@@ -131,6 +133,7 @@ export async function POST(req: NextRequest) {
               .single()
 
             await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 tasks.insert (passport missing); extract to lib/operations/task per dev_task fda76fd3
               supabaseAdmin.from("tasks").insert({
                 task_title: `[MISSING] Request passport from ${contactInfo?.full_name || "client"} (${companyName})`,
                 description: `One-time client ${companyName} submitted tax form but has NO passport on file.\nEmail ${contactInfo?.email || "client"} to request a clear passport scan.\nPassport is required for tax return filing.`,
@@ -235,6 +238,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
           })
 
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 service_deliveries.update (stage_history); extract to lib/operations/service-delivery per dev_task fda76fd3
             supabaseAdmin
               .from("service_deliveries")
               .update({ stage_history: history })
@@ -250,43 +254,95 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
-      // ─── 3. CREATE REVIEW TASK FOR TEAM ───
-      try {
-        const taskTitle = `Review tax form data -- ${companyName} (${sub.tax_year})`
+      // ─── 3. CREATE REVIEW TASK FOR TEAM (catalog-driven dispatch) ───
+      //
+      // Slice 8 Pass 6: workflow choice is data-driven. The dispatcher
+      // scans task_workflows rows whose triggered_by matches this submission
+      // (table=tax_return_submissions). Today only tax_form_review matches.
+      // Adding a future tax variant = duplicate the row with a different
+      // filter — no edit to this route.
+      const workflowTaskTitle = `Review tax form data -- ${companyName} (${sub.tax_year})`
 
-        const { data: existingTask } = await supabaseAdmin
-          .from("tasks")
-          .select("id")
-          .eq("task_title", taskTitle)
-          .eq("account_id", sub.account_id)
-          .maybeSingle()
+      const dispatch = await dispatchWorkflowForFormCompletion({
+        form_table: "tax_return_submissions",
+        submission: { ...sub },
+        build_task_meta: async () => ({
+          submission_id: sub.id,
+          account_id: sub.account_id,
+          contact_id: sub.contact_id ?? null,
+          tax_year: sub.tax_year,
+          entity_type: sub.entity_type,
+          token: sub.token,
+          company_name: companyName,
+        }),
+        task_title: workflowTaskTitle,
+        description: `Client ${companyName} has submitted tax data for ${sub.tax_year}. Entity type: ${sub.entity_type}. Review the data, then click Approve & Apply Changes to enqueue the CRM reconciliation job.`,
+        account_id: sub.account_id,
+        contact_id: sub.contact_id ?? null,
+        actor: "tax-form-completed:auto-chain",
+        idempotency: { field: "submission_id", value: sub.id },
+      })
 
-        if (!existingTask) {
-          await dbWriteSafe(
-            supabaseAdmin.from("tasks").insert({
-              task_title: taskTitle,
-              description: [
-                `Client ${companyName} has submitted tax data for ${sub.tax_year}.`,
-                ``,
-                `Entity type: ${sub.entity_type}`,
-                `Review: tax_form_review(token="${sub.token}")`,
-                `Action: Review data completeness, then apply_changes=true to update CRM.`,
-              ].join("\n"),
-              assigned_to: "Luca",
-              priority: "High",
-              category: "Tax" as never,
-              status: "To Do",
-              account_id: sub.account_id,
-              created_by: "System",
-            }),
-            "tasks.insert"
+      if (dispatch.spawned) {
+        results.push({
+          step: "review_task",
+          status: "ok",
+          detail: `Workflow ${dispatch.workflow_slug} task ${dispatch.task_id}`,
+        })
+      } else if (dispatch.reason === "already_spawned") {
+        // Webhook retry — treat as success, do NOT fall through to legacy.
+        results.push({
+          step: "review_task",
+          status: "skipped",
+          detail: `Workflow task already exists for submission ${sub.id} (task ${dispatch.task_id})`,
+        })
+      } else {
+        if (dispatch.reason === "ambiguous") {
+          console.warn(
+            `[tax-form-completed] AMBIGUOUS workflow match (${dispatch.candidates?.join(", ")}) — falling back to legacy plain task. Fix catalog data.`,
           )
-          results.push({ step: "review_task", status: "ok", detail: taskTitle })
-        } else {
-          results.push({ step: "review_task", status: "skipped", detail: "Already exists" })
+        } else if (dispatch.reason === "meta_invalid" || dispatch.reason === "spawn_failed") {
+          console.warn(
+            `[tax-form-completed] dispatch failed (${dispatch.reason}): ${dispatch.meta_error ?? dispatch.spawn_error}`,
+          )
         }
-      } catch (e) {
-        results.push({ step: "review_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        // Legacy fallback below.
+        try {
+          const { data: existingTask } = await supabaseAdmin
+            .from("tasks")
+            .select("id")
+            .eq("task_title", workflowTaskTitle)
+            .eq("account_id", sub.account_id)
+            .maybeSingle()
+
+          if (!existingTask) {
+            await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 legacy fallback plain task; extract to lib/operations/ per dev_task fda76fd3
+              supabaseAdmin.from("tasks").insert({
+                task_title: workflowTaskTitle,
+                description: [
+                  `Client ${companyName} has submitted tax data for ${sub.tax_year}.`,
+                  ``,
+                  `Entity type: ${sub.entity_type}`,
+                  `Review: tax_form_review(token="${sub.token}")`,
+                  `Action: Review data completeness, then apply_changes=true to update CRM.`,
+                ].join("\n"),
+                assigned_to: "Luca",
+                priority: "High",
+                category: "Tax" as never,
+                status: "To Do",
+                account_id: sub.account_id,
+                created_by: "System",
+              }),
+              "tasks.insert"
+            )
+            results.push({ step: "review_task", status: "ok", detail: `${workflowTaskTitle} (legacy fallback)` })
+          } else {
+            results.push({ step: "review_task", status: "skipped", detail: "Already exists" })
+          }
+        } catch (e) {
+          results.push({ step: "review_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
       }
     }
 

@@ -54,6 +54,12 @@ const REGISTERED_HANDLERS = [
   "itin.approve_and_send",
   "itin.recall_and_recorrect",
   "itin.confirm_number_received",
+  // Slice 8 — banking + tax service-specific
+  // One banking handler (not per-provider) — provider variants live in
+  // catalog rows via handler_params.followup_task per the Principle of
+  // Flexibility. Adding a new banking provider is SQL only.
+  "banking.approve_form",
+  "tax.approve_and_apply",
 ] as const
 
 describe("workflow-registry — current handler set", () => {
