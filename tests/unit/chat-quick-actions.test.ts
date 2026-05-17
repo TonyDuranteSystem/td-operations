@@ -30,8 +30,11 @@ function makeAction(slug: string, overrides: Partial<QuickAction["metadata"]> = 
       surface: "portal_chat_message",
       order: 10,
       icon: "ClipboardList",
-      handler: "chat.quick_create",
-      handler_params: { create_type: "task" },
+      handler: {
+        kind: "open_modal",
+        modal_id: "quick_create",
+        modal_params: { create_type: "task" },
+      },
       ...overrides,
     },
   }
@@ -131,19 +134,29 @@ describe("groupForRender", () => {
       surface: "portal_chat_message",
       order: 20,
       requires_all: ["account_id"],
-      handler_params: { create_type: "sd" },
+      handler: {
+        kind: "open_modal",
+        modal_id: "quick_create",
+        modal_params: { create_type: "sd" },
+      },
     }),
     makeAction("create_invoice", {
       surface: "portal_chat_message",
       order: 30,
       requires_all: ["account_id"],
-      handler_params: { create_type: "invoice" },
+      handler: {
+        kind: "open_modal",
+        modal_id: "quick_create",
+        modal_params: { create_type: "invoice" },
+      },
     }),
     makeAction("future_thread_action", {
       surface: "internal_thread_header",
       order: 10,
-      handler: "chat.delete_thread",
-      handler_params: {},
+      handler: {
+        kind: "open_modal",
+        modal_id: "delete_thread_confirm",
+      },
       requires_all: ["thread_id"],
     }),
   ]
@@ -201,11 +214,16 @@ describe("groupForRender", () => {
 })
 
 describe("validateMetadata", () => {
+  const goodHandler = {
+    kind: "open_modal",
+    modal_id: "quick_create",
+    modal_params: { create_type: "task" },
+  }
   const good = {
     surface: "portal_chat_message",
     order: 10,
     icon: "ClipboardList",
-    handler: "chat.quick_create",
+    handler: goodHandler,
   }
 
   it("accepts a minimal well-formed row", () => {
@@ -219,7 +237,6 @@ describe("validateMetadata", () => {
       permission: { role_in: ["admin", "team"] },
       requires_all: ["account_id"],
       requires_any: [],
-      handler_params: { create_type: "task" },
     }
     expect(validateMetadata(full)).not.toBeNull()
   })
@@ -249,6 +266,46 @@ describe("validateMetadata", () => {
     expect(validateMetadata({ ...good, requires_all: "account_id" })).toBeNull()
     expect(validateMetadata({ ...good, requires_any: [1, 2] })).toBeNull()
     expect(validateMetadata({ ...good, permission: { role_in: [1] } })).toBeNull()
-    expect(validateMetadata({ ...good, handler_params: "nope" })).toBeNull()
+  })
+
+  it("rejects the legacy fixed-slug handler shape (string instead of object)", () => {
+    expect(validateMetadata({ ...good, handler: "chat.quick_create" })).toBeNull()
+  })
+
+  it("rejects handler with unknown kind", () => {
+    expect(validateMetadata({ ...good, handler: { kind: "ftp_upload", path: "/x" } })).toBeNull()
+  })
+
+  it("rejects documented-but-not-yet-implemented primitives (api_call/navigate/client_action)", () => {
+    expect(
+      validateMetadata({
+        ...good,
+        handler: { kind: "api_call", method: "POST", url_template: "/api/x" },
+      }),
+    ).toBeNull()
+    expect(
+      validateMetadata({ ...good, handler: { kind: "navigate", url_template: "/tasks" } }),
+    ).toBeNull()
+    expect(
+      validateMetadata({
+        ...good,
+        handler: { kind: "client_action", action: "copy_to_clipboard" },
+      }),
+    ).toBeNull()
+  })
+
+  it("rejects open_modal with missing modal_id", () => {
+    expect(
+      validateMetadata({ ...good, handler: { kind: "open_modal", modal_params: {} } }),
+    ).toBeNull()
+  })
+
+  it("rejects open_modal with non-object modal_params", () => {
+    expect(
+      validateMetadata({
+        ...good,
+        handler: { kind: "open_modal", modal_id: "x", modal_params: "nope" },
+      }),
+    ).toBeNull()
   })
 })
