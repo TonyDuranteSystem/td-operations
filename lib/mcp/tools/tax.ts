@@ -633,33 +633,34 @@ export function registerTaxTools(server: McpServer) {
         if (apply_changes) {
           lines.push("")
           lines.push("───────────────────────────────────")
-          lines.push("ENQUEUING BACKGROUND JOB...")
+          lines.push("APPLYING CHANGES...")
           lines.push("")
 
-          // Enqueue async job for CRM updates
-          const { enqueueJob } = await import("@/lib/jobs/queue")
-          const { id: jobId } = await enqueueJob({
-            job_type: "tax_form_setup",
-            payload: {
-              token: sub.token,
-              submission_id: sub.id,
-              contact_id: sub.contact_id || null,
-              account_id: sub.account_id || null,
-              tax_return_id: sub.tax_return_id || null,
-              changed_fields: changes,
-            },
-            priority: 1,
-            max_attempts: 3,
-            account_id: sub.account_id || undefined,
-            related_entity_type: "tax_return_submission",
-            related_entity_id: sub.id,
-            created_by: "claude",
+          // ── Apply via shared helper (Slice 8) ──────────────────────────
+          // Helper handles: enqueue tax_form_setup job + reviewed_at flip with
+          // a reviewed_at IS NOT NULL short-circuit. Same code path used by
+          // workflow handler tax.approve_and_apply — protects B9 across
+          // MCP + workflow surfaces.
+          const { approveAndApplyTaxReview } = await import("@/lib/operations/tax-review")
+          const apply = await approveAndApplyTaxReview({
+            submission_id: sub.id,
+            actor: "claude",
           })
 
-          lines.push(`✅ Background job enqueued: ${jobId}`)
+          if (!apply.ok) {
+            lines.push(`❌ Apply failed: ${apply.error}`)
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+          }
+
+          if (apply.alreadyApplied) {
+            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping job enqueue + Drive save to avoid duplicates.`)
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+          }
+
+          lines.push(`✅ Background job enqueued: ${apply.job_id}`)
           lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
           lines.push("")
-          lines.push(`➡️ Check progress: job_status('${jobId}')`)
+          lines.push(`➡️ Check progress: job_status('${apply.job_id}')`)
 
           // Save form data + uploads to Drive
           if (sub.account_id) {

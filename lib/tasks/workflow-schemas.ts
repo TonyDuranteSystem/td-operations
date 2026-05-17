@@ -47,8 +47,70 @@ const ItinReviewV1 = z.object({
 
 export type ItinReviewV1Meta = z.infer<typeof ItinReviewV1>
 
+// ── banking_review_v1 ──────────────────────────────────────────────────
+//
+// Validates task_meta for the workflow tasks spawned by
+// /api/banking-form-completed Step 2 when WORKFLOWS_SYSTEM is active. The
+// same shape is shared by both `banking_review_payset` and
+// `banking_review_relay` catalog rows — provider differentiates which one
+// gets spawned (the auto-chain picks the slug based on
+// banking_submissions.provider). The handler reads `submission_id` to look
+// up the submission row and `provider` to compose the next-step task.
+// `provider` is z.string() — NOT enum — so adding a new banking provider
+// (e.g. Mercury) is a pure SQL operation: insert one task_workflows row
+// with triggered_by.filter.provider = "<new>". No schema code change.
+// The catalog row's triggered_by is the authoritative list of valid providers
+// at runtime; this schema only enforces structural shape.
+const BankingReviewV1 = z.object({
+  submission_id: z.string().uuid(),
+  provider: z.string().min(1),
+  account_id: z.string().uuid(),
+  contact_id: z.string().uuid().nullable().optional(),
+  token: z.string().min(1),
+  company_name: z.string().min(1),
+  drive_folder_id: z.string().nullable().optional(),
+})
+
+export type BankingReviewV1Meta = z.infer<typeof BankingReviewV1>
+
+// ── banking_physical_v1 ────────────────────────────────────────────────
+//
+// Validates task_meta for the manually-spawned `banking_physical_progress`
+// workflow. The admin creates this task when starting a Banking Physical SD,
+// setting delivery_id on the task itself so chain.advance_sd_stage can find
+// the SD. account_id is required for context (chat threading, logging).
+const BankingPhysicalV1 = z.object({
+  account_id: z.string().uuid(),
+  service_delivery_id: z.string().uuid(),
+  initial_stage: z.string().min(1).optional(),
+})
+
+export type BankingPhysicalV1Meta = z.infer<typeof BankingPhysicalV1>
+
+// ── tax_form_review_v1 ─────────────────────────────────────────────────
+//
+// Validates task_meta for the workflow task spawned by
+// /api/tax-form-completed code-step 3. The handler reads submission_id to
+// look up the submission row and call approveAndApplyTaxReview, which
+// enqueues the tax_form_setup background job that does the actual CRM
+// updates (contact + account + tax_returns + form review flag).
+const TaxFormReviewV1 = z.object({
+  submission_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  contact_id: z.string().uuid().nullable().optional(),
+  tax_year: z.number().int().min(2000).max(2100),
+  entity_type: z.string().min(1),
+  token: z.string().min(1),
+  company_name: z.string().min(1),
+})
+
+export type TaxFormReviewV1Meta = z.infer<typeof TaxFormReviewV1>
+
 export const WORKFLOW_SCHEMAS: Record<string, ZodTypeAny> = {
   itin_review_v1: ItinReviewV1,
+  banking_review_v1: BankingReviewV1,
+  banking_physical_v1: BankingPhysicalV1,
+  tax_form_review_v1: TaxFormReviewV1,
 }
 
 /** Returns the schema for a given task_meta_schema name, or null if not registered. */

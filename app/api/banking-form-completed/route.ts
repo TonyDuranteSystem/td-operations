@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWriteSafe } from "@/lib/db"
 import { advanceStageIfAt } from "@/lib/operations/service-delivery"
+import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 
 export async function POST(req: NextRequest) {
   try {
@@ -92,54 +93,120 @@ export async function POST(req: NextRequest) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // ─── 2. CREATE FOLLOW-UP TASK ───
+    // ─── 2. CREATE REVIEW TASK (catalog-driven dispatch) ───
+    //
+    // Slice 8 Pass 6: the workflow choice (banking_review_payset vs relay)
+    // is determined by data, not code. The dispatcher scans task_workflows
+    // rows whose triggered_by predicate matches THIS submission and spawns
+    // the matching workflow task. Adding a new banking provider (e.g.
+    // Mercury) is a pure SQL insert — no edit to this route.
+    //
+    // Falls back to a legacy plain task when:
+    //   - No catalog row matches (production before pass-6 migration; OR an
+    //     unknown provider value with no matching row)
+    //   - 2+ rows match (catalog data error — overlapping triggers)
+    //   - workflow_snapshot or task_meta fails schema validation
+    //   - createWorkflowTask itself errors
+    //
+    // Legacy fallback is kept as a safety net so the auto-chain stays robust
+    // if anything in the workflow surface breaks.
     if (sub.account_id) {
-      try {
-        const taskTitle = sub.provider === "relay"
-          ? `Submit Relay USD application — ${companyName}`
-          : `Schedule Payset application session — ${companyName}`
+      const provider = sub.provider === "relay" ? "relay" : "payset"
 
-        const { data: existingTask } = await supabaseAdmin
-          .from("tasks")
-          .select("id")
-          .eq("task_title", taskTitle)
-          .eq("account_id", sub.account_id)
-          .maybeSingle()
+      const dispatch = await dispatchWorkflowForFormCompletion({
+        form_table: "banking_submissions",
+        submission: { ...sub },
+        build_task_meta: async () => ({
+          submission_id: sub.id,
+          provider,
+          account_id: sub.account_id,
+          contact_id: sub.contact_id ?? null,
+          token: sub.token,
+          company_name: companyName,
+        }),
+        task_title: provider === "relay"
+          ? `Review Relay banking form — ${companyName}`
+          : `Review Payset banking form — ${companyName}`,
+        description: `Banking ${provider.toUpperCase()} form completed by client for ${companyName}. Review the data, then click Approve & Apply (workflow action) to mark reviewed and spawn the next-step task.`,
+        account_id: sub.account_id,
+        contact_id: sub.contact_id ?? null,
+        actor: "banking-form-completed:auto-chain",
+        idempotency: { field: "submission_id", value: sub.id },
+      })
 
-        if (!existingTask) {
-          const description = sub.provider === "relay"
-            ? [
-                `Client submitted Relay banking form data.`,
-                ``,
-                `Review: banking_form_review(token="${sub.token}")`,
-                `Action: Submit application via Relay dashboard.`,
-              ].join("\n")
-            : [
-                `Client submitted Payset banking form data.`,
-                ``,
-                `Review: banking_form_review(token="${sub.token}")`,
-                `Action: Schedule live session for OTP verification and application completion.`,
-              ].join("\n")
-
-          await dbWriteSafe(
-            supabaseAdmin.from("tasks").insert({
-              task_title: taskTitle,
-              description,
-              assigned_to: "Luca",
-              priority: "High",
-              category: "Banking" as never,
-              status: "To Do",
-              account_id: sub.account_id,
-              created_by: "System",
-            }),
-            "tasks.insert"
+      if (dispatch.spawned) {
+        results.push({
+          step: "task_created",
+          status: "ok",
+          detail: `Workflow ${dispatch.workflow_slug} task ${dispatch.task_id}`,
+        })
+      } else if (dispatch.reason === "already_spawned") {
+        // Webhook retry — treat as success, do NOT fall through to legacy.
+        results.push({
+          step: "task_created",
+          status: "skipped",
+          detail: `Workflow task already exists for submission ${sub.id} (task ${dispatch.task_id})`,
+        })
+      } else {
+        // Legacy fallback: provider-specific plain task with the original wording.
+        if (dispatch.reason === "ambiguous") {
+          console.warn(
+            `[banking-form-completed] AMBIGUOUS workflow match (${dispatch.candidates?.join(", ")}) — falling back to legacy plain task. Fix catalog data.`,
           )
-          results.push({ step: "task_created", status: "ok", detail: taskTitle })
-        } else {
-          results.push({ step: "task_created", status: "skipped", detail: "Already exists" })
+        } else if (dispatch.reason === "meta_invalid" || dispatch.reason === "spawn_failed") {
+          console.warn(
+            `[banking-form-completed] dispatch failed (${dispatch.reason}): ${dispatch.meta_error ?? dispatch.spawn_error}`,
+          )
         }
-      } catch (e) {
-        results.push({ step: "task_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
+
+        try {
+          const taskTitle = provider === "relay"
+            ? `Submit Relay USD application — ${companyName}`
+            : `Schedule Payset application session — ${companyName}`
+
+          const { data: existingTask } = await supabaseAdmin
+            .from("tasks")
+            .select("id")
+            .eq("task_title", taskTitle)
+            .eq("account_id", sub.account_id)
+            .maybeSingle()
+
+          if (!existingTask) {
+            const description = provider === "relay"
+              ? [
+                  `Client submitted Relay banking form data.`,
+                  ``,
+                  `Review: banking_form_review(token="${sub.token}")`,
+                  `Action: Submit application via Relay dashboard.`,
+                ].join("\n")
+              : [
+                  `Client submitted Payset banking form data.`,
+                  ``,
+                  `Review: banking_form_review(token="${sub.token}")`,
+                  `Action: Schedule live session for OTP verification and application completion.`,
+                ].join("\n")
+
+            await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 legacy fallback path; extract to lib/operations/ per dev_task fda76fd3
+              supabaseAdmin.from("tasks").insert({
+                task_title: taskTitle,
+                description,
+                assigned_to: "Luca",
+                priority: "High",
+                category: "Banking" as never,
+                status: "To Do",
+                account_id: sub.account_id,
+                created_by: "System",
+              }),
+              "tasks.insert"
+            )
+            results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (legacy fallback: ${dispatch.reason ?? "unknown"})` })
+          } else {
+            results.push({ step: "task_created", status: "skipped", detail: "Already exists" })
+          }
+        } catch (e) {
+          results.push({ step: "task_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
       }
     }
 

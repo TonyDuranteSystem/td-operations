@@ -345,30 +345,33 @@ export function registerBankingFormTools(server: McpServer) {
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
-          // Update Banking Fintech service if it exists
-          const { data: svc } = await supabaseAdmin
-            .from("services")
-            .select("id, status")
-            .eq("account_id", sub.account_id)
-            .eq("service_type", "Banking Fintech")
-            .maybeSingle()
+          // ── Apply via shared helper (Slice 8) ──────────────────────────
+          // Helper handles: services.status update + reviewed_at flip with
+          // a reviewed_at IS NOT NULL short-circuit. Same code path used by
+          // workflow handlers banking.approve_{payset,relay} — protects B9
+          // double-execution across MCP + workflow surfaces.
+          const { approveAndApplyBankingReview } = await import("@/lib/operations/banking-review")
+          const apply = await approveAndApplyBankingReview({
+            submission_id: sub.id,
+            actor: "claude",
+          })
 
-          if (svc) {
-            const { error: svcErr } = await supabaseAdmin
-              .from("services")
-              .update({
-                status: "Data Collected" as never,
-                notes: `Banking form completed ${new Date().toISOString()}`,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", svc.id)
-            if (svcErr) {
-              lines.push(`❌ Service update failed: ${svcErr.message}`)
-            } else {
-              lines.push(`✅ Banking Fintech service updated to "Data Collected"`)
-            }
-          } else {
-            lines.push(`⚠️ No "Banking Fintech" service found for this account — skipping service update`)
+          if (!apply.ok) {
+            lines.push(`❌ Apply failed: ${apply.error}`)
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+          }
+
+          if (apply.alreadyApplied) {
+            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping follow-up task + Drive save to avoid duplicates.`)
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+          }
+
+          if (apply.services_update === "updated") {
+            lines.push(`✅ Banking Fintech service updated to "Data Collected"`)
+          } else if (apply.services_update === "no_row") {
+            lines.push(`⚠️ No "Banking Fintech" service row found for this account — skipping service update`)
+          } else if (apply.services_update === "error") {
+            lines.push(`❌ Service update failed: ${apply.services_update_error}`)
           }
 
           // Get account name for task title
@@ -378,7 +381,7 @@ export function registerBankingFormTools(server: McpServer) {
             .eq("id", sub.account_id)
             .single()
 
-          // Create follow-up task (provider-aware)
+          // Create follow-up task (provider-aware, MCP-tool wording preserved)
           const isRelay = (sub.provider || "payset") === "relay"
           const taskTitle = isRelay
             ? `${acct?.company_name || "Client"} — Complete Relay USD account application`
@@ -387,6 +390,7 @@ export function registerBankingFormTools(server: McpServer) {
             ? `Banking form completed. Data collected for Relay USD business account.\n\nNext: Submit the Relay application with the collected data.\n\nForm token: ${token}`
             : `Banking form completed. Data collected for Payset IBAN application.\n\nNext: Schedule a live session via WhatsApp/Telegram to complete the Payset application together with the client (OTP verification required).\n\nForm token: ${token}`
 
+          // eslint-disable-next-line no-restricted-syntax -- MCP tool plain task spawn; extract to lib/operations/task per dev_task fda76fd3
           const { error: taskErr } = await supabaseAdmin
             .from("tasks")
             .insert({
@@ -430,15 +434,6 @@ export function registerBankingFormTools(server: McpServer) {
             lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
           }
 
-          // Mark form as reviewed
-          await supabaseAdmin
-            .from("banking_submissions")
-            .update({
-              status: "reviewed",
-              reviewed_at: new Date().toISOString(),
-              reviewed_by: "claude",
-            })
-            .eq("id", sub.id)
           lines.push(`✅ Form marked as reviewed`)
         }
 
