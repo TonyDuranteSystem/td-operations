@@ -242,7 +242,11 @@ export async function dispatchWorkflowForFormCompletion<T extends Record<string,
   // ── 5. Spawn the workflow task ─────────────────────────────────────────
   const spawn = await createWorkflowTask({
     workflow_slug: matched.slug,
-    workflow_snapshot: matched.raw_metadata,
+    // Inject slug into the stored snapshot so TaskCard's parseWorkflowSnapshot
+    // can read it. Without slug the schema fails and the ErrorBoundary fires.
+    // The TaskCard parses the stored snapshot directly (no slug injection at
+    // read time); slug must be present in what we store.
+    workflow_snapshot: { ...matched.raw_metadata, slug: matched.slug },
     task_meta: taskMeta,
     task_title: params.task_title,
     description: params.description ?? null,
@@ -420,7 +424,11 @@ export async function dispatchWorkflowForSdCreated(
   // ── 4. Spawn the workflow task ─────────────────────────────────────────
   const spawn = await createWorkflowTask({
     workflow_slug: matched.slug,
-    workflow_snapshot: matched.raw_metadata,
+    // Inject slug into the stored snapshot so TaskCard's parseWorkflowSnapshot
+    // can read it. Without slug the schema fails and the ErrorBoundary fires.
+    // The TaskCard parses the stored snapshot directly (no slug injection at
+    // read time); slug must be present in what we store.
+    workflow_snapshot: { ...matched.raw_metadata, slug: matched.slug },
     task_meta: taskMeta,
     task_title: params.task_title,
     description: params.description ?? null,
