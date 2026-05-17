@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  filterForSurfaceAndContext,
   groupForRender,
   isAllowed,
   satisfiesContext,
@@ -210,6 +211,76 @@ describe("groupForRender", () => {
     ]
     const out = groupForRender(ties, "admin", {})
     expect(out.s.map((a) => a.slug)).toEqual(["first", "alpha", "mid", "zeta"])
+  })
+})
+
+describe("filterForSurfaceAndContext", () => {
+  const actions: QuickAction[] = [
+    makeAction("create_task", {
+      surface: "portal_chat_message",
+      order: 10,
+      requires_all: ["account_id"],
+    }),
+    makeAction("create_sd", {
+      surface: "portal_chat_message",
+      order: 20,
+      requires_all: ["account_id"],
+      handler: {
+        kind: "open_modal",
+        modal_id: "quick_create",
+        modal_params: { create_type: "sd" },
+      },
+    }),
+    makeAction("create_invoice", {
+      surface: "portal_chat_message",
+      order: 30,
+      requires_all: ["account_id"],
+      handler: {
+        kind: "open_modal",
+        modal_id: "quick_create",
+        modal_params: { create_type: "invoice" },
+      },
+    }),
+    makeAction("future_thread_action", {
+      surface: "internal_thread_header",
+      order: 10,
+      requires_all: ["thread_id"],
+      handler: {
+        kind: "open_modal",
+        modal_id: "delete_thread_confirm",
+      },
+    }),
+  ]
+
+  it("returns only items for the requested surface", () => {
+    const out = filterForSurfaceAndContext(actions, "portal_chat_message", {
+      account_id: "a-1",
+    })
+    expect(out.map((a) => a.slug)).toEqual(["create_task", "create_sd", "create_invoice"])
+  })
+
+  it("returns empty when no items match the surface", () => {
+    const out = filterForSurfaceAndContext(actions, "nonexistent_surface", {
+      account_id: "a-1",
+    })
+    expect(out).toEqual([])
+  })
+
+  it("hides items whose context isn't satisfied (contact-only thread: no account_id)", () => {
+    const out = filterForSurfaceAndContext(actions, "portal_chat_message", {
+      contact_id: "c-1",
+    })
+    expect(out).toEqual([])
+  })
+
+  it("sorts deterministically by order ASC, slug ASC for ties", () => {
+    const ties: QuickAction[] = [
+      makeAction("zeta", { surface: "s", order: 10 }),
+      makeAction("alpha", { surface: "s", order: 10 }),
+      makeAction("first", { surface: "s", order: 5 }),
+    ]
+    const out = filterForSurfaceAndContext(ties, "s", {})
+    expect(out.map((a) => a.slug)).toEqual(["first", "alpha", "zeta"])
   })
 })
 

@@ -99,6 +99,35 @@ export function satisfiesContext(action: QuickAction, ctx: ChatContext): boolean
 }
 
 /**
+ * Filter + sort actions for a single dropdown rendering (one surface).
+ *
+ * Use this when a UI surface needs ONLY its own items for the current
+ * render context (e.g. portal-chats per-message dropdown wants only
+ * surface='portal_chat_message' items that satisfy the live message context).
+ *
+ * Server-side RBAC is the source of truth — the GET endpoint already
+ * filtered by role — so this helper does NOT re-filter by role. Pass the
+ * already-RBAC-filtered actions in.
+ *
+ * Sort: metadata.order ASC, ties broken by slug ASC for determinism.
+ */
+export function filterForSurfaceAndContext(
+  actions: QuickAction[],
+  surface: string,
+  ctx: ChatContext,
+): QuickAction[] {
+  return actions
+    .filter((a) => a.metadata.surface === surface)
+    .filter((a) => satisfiesContext(a, ctx))
+    .sort((x, y) => {
+      const ox = x.metadata.order ?? 0
+      const oy = y.metadata.order ?? 0
+      if (ox !== oy) return ox - oy
+      return x.slug.localeCompare(y.slug)
+    })
+}
+
+/**
  * Filter + group + sort a list of actions for rendering.
  *
  * Order:
