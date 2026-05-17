@@ -14,8 +14,39 @@ import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import { ThreadTasksPanel } from '@/components/portal-chats/thread-tasks-panel'
+import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
+import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
+
+// ─── chat_quick_actions catalog integration (Slice 6b) ──────────────────────
+//
+// Defense-in-depth: the per-message dropdown's "Create" section can be
+// rendered from the chat_quick_actions catalog (catalog-driven, future-flex)
+// OR from the hardcoded JSX below (today's known-good behavior). The catalog
+// path activates only when ALL of these hold:
+//   1. NEXT_PUBLIC_CHAT_QUICK_ACTIONS_CATALOG === 'on' (build-time feature flag)
+//   2. The GET endpoint returned at least one valid row (validateMetadata pass)
+//   3. ChatQuickActionsErrorBoundary did not catch a render-time crash
+// Any of those failing → hardcoded fallback renders. Antonio's daily flow
+// never breaks if the catalog goes sideways.
+//
+// IMPORTANT: only the "Create" section is catalog-driven in Slice 6b. The
+// Tag Message, Edit message, and Delete message items in the SAME dropdown
+// stay hardcoded (different concept: Tag tracks workflow_state, Edit/Delete
+// are content operations). If the mixed style ever bothers a future
+// reviewer, see master plan §🔒 Principle of Flexibility — the deferral
+// is intentional, not incomplete.
+const CHAT_QUICK_ACTIONS_CATALOG_FLAG = process.env.NEXT_PUBLIC_CHAT_QUICK_ACTIONS_CATALOG === 'on'
+
+/** Modal registry — components mounted by the open_modal primitive. Today
+ *  only QuickCreateModal exists (used by Task / Service / Invoice items).
+ *  Adding a new modal: build the component + register here + add catalog row. */
+const ICON_REGISTRY: Record<string, React.ComponentType<{ className?: string }>> = {
+  ClipboardList,
+  Truck,
+  Receipt,
+}
 
 interface ChatThread {
   account_id: string | null
@@ -479,6 +510,44 @@ export default function PortalChatsPage() {
       supabase.removeChannel(channel)
     }
   }, [queryClient, threads, playSound, notificationsEnabled])
+
+  // Fetch chat_quick_actions catalog (Slice 6b — only when flag is on).
+  // Server-side RBAC: endpoint returns only actions allowed for the user's role.
+  // Validation: each row's metadata is Zod-validated; malformed rows are dropped.
+  // If fetch fails, the catalog path falls back to hardcoded items.
+  const { data: catalogActionsRaw } = useQuery<{ actions: unknown[] }>({
+    queryKey: ['chat-quick-actions'],
+    queryFn: () => fetch('/api/portal/chat/quick-actions').then((r) => {
+      if (!r.ok) throw new Error(`quick-actions fetch failed: ${r.status}`)
+      return r.json()
+    }),
+    enabled: CHAT_QUICK_ACTIONS_CATALOG_FLAG,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: true,
+    retry: 1,
+  })
+
+  // Validate every row client-side (defense in depth — server already validates,
+  // but if a row was hand-edited via SQL bypass, we drop it here too).
+  const catalogActions: QuickAction[] = (catalogActionsRaw?.actions ?? [])
+    .map((raw) => {
+      const r = raw as { slug?: string; display_name?: string; display_name_translations?: Record<string, string>; description?: string | null; metadata?: unknown }
+      if (!r?.slug || typeof r.slug !== 'string') return null
+      if (typeof r.display_name !== 'string') return null
+      const metadata = validateMetadata(r.metadata)
+      if (!metadata) {
+        console.warn(`[chat_quick_actions] dropping invalid row: ${r.slug}`)
+        return null
+      }
+      return {
+        slug: r.slug,
+        display_name: r.display_name,
+        display_name_translations: r.display_name_translations ?? {},
+        description: r.description ?? null,
+        metadata,
+      } as QuickAction
+    })
+    .filter((a): a is QuickAction => a !== null)
 
   // Fetch message action tags for the selected thread
   const { data: messageActions } = useQuery<MessageAction[]>({
@@ -2105,28 +2174,97 @@ export default function PortalChatsPage() {
                               </DropdownMenu.Item>
                             )
                           })}
-                          <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
-                          <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-                            Create
-                          </DropdownMenu.Label>
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
-                            onSelect={() => setQuickCreate({ type: 'task', messageText: msg.message })}
-                          >
-                            <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Task
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
-                            onSelect={() => setQuickCreate({ type: 'sd', messageText: msg.message })}
-                          >
-                            <Truck className="h-3.5 w-3.5 text-zinc-400" /> Service
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
-                            onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.message })}
-                          >
-                            <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
-                          </DropdownMenu.Item>
+                          {(() => {
+                            // Slice 6b — chat_quick_actions catalog integration with 3-layer fallback.
+                            // See banner near the top of this file for the full design.
+                            const hardcodedCreate = (
+                              <>
+                                <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                                <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                                  Create
+                                </DropdownMenu.Label>
+                                <DropdownMenu.Item
+                                  className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                                  onSelect={() => setQuickCreate({ type: 'task', messageText: msg.message })}
+                                >
+                                  <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Task
+                                </DropdownMenu.Item>
+                                <DropdownMenu.Item
+                                  className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                                  onSelect={() => setQuickCreate({ type: 'sd', messageText: msg.message })}
+                                >
+                                  <Truck className="h-3.5 w-3.5 text-zinc-400" /> Service
+                                </DropdownMenu.Item>
+                                <DropdownMenu.Item
+                                  className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                                  onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.message })}
+                                >
+                                  <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
+                                </DropdownMenu.Item>
+                              </>
+                            )
+
+                            // Layer 1: flag off → hardcoded (default, today's behavior)
+                            if (!CHAT_QUICK_ACTIONS_CATALOG_FLAG) return hardcodedCreate
+
+                            // Layer 2: fetch failed / no valid rows → hardcoded
+                            if (!catalogActionsRaw || catalogActions.length === 0) return hardcodedCreate
+
+                            // Build the per-message context for filter + dispatch
+                            const chatContext: ChatContext = {
+                              account_id: selectedAccountId,
+                              contact_id: selectedContactId,
+                              thread_id: selectedThreadId,
+                              message_id: msg.id,
+                              message_text: msg.message,
+                              sender_type: msg.sender_type,
+                            }
+
+                            const items = filterForSurfaceAndContext(catalogActions, 'portal_chat_message', chatContext)
+
+                            // Intentional empty (every item correctly filtered out by requires_*)
+                            // → hide the Create section. This is the catalog working correctly,
+                            // not a failure. With flag ON, contact-only threads now correctly
+                            // hide items that require account_id (today's hardcoded items
+                            // appear-but-do-nothing on contact-only threads — see commit 6a).
+                            if (items.length === 0) return null
+
+                            const dispatch = (action: QuickAction) => {
+                              const h = action.metadata.handler
+                              if (h.kind === 'open_modal' && h.modal_id === 'quick_create') {
+                                const ct = h.modal_params?.create_type
+                                if (ct !== 'task' && ct !== 'sd' && ct !== 'invoice') {
+                                  console.warn(`[chat dispatch] invalid create_type on ${action.slug}:`, ct)
+                                  return
+                                }
+                                setQuickCreate({ type: ct, messageText: msg.message })
+                                return
+                              }
+                              console.warn(`[chat dispatch] unhandled handler for ${action.slug}:`, h)
+                            }
+
+                            // Layer 3: render-time crash → error boundary swaps to hardcoded
+                            return (
+                              <ChatQuickActionsErrorBoundary fallback={hardcodedCreate}>
+                                <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                                <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                                  Create
+                                </DropdownMenu.Label>
+                                {items.map((action) => {
+                                  const Icon = ICON_REGISTRY[action.metadata.icon] ?? ClipboardList
+                                  return (
+                                    <DropdownMenu.Item
+                                      key={action.slug}
+                                      className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                                      onSelect={() => dispatch(action)}
+                                    >
+                                      <Icon className="h-3.5 w-3.5 text-zinc-400" /> {action.display_name}
+                                    </DropdownMenu.Item>
+                                  )
+                                })}
+                              </ChatQuickActionsErrorBoundary>
+                            )
+                          })()}
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
                           {isAdmin && (
                             <DropdownMenu.Item
