@@ -102,6 +102,16 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
       : null
   const stateLabel = typeof workflowState === 'string' && workflowState ? workflowState : task.status
 
+  // Slice 10: SLA badge sourced from task_meta.sla_state (set by the
+  // /api/cron/workflow-sla-check cron). 'warn' = yellow, 'escalated' = red.
+  // Other values (or absent) → no badge.
+  const slaState =
+    task.task_meta && typeof task.task_meta === 'object'
+      ? (task.task_meta as Record<string, unknown>).sla_state
+      : undefined
+  const slaTier: 'warn' | 'escalated' | null =
+    slaState === 'warn' ? 'warn' : slaState === 'escalated' ? 'escalated' : null
+
   const lastError =
     task.task_meta && typeof task.task_meta === 'object'
       ? ((task.task_meta as Record<string, unknown>).last_error as
@@ -177,6 +187,23 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground/70">{task.assigned_to}</span>
           <span className="inline-flex items-center gap-1">{stateLabel}</span>
+          {slaTier && (
+            <span
+              title={
+                slaTier === 'warn'
+                  ? 'SLA warning — task is overdue for action'
+                  : 'SLA escalated — past the escalation threshold'
+              }
+              className={cn(
+                'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold',
+                slaTier === 'warn'
+                  ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
+                  : 'bg-red-100 text-red-700 border border-red-200',
+              )}
+            >
+              SLA {slaTier === 'warn' ? 'WARN' : 'ESCALATED'}
+            </span>
+          )}
           {dueInfo && (
             <span
               className={cn(
