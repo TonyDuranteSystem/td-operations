@@ -131,7 +131,10 @@ export async function POST(request: NextRequest) {
       contact_id: resolvedContactId,
       sender_type: "admin",
       sender_id: user.id,
-      sender_context: "team",
+      // sender_context is constrained to ('person' | 'company' | NULL). For
+      // auto-generated topic starter messages we leave it NULL (the admin is
+      // posting on behalf of the team, not specifically as person or company).
+      sender_context: null,
       topic: topicName,
       message: messageText,
       attachment_url: null,
