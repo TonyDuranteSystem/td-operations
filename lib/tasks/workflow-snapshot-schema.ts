@@ -99,6 +99,15 @@ export const WorkflowSnapshotSchema = z.object({
       warn_hours: z.number().positive(),
       escalate_hours: z.number().positive(),
       escalate_to: z.string().min(1),
+      // Slice 10: per-workflow opt-out for the default "reassign on escalate"
+      // behavior. Default true — task moves to sla.escalate_to. Set false to
+      // keep the original assignee while still flagging the task as escalated.
+      auto_reassign: z.boolean().optional(),
+      // Slice 10: per-workflow staff inbox override for the escalation email.
+      // Default "support@tonydurante.us" applied at cron runtime when
+      // escalate_to is set. Set to empty string to suppress the email entirely
+      // (e.g. for workflows where the reassign alone is the signal).
+      notify_email_to: z.string().optional(),
     })
     .optional(),
   actions: z.array(WorkflowActionDefinitionSchema).min(1),

@@ -97,6 +97,10 @@
       "schedule": "0 9 * * 1"
     },
     {
+      "path": "/api/cron/workflow-sla-check",
+      "schedule": "0 * * * *"
+    },
+    {
       "path": "/api/cron/audit-health-check",
       "schedule": "0 7 * * *"
     },

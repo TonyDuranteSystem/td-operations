@@ -63,7 +63,15 @@ export interface WorkflowSnapshot {
   attachment_template?: string
   task_meta_schema?: string
   auto_topic?: string
-  sla?: { warn_hours: number; escalate_hours: number; escalate_to: string }
+  sla?: {
+    warn_hours: number
+    escalate_hours: number
+    escalate_to: string
+    /** Slice 10: opt-out per workflow. Default true — reassign on escalate. */
+    auto_reassign?: boolean
+    /** Slice 10: staff inbox override; default "support@tonydurante.us"; empty string = skip email. */
+    notify_email_to?: string
+  }
   actions: WorkflowActionDefinition[]
 }
 
