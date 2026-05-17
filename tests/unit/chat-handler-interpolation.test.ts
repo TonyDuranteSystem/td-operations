@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  interpolateBodyTemplate,
   interpolateRecord,
   interpolateRecordStrict,
   interpolateString,
@@ -119,6 +120,88 @@ describe("interpolateRecordStrict", () => {
       account_id: "a-1",
       contact_id: "c-1",
       starter_message_en: "Hi",
+    })
+  })
+})
+
+describe("interpolateBodyTemplate (Slice 7 — null pass-through for api_call bodies)", () => {
+  it("single-token wrap preserves typed null value", () => {
+    const out = interpolateBodyTemplate(
+      { account_id: "{account_id}", contact_id: "{contact_id}" },
+      { account_id: "a-1", contact_id: null },
+    )
+    expect(out).toEqual({ account_id: "a-1", contact_id: null })
+  })
+
+  it("single-token wrap with missing context returns null (not literal placeholder)", () => {
+    const out = interpolateBodyTemplate(
+      { account_id: "{account_id}" },
+      {},
+    )
+    expect(out).toEqual({ account_id: null })
+  })
+
+  it("single-token wrap with undefined returns null", () => {
+    const out = interpolateBodyTemplate(
+      { account_id: "{account_id}" },
+      { account_id: undefined },
+    )
+    expect(out).toEqual({ account_id: null })
+  })
+
+  it("non-wrapped strings use non-strict interpolation (placeholder stays on miss)", () => {
+    const out = interpolateBodyTemplate(
+      { message: "Hello {client_name}, welcome!" },
+      {},
+    )
+    expect(out).toEqual({ message: "Hello {client_name}, welcome!" })
+  })
+
+  it("plain literal strings pass through unchanged", () => {
+    const out = interpolateBodyTemplate(
+      { topic_name: "Banking", starter: "Hi" },
+      {},
+    )
+    expect(out).toEqual({ topic_name: "Banking", starter: "Hi" })
+  })
+
+  it("non-string leaves pass through (numbers, booleans, arrays, nested objects)", () => {
+    const out = interpolateBodyTemplate(
+      { count: 5, flag: true, list: [1, 2], nested: { a: 1 } },
+      {},
+    )
+    expect(out).toEqual({ count: 5, flag: true, list: [1, 2], nested: { a: 1 } })
+  })
+
+  it("handles the topic_templates body_template shape end-to-end", () => {
+    // The real shape used by Slice 7's topic_templates seed rows.
+    const template = {
+      topic_name: "Banking",
+      account_id: "{account_id}",
+      contact_id: "{contact_id}",
+      starter_message_en: "Hi! Opening banking topic.",
+      starter_message_it: "Ciao! Apriamo argomento banking.",
+    }
+    // Account-level thread (contact_id null) — the failure case that
+    // triggered this helper's existence.
+    expect(
+      interpolateBodyTemplate(template, { account_id: "a-1", contact_id: null }),
+    ).toEqual({
+      topic_name: "Banking",
+      account_id: "a-1",
+      contact_id: null,
+      starter_message_en: "Hi! Opening banking topic.",
+      starter_message_it: "Ciao! Apriamo argomento banking.",
+    })
+    // Contact-level thread (account_id null)
+    expect(
+      interpolateBodyTemplate(template, { account_id: null, contact_id: "c-1" }),
+    ).toEqual({
+      topic_name: "Banking",
+      account_id: null,
+      contact_id: "c-1",
+      starter_message_en: "Hi! Opening banking topic.",
+      starter_message_it: "Ciao! Apriamo argomento banking.",
     })
   })
 })

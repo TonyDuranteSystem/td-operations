@@ -21,7 +21,7 @@ import {
   validateMetadata as validateTopicMetadata,
   type TopicTemplate,
 } from '@/lib/chat/topic-templates'
-import { interpolateRecordStrict, interpolateStringStrict } from '@/lib/chat/handler-primitives'
+import { interpolateBodyTemplate, interpolateStringStrict } from '@/lib/chat/handler-primitives'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -2127,13 +2127,13 @@ export default function PortalChatsPage() {
                         return
                       }
                       const url = interpolateStringStrict(h.url_template, topicCtx)
-                      const body = h.body_template
-                        ? interpolateRecordStrict(h.body_template, topicCtx)
-                        : {}
-                      if (!url || !body) {
+                      if (!url) {
                         toast.error('Missing context — cannot open topic on this thread')
                         return
                       }
+                      const body = h.body_template
+                        ? interpolateBodyTemplate(h.body_template, topicCtx)
+                        : {}
                       try {
                         const res = await fetch(url, {
                           method: h.method,

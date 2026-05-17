@@ -243,6 +243,50 @@ export function interpolateRecordStrict(
   return out
 }
 
+/**
+ * Body-template interpolation with NULL PASS-THROUGH.
+ *
+ * Distinguishes between two string-leaf shapes:
+ *
+ *  1. Single-token wrap (e.g. `"{account_id}"`): the leaf is replaced with
+ *     the TYPED value from context — including `null` or `undefined`.
+ *     The result keeps the typed value (not a string), so an endpoint
+ *     receiving `{ account_id: null }` sees a real null, not the literal
+ *     string `"null"` or the placeholder `"{account_id}"`.
+ *
+ *  2. Multi-token / partial-token strings (e.g. `"Hello {name}!"` or `"foo"`):
+ *     uses non-strict `interpolateString` — missing tokens leave placeholders.
+ *     This is the right behavior for human-readable copy where a missing name
+ *     should fall back to the placeholder text rather than fail the dispatch.
+ *
+ * Non-string leaves (numbers, booleans, arrays, nested objects) pass through.
+ *
+ * Use this for api_call body_template. Use `interpolateStringStrict` for
+ * url_template (URLs cannot have null path segments).
+ */
+export function interpolateBodyTemplate(
+  obj: Record<string, unknown>,
+  context: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v !== "string") {
+      out[k] = v
+      continue
+    }
+    // Single-token wrap: e.g. "{account_id}" — preserve typed value.
+    const singleToken = v.match(/^\{([a-zA-Z0-9_.]+)\}$/)
+    if (singleToken) {
+      const value = resolvePath(context, singleToken[1])
+      out[k] = value ?? null
+      continue
+    }
+    // Multi-token / partial: non-strict string interpolation.
+    out[k] = interpolateString(v, context)
+  }
+  return out
+}
+
 /** Resolve a dot-path like "response.task_id" against an object. */
 function resolvePath(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split(".")
