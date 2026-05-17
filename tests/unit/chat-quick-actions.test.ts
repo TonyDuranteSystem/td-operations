@@ -347,13 +347,16 @@ describe("validateMetadata", () => {
     expect(validateMetadata({ ...good, handler: { kind: "ftp_upload", path: "/x" } })).toBeNull()
   })
 
-  it("rejects documented-but-not-yet-implemented primitives (api_call/navigate/client_action)", () => {
+  it("accepts api_call (Slice 7 added the primitive to IMPLEMENTED_PRIMITIVES)", () => {
     expect(
       validateMetadata({
         ...good,
         handler: { kind: "api_call", method: "POST", url_template: "/api/x" },
       }),
-    ).toBeNull()
+    ).not.toBeNull()
+  })
+
+  it("rejects still-staged primitives (navigate, client_action)", () => {
     expect(
       validateMetadata({ ...good, handler: { kind: "navigate", url_template: "/tasks" } }),
     ).toBeNull()

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus, Pencil } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -16,6 +16,12 @@ import dynamic from 'next/dynamic'
 import { ThreadTasksPanel } from '@/components/portal-chats/thread-tasks-panel'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
+import {
+  filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
+  validateMetadata as validateTopicMetadata,
+  type TopicTemplate,
+} from '@/lib/chat/topic-templates'
+import { interpolateRecordStrict, interpolateStringStrict } from '@/lib/chat/handler-primitives'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -38,14 +44,26 @@ const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 // reviewer, see master plan §🔒 Principle of Flexibility — the deferral
 // is intentional, not incomplete.
 const CHAT_QUICK_ACTIONS_CATALOG_FLAG = process.env.NEXT_PUBLIC_CHAT_QUICK_ACTIONS_CATALOG === 'on'
+const CHAT_TOPIC_TEMPLATES_CATALOG_FLAG = process.env.NEXT_PUBLIC_CHAT_TOPIC_TEMPLATES_CATALOG === 'on'
 
-/** Modal registry — components mounted by the open_modal primitive. Today
- *  only QuickCreateModal exists (used by Task / Service / Invoice items).
- *  Adding a new modal: build the component + register here + add catalog row. */
+/** Modal + icon registries — components mounted by the open_modal primitive
+ *  and lucide icons referenced from catalog rows. Today only QuickCreateModal
+ *  exists for chat_quick_actions. topic_templates icons (FileSignature,
+ *  Landmark, Calculator, Home, XCircle, MessageCircle) are imported separately
+ *  and added below. */
 const ICON_REGISTRY: Record<string, React.ComponentType<{ className?: string }>> = {
+  // chat_quick_actions icons (Slice 6a):
   ClipboardList,
   Truck,
   Receipt,
+  Plus,
+  // topic_templates icons (Slice 7):
+  FileSignature,
+  Landmark,
+  Calculator,
+  Home,
+  XCircle,
+  MessageCircle,
 }
 
 interface ChatThread {
@@ -526,6 +544,39 @@ export default function PortalChatsPage() {
     refetchOnWindowFocus: true,
     retry: 1,
   })
+
+  // Slice 7 — fetch topic_templates catalog (only when flag is on).
+  const { data: topicTemplatesRaw } = useQuery<{ templates: unknown[] }>({
+    queryKey: ['chat-topic-templates'],
+    queryFn: () => fetch('/api/portal/chat/topic-templates').then((r) => {
+      if (!r.ok) throw new Error(`topic-templates fetch failed: ${r.status}`)
+      return r.json()
+    }),
+    enabled: CHAT_TOPIC_TEMPLATES_CATALOG_FLAG,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: true,
+    retry: 1,
+  })
+
+  const topicTemplates: TopicTemplate[] = (topicTemplatesRaw?.templates ?? [])
+    .map((raw) => {
+      const r = raw as { slug?: string; display_name?: string; display_name_translations?: Record<string, string>; description?: string | null; metadata?: unknown }
+      if (!r?.slug || typeof r.slug !== 'string') return null
+      if (typeof r.display_name !== 'string') return null
+      const metadata = validateTopicMetadata(r.metadata)
+      if (!metadata) {
+        console.warn(`[topic_templates] dropping invalid row: ${r.slug}`)
+        return null
+      }
+      return {
+        slug: r.slug,
+        display_name: r.display_name,
+        display_name_translations: r.display_name_translations ?? {},
+        description: r.description ?? null,
+        metadata,
+      } as TopicTemplate
+    })
+    .filter((t): t is TopicTemplate => t !== null)
 
   // Validate every row client-side (defense in depth — server already validates,
   // but if a row was hand-edited via SQL bypass, we drop it here too).
@@ -2043,13 +2094,110 @@ export default function PortalChatsPage() {
                     className="shrink-0 px-2.5 py-1 text-[11px] rounded-full border border-blue-300 outline-none bg-white text-zinc-800 placeholder:text-zinc-400 w-32"
                   />
                 ) : (
-                  <button
-                    onClick={() => setAdminCreatingTopic(true)}
-                    className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Create a new topic
-                  </button>
+                  (() => {
+                    // Slice 7 — topic_templates catalog integration with 3-layer fallback.
+                    // Default UX (flag off OR fetch fail OR validation fail OR render crash):
+                    // the existing free-text "Create a new topic" button below. Catalog path:
+                    // dropdown of templates + "Custom..." fallback that reveals the same input.
+                    const hardcodedButton = (
+                      <button
+                        onClick={() => setAdminCreatingTopic(true)}
+                        className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Create a new topic
+                      </button>
+                    )
+
+                    if (!CHAT_TOPIC_TEMPLATES_CATALOG_FLAG) return hardcodedButton
+                    if (!topicTemplatesRaw || topicTemplates.length === 0) return hardcodedButton
+
+                    const topicCtx = {
+                      account_id: selectedAccountId,
+                      contact_id: selectedContactId,
+                      thread_id: selectedThreadId,
+                    }
+                    const items = filterTopicsForSurfaceAndContext(topicTemplates, 'portal_chat_topic_create', topicCtx)
+                    if (items.length === 0) return hardcodedButton
+
+                    const dispatchTopic = async (template: TopicTemplate) => {
+                      const h = template.metadata.handler
+                      if (h.kind !== 'api_call') {
+                        console.warn(`[topic dispatch] unsupported handler kind for ${template.slug}:`, h.kind)
+                        return
+                      }
+                      const url = interpolateStringStrict(h.url_template, topicCtx)
+                      const body = h.body_template
+                        ? interpolateRecordStrict(h.body_template, topicCtx)
+                        : {}
+                      if (!url || !body) {
+                        toast.error('Missing context — cannot open topic on this thread')
+                        return
+                      }
+                      try {
+                        const res = await fetch(url, {
+                          method: h.method,
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(body),
+                        })
+                        if (!res.ok) {
+                          const d = await res.json().catch(() => ({}))
+                          throw new Error(d.error || `Failed to open topic (HTTP ${res.status})`)
+                        }
+                        const data = (await res.json()) as { topic_name?: string }
+                        const onSuccess = template.metadata.on_success
+                        if (onSuccess?.toast) toast.success(onSuccess.toast)
+                        if (onSuccess?.set_active_topic && data.topic_name) {
+                          setAdminActiveTopic(data.topic_name)
+                          // Refetch messages so the new topic tab appears immediately.
+                          queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+                        }
+                      } catch (err) {
+                        toast.error(err instanceof Error && err.message ? err.message : 'Failed to open topic')
+                      }
+                    }
+
+                    return (
+                      <ChatQuickActionsErrorBoundary fallback={hardcodedButton}>
+                        <DropdownMenu.Root>
+                          <DropdownMenu.Trigger asChild>
+                            <button className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors">
+                              <Plus className="h-3 w-3" />
+                              Create a new topic
+                              <ChevronDown className="h-3 w-3" />
+                            </button>
+                          </DropdownMenu.Trigger>
+                          <DropdownMenu.Portal>
+                            <DropdownMenu.Content
+                              className="min-w-[180px] rounded-lg bg-white shadow-lg border border-zinc-200 py-1 z-50"
+                              align="start"
+                              sideOffset={4}
+                            >
+                              {items.map((template) => {
+                                const Icon = ICON_REGISTRY[template.metadata.icon] ?? MessageCircle
+                                return (
+                                  <DropdownMenu.Item
+                                    key={template.slug}
+                                    className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                                    onSelect={() => dispatchTopic(template)}
+                                  >
+                                    <Icon className="h-3.5 w-3.5 text-zinc-400" /> {template.display_name}
+                                  </DropdownMenu.Item>
+                                )
+                              })}
+                              <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                              <DropdownMenu.Item
+                                className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                                onSelect={() => setAdminCreatingTopic(true)}
+                              >
+                                <Pencil className="h-3.5 w-3.5 text-zinc-400" /> Custom…
+                              </DropdownMenu.Item>
+                            </DropdownMenu.Content>
+                          </DropdownMenu.Portal>
+                        </DropdownMenu.Root>
+                      </ChatQuickActionsErrorBoundary>
+                    )
+                  })()
                 )}
               </div>
             )}

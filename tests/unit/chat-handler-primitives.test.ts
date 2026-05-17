@@ -23,8 +23,8 @@ describe("primitive registry constants", () => {
     ])
   })
 
-  it("today only open_modal is implemented (staged-implementation policy)", () => {
-    expect([...IMPLEMENTED_PRIMITIVES].sort()).toEqual(["open_modal"])
+  it("as of Slice 7, open_modal and api_call are implemented", () => {
+    expect([...IMPLEMENTED_PRIMITIVES].sort()).toEqual(["api_call", "open_modal"])
   })
 })
 
@@ -61,23 +61,52 @@ describe("validatePrimitiveHandler — open_modal (implemented)", () => {
   })
 })
 
-describe("validatePrimitiveHandler — staged gating", () => {
-  it("rejects api_call until a slice implements it", () => {
-    const wellFormed = {
+describe("validatePrimitiveHandler — api_call (implemented Slice 7)", () => {
+  it("accepts a minimal api_call handler", () => {
+    const h = { kind: "api_call", method: "POST", url_template: "/api/x" }
+    expect(validatePrimitiveHandler(h)).toEqual(h)
+  })
+
+  it("accepts api_call with body_template", () => {
+    const h = {
       kind: "api_call",
       method: "POST",
       url_template: "/api/x",
-      body_template: { y: 1 },
+      body_template: { topic_name: "T", account_id: "{account_id}" },
     }
-    // Shape would be valid IF api_call were implemented — but it's not yet.
-    expect(validatePrimitiveHandler(wellFormed)).toBeNull()
+    expect(validatePrimitiveHandler(h)).toEqual(h)
   })
 
-  it("rejects navigate until implemented", () => {
+  it("rejects api_call with invalid method", () => {
+    expect(
+      validatePrimitiveHandler({ kind: "api_call", method: "TRACE", url_template: "/x" }),
+    ).toBeNull()
+  })
+
+  it("rejects api_call with empty url_template", () => {
+    expect(
+      validatePrimitiveHandler({ kind: "api_call", method: "POST", url_template: "" }),
+    ).toBeNull()
+  })
+
+  it("rejects api_call with non-object body_template", () => {
+    expect(
+      validatePrimitiveHandler({
+        kind: "api_call",
+        method: "POST",
+        url_template: "/x",
+        body_template: "nope",
+      }),
+    ).toBeNull()
+  })
+})
+
+describe("validatePrimitiveHandler — still-staged gating", () => {
+  it("rejects navigate until its first consumer ships", () => {
     expect(validatePrimitiveHandler({ kind: "navigate", url_template: "/x" })).toBeNull()
   })
 
-  it("rejects client_action until implemented", () => {
+  it("rejects client_action until its first consumer ships", () => {
     expect(
       validatePrimitiveHandler({ kind: "client_action", action: "copy_to_clipboard" }),
     ).toBeNull()

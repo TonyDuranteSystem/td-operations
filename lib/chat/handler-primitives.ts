@@ -51,9 +51,15 @@ export const PRIMITIVE_KINDS = [
 export type PrimitiveKind = (typeof PRIMITIVE_KINDS)[number]
 
 /** Which primitives are implemented today (gating set). Updated when a
- *  new primitive ships in its own slice. */
+ *  new primitive ships in its own slice.
+ *  - open_modal      : Slice 6a-followup (chat_quick_actions Create section)
+ *  - api_call        : Slice 7 (topic_templates first consumer)
+ *  - navigate        : not yet implemented — ship on first consumer
+ *  - client_action   : not yet implemented — ship on first consumer
+ */
 export const IMPLEMENTED_PRIMITIVES: ReadonlySet<PrimitiveKind> = new Set<PrimitiveKind>([
   "open_modal",
+  "api_call",
 ])
 
 // ── Discriminated-union shape for the `metadata.handler` field ────────────
@@ -157,4 +163,116 @@ export function validatePrimitiveHandler(raw: unknown): PrimitiveHandler | null 
       return null
     }
   }
+}
+
+// ── Template interpolation (used by api_call / navigate / client_action) ──
+
+/**
+ * Interpolate `{token}` placeholders in a string from the context map.
+ * Tokens not present in context are LEFT AS-IS (defense-in-depth: caller
+ * decides whether missing tokens are fatal — see `interpolateStringStrict`).
+ *
+ * Supported syntax: `{name}` — alphanumeric, underscore, dot (for nested
+ * paths in response interpolation, e.g. `{response.task_id}`).
+ */
+export function interpolateString(template: string, context: Record<string, unknown>): string {
+  return template.replace(/\{([a-zA-Z0-9_.]+)\}/g, (match, key) => {
+    const value = resolvePath(context, key)
+    if (value === undefined || value === null) return match
+    return String(value)
+  })
+}
+
+/**
+ * Strict variant: returns null if ANY referenced token is missing or null.
+ * Used at api_call dispatch time so we never send a request with literal
+ * `{account_id}` in the URL or body.
+ */
+export function interpolateStringStrict(
+  template: string,
+  context: Record<string, unknown>,
+): string | null {
+  const tokens = Array.from(template.matchAll(/\{([a-zA-Z0-9_.]+)\}/g)).map((m) => m[1])
+  for (const token of tokens) {
+    const value = resolvePath(context, token)
+    if (value === undefined || value === null || value === "") return null
+  }
+  return interpolateString(template, context)
+}
+
+/**
+ * Interpolate all string-typed leaf values in a record. Non-string leaves
+ * (numbers, booleans, arrays, nested objects) pass through unchanged.
+ * Missing tokens leave the placeholder as-is (non-strict variant).
+ */
+export function interpolateRecord(
+  obj: Record<string, unknown>,
+  context: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "string") {
+      out[k] = interpolateString(v, context)
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+/**
+ * Strict record interpolation: returns null if ANY referenced token in ANY
+ * string leaf is missing. Used by api_call to refuse dispatch when context
+ * is incomplete (defense in depth — the action shouldn't even render in the
+ * menu if requires_all/requires_any fails, but we guard anyway).
+ */
+export function interpolateRecordStrict(
+  obj: Record<string, unknown>,
+  context: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "string") {
+      const interp = interpolateStringStrict(v, context)
+      if (interp === null) return null
+      out[k] = interp
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+/** Resolve a dot-path like "response.task_id" against an object. */
+function resolvePath(obj: Record<string, unknown>, path: string): unknown {
+  const parts = path.split(".")
+  let cur: unknown = obj
+  for (const part of parts) {
+    if (cur === null || cur === undefined || typeof cur !== "object") return undefined
+    cur = (cur as Record<string, unknown>)[part]
+  }
+  return cur
+}
+
+// ── on_success post-action behavior shape ────────────────────────────────
+
+/**
+ * Optional behavior to run after a primitive's main effect succeeds.
+ * Surface-specific consumers interpret these fields; unknown fields are
+ * ignored.
+ *
+ * - toast: string to show in a success toast
+ * - navigate_url_template: URL to push (client-side router) after success
+ * - close_menu: collapse the dropdown that fired the action
+ * - set_active_topic: chat-specific — after a topic_templates api_call
+ *   succeeds, switch the page's adminActiveTopic to the response.topic_name
+ *
+ * Adding a new on_success behavior = one new field here + handle it in the
+ * consumer page. Keep this list small and grounded in real consumers.
+ */
+export interface OnSuccessConfig {
+  toast?: string
+  navigate_url_template?: string
+  close_menu?: boolean
+  set_active_topic?: boolean
 }
