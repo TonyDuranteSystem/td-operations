@@ -29,7 +29,7 @@ export type CatalogDecisionLogAction = "added" | "renamed" | "deprecated" | "res
 export type CatalogDecisionLogActorKind = "chat" | "ui" | "migration" | "admin_api"
 
 /** catalog_entries.status — CHECK constraint */
-export type CatalogEntriesStatus = "active" | "deprecated" | "exception_only"
+export type CatalogEntriesStatus = "active" | "deprecated" | "exception_only" | "draft"
 
 /** catalog_pending_review.source — CHECK constraint */
 export type CatalogPendingReviewSource = "whop_webhook" | "stripe_webhook" | "plaid_webhook" | "manual_form" | "admin_input" | "mcp_tool"
@@ -63,3 +63,6 @@ export type PortalMessagesSenderContext = "person" | "company"
 
 /** service_catalog.default_service_context — CHECK constraint */
 export type ServiceCatalogDefaultServiceContext = "individual" | "business" | "ask"
+
+/** task_action_log.status — CHECK constraint */
+export type TaskActionLogStatus = "pending" | "success" | "failed" | "partial"

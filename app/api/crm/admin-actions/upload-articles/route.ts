@@ -44,9 +44,20 @@ export async function POST(req: NextRequest) {
     const formationDate = form.get("formation_date") as string | null
     const filingId = (form.get("filing_id") as string | null) || undefined
     const registeredAgentId = (form.get("registered_agent_id") as string | null) || undefined
+    const formationStateRaw = (form.get("formation_state") as string | null)?.trim().toUpperCase() || undefined
+    const VALID_STATES = new Set(["NM", "WY", "FL", "DE"])
+    const formationState = formationStateRaw && VALID_STATES.has(formationStateRaw)
+      ? (formationStateRaw as "NM" | "WY" | "FL" | "DE")
+      : undefined
 
     if (!file || !contactId) {
       return NextResponse.json({ error: "file and contact_id are required" }, { status: 400 })
+    }
+    if (formationStateRaw && !formationState) {
+      return NextResponse.json(
+        { error: `Invalid formation_state "${formationStateRaw}". Expected NM, WY, FL, or DE.` },
+        { status: 400 },
+      )
     }
 
     // 1. Resolve contact + chosen name (so we can build a clean filename).
@@ -128,6 +139,7 @@ export async function POST(req: NextRequest) {
       formation_date: formationDate || undefined,
       filing_id: filingId,
       registered_agent_id: registeredAgentId,
+      formation_state: formationState,
       actor: `crm-admin:${user?.email ?? "unknown"}`,
     })
 

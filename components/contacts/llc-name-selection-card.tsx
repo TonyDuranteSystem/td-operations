@@ -66,6 +66,7 @@ export function LlcNameSelectionCard({
   const [uploading, setUploading] = useState(false)
   const [formationDate, setFormationDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [filingId, setFilingId] = useState('')
+  const [formationState, setFormationState] = useState<'' | 'NM' | 'WY' | 'FL' | 'DE'>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Find formation wizard that's been submitted
@@ -121,12 +122,17 @@ export function LlcNameSelectionCard({
       toast.error('Set the formation date')
       return
     }
+    if (!formationState) {
+      toast.error('Pick the formation state')
+      return
+    }
     setUploading(true)
     try {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('contact_id', contactId)
       fd.append('formation_date', formationDate)
+      fd.append('formation_state', formationState)
       if (filingId.trim()) fd.append('filing_id', filingId.trim())
       const res = await fetch('/api/crm/admin-actions/upload-articles', {
         method: 'POST',
@@ -450,6 +456,20 @@ export function LlcNameSelectionCard({
                   onChange={e => setFormationDate(e.target.value)}
                   className="w-full text-sm border border-zinc-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 mb-1">Formation state</label>
+                <select
+                  value={formationState}
+                  onChange={e => setFormationState(e.target.value as '' | 'NM' | 'WY' | 'FL' | 'DE')}
+                  className="w-full text-sm border border-zinc-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">Select state…</option>
+                  <option value="NM">New Mexico (NM)</option>
+                  <option value="WY">Wyoming (WY)</option>
+                  <option value="FL">Florida (FL)</option>
+                  <option value="DE">Delaware (DE)</option>
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-zinc-700 mb-1">SOS filing ID (optional)</label>

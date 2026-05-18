@@ -56,6 +56,13 @@ export interface MaterializeFormationParams {
   filing_id?: string
   /** FK to addresses.id. Optional — admin can link RA after materialization. */
   registered_agent_id?: string
+  /**
+   * Admin-supplied state of formation. When provided, overrides any state
+   * value on formation_submissions. Required when no formation_submissions
+   * row exists for the contact (resolver falls back to wizard_progress, which
+   * does not capture the formation state — only owner residence).
+   */
+  formation_state?: "NM" | "WY" | "FL" | "DE"
   actor?: string
 }
 
@@ -102,8 +109,20 @@ export async function materializeFormationCompany(
     index: number
   }[] = []
 
+  // Flexible formation-data resolver: prefer formation_submissions; fall back
+  // to wizard_progress.data when the row is missing. Admin-supplied state
+  // (params.formation_state) overrides any state on the submission row, since
+  // wizard_progress never captures the formation state and admin is the only
+  // source of truth at upload time.
+  let resolverSource: "formation_submissions" | "wizard_progress" = "formation_submissions"
+  let submittedData: Record<string, unknown> = {}
+  let uploadPaths: string[] = []
+  let submissionState: string | null = null
+  let submissionEntityType: string | null = null
+  let submissionId: string | null = null
+
   try {
-    // 1. Latest completed formation submission for this contact.
+    // 1a. Try formation_submissions first.
     const { data: sub } = await supabaseAdmin
       .from("formation_submissions")
       .select("id, submitted_data, upload_paths, state, entity_type")
@@ -113,17 +132,7 @@ export async function materializeFormationCompany(
       .limit(1)
       .maybeSingle()
 
-    if (!sub) {
-      return {
-        success: false,
-        outcome: "missing_submission",
-        steps,
-        error: "No completed formation submission found for this contact.",
-      }
-    }
-    steps.push({ step: "fetch_submission", status: "ok", detail: `submission ${sub.id}` })
-
-    // 2. Wizard progress with the chosen name.
+    // 2. Wizard progress (always read — needed for chosen_name and for fallback data).
     const { data: wp } = await supabaseAdmin
       .from("wizard_progress")
       .select("id, data")
@@ -135,6 +144,43 @@ export async function materializeFormationCompany(
       .maybeSingle()
 
     const wizardData = (wp?.data || {}) as Record<string, unknown>
+
+    if (sub) {
+      submissionId = sub.id
+      submittedData = (sub.submitted_data || {}) as Record<string, unknown>
+      uploadPaths = Array.isArray(sub.upload_paths) ? (sub.upload_paths as string[]) : []
+      submissionState = sub.state ?? null
+      submissionEntityType = sub.entity_type ?? null
+      steps.push({ step: "fetch_submission", status: "ok", detail: `formation_submissions ${sub.id}` })
+    } else {
+      // 1b. Fallback to wizard_progress.data. Surgical recovery path for the
+      // pre-fix wizard-submit window where formation_submissions could be
+      // missing while wizard_progress was correctly written.
+      if (!wp) {
+        return {
+          success: false,
+          outcome: "missing_submission",
+          steps,
+          error:
+            "No completed formation submission found for this contact, and no submitted formation wizard either. Ask the client to (re)submit the formation wizard from the portal.",
+        }
+      }
+      resolverSource = "wizard_progress"
+      submittedData = wizardData
+      // Extract upload paths from the wizard data using the same convention
+      // wizard-submit uses (any string value starting with "formation/").
+      for (const val of Object.values(wizardData)) {
+        if (typeof val === "string" && val.startsWith("formation/")) uploadPaths.push(val)
+      }
+      submissionState = null
+      submissionEntityType = (wizardData.entity_type as string | undefined) ?? null
+      steps.push({
+        step: "fetch_submission",
+        status: "skipped",
+        detail: `No formation_submissions row — falling back to wizard_progress ${wp.id} (self-heal will write the missing row on success)`,
+      })
+    }
+
     const chosenName = String(wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
     if (!chosenName) {
       return {
@@ -173,21 +219,35 @@ export async function materializeFormationCompany(
     }
 
     // 4. State + entity_type.
-    const rawState = String(sub.state || "").toUpperCase().trim()
-    if (!VALID_STATE_CODES.has(rawState)) {
+    // Admin-supplied state wins (it's the only source of truth at upload time
+    // — wizard_progress never captures formation state, and formation_submissions
+    // is often null in this column). Falls back to the submission row's state
+    // when no admin value was provided.
+    const resolvedStateRaw = params.formation_state
+      ? params.formation_state
+      : String(submissionState || "").toUpperCase().trim()
+    if (!VALID_STATE_CODES.has(resolvedStateRaw)) {
       return {
         success: false,
         outcome: "invalid_state",
         steps,
-        error: `Invalid or missing state in formation_submissions: "${sub.state}". Expected one of NM/WY/FL/DE.`,
+        error: params.formation_state
+          ? `Invalid formation_state "${params.formation_state}". Expected one of NM/WY/FL/DE.`
+          : `No formation state available. ${resolverSource === "wizard_progress" ? "Wizard data does not capture formation state — admin must pass formation_state at upload time (NM/WY/FL/DE)." : `formation_submissions.state is "${submissionState}", which is not NM/WY/FL/DE — admin must pass formation_state to override.`}`,
       }
     }
-    const stateName = STATE_NAME_FROM_CODE[rawState]
+    const stateName = STATE_NAME_FROM_CODE[resolvedStateRaw]
+    if (params.formation_state && submissionState && submissionState.toUpperCase() !== params.formation_state) {
+      steps.push({
+        step: "state_override",
+        status: "ok",
+        detail: `Admin-supplied state ${params.formation_state} overrides submission state ${submissionState}`,
+      })
+    }
 
-    const submitted = (sub.submitted_data || {}) as Record<string, unknown>
-    const entityTypeFromSub = sub.entity_type as string | null
+    const submitted = submittedData
     const entityType: "Single Member LLC" | "Multi Member LLC" =
-      entityTypeFromSub === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
+      submissionEntityType === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
     const isMMLC = entityType === "Multi Member LLC"
 
     // 5. Create the account.
@@ -238,7 +298,8 @@ export async function materializeFormationCompany(
     let additionalPctSum = 0
     if (isMMLC) {
       const additionalMembers = extractMembersFromWizardData(submitted)
-      const uploadPaths: string[] = Array.isArray(sub.upload_paths) ? (sub.upload_paths as string[]) : []
+      // Uses the resolver-supplied uploadPaths (from formation_submissions when
+      // present; extracted from wizard_progress.data when in fallback mode).
       primaryMemberIndex = typeof submitted.primary_member_index === "number" ? submitted.primary_member_index as number : 0
       additionalPctSum = additionalMembers.reduce((sum, m) => sum + (m.member_ownership_pct ?? 0), 0)
 
@@ -532,6 +593,98 @@ export async function materializeFormationCompany(
       status: "ok",
       detail: `${updatedSds?.length ?? 0} SD(s) linked to account`,
     })
+
+    // 10b. Self-heal: if we got here via wizard_progress fallback (no
+    // formation_submissions row existed), write the canonical row now so
+    // future audits, re-runs, and any code that queries formation_submissions
+    // see a consistent record. Token follows wizard-submit's portal-{slug}-{year}
+    // convention; conflict-on-token is benign (someone else's row with the same
+    // slug — leave it alone, we still proceeded successfully).
+    if (resolverSource === "wizard_progress" && !submissionId) {
+      try {
+        const ownerFullName = [submitted.owner_first_name, submitted.owner_last_name]
+          .filter(Boolean).map(String).join(" ")
+        const slugSource = (ownerFullName || chosenName || "client").toLowerCase()
+        const nameSlug = slugSource.replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").slice(0, 40)
+        const year = new Date(formationDate).getFullYear() || new Date().getFullYear()
+        const selfHealToken = `portal-${nameSlug}-${year}-heal`
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- types lag the column set
+        const healRow: Record<string, unknown> = {
+          token: selfHealToken,
+          contact_id: params.contact_id,
+          language: "en",
+          prefilled_data: {},
+          submitted_data: submitted,
+          changed_fields: {},
+          upload_paths: uploadPaths,
+          status: "completed",
+          state: resolvedStateRaw,
+          entity_type: submissionEntityType || "SMLLC",
+          completed_at: new Date().toISOString(),
+        }
+        // Plain INSERT — formation_submissions.token has no unique index, so
+        // upsert with onConflict:'token' raises 42P10. The -heal suffix already
+        // makes the token unique to this materialization; race is implausible
+        // (materialize runs serially per contact via the Upload Articles UX).
+        const { error: healErr } = await supabaseAdmin
+          .from("formation_submissions")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- types lag the column set
+          .insert(healRow as any)
+        steps.push({
+          step: "self_heal_submission",
+          status: healErr ? "error" : "ok",
+          detail: healErr ? healErr.message : `formation_submissions row created (token=${selfHealToken}, state=${resolvedStateRaw})`,
+        })
+      } catch (healErr) {
+        steps.push({
+          step: "self_heal_submission",
+          status: "error",
+          detail: healErr instanceof Error ? healErr.message : String(healErr),
+        })
+      }
+    }
+
+    // 10c. Orphan documents cleanup. When materialize was retried after one or
+    // more failed attempts, each attempt created a "Articles of Organization"
+    // documents row with account_id=null (see upload-articles route). Link the
+    // most recent one to the new account and remove the duplicate documents
+    // rows (Drive files stay — admin can clean those up manually if needed;
+    // we only own the CRM-side documents record here).
+    try {
+      const { data: orphanDocs } = await supabaseAdmin
+        .from("documents")
+        .select("id, drive_file_id, created_at")
+        .eq("contact_id", params.contact_id)
+        .eq("document_type_name", "Articles of Organization")
+        .is("account_id", null)
+        .order("created_at", { ascending: false })
+      if (orphanDocs && orphanDocs.length > 0) {
+        const [keep, ...drop] = orphanDocs
+        // Link the newest to the new account.
+        await supabaseAdmin
+          .from("documents")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .eq("id", keep.id)
+        let dropped = 0
+        if (drop.length > 0) {
+          const dropIds = drop.map(d => d.id)
+          const { error: delErr } = await supabaseAdmin.from("documents").delete().in("id", dropIds)
+          if (!delErr) dropped = dropIds.length
+        }
+        steps.push({
+          step: "orphan_documents_cleanup",
+          status: "ok",
+          detail: `Kept Articles document ${keep.id.slice(0, 8)} (drive ${keep.drive_file_id?.slice(0, 8) ?? "n/a"})${dropped > 0 ? `, deleted ${dropped} duplicate(s)` : ""}`,
+        })
+      }
+    } catch (dedupeErr) {
+      steps.push({
+        step: "orphan_documents_cleanup",
+        status: "error",
+        detail: dedupeErr instanceof Error ? dedupeErr.message : String(dedupeErr),
+      })
+    }
 
     // 11. Sync portal tier.
     try {

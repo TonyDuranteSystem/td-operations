@@ -8457,8 +8457,10 @@ export type Database = {
           created_at: string | null
           deleted_at: string | null
           deleted_by: string | null
+          edited_at: string | null
           id: string
           message: string
+          original_message: string | null
           read_at: string | null
           reply_to_id: string | null
           sender_context: string | null
@@ -8475,8 +8477,10 @@ export type Database = {
           created_at?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
+          edited_at?: string | null
           id?: string
           message: string
+          original_message?: string | null
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -8493,8 +8497,10 @@ export type Database = {
           created_at?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
+          edited_at?: string | null
           id?: string
           message?: string
+          original_message?: string | null
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -9747,6 +9753,78 @@ export type Database = {
         }
         Relationships: []
       }
+      task_action_log: {
+        Row: {
+          action_slug: string
+          actor_id: string
+          completed_at: string | null
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          id: string
+          idempotency_key: string
+          params: Json
+          partial_state: Json | null
+          result: Json | null
+          side_effects: Json | null
+          status: string
+          task_id: string
+          workflow_slug: string
+          workflow_version: number
+        }
+        Insert: {
+          action_slug: string
+          actor_id: string
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key: string
+          params?: Json
+          partial_state?: Json | null
+          result?: Json | null
+          side_effects?: Json | null
+          status: string
+          task_id: string
+          workflow_slug: string
+          workflow_version: number
+        }
+        Update: {
+          action_slug?: string
+          actor_id?: string
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key?: string
+          params?: Json
+          partial_state?: Json | null
+          result?: Json | null
+          side_effects?: Json | null
+          status?: string
+          task_id?: string
+          workflow_slug?: string
+          workflow_version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_action_log_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_action_log_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "v_active_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tasks: {
         Row: {
           account_id: string | null
@@ -9770,8 +9848,11 @@ export type Database = {
           service_id: string | null
           stage_order: number | null
           status: Database["public"]["Enums"]["task_status"] | null
+          task_meta: Json
           task_title: string
           updated_at: string | null
+          workflow_slug: string | null
+          workflow_snapshot: Json | null
           zoho_task_id: string | null
         }
         Insert: {
@@ -9796,8 +9877,11 @@ export type Database = {
           service_id?: string | null
           stage_order?: number | null
           status?: Database["public"]["Enums"]["task_status"] | null
+          task_meta?: Json
           task_title: string
           updated_at?: string | null
+          workflow_slug?: string | null
+          workflow_snapshot?: Json | null
           zoho_task_id?: string | null
         }
         Update: {
@@ -9822,8 +9906,11 @@ export type Database = {
           service_id?: string | null
           stage_order?: number | null
           status?: Database["public"]["Enums"]["task_status"] | null
+          task_meta?: Json
           task_title?: string
           updated_at?: string | null
+          workflow_slug?: string | null
+          workflow_snapshot?: Json | null
           zoho_task_id?: string | null
         }
         Relationships: [
