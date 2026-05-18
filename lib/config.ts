@@ -40,7 +40,6 @@ export const TD_COMPANY = {
   name: "Tony Durante LLC",
   address: "10225 Ulmerton Rd, STE 3D, Largo FL 33771",
   state: "Florida",
-  ein: "32-0754285",
 } as const
 
 export const TD_FOOTER = `Tony Durante LLC · ${TD_COMPANY.address}`

@@ -85,7 +85,6 @@ export async function GET(
     companyName: TD_COMPANY.name,
     companyAddress: TD_COMPANY.address,
     companyState: TD_COMPANY.state,
-    companyEin: TD_COMPANY.ein,
 
     documentType: isCredit ? 'CREDIT NOTE' : 'INVOICE',
     invoiceNumber: payment.invoice_number ?? 'DRAFT',
