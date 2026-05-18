@@ -156,6 +156,23 @@ Always communicate in English. Be direct and efficient.
 ## Run unit tests after every code change — MANDATORY
 Before saying "it works" or "done", run `npm run test:unit`. If you didn't run tests, it's NOT done.
 
+## Workflow System — conventions (Slices 0-10 shipped on `workflow-system-slice-1` branch, not yet on production)
+
+Full design: `sysdoc_read('workflows-system-master-plan')`. Current state + extension cookbook: `sysdoc_read('workflows-system-slices-8-10-final-state')`. These rules are the minimum a session needs.
+
+- **Catalog-driven.** Workflows, actions, SLA values, escalation behavior, follow-up task copy — all in `catalog_entries.metadata` (JSONB). Adding a new banking provider / SD-lifecycle workflow / catalog row variant is pure SQL.
+- **Three trigger sources** (discriminated union in `lib/tasks/workflow-trigger-schema.ts`): `form_submission` (Slice 8), `sd_created` (Slice 9). Chained workflows use `chain.spawn_next_workflow` (ITIN pattern).
+- **`createSD` hook** in `lib/operations/service-delivery.ts` fires `dispatchWorkflowForSdCreated` after every SD insert. Fire-and-forget try/catch.
+- **Dispatcher slug rule** (carved-in-stone after the `cf0cb867` bugfix): when calling `createWorkflowTask`, the stored `workflow_snapshot` MUST inject slug from the catalog row: `{ ...catalogRow.metadata, slug: catalogRow.slug }`. The catalog row's metadata does NOT contain slug — slug lives on the catalog row's `slug` column. TaskCard reads `parseWorkflowSnapshot(task.workflow_snapshot)` at render time; missing slug = ErrorBoundary "Workflow render failed". Both dispatchers in `lib/tasks/dispatch-workflow-for-event.ts` already inject — don't regress.
+- **Snapshot pinned at task creation.** Catalog edits never affect in-flight tasks. To retro-update in-flight, write a `jsonb_set` migration.
+- **Visibility predicate** (Slice 9): per-action `visible_when.sd_stage` filters TaskCard render. Reads `task_meta.sd_stage` (seeded by dispatcher at spawn, kept in sync by `chain.advance_sd_stage` via task_meta_patch). Defensive actions (Blocked / Needs Fix) should NOT have `visible_when` so they're always available.
+- **SLA escalation behavior is catalog-driven** (Slice 10): `sla.auto_reassign` default true, `sla.notify_email_to` default "support@tonydurante.us" (set "" to suppress email). `WORKFLOW_SLA_DRY_RUN=true` env var disables writes during rollout.
+- **Idempotency / TOCTOU pattern (B9 mitigation):** operations helpers shared between MCP tools and workflow handlers (`banking-review.ts`, `tax-review.ts`, `closure-review.ts`) use `reviewed_at IS NULL` short-circuit + `.is('reviewed_at', null)` TOCTOU guard on the UPDATE. Always pair both.
+- **Webhook retry idempotency:** auto-chain routes pass `idempotency: { field: 'submission_id', value: sub.id }` to `dispatchWorkflowForFormCompletion`. SD-created hook uses task_meta.service_delivery_id automatically.
+- **PostgREST JSONB nested paths** use UNQUOTED keys: `.eq("metadata->triggered_by->filter->>service_type", value)`. SQL-native `'filter'` quotes don't work in supabase-js. Caught during Slice 9 stress QA.
+- **Time-travel cron testing:** `decideReminder` / `decideSlaTier` take explicit `now: Date` arg. Tests pass `hoursAfter(task, N)` rather than mocking system clock. Pattern for any future cron eligibility helper.
+- **Stress QA must include browser-based render verification**, not just DB+curl back-end checks. The slug bug only manifested at TaskCard render time and would have shipped to production if Slice 10 hadn't included a browser walkthrough.
+
 <!-- TIER1:END -->
 
 <!-- TIER2:START -->
