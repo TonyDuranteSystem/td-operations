@@ -2,7 +2,7 @@
  * Bank Feed Matcher — Auto-reconciliation engine
  *
  * Matches incoming bank transactions (td_bank_feeds) against:
- * 1. CRM invoices (payments where invoice_status IN ('Sent', 'Overdue'))
+ * 1. CRM invoices (payments where invoice_status NOT IN ('Paid', 'Voided', 'Cancelled'))
  * 2. Pending activations (pending_activations where status = 'awaiting_payment')
  *
  * Match logic:
@@ -151,10 +151,13 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       }
     }
 
-    // Filter BOTH status and currency in code — PostgREST .eq()/.in() on custom enums returns wrong results
-    const openStatuses = new Set(["Sent", "Overdue", "Partial"])
+    // Filter BOTH status and currency in code — PostgREST .eq()/.in() on custom enums returns wrong results.
+    // Use a blocklist of terminal statuses rather than an allowlist: any invoice that isn't
+    // already Paid, Voided, or Cancelled represents money still expected and should be matchable
+    // (includes Draft — created at contract signing, real obligation, payment can arrive before
+    // the invoice is formally sent).
     const currencyFiltered = (allInvoices || []).filter(inv =>
-      openStatuses.has(String(inv.invoice_status)) && String(inv.amount_currency) === feedCurrency
+      isMatchableInvoiceStatus(String(inv.invoice_status)) && String(inv.amount_currency) === feedCurrency
     )
 
     if (currencyFiltered.length === 0) {
@@ -506,6 +509,16 @@ export async function markMercuryStripePayoutsOutgoing(): Promise<{ marked: numb
     .in("id", ids)
 
   return { marked: ids.length }
+}
+
+/**
+ * Returns true if an invoice with this status should be considered for payment matching.
+ * Uses a blocklist of terminal statuses — anything not already Paid, Voided, or Cancelled
+ * represents money still expected (including Draft invoices created at contract signing).
+ * Exported for unit tests.
+ */
+export function isMatchableInvoiceStatus(invoiceStatus: string): boolean {
+  return !new Set(["Paid", "Voided", "Cancelled"]).has(invoiceStatus)
 }
 
 /**

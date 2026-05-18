@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment } from "@/lib/bank-feed-matcher"
+import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, isMatchableInvoiceStatus } from "@/lib/bank-feed-matcher"
 
 describe("isStripePayoutFeed", () => {
   // mercury (Plaid) pattern: full text in memo and sender_name
@@ -49,6 +49,36 @@ describe("isStripePayoutFeed", () => {
 
   it("returns false when both fields are empty strings", () => {
     expect(isStripePayoutFeed("", "")).toBe(false)
+  })
+})
+
+describe("isMatchableInvoiceStatus", () => {
+  it("matches Draft — created at contract signing, real obligation", () => {
+    expect(isMatchableInvoiceStatus("Draft")).toBe(true)
+  })
+
+  it("matches Sent", () => {
+    expect(isMatchableInvoiceStatus("Sent")).toBe(true)
+  })
+
+  it("matches Overdue", () => {
+    expect(isMatchableInvoiceStatus("Overdue")).toBe(true)
+  })
+
+  it("matches Partial", () => {
+    expect(isMatchableInvoiceStatus("Partial")).toBe(true)
+  })
+
+  it("excludes Paid", () => {
+    expect(isMatchableInvoiceStatus("Paid")).toBe(false)
+  })
+
+  it("excludes Voided", () => {
+    expect(isMatchableInvoiceStatus("Voided")).toBe(false)
+  })
+
+  it("excludes Cancelled", () => {
+    expect(isMatchableInvoiceStatus("Cancelled")).toBe(false)
   })
 })
 
