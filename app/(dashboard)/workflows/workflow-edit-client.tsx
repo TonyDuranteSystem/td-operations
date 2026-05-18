@@ -786,6 +786,55 @@ function PipelineStagesSection({ draft, updateDraft }: { draft: WorkflowDraft; u
     updateDraft("stages", next)
   }
 
+  function generateActions() {
+    const stages = draft.stages
+    if (stages.length < 2) return
+    if (draft.actions.length > 0 && !confirm("This will replace all current actions. Continue?")) return
+    const generated: ActionDraft[] = []
+    for (let i = 0; i < stages.length - 1; i++) {
+      const from = stages[i]
+      const to = stages[i + 1]
+      const toSlug = to.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/, "")
+      generated.push({
+        _editorKey: crypto.randomUUID(),
+        slug: `advance_to_${toSlug}`,
+        label_admin: `${from} → ${to}`,
+        primary: i === 0,
+        icon: i === stages.length - 2 ? "CheckCircle2" : "ArrowRight",
+        color: i === stages.length - 2 ? "green" : "blue",
+        handler: "chain.advance_sd_stage",
+        handler_params: { target_stage: to },
+        on_success_status: "In Progress",
+        visible_when_sd_stage: from,
+      })
+    }
+    generated.push({
+      _editorKey: crypto.randomUUID(),
+      slug: "mark_complete",
+      label_admin: "Mark Complete",
+      primary: false,
+      icon: "PartyPopper",
+      color: "green",
+      handler: "sd.mark_complete",
+      handler_params: {},
+      on_success_status: "Done",
+      visible_when_sd_stage: stages[stages.length - 1],
+    })
+    generated.push({
+      _editorKey: crypto.randomUUID(),
+      slug: "needs_fix",
+      label_admin: "Blocked / Needs Info",
+      primary: false,
+      icon: "AlertCircle",
+      color: "amber",
+      handler: "task.flag_blocked",
+      handler_params: {},
+      on_success_status: "Waiting",
+      visible_when_sd_stage: "",
+    })
+    updateDraft("actions", generated)
+  }
+
   return (
     <Card
       title="Pipeline Stages"
@@ -847,6 +896,20 @@ function PipelineStagesSection({ draft, updateDraft }: { draft: WorkflowDraft; u
           Add
         </button>
       </div>
+      {draft.stages.length >= 2 && (
+        <div className="mt-3 pt-3 border-t border-zinc-200">
+          <button
+            type="button"
+            onClick={generateActions}
+            className="w-full px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 font-medium"
+          >
+            ✦ Auto-generate action buttons from these {draft.stages.length} stages
+          </button>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Creates one transition button per stage, a Mark Complete on the last, and a Blocked action. Scroll to Actions to review.
+          </p>
+        </div>
+      )}
     </Card>
   )
 }
