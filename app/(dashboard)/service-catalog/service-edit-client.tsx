@@ -352,6 +352,9 @@ export function ServiceEditClient({ mode, initial }: Props) {
         updateStage={updateStage}
         moveStage={moveStage}
         removeStage={removeStage}
+        onGenerateActions={(actions) =>
+          setWorkflow((w) => ({ ...w, enabled: true, actions }))
+        }
       />
       <WorkflowSection
         pipeline={basics.pipeline ?? ""}
@@ -569,6 +572,7 @@ function StagesSection({
   updateStage,
   moveStage,
   removeStage,
+  onGenerateActions,
 }: {
   pipeline: string
   stages: StageRow[]
@@ -576,7 +580,61 @@ function StagesSection({
   updateStage: (idx: number, p: Partial<StageRow>) => void
   moveStage: (idx: number, dir: -1 | 1) => void
   removeStage: (idx: number) => void
+  onGenerateActions: (actions: ActionDraft[]) => void
 }) {
+  function handleGenerate() {
+    const named = stages.map((s) => s.stage_name.trim()).filter(Boolean)
+    if (named.length < 2) return
+    if (stages.some((s) => !s.stage_name.trim())) {
+      alert("Some stages have no name. Fill in all stage names first.")
+      return
+    }
+    if (!confirm("This will replace all current workflow actions with auto-generated ones. Continue?")) return
+    const generated: ActionDraft[] = []
+    for (let i = 0; i < named.length - 1; i++) {
+      const from = named[i]
+      const to = named[i + 1]
+      const toSlug = to.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/, "")
+      generated.push({
+        _editorKey: uniqueKey(),
+        slug: `advance_to_${toSlug}`,
+        label_admin: `${from} → ${to}`,
+        primary: i === 0,
+        icon: i === named.length - 2 ? "CheckCircle2" : "ArrowRight",
+        color: i === named.length - 2 ? "green" : "blue",
+        handler: "chain.advance_sd_stage",
+        handler_params: { target_stage: to },
+        on_success_status: "In Progress",
+        visible_when_sd_stage: from,
+      })
+    }
+    generated.push({
+      _editorKey: uniqueKey(),
+      slug: "mark_complete",
+      label_admin: "Mark Complete",
+      primary: false,
+      icon: "CheckCircle2",
+      color: "green",
+      handler: "sd.mark_complete",
+      handler_params: {},
+      on_success_status: "Done",
+      visible_when_sd_stage: named[named.length - 1],
+    })
+    generated.push({
+      _editorKey: uniqueKey(),
+      slug: "needs_fix",
+      label_admin: "Blocked / Needs Info",
+      primary: false,
+      icon: "AlertCircle",
+      color: "amber",
+      handler: "task.flag_blocked",
+      handler_params: {},
+      on_success_status: "Waiting",
+      visible_when_sd_stage: "",
+    })
+    onGenerateActions(generated)
+  }
+
   if (!pipeline.trim()) {
     return (
       <Card
@@ -611,13 +669,29 @@ function StagesSection({
           onRemove={() => removeStage(idx)}
         />
       ))}
-      <button
-        type="button"
-        onClick={addStage}
-        className="mt-2 px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-md hover:bg-blue-50"
-      >
-        + Add Stage
-      </button>
+      <div className="flex flex-col gap-2 mt-2">
+        <button
+          type="button"
+          onClick={addStage}
+          className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-md hover:bg-blue-50 self-start"
+        >
+          + Add Stage
+        </button>
+        {stages.length >= 2 && (
+          <button
+            type="button"
+            onClick={handleGenerate}
+            className="w-full py-2.5 text-sm font-semibold bg-green-600 text-white rounded-md hover:bg-green-700"
+          >
+            ✦ Auto-generate action buttons from these {stages.length} stages
+          </button>
+        )}
+        {stages.length >= 2 && (
+          <p className="text-xs text-zinc-500">
+            Creates one transition button per stage, a Mark Complete on the last, and a Blocked action. Scroll to Workflow → Actions to review.
+          </p>
+        )}
+      </div>
     </Card>
   )
 }
