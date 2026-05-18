@@ -19,6 +19,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWriteSafe } from "@/lib/db"
 import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 
 export async function POST(req: NextRequest) {
   try {
@@ -191,7 +192,7 @@ export async function POST(req: NextRequest) {
               supabaseAdmin.from("tasks").insert({
                 task_title: taskTitle,
                 description,
-                assigned_to: "Luca",
+                assigned_to: defaultTaskAssignee(),
                 priority: "High",
                 category: "Banking" as never,
                 status: "To Do",

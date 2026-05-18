@@ -1,7 +1,8 @@
 'use client'
 
 import { useTransition } from 'react'
-import { Check, RotateCw, ChevronUp, ChevronDown, Clock, Paperclip, ExternalLink } from 'lucide-react'
+import Link from 'next/link'
+import { Check, RotateCw, ChevronUp, ChevronDown, Clock, Paperclip, ExternalLink, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
@@ -212,9 +213,43 @@ function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; on
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
+          <ChatWithClientButton accountId={task.account_id} contactId={task.contact_id} />
           <TaskRowActions task={task} />
         </div>
       </div>
     </div>
   )
 }
+
+/**
+ * Small icon button that deep-links to /portal-chats with the task's account
+ * (or contact) thread pre-selected. Added 2026-05-18 per Antonio: every task
+ * should have a 1-click affordance to chat with the client about THAT thing.
+ *
+ * Renders nothing when the task has neither account_id nor contact_id (no
+ * thread to open). The portal-chats page reads `?account=<id>` to scroll its
+ * sidebar to that thread; falls back to contact-only when account is absent.
+ */
+function ChatWithClientButton({
+  accountId,
+  contactId,
+}: {
+  accountId?: string | null
+  contactId?: string | null
+}) {
+  if (!accountId && !contactId) return null
+  const href = accountId
+    ? `/portal-chats?account=${accountId}`
+    : `/portal-chats?contact=${contactId}`
+  return (
+    <Link
+      href={href}
+      title="Chat with client about this"
+      className="p-1.5 rounded hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition-colors"
+    >
+      <MessageSquare className="h-3.5 w-3.5" />
+    </Link>
+  )
+}
+
+export { ChatWithClientButton }

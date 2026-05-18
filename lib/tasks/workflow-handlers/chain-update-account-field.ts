@@ -9,6 +9,9 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { updateAccount } from "@/lib/operations/account"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { chainUpdateAccountFieldParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const chainUpdateAccountField: WorkflowHandler = async (
   ctx: HandlerContext,
 ): Promise<HandlerResult> => {

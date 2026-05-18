@@ -33,6 +33,9 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 import type { ItinReviewV1Meta } from "@/lib/tasks/workflow-schemas"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { itinApproveAndSendParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 const ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 const TARGET_SD_STAGE = "Client Signing"
 

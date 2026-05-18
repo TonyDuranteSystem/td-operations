@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Clock, MoreHorizontal } from 'lucide-react'
+import { ChatWithClientButton } from '@/components/tasks/task-card'
 import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { parseWorkflowSnapshot } from '@/lib/tasks/workflow-snapshot-schema'
@@ -10,6 +11,7 @@ import { filterActionsByRole, filterActionsByStage, splitPrimary } from '@/lib/t
 import { ActionConfirmModal } from '@/components/tasks/action-confirm-modal'
 import { WorkflowErrorBoundary } from '@/components/tasks/workflow-error-boundary'
 import { getAttachmentTemplate } from '@/components/tasks/attachment-templates'
+import { SLA_STATE, SLA_META_KEYS } from '@/lib/tasks/sla-eligibility'
 import type {
   CrmRole,
   TaskStatus,
@@ -107,10 +109,14 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
   // Other values (or absent) → no badge.
   const slaState =
     task.task_meta && typeof task.task_meta === 'object'
-      ? (task.task_meta as Record<string, unknown>).sla_state
+      ? (task.task_meta as Record<string, unknown>)[SLA_META_KEYS.state]
       : undefined
-  const slaTier: 'warn' | 'escalated' | null =
-    slaState === 'warn' ? 'warn' : slaState === 'escalated' ? 'escalated' : null
+  const slaTier: typeof SLA_STATE.WARN | typeof SLA_STATE.ESCALATED | null =
+    slaState === SLA_STATE.WARN
+      ? SLA_STATE.WARN
+      : slaState === SLA_STATE.ESCALATED
+        ? SLA_STATE.ESCALATED
+        : null
 
   const lastError =
     task.task_meta && typeof task.task_meta === 'object'
@@ -190,18 +196,18 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
           {slaTier && (
             <span
               title={
-                slaTier === 'warn'
+                slaTier === SLA_STATE.WARN
                   ? 'SLA warning — task is overdue for action'
                   : 'SLA escalated — past the escalation threshold'
               }
               className={cn(
                 'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold',
-                slaTier === 'warn'
+                slaTier === SLA_STATE.WARN
                   ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
                   : 'bg-red-100 text-red-700 border border-red-200',
               )}
             >
-              SLA {slaTier === 'warn' ? 'WARN' : 'ESCALATED'}
+              SLA {slaTier === SLA_STATE.WARN ? 'WARN' : 'ESCALATED'}
             </span>
           )}
           {dueInfo && (
@@ -218,6 +224,7 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
         </div>
 
         <div className="flex items-center gap-1">
+          <ChatWithClientButton accountId={task.account_id} contactId={task.contact_id} />
           {primary && (
             <button
               type="button"

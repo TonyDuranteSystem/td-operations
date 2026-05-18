@@ -27,6 +27,9 @@
 import { sendEmail } from "@/lib/operations/email"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { chainSendEmailParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const chainSendEmail: WorkflowHandler = async (
   ctx: HandlerContext,
 ): Promise<HandlerResult> => {

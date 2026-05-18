@@ -21,6 +21,10 @@
 
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor.
+ *  STUB at Slice 2; schema will be filled when the real handler ships. */
+export { chainSendForSignatureParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const chainSendForSignature: WorkflowHandler = async (
   _ctx: HandlerContext,
 ): Promise<HandlerResult> => {

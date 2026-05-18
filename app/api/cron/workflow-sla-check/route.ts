@@ -33,7 +33,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
-import { decideSlaTier, type SlaConfig, type SlaDecision } from "@/lib/tasks/sla-eligibility"
+import { decideSlaTier, SLA_STATE, SLA_META_KEYS, type SlaConfig, type SlaDecision } from "@/lib/tasks/sla-eligibility"
 import { updateTask } from "@/lib/operations/task"
 
 export const maxDuration = 60
@@ -248,7 +248,11 @@ async function applyWarn(task_id: string): Promise<{ error?: string }> {
     .eq("id", task_id)
     .maybeSingle()
   const meta = ((existing as unknown as { task_meta?: Record<string, unknown> | null } | null)?.task_meta) ?? {}
-  const next = { ...meta, sla_state: "warn", sla_warned_at: nowIso }
+  const next = {
+    ...meta,
+    [SLA_META_KEYS.state]: SLA_STATE.WARN,
+    [SLA_META_KEYS.warned_at]: nowIso,
+  }
   const r = await updateTask({
     id: task_id,
     // task_meta is typed loosely on tasks until lib/database.types.ts regen
@@ -256,7 +260,7 @@ async function applyWarn(task_id: string): Promise<{ error?: string }> {
     patch: ({ task_meta: next } as unknown) as Parameters<typeof updateTask>[0]["patch"],
     actor: "cron:workflow-sla-check",
     summary: "SLA warn threshold crossed",
-    details: { sla_state: "warn", sla_warned_at: nowIso },
+    details: { [SLA_META_KEYS.state]: SLA_STATE.WARN, [SLA_META_KEYS.warned_at]: nowIso },
   })
   if (!r.success) return { error: `updateTask failed: ${r.error}` }
   return {}
@@ -292,9 +296,9 @@ async function applyEscalate(args: EscalateArgs): Promise<{ error?: string }> {
   const meta = ((existing as unknown as { task_meta?: Record<string, unknown> | null } | null)?.task_meta) ?? {}
   const nextMeta = {
     ...meta,
-    sla_state: "escalated",
-    escalated_at: nowIso,
-    sla_escalate_to: escalateTo ?? null,
+    [SLA_META_KEYS.state]: SLA_STATE.ESCALATED,
+    [SLA_META_KEYS.escalated_at]: nowIso,
+    [SLA_META_KEYS.escalate_to]: escalateTo ?? null,
   }
   const patch: Record<string, unknown> = { task_meta: nextMeta }
   if (autoReassign && escalateTo && escalateTo !== args.current_assignee) {
@@ -306,8 +310,8 @@ async function applyEscalate(args: EscalateArgs): Promise<{ error?: string }> {
     actor: "cron:workflow-sla-check",
     summary: `SLA escalated${autoReassign && escalateTo ? ` + reassigned to ${escalateTo}` : ""}`,
     details: {
-      sla_state: "escalated",
-      escalated_at: nowIso,
+      [SLA_META_KEYS.state]: SLA_STATE.ESCALATED,
+      [SLA_META_KEYS.escalated_at]: nowIso,
       hours_waiting: args.decision.hours_waiting,
       escalate_threshold: args.decision.escalate_threshold,
       auto_reassign: autoReassign,

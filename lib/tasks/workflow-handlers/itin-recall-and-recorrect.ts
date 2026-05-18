@@ -33,6 +33,9 @@
 import { advanceStage } from "@/lib/operations/service-delivery"
 import { createWorkflowTask } from "@/lib/operations/task"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+
+/** Re-export the central client-safe schema for the workflow editor. */
+export { itinRecallAndRecorrectParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 import type { ItinReviewV1Meta } from "@/lib/tasks/workflow-schemas"
 

@@ -23,6 +23,9 @@ import { advanceStage } from "@/lib/operations/service-delivery"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { formationConfirmEinReceivedParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 const TARGET_STAGE = "Post-Formation + Banking"
 
 function normalizeEin(raw: string): string {

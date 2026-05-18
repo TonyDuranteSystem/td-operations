@@ -2263,11 +2263,11 @@ function EINReceivedDialog({ open, onClose, accountId, companyName }: {
   )
 }
 
-const SERVICE_TYPES = [
-  'Company Formation', 'Tax Return', 'EIN', 'ITIN', 'Banking Fintech',
-  'Annual Renewal', 'CMRA Mailing Address', 'State RA Renewal', 'State Annual Report',
-  'Company Closure', 'Client Onboarding',
-]
+interface ServiceCatalogOption {
+  id: string
+  name: string
+  pipeline: string | null
+}
 
 function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
   open: boolean; onClose: () => void; accountId: string; existingTypes: string[]
@@ -2275,6 +2275,38 @@ function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
   const [serviceType, setServiceType] = useState('')
   const [notes, setNotes] = useState('')
   const [creating, setCreating] = useState(false)
+  const [options, setOptions] = useState<ServiceCatalogOption[]>([])
+  const [loadingOptions, setLoadingOptions] = useState(false)
+
+  // Load available service types from the catalog when the dialog opens.
+  // Filtered to services with a pipeline (multi-stage lifecycle) — addons
+  // without a pipeline have no stages so createSD would fail.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoadingOptions(true)
+    fetch('/api/service-catalog')
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return
+        const list = (data.services ?? []) as Array<ServiceCatalogOption & { active?: boolean }>
+        // Active services only, with a pipeline name (SD-eligible).
+        const filtered = list
+          .filter((s) => s.active !== false && typeof s.pipeline === 'string' && s.pipeline.trim().length > 0)
+          .map((s) => ({ id: s.id, name: s.name, pipeline: s.pipeline }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+        setOptions(filtered)
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Failed to load service catalog')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOptions(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   if (!open) return null
 
@@ -2313,14 +2345,24 @@ function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
             <div>
               <label className="block text-sm font-medium mb-1">Service Type *</label>
               <select value={serviceType} onChange={e => setServiceType(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">Select...</option>
-                {SERVICE_TYPES.map(t => (
-                  <option key={t} value={t} disabled={existingTypes.includes(t)}>
-                    {t}{existingTypes.includes(t) ? ' (exists)' : ''}
-                  </option>
-                ))}
+                disabled={loadingOptions}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-zinc-50">
+                <option value="">{loadingOptions ? 'Loading…' : 'Select...'}</option>
+                {options.map(opt => {
+                  const value = opt.pipeline ?? opt.name
+                  const exists = existingTypes.includes(value)
+                  return (
+                    <option key={opt.id} value={value} disabled={exists}>
+                      {opt.name}{exists ? ' (exists)' : ''}
+                    </option>
+                  )
+                })}
               </select>
+              {!loadingOptions && options.length === 0 && (
+                <p className="mt-1 text-xs text-amber-700">
+                  No catalog services with a pipeline. Add one in Service Catalog first.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Notes</label>

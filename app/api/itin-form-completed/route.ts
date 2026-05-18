@@ -30,6 +30,7 @@ import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { APP_BASE_URL } from "@/lib/config"
 import { generateW7Pdf, generate1040NRPdf, generateScheduleOIPdf } from "@/lib/itin-pdf-generator"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -466,7 +467,10 @@ export async function POST(req: NextRequest) {
             }),
             task_title: taskTitle,
             description: `W-7 + 1040-NR + Schedule OI auto-generated for ${displayName}. Review the PDFs, then click Approve & Send to Client (workflow action) to email the package to ${clientEmail} and advance the SD.`,
-            assigned_to: "Luca",
+            // assigned_to intentionally omitted — the dispatcher resolves from
+            // the catalog row's default_assignee, then falls back to
+            // defaultTaskAssignee(). Passing an explicit value here would
+            // override per-workflow catalog config.
             priority: "High",
             account_id: sub.account_id || null,
             contact_id: contactId || null,
@@ -516,7 +520,7 @@ export async function POST(req: NextRequest) {
               description: docsGenerated
                 ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Largo FL.`
                 : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
-              assigned_to: "Luca",
+              assigned_to: defaultTaskAssignee(),
               priority: "High",
               category: "KYC",
               status: "To Do",

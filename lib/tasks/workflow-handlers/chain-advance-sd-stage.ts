@@ -21,6 +21,10 @@ import { advanceStage } from "@/lib/operations/service-delivery"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema so the workflow editor can
+ *  import this handler's params shape without dragging in supabase-admin. */
+export { chainAdvanceSdStageParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const chainAdvanceSdStage: WorkflowHandler = async (
   ctx: HandlerContext,
 ): Promise<HandlerResult> => {

@@ -39,18 +39,19 @@ import type { BankingReviewV1Meta } from "@/lib/tasks/workflow-schemas"
 // ── handler_params shape ────────────────────────────────────────────────
 //
 // Provider-specific copy lives here, in CATALOG DATA. The handler reads
-// it and interpolates templates against task_meta.
-const FollowupTaskSpec = z.object({
-  title_template: z.string().min(1),
-  description_template: z.string().min(1),
-  assignee: z.string().min(1),
-  priority: z.enum(["Urgent", "High", "Normal", "Low"]),
-  category: z.string().min(1),
-})
+// it and interpolates templates against task_meta. Defined in the central
+// client-safe schemas file (so the workflow editor can import it without
+// pulling server-only deps from this handler module).
+import { bankingApproveFormParams } from "@/lib/tasks/handler-param-schemas"
+const HandlerParamsSchema = bankingApproveFormParams
 
-const HandlerParamsSchema = z.object({
-  followup_task: FollowupTaskSpec,
-})
+/**
+ * Exported for the workflow editor (Phase 1 — workflow flexibility pass).
+ * The editor reads this to auto-render the handler_params form when an
+ * action uses banking.approve_form. Same object as the registry uses —
+ * single source of truth in handler-param-schemas.ts.
+ */
+export const handlerParamsSchema = HandlerParamsSchema
 
 type HandlerParamsT = z.infer<typeof HandlerParamsSchema>
 

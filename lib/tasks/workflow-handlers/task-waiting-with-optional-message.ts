@@ -24,6 +24,9 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { taskWaitingParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 // Hardcoded admin sender id (Antonio's auth user id), mirrored from
 // lib/mcp/tools/portal.ts portal_chat_send. Centralization is a future cleanup.
 const ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"

@@ -94,6 +94,13 @@ export const WorkflowSnapshotSchema = z.object({
   attachment_template: z.string().optional(),
   task_meta_schema: z.string().optional(),
   auto_topic: z.string().optional(),
+  // Optional task-title / description templates. When set, the dispatcher
+  // interpolates `{token}` placeholders against the merged
+  // (submission ∪ task_meta) context at spawn time, so callers don't have to
+  // build the literal title in route code. If unset, callers' explicit
+  // task_title / description still wins (backward-compatible).
+  task_title_template: z.string().min(1).optional(),
+  description_template: z.string().min(1).optional(),
   sla: z
     .object({
       warn_hours: z.number().positive(),
@@ -116,4 +123,24 @@ export const WorkflowSnapshotSchema = z.object({
 /** Parse + validate a snapshot value from JSONB. Throws on failure. */
 export function parseWorkflowSnapshot(raw: unknown) {
   return WorkflowSnapshotSchema.parse(raw)
+}
+
+/**
+ * Build the JSONB blob to store in `tasks.workflow_snapshot` from a
+ * `catalog_entries` row.
+ *
+ * Why this exists (carved-in-stone after bugfix cf0cb867): `slug` lives on
+ * the catalog row's `slug` column, NOT inside its `metadata`. Every site that
+ * stores a workflow_snapshot must merge slug into metadata, or TaskCard's
+ * `parseWorkflowSnapshot` fails and the ErrorBoundary fires. Both dispatchers
+ * + the chained-spawn path in `app/api/tasks/[id]/action/route.ts` MUST go
+ * through this helper so the bug becomes structurally impossible.
+ *
+ * Pure, side-effect-free, does not mutate either argument.
+ */
+export function buildSnapshotForStorage(row: {
+  slug: string
+  metadata: Record<string, unknown> | null | undefined
+}): Record<string, unknown> {
+  return { ...(row.metadata ?? {}), slug: row.slug }
 }

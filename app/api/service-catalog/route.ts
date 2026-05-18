@@ -94,3 +94,35 @@ export async function PUT(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ service: data })
 }
+
+/**
+ * DELETE /api/service-catalog
+ * Body: { id }
+ *
+ * Soft-deactivate the service (sets active=false). The existing service-catalog
+ * list page already calls this method — but the endpoint was missing, so every
+ * deactivate click was 405-ing silently. Surfaced in 2026-05-18 when Antonio
+ * tried to deactivate the V2 test service from the editor consolidation pass.
+ *
+ * Soft delete (not hard) because:
+ *   - existing service_deliveries rows reference service_catalog by name
+ *   - hard delete would break historical reporting
+ *   - reactivate is a 1-click PUT { id, active: true } via the same UI
+ */
+export async function DELETE(request: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const body = await request.json()
+  const { id } = body
+  if (!id) return NextResponse.json({ error: 'ID is required' }, { status: 400 })
+
+  const { error } = await supabaseAdmin
+    .from('service_catalog')
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}

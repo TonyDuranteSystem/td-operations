@@ -22,7 +22,11 @@
 
 import { createSD } from "@/lib/operations/service-delivery"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
+
+/** Re-export the central client-safe schema for the workflow editor. */
+export { sdMarkCompleteParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
 
 interface MarkCompleteParams {
   spawn_next_sds?: string[]
@@ -131,7 +135,7 @@ export const sdMarkComplete: WorkflowHandler = async (
         service_type: serviceType,
         account_id: before.account_id ?? undefined,
         contact_id: before.contact_id ?? undefined,
-        assigned_to: ctx.workflow.default_assignee ?? "Luca",
+        assigned_to: ctx.workflow.default_assignee ?? defaultTaskAssignee(),
         notes: `Auto-spawned by sd.mark_complete from workflow ${ctx.workflow.slug}`,
       })
       spawnedSds.push({ service_type: serviceType, sd_id: sd.id })

@@ -32,7 +32,6 @@ import {
   Wrench,
   Share2,
   Package,
-  Library,
   HeartPulse,
   PhoneIncoming,
   Activity,
@@ -107,8 +106,11 @@ const defaultNavigation: NavItem[] = [
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },
   { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList, tooltip: 'Kanban board for manual and auto-generated tasks. Use message tags for daily work instead.' },
-  { id: 'service-catalog', name: 'Service Catalog', href: '/service-catalog', icon: Package, tooltip: 'Manage services available for offers and invoices — add, edit, and configure service types.' },
-  { id: 'catalog', name: 'Catalog', href: '/catalog', icon: Library, adminOnly: true, tooltip: 'Catalog framework — governance for the canonical Services & SD-Types catalog (slugs, tags, translations, pending review).' },
+  { id: 'service-catalog', name: 'Service Catalog', href: '/service-catalog', icon: Package, tooltip: 'Manage services + stages + workflows — one place to add, edit, and publish everything about a service.' },
+  // /catalog (generic framework UI) intentionally NOT in the sidebar since the
+  // workflow-editor consolidation (2026-05-18). Service Catalog handles services
+  // + stages + workflows in one flow. /catalog stays alive at the URL for
+  // power-user governance (status / tags / translations).
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, tooltip: 'Client portal management — create portal users, send invitations.' },
