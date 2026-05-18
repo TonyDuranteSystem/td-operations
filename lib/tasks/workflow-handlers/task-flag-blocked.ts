@@ -14,6 +14,9 @@
 
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { taskFlagBlockedParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const taskFlagBlocked: WorkflowHandler = async (ctx: HandlerContext): Promise<HandlerResult> => {
   const params = (ctx.params ?? {}) as { note?: unknown }
   const note = typeof params.note === "string" ? params.note.trim() : ""

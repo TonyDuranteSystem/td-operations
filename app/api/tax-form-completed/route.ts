@@ -28,6 +28,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
 
@@ -137,7 +138,7 @@ export async function POST(req: NextRequest) {
               supabaseAdmin.from("tasks").insert({
                 task_title: `[MISSING] Request passport from ${contactInfo?.full_name || "client"} (${companyName})`,
                 description: `One-time client ${companyName} submitted tax form but has NO passport on file.\nEmail ${contactInfo?.email || "client"} to request a clear passport scan.\nPassport is required for tax return filing.`,
-                assigned_to: "Luca",
+                assigned_to: defaultTaskAssignee(),
                 priority: "Urgent",
                 category: "Document",
                 status: "To Do",
@@ -327,7 +328,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
                   `Review: tax_form_review(token="${sub.token}")`,
                   `Action: Review data completeness, then apply_changes=true to update CRM.`,
                 ].join("\n"),
-                assigned_to: "Luca",
+                assigned_to: defaultTaskAssignee(),
                 priority: "High",
                 category: "Tax" as never,
                 status: "To Do",

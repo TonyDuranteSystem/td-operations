@@ -21,7 +21,7 @@ type CatalogPendingReviewInsert = Database["public"]["Tables"]["catalog_pending_
 
 export type ActorKind = "chat" | "ui" | "migration" | "admin_api"
 
-export type EntryStatus = "active" | "deprecated" | "exception_only"
+export type EntryStatus = "active" | "deprecated" | "exception_only" | "draft"
 
 export type CatalogAction =
   | "added"
@@ -473,6 +473,68 @@ export async function addTranslation(
       display_name_translations: after.display_name_translations,
       description_translations: after.description_translations,
     },
+  })
+
+  return after
+}
+
+// ── Metadata + status updates (workflow editor Phase 6) ─────────────────
+
+/**
+ * Replace a catalog entry's `metadata` JSONB and (optionally) its `status`.
+ * Writes a `metadata_changed` decision log entry capturing before/after.
+ *
+ * Optimistic concurrency: pass `expectedUpdatedAt` (the row's `updated_at`
+ * value as observed when the editor opened it) and this function throws
+ * `STALE_EDIT` if the row was modified in the meantime. UI surfaces a
+ * "reload, edit was made elsewhere" prompt.
+ *
+ * Used by the /workflows editor's Save Draft + Publish actions.
+ */
+export async function updateMetadata(
+  entryId: string,
+  newMetadata: Record<string, unknown>,
+  reason: string,
+  actor: Actor,
+  opts?: { status?: EntryStatus; expectedUpdatedAt?: string },
+): Promise<CatalogEntry> {
+  requireReason("updateMetadata", reason)
+  const before = await getEntryById(entryId)
+  if (!before) throw new Error(`updateMetadata: entry not found: ${entryId}`)
+
+  if (opts?.expectedUpdatedAt && before.updated_at !== opts.expectedUpdatedAt) {
+    const e = new Error(
+      `STALE_EDIT: catalog row ${before.catalog_id}/${before.slug} was modified after this editor opened it. Reload to see the latest, then re-apply your changes.`,
+    )
+    ;(e as Error & { code?: string }).code = "STALE_EDIT"
+    throw e
+  }
+
+  const updatePayload: Record<string, unknown> = {
+    metadata: newMetadata,
+    updated_by: actor.userId ?? null,
+  }
+  if (opts?.status) {
+    updatePayload.status = opts.status
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("catalog_entries")
+    .update(updatePayload)
+    .eq("id", entryId)
+    .select()
+    .single()
+  if (error) throw new Error(`updateMetadata(${entryId}): ${error.message}`)
+  const after = data as CatalogEntry
+
+  await writeDecisionLog({
+    catalog_entry_id: entryId,
+    catalog_id: before.catalog_id,
+    action: "metadata_changed",
+    actor,
+    reason,
+    before_state: { metadata: before.metadata, status: before.status },
+    after_state: { metadata: after.metadata, status: after.status },
   })
 
   return after

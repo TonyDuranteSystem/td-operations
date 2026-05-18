@@ -15,6 +15,9 @@
 import { updateTask } from "@/lib/operations/task"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { taskReassignParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const taskReassign: WorkflowHandler = async (ctx: HandlerContext): Promise<HandlerResult> => {
   const params = (ctx.params ?? {}) as { assigned_to?: unknown }
   const newAssignee = typeof params.assigned_to === "string" ? params.assigned_to.trim() : ""

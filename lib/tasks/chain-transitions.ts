@@ -23,6 +23,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { getEntryByServiceType } from "@/lib/services"
 import type { TaskRow } from "@/lib/tasks/types"
+import { buildSnapshotForStorage } from "@/lib/tasks/workflow-snapshot-schema"
 
 export interface ResolvedTransition {
   /** Next workflow_slug to spawn (null if no spawn). */
@@ -100,5 +101,5 @@ export async function getWorkflowCatalogRow(slug: string): Promise<Record<string
   const meta = data.metadata as Record<string, unknown> | null | undefined
   if (!meta || typeof meta !== "object") return null
   // Pin the slug into the snapshot so parseWorkflowSnapshot accepts it.
-  return { ...meta, slug }
+  return buildSnapshotForStorage({ slug, metadata: meta })
 }

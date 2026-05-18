@@ -17,6 +17,7 @@ export interface Task {
   category: string | null
   description: string | null
   account_id: string | null
+  contact_id?: string | null
   delivery_id?: string | null
   company_name: string | null
   service_type?: string | null

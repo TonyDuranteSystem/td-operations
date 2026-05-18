@@ -46,6 +46,7 @@ import {
   type ValidServiceType,
 } from "@/lib/operations/service-types"
 import { getEntryByServiceType } from "@/lib/services"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -307,7 +308,7 @@ export async function createSD(
         stage_order,
         status: params.status || "active",
         start_date,
-        assigned_to: params.assigned_to || "Luca",
+        assigned_to: params.assigned_to || defaultTaskAssignee(),
         notes: params.notes || null,
         stage_entered_at: new Date().toISOString(),
         is_test,
@@ -336,17 +337,19 @@ export async function createSD(
   // The dispatcher's own idempotency check (task_meta.service_delivery_id)
   // ensures retries can't spawn duplicate workflow tasks. Service types
   // with no matching task_workflows row return no_trigger_match (silent).
+  let workflowSpawned = false
   try {
     const { dispatchWorkflowForSdCreated } = await import(
       "@/lib/tasks/dispatch-workflow-for-event"
     )
-    await dispatchWorkflowForSdCreated({
+    const dispatchResult = await dispatchWorkflowForSdCreated({
       delivery: {
         id: row.id,
         service_type: row.service_type,
         stage: row.stage,
         account_id: row.account_id,
         contact_id: row.contact_id,
+        service_name: row.service_name ?? null,
       },
       build_task_meta: async () => ({
         service_delivery_id: row.id,
@@ -359,11 +362,46 @@ export async function createSD(
       description: `Service delivery created: ${row.service_type}. Use the action buttons below to advance the lifecycle.`,
       actor: "createSD:auto-spawn",
     })
+    if (dispatchResult.spawned || dispatchResult.reason === "already_spawned") {
+      workflowSpawned = true
+    }
   } catch (err) {
     console.warn(
       `[createSD] workflow dispatcher failed (non-fatal) for SD ${row.id} (${row.service_type}):`,
       err instanceof Error ? err.message : String(err),
     )
+  }
+
+  // Universal task per SD (2026-05-18, per Antonio). When no workflow row
+  // matches this service_type, fall back to creating a plain task so every
+  // service has at least one tracked task visible in the portal-chats
+  // per-thread Tasks panel + the Task Board. Fire-and-forget — task failure
+  // does NOT roll back the SD insert. Title mirrors the workflow path so
+  // both surfaces present the same name.
+  if (!workflowSpawned) {
+    try {
+      const { dbWriteSafe } = await import("@/lib/db")
+      // eslint-disable-next-line no-restricted-syntax -- universal-task fallback for SDs without workflow rows
+      await dbWriteSafe(
+        supabaseAdmin.from("tasks").insert({
+          task_title: `${row.service_type} — ${row.service_name || row.service_type}`,
+          description: `Service delivery created: ${row.service_type}. No workflow defined for this service type yet — add one via /service-catalog/[slug]/edit so future ${row.service_type} services get action buttons.`,
+          assigned_to: params.assigned_to || defaultTaskAssignee(),
+          priority: "Normal",
+          status: "To Do",
+          account_id: row.account_id ?? undefined,
+          contact_id: row.contact_id ?? undefined,
+          delivery_id: row.id,
+          created_by: "System",
+        }),
+        "tasks.insert.universal-sd-fallback",
+      )
+    } catch (err) {
+      console.warn(
+        `[createSD] universal-task fallback failed (non-fatal) for SD ${row.id} (${row.service_type}):`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
   return {

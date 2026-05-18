@@ -11,6 +11,9 @@
 
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { taskSnoozeParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export const taskSnooze: WorkflowHandler = async (ctx: HandlerContext): Promise<HandlerResult> => {

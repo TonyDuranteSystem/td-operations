@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { Plus, Pencil, Trash2, RotateCcw, Loader2, Package } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -48,6 +49,7 @@ const emptyForm = {
 }
 
 export default function ServiceCatalogPage() {
+  const router = useRouter()
   const [services, setServices] = useState<ServiceItem[]>([])
   const [loading, setLoading] = useState(true)
   const [showInactive, setShowInactive] = useState(false)
@@ -73,12 +75,18 @@ export default function ServiceCatalogPage() {
   useEffect(() => { fetchServices() }, [fetchServices])
 
   const openAdd = () => {
+    router.push('/service-catalog/new')
+  }
+  const _legacyOpenAdd = () => {
     setForm(emptyForm)
     setEditingId(null)
     setModalOpen(true)
   }
 
   const openEdit = (svc: ServiceItem) => {
+    router.push(`/service-catalog/${svc.slug}/edit`)
+  }
+  const _legacyOpenEdit = (svc: ServiceItem) => {
     setForm({
       name: svc.name,
       slug: svc.slug,

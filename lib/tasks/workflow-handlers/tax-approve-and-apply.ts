@@ -19,6 +19,9 @@ import { approveAndApplyTaxReview } from "@/lib/operations/tax-review"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 import type { TaxFormReviewV1Meta } from "@/lib/tasks/workflow-schemas"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { taxApproveAndApplyParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 export const taxApproveAndApply: WorkflowHandler = async (
   ctx: HandlerContext,
 ): Promise<HandlerResult> => {

@@ -27,6 +27,9 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 
+/** Re-export the central client-safe schema for the workflow editor. */
+export { itinConfirmNumberReceivedParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
+
 const ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 
 function buildClientNotice(firstName: string, lang: "en" | "it"): string {

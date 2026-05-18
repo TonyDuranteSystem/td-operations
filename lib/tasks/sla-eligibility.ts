@@ -33,6 +33,30 @@ export interface SlaConfig {
   notify_email_to?: string
 }
 
+/**
+ * Canonical SLA-state string values stamped into `task_meta.sla_state` by the
+ * cron and read by both the cron (debounce) and the TaskCard SLA badge.
+ * Importing this constant in every site (cron, TaskCard, tests) prevents the
+ * silent-typo class of bug where one side writes "warn" and the other reads
+ * "warning" or "warned" with no compile-time signal.
+ */
+export const SLA_STATE = {
+  WARN: "warn",
+  ESCALATED: "escalated",
+} as const
+export type SlaStateValue = (typeof SLA_STATE)[keyof typeof SLA_STATE]
+
+/**
+ * Canonical `task_meta` key names for SLA bookkeeping. Co-located with
+ * SLA_STATE for the same reason: one typo away from a silent bug otherwise.
+ */
+export const SLA_META_KEYS = {
+  state: "sla_state",
+  warned_at: "sla_warned_at",
+  escalated_at: "escalated_at",
+  escalate_to: "sla_escalate_to",
+} as const
+
 export interface SlaCheckTask {
   id: string
   created_at: string
@@ -60,7 +84,7 @@ const HOUR_MS = 60 * 60 * 1000
 
 function readSlaState(taskMeta: Record<string, unknown> | null): string | null {
   if (!taskMeta) return null
-  const v = taskMeta.sla_state
+  const v = taskMeta[SLA_META_KEYS.state]
   return typeof v === "string" ? v : null
 }
 
@@ -85,7 +109,7 @@ export function decideSlaTier(
 
   // Escalate dominates. Check it first.
   if (escalate != null && hoursWaiting >= escalate) {
-    if (slaState === "escalated") {
+    if (slaState === SLA_STATE.ESCALATED) {
       return { tier: "escalate_no_op", hours_waiting: hoursWaiting, escalate_threshold: escalate }
     }
     return {
@@ -98,7 +122,7 @@ export function decideSlaTier(
 
   // Warn tier: past warn_hours but not yet escalate.
   if (warn != null && hoursWaiting >= warn) {
-    if (slaState === "warn" || slaState === "escalated") {
+    if (slaState === SLA_STATE.WARN || slaState === SLA_STATE.ESCALATED) {
       return { tier: "warn_no_op", hours_waiting: hoursWaiting, warn_threshold: warn }
     }
     return { tier: "warn", hours_waiting: hoursWaiting, warn_threshold: warn }

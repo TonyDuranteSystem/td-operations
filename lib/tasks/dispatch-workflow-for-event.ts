@@ -31,10 +31,59 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createWorkflowTask } from "@/lib/operations/task"
-import { parseWorkflowSnapshot } from "@/lib/tasks/workflow-snapshot-schema"
+import { parseWorkflowSnapshot, buildSnapshotForStorage } from "@/lib/tasks/workflow-snapshot-schema"
 import { getWorkflowSchema } from "@/lib/tasks/workflow-schemas"
 import { parseTriggeredBy, matchesFilter } from "@/lib/tasks/workflow-trigger-schema"
+import { interpolateStringStrict } from "@/lib/template-interpolation"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import type { WorkflowSnapshot } from "@/lib/tasks/types"
+
+/**
+ * Resolve task_title / description from catalog templates (when present) with
+ * graceful fallback to the caller-provided literal. The interpolation context
+ * is `(submission ∪ task_meta)` — task_meta wins on key conflict because it's
+ * the normalized derivative built by the caller's `build_task_meta`.
+ *
+ * Strict mode: any missing/empty token in the template returns null from the
+ * interpolator → we fall back to the caller's literal AND log a warn so the
+ * catalog row can be corrected (token typo, missing build_task_meta field).
+ * Without the warn the bug is invisible — the legacy literal silently wins.
+ */
+function resolveTaskTextFields(
+  metadata: Record<string, unknown>,
+  context: Record<string, unknown>,
+  fallback: { task_title: string; description?: string | null },
+  workflowSlug: string,
+): { task_title: string; description: string | null } {
+  const titleTemplate = typeof metadata.task_title_template === "string" ? metadata.task_title_template : null
+  const descTemplate = typeof metadata.description_template === "string" ? metadata.description_template : null
+
+  let task_title = fallback.task_title
+  if (titleTemplate) {
+    const interpolated = interpolateStringStrict(titleTemplate, context)
+    if (interpolated !== null) {
+      task_title = interpolated
+    } else {
+      console.warn(
+        `[dispatch-workflow] ${workflowSlug}: task_title_template missing token(s); falling back to caller literal. Template: ${titleTemplate}`,
+      )
+    }
+  }
+
+  let description: string | null = fallback.description ?? null
+  if (descTemplate) {
+    const interpolated = interpolateStringStrict(descTemplate, context)
+    if (interpolated !== null) {
+      description = interpolated
+    } else {
+      console.warn(
+        `[dispatch-workflow] ${workflowSlug}: description_template missing token(s); falling back to caller literal. Template: ${descTemplate}`,
+      )
+    }
+  }
+
+  return { task_title, description }
+}
 
 export interface MatchedWorkflow {
   slug: string
@@ -240,17 +289,20 @@ export async function dispatchWorkflowForFormCompletion<T extends Record<string,
   }
 
   // ── 5. Spawn the workflow task ─────────────────────────────────────────
+  const resolved = resolveTaskTextFields(
+    matched.raw_metadata,
+    { ...(submission as Record<string, unknown>), ...taskMeta },
+    { task_title: params.task_title, description: params.description ?? null },
+    matched.slug,
+  )
+
   const spawn = await createWorkflowTask({
     workflow_slug: matched.slug,
-    // Inject slug into the stored snapshot so TaskCard's parseWorkflowSnapshot
-    // can read it. Without slug the schema fails and the ErrorBoundary fires.
-    // The TaskCard parses the stored snapshot directly (no slug injection at
-    // read time); slug must be present in what we store.
-    workflow_snapshot: { ...matched.raw_metadata, slug: matched.slug },
+    workflow_snapshot: buildSnapshotForStorage({ slug: matched.slug, metadata: matched.raw_metadata }),
     task_meta: taskMeta,
-    task_title: params.task_title,
-    description: params.description ?? null,
-    assigned_to: params.assigned_to ?? (matched.raw_metadata.default_assignee as string) ?? "Luca",
+    task_title: resolved.task_title,
+    description: resolved.description,
+    assigned_to: params.assigned_to ?? (matched.raw_metadata.default_assignee as string) ?? defaultTaskAssignee(),
     priority: params.priority ?? (matched.raw_metadata.default_priority as "Urgent" | "High" | "Normal" | "Low") ?? "High",
     status: "To Do",
     account_id: params.account_id ?? null,
@@ -287,6 +339,11 @@ export interface DispatchSdCreatedParams {
     stage: string | null
     account_id?: string | null
     contact_id?: string | null
+    /** Human-readable service name (e.g. "Mario Rossi - Company Formation").
+     *  Optional — included in the interpolation context for task_title_template
+     *  so catalog rows can use `{service_name}` without needing build_task_meta
+     *  to add it. */
+    service_name?: string | null
   }
   /** Build task_meta for the matched workflow. The returned shape MUST satisfy
    *  the workflow's task_meta_schema Zod check. */
@@ -422,17 +479,20 @@ export async function dispatchWorkflowForSdCreated(
   }
 
   // ── 4. Spawn the workflow task ─────────────────────────────────────────
+  const resolved = resolveTaskTextFields(
+    matched.raw_metadata,
+    { ...(delivery as unknown as Record<string, unknown>), ...taskMeta },
+    { task_title: params.task_title, description: params.description ?? null },
+    matched.slug,
+  )
+
   const spawn = await createWorkflowTask({
     workflow_slug: matched.slug,
-    // Inject slug into the stored snapshot so TaskCard's parseWorkflowSnapshot
-    // can read it. Without slug the schema fails and the ErrorBoundary fires.
-    // The TaskCard parses the stored snapshot directly (no slug injection at
-    // read time); slug must be present in what we store.
-    workflow_snapshot: { ...matched.raw_metadata, slug: matched.slug },
+    workflow_snapshot: buildSnapshotForStorage({ slug: matched.slug, metadata: matched.raw_metadata }),
     task_meta: taskMeta,
-    task_title: params.task_title,
-    description: params.description ?? null,
-    assigned_to: (matched.raw_metadata.default_assignee as string) ?? "Luca",
+    task_title: resolved.task_title,
+    description: resolved.description,
+    assigned_to: (matched.raw_metadata.default_assignee as string) ?? defaultTaskAssignee(),
     priority: (matched.raw_metadata.default_priority as "Urgent" | "High" | "Normal" | "Low") ?? "High",
     status: "To Do",
     account_id: delivery.account_id ?? null,

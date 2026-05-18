@@ -37,6 +37,7 @@ const STATUS_BADGE: Record<CatalogEntry["status"], string> = {
   active: "bg-green-100 text-green-800",
   deprecated: "bg-gray-200 text-gray-600 line-through",
   exception_only: "bg-amber-100 text-amber-800",
+  draft: "bg-blue-100 text-blue-800",
 }
 
 function StatusBadge({ status }: { status: CatalogEntry["status"] }) {
