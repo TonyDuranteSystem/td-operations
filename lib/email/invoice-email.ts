@@ -207,7 +207,7 @@ function baseShell(input: InvoiceEmailInput, inner: string): string {
       <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px;">
         ${inner}
         <div style="border-top:1px solid #e5e7eb;margin-top:24px;padding-top:16px;font-size:11px;color:#9ca3af;">
-          Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
+          Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
         </div>
       </div>
     </div>

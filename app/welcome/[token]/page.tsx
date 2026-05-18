@@ -56,7 +56,7 @@ function t(lang: Lang) {
   }
 }
 
-const FOOTER = "Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139"
+const FOOTER = "Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771"
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (

@@ -4,13 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { resolveMailingAddress } from '@/lib/addresses'
 
-// TD LLC company info
-const TD_COMPANY = {
-  name: 'Tony Durante LLC',
-  address: '1111 Lincoln Road, Suite 400, Miami Beach, FL 33139',
-  state: 'Florida',
-  ein: '32-0754285',
-}
+import { TD_COMPANY } from '@/lib/config'
 
 // Bank details by currency
 const BANK_DETAILS: Record<string, InvoicePdfInput['bankDetails']> = {

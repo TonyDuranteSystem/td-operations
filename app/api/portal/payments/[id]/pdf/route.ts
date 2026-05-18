@@ -5,12 +5,7 @@ import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { resolveMailingAddress } from '@/lib/addresses'
 
-const TD_COMPANY = {
-  name: 'Tony Durante LLC',
-  address: '1111 Lincoln Road, Suite 400, Miami Beach, FL 33139',
-  state: 'Florida',
-  ein: '32-0754285',
-}
+import { TD_COMPANY } from '@/lib/config'
 
 const BANK_DETAILS: Record<string, InvoicePdfInput['bankDetails']> = {
   USD: {

@@ -34,3 +34,13 @@ export const PORTAL_BASE_URL = process.env.PUBLIC_PORTAL_BASE_URL || "https://po
 export const CRM_BASE_URL = process.env.PUBLIC_CRM_BASE_URL || "https://crm.tonydurante.us"
 // Internal domain — OAuth issuer, QB callback, webhooks (exempt from domain check)
 export const INTERNAL_BASE_URL = "https://td-operations.vercel.app"
+
+// Tony Durante LLC — single source of truth for company info used in invoices, emails, PDFs
+export const TD_COMPANY = {
+  name: "Tony Durante LLC",
+  address: "10225 Ulmerton Rd, STE 3D, Largo FL 33771",
+  state: "Florida",
+  ein: "32-0754285",
+} as const
+
+export const TD_FOOTER = `Tony Durante LLC · ${TD_COMPANY.address}`

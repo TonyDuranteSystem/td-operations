@@ -565,7 +565,7 @@ function buildPortalAccessEmail(
     <p style="color: #6b7280; font-size: 13px;">Al primo accesso ti verrà chiesto di cambiare la password.</p>
     <p style="color: #6b7280; font-size: 13px;">Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale.</p>
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
+      Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
     </div>
   </div>
 </div>${pixel}`
@@ -594,7 +594,7 @@ function buildPortalAccessEmail(
     <p style="color: #6b7280; font-size: 13px;">On your first login, you'll be asked to change your password.</p>
     <p style="color: #6b7280; font-size: 13px;">For any questions, reply to this email or use the chat in your portal.</p>
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
+      Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
     </div>
   </div>
 </div>${pixel}`
@@ -627,7 +627,7 @@ function buildPortalNotificationEmail(
     </p>
     <p style="color: #6b7280; font-size: 13px;">Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale.</p>
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
+      Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
     </div>
   </div>
 </div>${pixel}`
@@ -649,7 +649,7 @@ function buildPortalNotificationEmail(
     </p>
     <p style="color: #6b7280; font-size: 13px;">For any questions, reply to this email or use the chat in your portal.</p>
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
+      Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
     </div>
   </div>
 </div>${pixel}`

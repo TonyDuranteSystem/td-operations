@@ -18,14 +18,7 @@ import { syncInvoiceToQB } from "@/lib/qb-sync"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { buildInvoiceEmail } from "@/lib/email/invoice-email"
 import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
-
-// TD LLC company info
-const TD_COMPANY = {
-  name: "Tony Durante LLC",
-  address: "1111 Lincoln Road, Suite 400, Miami Beach, FL 33139",
-  state: "Florida",
-  ein: "32-0754285",
-}
+import { TD_COMPANY } from "@/lib/config"
 
 /**
  * Resolve bank details for a payment row into the shape generateInvoicePdf +

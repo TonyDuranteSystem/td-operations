@@ -111,7 +111,7 @@ export async function POST(
             </p>
 
             <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-              Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
+              Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
             </div>
           </div>
         </div>
@@ -143,6 +143,7 @@ export async function POST(
       {
         name: 'update_reminder_count',
         fn: async () => {
+          // eslint-disable-next-line no-restricted-syntax -- reminder_count / last_reminder_at have no dedicated helper
           await supabaseAdmin
             .from('payments')
             .update({

@@ -157,7 +157,7 @@ describe("buildInvoiceEmail — shared structure invariants", () => {
     for (const v of variants) {
       const { html } = buildInvoiceEmail({ ...baseInput, ...v })
       expect(html).toContain("Tony Durante LLC")
-      expect(html).toContain("1111 Lincoln Road")
+      expect(html).toContain("10225 Ulmerton Rd")
       expect(html).toContain(baseInput.invoiceNumber)
     }
   })

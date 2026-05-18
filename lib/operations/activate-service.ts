@@ -1456,7 +1456,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   </div>
   <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px">
     ${inner}
-    <div style="border-top:1px solid #e5e7eb;margin-top:24px;padding-top:12px;font-size:11px;color:#9ca3af">Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139</div>
+    <div style="border-top:1px solid #e5e7eb;margin-top:24px;padding-top:12px;font-size:11px;color:#9ca3af">Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771</div>
   </div>
 </div>`
 
