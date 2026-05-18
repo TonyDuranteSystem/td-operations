@@ -30,6 +30,8 @@ import {
   Loader2,
   X,
   Link2,
+  Building2,
+  User,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import {
@@ -40,9 +42,10 @@ import {
   deletePayment,
   deletePaymentPreview,
   updateInvoice,
-  searchContactsForRelink,
+  searchLinkTargets,
   relinkPayment,
-  type ContactSearchResult,
+  type LinkSearchResult,
+  type LinkTarget,
 } from '@/app/(dashboard)/finance/actions'
 
 export interface PaymentRowLike {
@@ -471,7 +474,7 @@ function EditPaymentDialog({
   )
 }
 
-// ── Relink Payment Dialog ──────────────────────────────────────
+// ── Link / Unlink Payment Dialog ──────────────────────────────
 
 function RelinkPaymentDialog({
   paymentId,
@@ -485,9 +488,9 @@ function RelinkPaymentDialog({
   onSaved: () => void
 }) {
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<ContactSearchResult[]>([])
+  const [results, setResults] = useState<LinkSearchResult[]>([])
   const [searching, setSearching] = useState(false)
-  const [selected, setSelected] = useState<ContactSearchResult | null>(null)
+  const [selected, setSelected] = useState<LinkSearchResult | null>(null)
   const [isPending, startTransition] = useTransition()
 
   const handleSearch = (value: string) => {
@@ -495,48 +498,60 @@ function RelinkPaymentDialog({
     setSelected(null)
     if (value.trim().length < 2) { setResults([]); return }
     setSearching(true)
-    searchContactsForRelink(value).then(r => {
+    searchLinkTargets(value).then(r => {
       setResults(r)
       setSearching(false)
     }).catch(() => setSearching(false))
   }
 
-  const handleSave = () => {
-    if (!selected) return
+  const save = (target: LinkTarget | null) => {
     startTransition(async () => {
-      const result = await relinkPayment(paymentId, selected.contact_id, selected.account_id)
+      const result = await relinkPayment(paymentId, target)
       if (result.success) {
-        toast.success(`${label} relinked to ${selected.full_name}`)
+        toast.success(target ? `${label} linked to ${target.label}` : `${label} unlinked`)
         onSaved()
         onClose()
       } else {
-        toast.error(result.error ?? 'Failed to relink')
+        toast.error(result.error ?? 'Failed')
       }
     })
   }
 
+  const handleLink = () => {
+    if (!selected) return
+    const target: LinkTarget = selected.type === 'account'
+      ? { type: 'account', id: selected.id, label: selected.label }
+      : { type: 'contact', id: selected.id, label: selected.label, account_id: selected.account_id }
+    save(target)
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-md"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b">
-          <h2 className="text-lg font-semibold">Relink {label}</h2>
+          <h2 className="text-lg font-semibold">Link / Unlink — {label}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="px-6 py-4 space-y-3">
+          <button
+            type="button"
+            onClick={() => save(null)}
+            disabled={isPending}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-40"
+          >
+            <X className="w-4 h-4" /> Unlink — remove all associations
+          </button>
+
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">Search contact</label>
             <input
               type="text"
               autoFocus
               value={query}
               onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Type a name…"
+              placeholder="Search companies or contacts…"
               className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -550,15 +565,19 @@ function RelinkPaymentDialog({
           {!searching && results.length > 0 && (
             <ul className="border rounded-lg divide-y max-h-52 overflow-y-auto">
               {results.map(r => (
-                <li key={r.contact_id}>
+                <li key={`${r.type}-${r.id}`}>
                   <button
                     type="button"
-                    onClick={() => { setSelected(r); setQuery(r.full_name) }}
-                    className={`w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 flex flex-col gap-0.5 ${selected?.contact_id === r.contact_id ? 'bg-blue-50' : ''}`}
+                    onClick={() => setSelected(r)}
+                    className={`w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 flex items-center gap-2 ${selected?.id === r.id && selected?.type === r.type ? 'bg-blue-50' : ''}`}
                   >
-                    <span className="font-medium">{r.full_name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {r.company_name ?? 'No company'}{r.email ? ` · ${r.email}` : ''}
+                    {r.type === 'account'
+                      ? <Building2 className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                      : <User className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                    }
+                    <span className="flex flex-col">
+                      <span className="font-medium">{r.label}</span>
+                      {r.sublabel && <span className="text-xs text-muted-foreground">{r.sublabel}</span>}
                     </span>
                   </button>
                 </li>
@@ -567,35 +586,29 @@ function RelinkPaymentDialog({
           )}
 
           {!searching && query.trim().length >= 2 && results.length === 0 && (
-            <p className="text-sm text-muted-foreground py-1">No contacts found.</p>
+            <p className="text-sm text-muted-foreground py-1">No results found.</p>
           )}
 
           {selected && (
             <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
-              <span className="font-medium text-blue-800">{selected.full_name}</span>
-              {selected.company_name && <span className="text-blue-600"> · {selected.company_name}</span>}
-              {!selected.account_id && <span className="text-amber-600 text-xs ml-1">(no company — contact only)</span>}
+              <span className="font-medium text-blue-800">{selected.label}</span>
+              <span className="text-xs text-muted-foreground ml-1">({selected.type})</span>
             </div>
           )}
         </div>
 
         <div className="flex items-center justify-end gap-2 px-6 py-3 border-t">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isPending}
-            className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50"
-          >
+          <button type="button" onClick={onClose} disabled={isPending} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50">
             Cancel
           </button>
           <button
             type="button"
-            onClick={handleSave}
+            onClick={handleLink}
             disabled={!selected || isPending}
             className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
           >
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-            Relink
+            Link
           </button>
         </div>
       </div>

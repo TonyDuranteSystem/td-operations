@@ -676,43 +676,76 @@ export async function syncBankFeeds(): Promise<ActionResult> {
 
 // ── Relink payment ──
 
-export interface ContactSearchResult {
-  contact_id: string
-  full_name: string
-  email: string | null
+export type LinkTarget =
+  | { type: 'account'; id: string; label: string }
+  | { type: 'contact'; id: string; label: string; account_id: string | null }
+
+export interface LinkSearchResult {
+  type: 'account' | 'contact'
+  id: string
+  label: string
+  sublabel: string | null
   account_id: string | null
-  company_name: string | null
 }
 
-export async function searchContactsForRelink(query: string): Promise<ContactSearchResult[]> {
+export async function searchLinkTargets(query: string): Promise<LinkSearchResult[]> {
   if (!query || query.trim().length < 2) return []
   const { supabaseAdmin } = await import('@/lib/supabase-admin')
-  const { data } = await supabaseAdmin
-    .from('contacts')
-    .select('id, full_name, email, account_contacts(account_id, accounts:account_id(company_name))')
-    .ilike('full_name', `%${query.trim()}%`)
-    .limit(10)
+  const q = `%${query.trim()}%`
 
-  return (data ?? []).map(c => {
+  const [accountsRes, contactsRes] = await Promise.all([
+    supabaseAdmin
+      .from('accounts')
+      .select('id, company_name')
+      .ilike('company_name', q)
+      .limit(8),
+    supabaseAdmin
+      .from('contacts')
+      .select('id, full_name, email, account_contacts(account_id, accounts:account_id(company_name))')
+      .ilike('full_name', q)
+      .limit(8),
+  ])
+
+  const accounts: LinkSearchResult[] = (accountsRes.data ?? []).map(a => ({
+    type: 'account',
+    id: a.id,
+    label: a.company_name,
+    sublabel: 'Company',
+    account_id: a.id,
+  }))
+
+  const contacts: LinkSearchResult[] = (contactsRes.data ?? []).map(c => {
     const link = (c.account_contacts as unknown as Array<{ account_id: string; accounts: { company_name: string } | null }>)[0]
     return {
-      contact_id: c.id,
-      full_name: c.full_name,
-      email: c.email ?? null,
+      type: 'contact',
+      id: c.id,
+      label: c.full_name,
+      sublabel: link?.accounts?.company_name ?? c.email ?? null,
       account_id: link?.account_id ?? null,
-      company_name: link?.accounts?.company_name ?? null,
     }
   })
+
+  return [...accounts, ...contacts].slice(0, 12)
 }
 
 export async function relinkPayment(
   paymentId: string,
-  contactId: string,
-  accountId: string | null,
+  target: LinkTarget | null,
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const now = new Date().toISOString()
+
+    let contactId: string | null = null
+    let accountId: string | null = null
+
+    if (target?.type === 'account') {
+      accountId = target.id
+    } else if (target?.type === 'contact') {
+      contactId = target.id
+      accountId = target.account_id
+    }
+    // target === null → unlink (both stay null)
 
     // eslint-disable-next-line no-restricted-syntax -- relink requires raw update; no dedicated tool for contact/account reassignment
     const { error } = await supabaseAdmin
@@ -721,7 +754,6 @@ export async function relinkPayment(
       .eq('id', paymentId)
     if (error) throw new Error(`Failed to relink payment: ${error.message}`)
 
-    // Sync account/contact to client_expenses mirror
     // eslint-disable-next-line no-restricted-syntax -- mirror sync
     await supabaseAdmin
       .from('client_expenses')
@@ -735,6 +767,8 @@ export async function relinkPayment(
     action_type: 'update',
     table_name: 'payments',
     record_id: paymentId,
-    summary: `Payment relinked to contact ${contactId}${accountId ? ` / account ${accountId}` : ''}`,
+    summary: target
+      ? `Payment relinked to ${target.type} ${target.id}`
+      : 'Payment unlinked (contact_id and account_id cleared)',
   })
 }
