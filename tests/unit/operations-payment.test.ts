@@ -120,6 +120,10 @@ vi.mock("@/lib/portal/unified-invoice", () => ({
   ),
 }))
 
+vi.mock("@/lib/invoice-auto-send", () => ({
+  sendPaidReceipt: vi.fn(() => Promise.resolve()),
+}))
+
 import { confirmPayment } from "@/lib/operations/payment"
 
 beforeEach(() => {
