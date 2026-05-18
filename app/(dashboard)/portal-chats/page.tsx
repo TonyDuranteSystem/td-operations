@@ -77,6 +77,8 @@ interface ChatThread {
   last_message: string
   last_message_at: string
   unread_count: number
+  /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
+  active_services: { service_type: string; stage: string | null }[]
 }
 
 interface ChatAttachment {
@@ -1462,6 +1464,18 @@ export default function PortalChatsPage() {
                         <div className="flex flex-wrap gap-1 mt-0.5">
                           {thread.companies.map(c => (
                             <Link key={c.id} href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
+                          ))}
+                        </div>
+                      )}
+                      {/* Active SD badges — one pill per in-progress service, fully dynamic from DB */}
+                      {(thread.active_services ?? []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {thread.active_services.map((sd, i) => (
+                            <span key={i} className="inline-flex items-center gap-0.5 text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                              {sd.service_type}
+                              {sd.stage && <span className="text-amber-500 ml-0.5">· {sd.stage}</span>}
+                            </span>
                           ))}
                         </div>
                       )}

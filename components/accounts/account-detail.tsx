@@ -21,7 +21,7 @@ import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/
 import { RegenLeasePdfDialog } from '@/app/(dashboard)/accounts/[id]/components/regen-lease-pdf-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
-import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from './service-deliveries-section'
+import { type ServiceDeliveryForStepper } from './service-deliveries-section'
 import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
@@ -752,14 +752,6 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         />
       )}
 
-      {/* Pipeline Stepper — click-to-advance for every active SD on this account. */}
-      {stepperDeliveries.length > 0 && (
-        <ServiceDeliveriesSection
-          deliveries={stepperDeliveries}
-          stagesByServiceType={stagesByServiceType}
-        />
-      )}
-
       {/* Generate Document Dialogs */}
       <GenerateOADialog
         open={showOADialog}
@@ -866,7 +858,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
       )}
       {activeTab === 'services' && (
-        <ServiziTab services={services} today={today} accountId={account.id} />
+        <ServiziTab services={services} today={today} accountId={account.id} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} />
       )}
       {activeTab === 'payments' && (
         <PagamentiTab payments={payments} today={today} />
@@ -2128,52 +2120,153 @@ function _InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label
 
 /* ── Servizi Tab ───────────────────────────────────── */
 
-function ServiziTab({ services, today, accountId }: { services: Service[]; today: string; accountId: string }) {
+function ServiziTab({
+  services,
+  today,
+  accountId,
+  stepperDeliveries,
+  stagesByServiceType,
+  payments,
+}: {
+  services: Service[]
+  today: string
+  accountId: string
+  stepperDeliveries: ServiceDeliveryForStepper[]
+  stagesByServiceType: Record<string, PipelineStage[]>
+  payments: Payment[]
+}) {
   const router = useRouter()
-  const active = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
-  const completed = services.filter(s => s.status === 'Completed' || s.status === 'Cancelled')
   const [showAddService, setShowAddService] = useState(false)
+
+  const active = stepperDeliveries.filter(d => d.status !== 'cancelled' && d.status !== 'completed')
+  const done = stepperDeliveries.filter(d => d.status === 'cancelled' || d.status === 'completed')
+
+  // Match invoice to a delivery: find the payment whose description matches
+  // the service_type (Phase 9 auto-invoices use service_type as description).
+  // If multiple exist (re-issues), take the most recent by issue_date.
+  function invoiceFor(sd: ServiceDeliveryForStepper): Payment | undefined {
+    return payments
+      .filter(p => p.description === sd.service_type && p.invoice_number)
+      .sort((a, b) =>
+        (b.issue_date ?? b.invoice_date ?? b.due_date ?? '').localeCompare(
+          a.issue_date ?? a.invoice_date ?? a.due_date ?? '',
+        ),
+      )[0]
+  }
 
   return (
     <div className="space-y-6">
-      {/* Active services */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-            Active ({active.length})
-          </h3>
-          <button
-            onClick={() => setShowAddService(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-md hover:bg-zinc-50"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add Service
-          </button>
-        </div>
-        {active.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No active services</p>
-        ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {active.map(s => (
-              <ServiceCard key={s.id} service={s} today={today} />
-            ))}
-          </div>
-        )}
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+          Active ({active.length})
+        </h3>
+        <button
+          onClick={() => setShowAddService(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-md hover:bg-zinc-50"
+        >
+          <Plus className="h-3.5 w-3.5" /> Add Service
+        </button>
       </div>
 
-      {/* Completed */}
-      {completed.length > 0 && (
+      {active.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No active services.</p>
+      ) : (
+        <div className="space-y-3">
+          {active.map(sd => {
+            const stages = stagesByServiceType[sd.service_type] ?? []
+            const invoice = invoiceFor(sd)
+            return (
+              <div key={sd.id} className="bg-white rounded-lg border border-zinc-200 p-4 space-y-3">
+                {/* Header: service name + status badge */}
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="font-medium text-zinc-900">{sd.service_name || sd.service_type}</span>
+                    {sd.service_name && sd.service_name !== sd.service_type && (
+                      <span className="text-xs text-zinc-500 ml-2">{sd.service_type}</span>
+                    )}
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shrink-0 capitalize">
+                    {sd.status}
+                  </span>
+                </div>
+
+                {/* Stage stepper — fully driven by pipeline_stages from DB */}
+                {stages.length > 0 ? (
+                  <SdPipelineStepper
+                    deliveryId={sd.id}
+                    serviceType={sd.service_type}
+                    serviceName={sd.service_name || sd.service_type}
+                    currentStage={sd.stage}
+                    status={sd.status}
+                    updatedAt={sd.updated_at}
+                    stages={stages}
+                  />
+                ) : (
+                  <p className="text-xs text-zinc-400 italic">No pipeline stages configured for this service.</p>
+                )}
+
+                {/* Invoice row */}
+                <div className="flex items-center justify-between text-xs pt-2 border-t border-zinc-100">
+                  {invoice ? (
+                    <>
+                      <span className="text-zinc-600 font-mono">
+                        {invoice.invoice_number}
+                        {invoice.amount != null && ` · ${formatCurrency(invoice.amount, invoice.amount_currency)}`}
+                        {` · ${invoice.invoice_status ?? invoice.status ?? 'Pending'}`}
+                      </span>
+                      {invoice.sent_at ? (
+                        <span className="text-zinc-400">Sent {new Date(invoice.sent_at).toLocaleDateString()}</span>
+                      ) : (
+                        <span className="text-amber-600 font-medium">Not sent to client yet</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-zinc-400 italic">No invoice issued</span>
+                      <button
+                        onClick={() => router.push(`/accounts/${accountId}#payments`)}
+                        className="text-blue-600 hover:underline"
+                      >
+                        Issue Invoice →
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {done.length > 0 && (
         <div className="space-y-2">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-            Completed ({completed.length})
+            Completed / Cancelled ({done.length})
           </h3>
           <div className="grid gap-2 sm:grid-cols-2">
-            {completed.map(s => (
-              <ServiceCard key={s.id} service={s} today={today} />
-            ))}
+            {done.map(sd => {
+              const legacy = services.find(s => s.id === sd.id)
+              if (legacy) return <ServiceCard key={sd.id} service={legacy} today={today} />
+              return (
+                <div key={sd.id} className="bg-white rounded-lg border p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium truncate">{sd.service_name || sd.service_type}</span>
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-100 capitalize shrink-0">{sd.status}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">{sd.service_type}</p>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
-      <AddServiceDialog open={showAddService} onClose={() => { setShowAddService(false); router.refresh() }} accountId={accountId} existingTypes={services.map(s => s.service_type)} />
+
+      <AddServiceDialog
+        open={showAddService}
+        onClose={() => { setShowAddService(false); router.refresh() }}
+        accountId={accountId}
+        existingTypes={stepperDeliveries.map(s => s.service_type)}
+      />
     </div>
   )
 }
