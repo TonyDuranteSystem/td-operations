@@ -29,6 +29,7 @@ import {
   Trash2,
   Loader2,
   X,
+  Link2,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import {
@@ -39,6 +40,9 @@ import {
   deletePayment,
   deletePaymentPreview,
   updateInvoice,
+  searchContactsForRelink,
+  relinkPayment,
+  type ContactSearchResult,
 } from '@/app/(dashboard)/finance/actions'
 
 export interface PaymentRowLike {
@@ -53,6 +57,8 @@ export interface PaymentRowLike {
   due_date?: string | null
   notes?: string | null
   message?: string | null
+  account_id?: string | null
+  contact_id?: string | null
 }
 
 interface Props {
@@ -66,6 +72,7 @@ export function PaymentRowActions({ payment }: Props) {
   const [voidOpen, setVoidOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [relinkOpen, setRelinkOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
@@ -241,8 +248,15 @@ export function PaymentRowActions({ payment }: Props) {
           )}
           <button
             type="button"
-            onClick={() => { setMenuOpen(false); setEditOpen(true) }}
+            onClick={() => { setMenuOpen(false); setRelinkOpen(true) }}
             className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left border-t"
+          >
+            <Link2 className="h-4 w-4" /> Relink contact…
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMenuOpen(false); setEditOpen(true) }}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"
           >
             <Pencil className="h-4 w-4" /> Edit
           </button>
@@ -298,6 +312,15 @@ export function PaymentRowActions({ payment }: Props) {
         <EditPaymentDialog
           payment={payment}
           onClose={() => setEditOpen(false)}
+          onSaved={() => router.refresh()}
+        />
+      )}
+
+      {relinkOpen && (
+        <RelinkPaymentDialog
+          paymentId={payment.id}
+          label={label}
+          onClose={() => setRelinkOpen(false)}
           onSaved={() => router.refresh()}
         />
       )}
@@ -441,6 +464,138 @@ function EditPaymentDialog({
           >
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Save
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Relink Payment Dialog ──────────────────────────────────────
+
+function RelinkPaymentDialog({
+  paymentId,
+  label,
+  onClose,
+  onSaved,
+}: {
+  paymentId: string
+  label: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<ContactSearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const [selected, setSelected] = useState<ContactSearchResult | null>(null)
+  const [isPending, startTransition] = useTransition()
+
+  const handleSearch = (value: string) => {
+    setQuery(value)
+    setSelected(null)
+    if (value.trim().length < 2) { setResults([]); return }
+    setSearching(true)
+    searchContactsForRelink(value).then(r => {
+      setResults(r)
+      setSearching(false)
+    }).catch(() => setSearching(false))
+  }
+
+  const handleSave = () => {
+    if (!selected) return
+    startTransition(async () => {
+      const result = await relinkPayment(paymentId, selected.contact_id, selected.account_id)
+      if (result.success) {
+        toast.success(`${label} relinked to ${selected.full_name}`)
+        onSaved()
+        onClose()
+      } else {
+        toast.error(result.error ?? 'Failed to relink')
+      }
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-xl shadow-xl w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b">
+          <h2 className="text-lg font-semibold">Relink {label}</h2>
+          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="px-6 py-4 space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Search contact</label>
+            <input
+              type="text"
+              autoFocus
+              value={query}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="Type a name…"
+              className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {searching && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-1">
+              <Loader2 className="h-4 w-4 animate-spin" /> Searching…
+            </div>
+          )}
+
+          {!searching && results.length > 0 && (
+            <ul className="border rounded-lg divide-y max-h-52 overflow-y-auto">
+              {results.map(r => (
+                <li key={r.contact_id}>
+                  <button
+                    type="button"
+                    onClick={() => { setSelected(r); setQuery(r.full_name) }}
+                    className={`w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 flex flex-col gap-0.5 ${selected?.contact_id === r.contact_id ? 'bg-blue-50' : ''}`}
+                  >
+                    <span className="font-medium">{r.full_name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {r.company_name ?? 'No company'}{r.email ? ` · ${r.email}` : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {!searching && query.trim().length >= 2 && results.length === 0 && (
+            <p className="text-sm text-muted-foreground py-1">No contacts found.</p>
+          )}
+
+          {selected && (
+            <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
+              <span className="font-medium text-blue-800">{selected.full_name}</span>
+              {selected.company_name && <span className="text-blue-600"> · {selected.company_name}</span>}
+              {!selected.account_id && <span className="text-amber-600 text-xs ml-1">(no company — contact only)</span>}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-6 py-3 border-t">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isPending}
+            className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!selected || isPending}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+            Relink
           </button>
         </div>
       </div>

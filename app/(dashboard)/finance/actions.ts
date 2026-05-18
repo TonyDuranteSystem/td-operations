@@ -673,3 +673,68 @@ export async function syncBankFeeds(): Promise<ActionResult> {
     summary: 'Triggered bank feed sync via Plaid',
   })
 }
+
+// ── Relink payment ──
+
+export interface ContactSearchResult {
+  contact_id: string
+  full_name: string
+  email: string | null
+  account_id: string | null
+  company_name: string | null
+}
+
+export async function searchContactsForRelink(query: string): Promise<ContactSearchResult[]> {
+  if (!query || query.trim().length < 2) return []
+  const { supabaseAdmin } = await import('@/lib/supabase-admin')
+  const { data } = await supabaseAdmin
+    .from('contacts')
+    .select('id, full_name, email, account_contacts(account_id, accounts:account_id(company_name))')
+    .ilike('full_name', `%${query.trim()}%`)
+    .limit(10)
+
+  return (data ?? []).map(c => {
+    const link = (c.account_contacts as unknown as Array<{ account_id: string; accounts: { company_name: string } | null }>)[0]
+    return {
+      contact_id: c.id,
+      full_name: c.full_name,
+      email: c.email ?? null,
+      account_id: link?.account_id ?? null,
+      company_name: link?.accounts?.company_name ?? null,
+    }
+  })
+}
+
+export async function relinkPayment(
+  paymentId: string,
+  contactId: string,
+  accountId: string | null,
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const now = new Date().toISOString()
+
+    // eslint-disable-next-line no-restricted-syntax -- relink requires raw update; no dedicated tool for contact/account reassignment
+    const { error } = await supabaseAdmin
+      .from('payments')
+      .update({ contact_id: contactId, account_id: accountId, updated_at: now })
+      .eq('id', paymentId)
+    if (error) throw new Error(`Failed to relink payment: ${error.message}`)
+
+    // Sync account/contact to client_expenses mirror
+    // eslint-disable-next-line no-restricted-syntax -- mirror sync
+    await supabaseAdmin
+      .from('client_expenses')
+      .update({ contact_id: contactId, account_id: accountId, updated_at: now })
+      .eq('td_payment_id', paymentId)
+
+    revalidatePath('/finance')
+    revalidatePath('/payments')
+    revalidatePath('/accounts')
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: `Payment relinked to contact ${contactId}${accountId ? ` / account ${accountId}` : ''}`,
+  })
+}
