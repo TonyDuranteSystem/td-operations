@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useMemo, useTransition } from 'react'
+import { useState, useMemo, useTransition, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3, X, Plus,
-  ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Link2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft } from './actions'
+import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, searchContactsForRelink, relinkPayment, type ContactSearchResult } from './actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
@@ -374,6 +374,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
   const [voidDialogOpen, setVoidDialogOpen] = useState(false)
+  const [relinkOpen, setRelinkOpen] = useState(false)
   const router = useRouter()
   const { id: invoiceId, invoice_number: invoiceNumber, status } = invoice
 
@@ -431,9 +432,18 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
           <ActionButton onClick={handleVoid} label="Void / Cancel Invoice" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
         )}
         <ActionButton onClick={() => setEditing(true)} label="Edit Invoice" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        <ActionButton onClick={() => setRelinkOpen(true)} label="Relink Contact" icon={Link2} color="text-violet-600" hoverBg="hover:bg-violet-100" />
       </div>
       {editing && (
         <EditInvoiceDialog invoice={invoice} onClose={() => setEditing(false)} />
+      )}
+      {relinkOpen && (
+        <RelinkDialog
+          paymentId={invoiceId}
+          label={invoiceNumber}
+          onClose={() => setRelinkOpen(false)}
+          onSaved={() => { setRelinkOpen(false); router.refresh() }}
+        />
       )}
       <ConfirmDestructiveDialog
         open={voidDialogOpen}
@@ -446,6 +456,99 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         onConfirm={handleVoidConfirm}
       />
     </>
+  )
+}
+
+// ── Relink Dialog ──
+
+function RelinkDialog({ paymentId, label, onClose, onSaved }: {
+  paymentId: string
+  label: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<ContactSearchResult[]>([])
+  const [selected, setSelected] = useState<ContactSearchResult | null>(null)
+  const [isPending, startTransition] = useTransition()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (query.trim().length < 2) { setResults([]); return }
+    debounceRef.current = setTimeout(() => {
+      searchContactsForRelink(query).then(r => setResults(r))
+    }, 300)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [query])
+
+  const handleSave = () => {
+    if (!selected) return
+    startTransition(async () => {
+      const result = await relinkPayment(paymentId, selected.contact_id, selected.account_id)
+      if (result.success) {
+        toast.success(`${label} relinked to ${selected.full_name}`)
+        onSaved()
+      } else {
+        toast.error(result.error ?? 'Failed to relink')
+      }
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Relink {label}</h2>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600"><X className="w-5 h-5" /></button>
+        </div>
+        <p className="text-sm text-muted-foreground">Search for the correct contact to link this invoice to.</p>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            autoFocus
+            type="text"
+            placeholder="Type a name…"
+            value={query}
+            onChange={e => { setQuery(e.target.value); setSelected(null) }}
+            className="w-full pl-10 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        {results.length > 0 && (
+          <ul className="border rounded-lg divide-y max-h-52 overflow-y-auto">
+            {results.map(r => (
+              <li key={r.contact_id}>
+                <button
+                  type="button"
+                  onClick={() => setSelected(r)}
+                  className={`w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 flex flex-col gap-0.5 ${selected?.contact_id === r.contact_id ? 'bg-blue-50' : ''}`}
+                >
+                  <span className="font-medium">{r.full_name}</span>
+                  <span className="text-xs text-muted-foreground">{r.email}{r.company_name ? ` · ${r.company_name}` : ' · (no company)'}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {selected && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-sm">
+            Linking to: <strong>{selected.full_name}</strong>
+            {!selected.account_id && <span className="text-amber-600 text-xs ml-1">(no company — contact only)</span>}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border hover:bg-zinc-50">Cancel</button>
+          <button
+            onClick={handleSave}
+            disabled={!selected || isPending}
+            className="px-4 py-2 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 flex items-center gap-2"
+          >
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+            Relink
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
