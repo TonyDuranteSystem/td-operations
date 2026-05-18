@@ -27,10 +27,12 @@
  *     for most service types this is stage_order=1, for Tax Return this is
  *     stage_order=-1 "Company Data Pending".
  *
- * Side-effects: createSD does NOT create auto-tasks.  Task creation is
- * handled by `advanceServiceDelivery` in lib/service-delivery.ts, which runs
- * when stage advances.  For creation-time tasks the caller must invoke
- * `advanceStage` after `createSD` OR use an explicit task insert.
+ * Side-effects (Phase 9, 2026-05-18): after a successful insert, createSD
+ * fires the workflow dispatcher (`dispatchWorkflowForSdCreated`). If a
+ * `task_workflows` row matches the service_type a workflow task is spawned;
+ * if no row matched a plain fallback task is created so every SD has at least
+ * one tracked task. Both paths are fire-and-forget — failures do NOT roll
+ * back the SD insert.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
