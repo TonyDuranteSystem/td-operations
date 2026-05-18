@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useMemo, useTransition, useEffect, useRef } from 'react'
+import { useState, useMemo, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3, X, Plus,
-  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Link2,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, searchLinkTargets, relinkPayment, type LinkSearchResult, type LinkTarget } from './actions'
+import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment } from './actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
@@ -374,7 +374,6 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
   const [voidDialogOpen, setVoidDialogOpen] = useState(false)
-  const [relinkOpen, setRelinkOpen] = useState(false)
   const router = useRouter()
   const { id: invoiceId, invoice_number: invoiceNumber, status } = invoice
 
@@ -432,18 +431,25 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
           <ActionButton onClick={handleVoid} label="Void / Cancel Invoice" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
         )}
         <ActionButton onClick={() => setEditing(true)} label="Edit Invoice" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
-        <ActionButton onClick={() => setRelinkOpen(true)} label="Relink Contact" icon={Link2} color="text-violet-600" hoverBg="hover:bg-violet-100" />
+        {status === 'Paid' && (
+          <ActionButton
+            onClick={() => {
+              if (!window.confirm(`Unlink payment from ${invoiceNumber}? The invoice will revert to Draft and the bank feed entry will be reset to pending.`)) return
+              startTransition(async () => {
+                const result = await unlinkPayment(invoiceId)
+                if (result.success) { toast.success(`${invoiceNumber} unlinked — reverted to Draft`); router.refresh() }
+                else toast.error(result.error ?? 'Failed to unlink')
+              })
+            }}
+            label="Unlink payment"
+            icon={Unlink}
+            color="text-orange-600"
+            hoverBg="hover:bg-orange-100"
+          />
+        )}
       </div>
       {editing && (
         <EditInvoiceDialog invoice={invoice} onClose={() => setEditing(false)} />
-      )}
-      {relinkOpen && (
-        <RelinkDialog
-          paymentId={invoiceId}
-          label={invoiceNumber}
-          onClose={() => setRelinkOpen(false)}
-          onSaved={() => { setRelinkOpen(false); router.refresh() }}
-        />
       )}
       <ConfirmDestructiveDialog
         open={voidDialogOpen}
@@ -456,124 +462,6 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         onConfirm={handleVoidConfirm}
       />
     </>
-  )
-}
-
-// ── Relink Dialog ──
-
-function RelinkDialog({ paymentId, label, onClose, onSaved }: {
-  paymentId: string
-  label: string
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<LinkSearchResult[]>([])
-  const [selected, setSelected] = useState<LinkSearchResult | null>(null)
-  const [isPending, startTransition] = useTransition()
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (query.trim().length < 2) { setResults([]); return }
-    debounceRef.current = setTimeout(() => {
-      searchLinkTargets(query).then(r => setResults(r))
-    }, 300)
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [query])
-
-  const save = (target: LinkTarget | null) => {
-    startTransition(async () => {
-      const result = await relinkPayment(paymentId, target)
-      if (result.success) {
-        toast.success(target ? `${label} linked to ${target.label}` : `${label} unlinked`)
-        onSaved()
-      } else {
-        toast.error(result.error ?? 'Failed')
-      }
-    })
-  }
-
-  const handleLink = () => {
-    if (!selected) return
-    const target: LinkTarget = selected.type === 'account'
-      ? { type: 'account', id: selected.id, label: selected.label }
-      : { type: 'contact', id: selected.id, label: selected.label, account_id: selected.account_id }
-    save(target)
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Link / Unlink — {label}</h2>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600"><X className="w-5 h-5" /></button>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => save(null)}
-          disabled={isPending}
-          className="w-full flex items-center gap-2 px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-40"
-        >
-          <X className="w-4 h-4" /> Unlink — remove all associations
-        </button>
-
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            autoFocus
-            type="text"
-            placeholder="Search companies or contacts…"
-            value={query}
-            onChange={e => { setQuery(e.target.value); setSelected(null) }}
-            className="w-full pl-10 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        {results.length > 0 && (
-          <ul className="border rounded-lg divide-y max-h-52 overflow-y-auto">
-            {results.map(r => (
-              <li key={`${r.type}-${r.id}`}>
-                <button
-                  type="button"
-                  onClick={() => setSelected(r)}
-                  className={`w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 flex items-center gap-2 ${selected?.id === r.id && selected?.type === r.type ? 'bg-blue-50' : ''}`}
-                >
-                  {r.type === 'account'
-                    ? <Building2 className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                    : <User className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                  }
-                  <span className="flex flex-col">
-                    <span className="font-medium">{r.label}</span>
-                    {r.sublabel && <span className="text-xs text-muted-foreground">{r.sublabel}</span>}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {selected && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-sm">
-            Selected: <strong>{selected.label}</strong>
-            <span className="text-xs text-muted-foreground ml-1">({selected.type})</span>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border hover:bg-zinc-50">Cancel</button>
-          <button
-            onClick={handleLink}
-            disabled={!selected || isPending}
-            className="px-4 py-2 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 flex items-center gap-2"
-          >
-            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-            Link
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }
 

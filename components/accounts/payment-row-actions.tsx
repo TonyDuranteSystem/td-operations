@@ -29,9 +29,6 @@ import {
   Trash2,
   Loader2,
   X,
-  Link2,
-  Building2,
-  User,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import {
@@ -42,10 +39,6 @@ import {
   deletePayment,
   deletePaymentPreview,
   updateInvoice,
-  searchLinkTargets,
-  relinkPayment,
-  type LinkSearchResult,
-  type LinkTarget,
 } from '@/app/(dashboard)/finance/actions'
 
 export interface PaymentRowLike {
@@ -75,7 +68,6 @@ export function PaymentRowActions({ payment }: Props) {
   const [voidOpen, setVoidOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
-  const [relinkOpen, setRelinkOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
@@ -251,13 +243,6 @@ export function PaymentRowActions({ payment }: Props) {
           )}
           <button
             type="button"
-            onClick={() => { setMenuOpen(false); setRelinkOpen(true) }}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left border-t"
-          >
-            <Link2 className="h-4 w-4" /> Relink contact…
-          </button>
-          <button
-            type="button"
             onClick={() => { setMenuOpen(false); setEditOpen(true) }}
             className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"
           >
@@ -319,14 +304,6 @@ export function PaymentRowActions({ payment }: Props) {
         />
       )}
 
-      {relinkOpen && (
-        <RelinkPaymentDialog
-          paymentId={payment.id}
-          label={label}
-          onClose={() => setRelinkOpen(false)}
-          onSaved={() => router.refresh()}
-        />
-      )}
     </>
   )
 }
@@ -474,144 +451,3 @@ function EditPaymentDialog({
   )
 }
 
-// ── Link / Unlink Payment Dialog ──────────────────────────────
-
-function RelinkPaymentDialog({
-  paymentId,
-  label,
-  onClose,
-  onSaved,
-}: {
-  paymentId: string
-  label: string
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<LinkSearchResult[]>([])
-  const [searching, setSearching] = useState(false)
-  const [selected, setSelected] = useState<LinkSearchResult | null>(null)
-  const [isPending, startTransition] = useTransition()
-
-  const handleSearch = (value: string) => {
-    setQuery(value)
-    setSelected(null)
-    if (value.trim().length < 2) { setResults([]); return }
-    setSearching(true)
-    searchLinkTargets(value).then(r => {
-      setResults(r)
-      setSearching(false)
-    }).catch(() => setSearching(false))
-  }
-
-  const save = (target: LinkTarget | null) => {
-    startTransition(async () => {
-      const result = await relinkPayment(paymentId, target)
-      if (result.success) {
-        toast.success(target ? `${label} linked to ${target.label}` : `${label} unlinked`)
-        onSaved()
-        onClose()
-      } else {
-        toast.error(result.error ?? 'Failed')
-      }
-    })
-  }
-
-  const handleLink = () => {
-    if (!selected) return
-    const target: LinkTarget = selected.type === 'account'
-      ? { type: 'account', id: selected.id, label: selected.label }
-      : { type: 'contact', id: selected.id, label: selected.label, account_id: selected.account_id }
-    save(target)
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b">
-          <h2 className="text-lg font-semibold">Link / Unlink — {label}</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="px-6 py-4 space-y-3">
-          <button
-            type="button"
-            onClick={() => save(null)}
-            disabled={isPending}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-40"
-          >
-            <X className="w-4 h-4" /> Unlink — remove all associations
-          </button>
-
-          <div>
-            <input
-              type="text"
-              autoFocus
-              value={query}
-              onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Search companies or contacts…"
-              className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {searching && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground py-1">
-              <Loader2 className="h-4 w-4 animate-spin" /> Searching…
-            </div>
-          )}
-
-          {!searching && results.length > 0 && (
-            <ul className="border rounded-lg divide-y max-h-52 overflow-y-auto">
-              {results.map(r => (
-                <li key={`${r.type}-${r.id}`}>
-                  <button
-                    type="button"
-                    onClick={() => setSelected(r)}
-                    className={`w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 flex items-center gap-2 ${selected?.id === r.id && selected?.type === r.type ? 'bg-blue-50' : ''}`}
-                  >
-                    {r.type === 'account'
-                      ? <Building2 className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                      : <User className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                    }
-                    <span className="flex flex-col">
-                      <span className="font-medium">{r.label}</span>
-                      {r.sublabel && <span className="text-xs text-muted-foreground">{r.sublabel}</span>}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {!searching && query.trim().length >= 2 && results.length === 0 && (
-            <p className="text-sm text-muted-foreground py-1">No results found.</p>
-          )}
-
-          {selected && (
-            <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
-              <span className="font-medium text-blue-800">{selected.label}</span>
-              <span className="text-xs text-muted-foreground ml-1">({selected.type})</span>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 px-6 py-3 border-t">
-          <button type="button" onClick={onClose} disabled={isPending} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50">
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleLink}
-            disabled={!selected || isPending}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-          >
-            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-            Link
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
