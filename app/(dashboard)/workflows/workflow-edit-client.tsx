@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Trash2, AlertCircle, CheckCircle2, Loader2 } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Trash2, AlertCircle, CheckCircle2, Loader2, Plus, X } from "lucide-react"
 import { toast } from "sonner"
 import type { CatalogEntry } from "@/lib/catalog/framework"
 import {
@@ -58,6 +58,8 @@ interface WorkflowDraft {
   sla: SlaDraft | null
   // actions (Phase 5)
   actions: ActionDraft[]
+  // pipeline stages — stored in metadata.stages[], used to drive dropdowns in action editor
+  stages: string[]
 }
 
 const TASK_STATUSES = ["To Do", "In Progress", "Waiting", "Done", "Cancelled"] as const
@@ -150,6 +152,7 @@ function blankDraft(): WorkflowDraft {
     triggered_by: { source: "none", table: "", filter: [] },
     sla: null,
     actions: [],
+    stages: [],
   }
 }
 
@@ -199,6 +202,7 @@ function fromEntry(entry: CatalogEntry): WorkflowDraft {
     actions: Array.isArray(m.actions)
       ? (m.actions as Array<Record<string, unknown>>).map(actionFromRaw)
       : [],
+    stages: Array.isArray(m.stages) ? (m.stages as unknown[]).filter((s): s is string => typeof s === "string") : [],
   }
 }
 
@@ -252,9 +256,12 @@ export function WorkflowEditClient({ mode, initial }: Props) {
 
       <TopLevelSection mode={mode} draft={draft} updateDraft={updateDraft} />
       <TriggerSection draft={draft} updateDraft={updateDraft} />
+      {draft.triggered_by.source === "sd_created" && (
+        <PipelineStagesSection draft={draft} updateDraft={updateDraft} />
+      )}
       <SlaSection draft={draft} updateDraft={updateDraft} />
       <TemplatesSection draft={draft} updateDraft={updateDraft} />
-      <ActionsSection draft={draft} updateDraft={updateDraft} />
+      <ActionsSection draft={draft} updateDraft={updateDraft} stages={draft.stages} />
 
       <SaveSection
         mode={mode}
@@ -755,11 +762,106 @@ function TemplatesSection({
   )
 }
 
+// ── Pipeline stages section ────────────────────────────────────────────
+
+function PipelineStagesSection({ draft, updateDraft }: { draft: WorkflowDraft; updateDraft: UpdateFn }) {
+  const [newStage, setNewStage] = useState("")
+
+  function addStage() {
+    const trimmed = newStage.trim()
+    if (!trimmed || draft.stages.includes(trimmed)) return
+    updateDraft("stages", [...draft.stages, trimmed])
+    setNewStage("")
+  }
+
+  function removeStage(idx: number) {
+    updateDraft("stages", draft.stages.filter((_, i) => i !== idx))
+  }
+
+  function moveStage(idx: number, dir: -1 | 1) {
+    const j = idx + dir
+    if (j < 0 || j >= draft.stages.length) return
+    const next = [...draft.stages]
+    ;[next[idx], next[j]] = [next[j], next[idx]]
+    updateDraft("stages", next)
+  }
+
+  return (
+    <Card
+      title="Pipeline Stages"
+      description="Define the SD stages for this workflow. These drive the Visible when and Target Stage dropdowns in action buttons."
+    >
+      {draft.stages.length === 0 && (
+        <p className="text-sm text-zinc-500 italic">No stages yet. Add the first stage below.</p>
+      )}
+      <div className="space-y-1">
+        {draft.stages.map((stage, idx) => (
+          <div key={idx} className="flex items-center gap-2 p-2 bg-zinc-50 rounded border border-zinc-200">
+            <span className="text-xs text-zinc-400 w-5 text-right font-mono">{idx + 1}</span>
+            <span className="flex-1 text-sm font-medium text-zinc-800">{stage}</span>
+            <button
+              type="button"
+              onClick={() => moveStage(idx, -1)}
+              disabled={idx === 0}
+              className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30"
+              title="Move up"
+            >
+              <ArrowUp className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => moveStage(idx, 1)}
+              disabled={idx === draft.stages.length - 1}
+              className="p-1 rounded hover:bg-zinc-200 disabled:opacity-30"
+              title="Move down"
+            >
+              <ArrowDown className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => removeStage(idx)}
+              className="p-1 rounded text-red-500 hover:bg-red-50"
+              title="Remove stage"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2 mt-2">
+        <input
+          type="text"
+          value={newStage}
+          onChange={(e) => setNewStage(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStage() } }}
+          placeholder="e.g. File the form 8822-B"
+          className={`${inputClass} flex-1`}
+        />
+        <button
+          type="button"
+          onClick={addStage}
+          disabled={!newStage.trim()}
+          className="px-3 py-2 text-sm bg-zinc-800 text-white rounded-md hover:bg-zinc-700 disabled:opacity-40 inline-flex items-center gap-1"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add
+        </button>
+      </div>
+    </Card>
+  )
+}
+
 // ── Actions section ────────────────────────────────────────────────────
 
-function ActionsSection({ draft, updateDraft }: { draft: WorkflowDraft; updateDraft: UpdateFn }) {
-  // Handler dropdown sourced from the central client-safe registry. Includes
-  // every handler that has a param schema registered (which is all 22).
+function ActionsSection({
+  draft,
+  updateDraft,
+  stages,
+}: {
+  draft: WorkflowDraft
+  updateDraft: UpdateFn
+  stages: string[]
+}) {
   const handlerSlugs = useMemo(() => getRegisteredHandlerParamSchemaSlugs().sort(), [])
 
   function updateAction(idx: number, patch: Partial<ActionDraft>) {
@@ -787,6 +889,56 @@ function ActionsSection({ draft, updateDraft }: { draft: WorkflowDraft; updateDr
     updateDraft("actions", [...draft.actions, newActionDraft()])
   }
 
+  function generateFromStages() {
+    if (stages.length < 2) return
+    if (draft.actions.length > 0 && !confirm("This will replace all current actions. Continue?")) return
+    const generated: ActionDraft[] = []
+    for (let i = 0; i < stages.length - 1; i++) {
+      const from = stages[i]
+      const to = stages[i + 1]
+      const toSlug = to.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/, "")
+      generated.push({
+        _editorKey: crypto.randomUUID(),
+        slug: `advance_to_${toSlug}`,
+        label_admin: `${from} → ${to}`,
+        primary: i === 0,
+        icon: i === stages.length - 2 ? "CheckCircle2" : "ArrowRight",
+        color: i === stages.length - 2 ? "green" : "blue",
+        handler: "chain.advance_sd_stage",
+        handler_params: { target_stage: to },
+        on_success_status: "In Progress",
+        visible_when_sd_stage: from,
+      })
+    }
+    // Mark complete on last stage
+    generated.push({
+      _editorKey: crypto.randomUUID(),
+      slug: "mark_complete",
+      label_admin: "Mark Complete",
+      primary: false,
+      icon: "PartyPopper",
+      color: "green",
+      handler: "sd.mark_complete",
+      handler_params: {},
+      on_success_status: "Done",
+      visible_when_sd_stage: stages[stages.length - 1],
+    })
+    // Always-visible blocked action
+    generated.push({
+      _editorKey: crypto.randomUUID(),
+      slug: "needs_fix",
+      label_admin: "Blocked / Needs Info",
+      primary: false,
+      icon: "AlertCircle",
+      color: "amber",
+      handler: "task.flag_blocked",
+      handler_params: {},
+      on_success_status: "Waiting",
+      visible_when_sd_stage: "",
+    })
+    updateDraft("actions", generated)
+  }
+
   return (
     <Card
       title="Actions"
@@ -794,7 +946,7 @@ function ActionsSection({ draft, updateDraft }: { draft: WorkflowDraft; updateDr
     >
       {draft.actions.length === 0 && (
         <p className="text-sm text-zinc-500 italic">
-          No actions yet. Click + Add Action to create the first step.
+          No actions yet.{stages.length >= 2 ? " Use \"Auto-generate\" to create one action per stage transition, or click + Add Action." : " Click + Add Action to create the first step."}
         </p>
       )}
       {draft.actions.map((action, idx) => (
@@ -804,18 +956,31 @@ function ActionsSection({ draft, updateDraft }: { draft: WorkflowDraft; updateDr
           total={draft.actions.length}
           action={action}
           handlerSlugs={handlerSlugs}
+          stages={stages}
           onPatch={(patch) => updateAction(idx, patch)}
           onMove={(dir) => move(idx, dir)}
           onRemove={() => remove(idx)}
         />
       ))}
-      <button
-        type="button"
-        onClick={add}
-        className="mt-2 px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-md hover:bg-blue-50"
-      >
-        + Add Action
-      </button>
+      <div className="flex items-center gap-2 mt-2 flex-wrap">
+        <button
+          type="button"
+          onClick={add}
+          className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-md hover:bg-blue-50"
+        >
+          + Add Action
+        </button>
+        {stages.length >= 2 && (
+          <button
+            type="button"
+            onClick={generateFromStages}
+            className="px-3 py-1.5 text-sm border border-green-300 text-green-700 rounded-md hover:bg-green-50"
+            title={`Auto-create ${stages.length - 1} transition actions + mark complete + blocked`}
+          >
+            ✦ Auto-generate from stages
+          </button>
+        )}
+      </div>
     </Card>
   )
 }
@@ -825,6 +990,7 @@ function ActionCard({
   total,
   action,
   handlerSlugs,
+  stages,
   onPatch,
   onMove,
   onRemove,
@@ -833,6 +999,7 @@ function ActionCard({
   total: number
   action: ActionDraft
   handlerSlugs: string[]
+  stages: string[]
   onPatch: (patch: Partial<ActionDraft>) => void
   onMove: (dir: -1 | 1) => void
   onRemove: () => void
@@ -980,22 +1147,72 @@ function ActionCard({
 
       <Field
         label="Visible when (SD stage)"
-        hint='Stage-aware buttons: action only shows when task_meta.sd_stage matches. Comma-separated for "any of". Leave empty for always visible.'
+        hint={stages.length > 0 ? "Click stages to toggle. Leave none selected = always visible." : 'Stage-aware buttons. Comma-separated for "any of". Leave empty for always visible.'}
       >
-        <input
-          type="text"
-          value={action.visible_when_sd_stage}
-          onChange={(e) => onPatch({ visible_when_sd_stage: e.target.value })}
-          className={inputClass}
-          placeholder="EIN Application, State Filing"
-        />
+        {stages.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {stages.map((stage) => {
+              const active = action.visible_when_sd_stage
+                .split(",")
+                .map((s) => s.trim())
+                .includes(stage)
+              return (
+                <button
+                  key={stage}
+                  type="button"
+                  onClick={() => {
+                    const current = action.visible_when_sd_stage
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                    const next = active
+                      ? current.filter((s) => s !== stage)
+                      : [...current, stage]
+                    onPatch({ visible_when_sd_stage: next.join(", ") })
+                  }}
+                  className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                    active
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-zinc-600 border-zinc-300 hover:border-blue-400"
+                  }`}
+                >
+                  {stage}
+                </button>
+              )
+            })}
+            {action.visible_when_sd_stage === "" && (
+              <span className="text-[11px] text-zinc-400 italic self-center">always visible</span>
+            )}
+          </div>
+        ) : (
+          <input
+            type="text"
+            value={action.visible_when_sd_stage}
+            onChange={(e) => onPatch({ visible_when_sd_stage: e.target.value })}
+            className={inputClass}
+            placeholder="EIN Application, State Filing"
+          />
+        )}
       </Field>
 
-      {/* Handler params block — schema-driven */}
+      {/* Handler params block — schema-driven, with stage-aware overrides */}
       {action.handler && (
         <div className="mt-3 pt-3 border-t border-zinc-200">
           <p className="text-xs font-semibold text-zinc-700 mb-2">handler_params</p>
-          {paramsSpec ? (
+          {action.handler === "chain.advance_sd_stage" && stages.length > 0 ? (
+            <Field label="Target Stage" required hint="The SD stage to advance to when this action fires.">
+              <select
+                value={typeof action.handler_params.target_stage === "string" ? action.handler_params.target_stage : ""}
+                onChange={(e) => onPatch({ handler_params: { ...action.handler_params, target_stage: e.target.value } })}
+                className={inputClass}
+              >
+                <option value="">— Choose target stage —</option>
+                {stages.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </Field>
+          ) : paramsSpec ? (
             paramsSpec.kind === "object" && Object.keys(paramsSpec.fields).length === 0 ? (
               <p className="text-[11px] text-zinc-500 italic">
                 This handler takes no catalog params (input comes from operator at action time).
@@ -1044,6 +1261,7 @@ function draftToMetadata(draft: WorkflowDraft): Record<string, unknown> {
   if (draft.auto_topic) out.auto_topic = draft.auto_topic
   if (draft.task_title_template) out.task_title_template = draft.task_title_template
   if (draft.description_template) out.description_template = draft.description_template
+  if (draft.stages.length > 0) out.stages = draft.stages
 
   // Trigger
   if (draft.triggered_by.source === "form_submission") {
