@@ -21,6 +21,7 @@ import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { RenewalBanner } from '@/components/portal/renewal-banner'
 import { MemberInfoBanner } from '@/components/portal/member-info-banner'
+import { OfferBanner } from '@/components/portal/offer-banner'
 import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
@@ -448,6 +449,21 @@ export default async function PortalDashboardPage() {
     .eq('status', 'pending')
     .limit(1)
     .maybeSingle() as { data: { token: string; access_code: string } | null }
+  // Pending offer for active-tier clients — shown as a persistent banner until
+  // the offer is completed or expired. Queried by portal login email so it works
+  // even before contact.email is normalised (same email used at offer creation).
+  const pendingOffer = user.email
+    ? await supabaseAdmin
+        .from('offers')
+        .select('token')
+        .eq('client_email', user.email)
+        .in('status', ['sent', 'viewed'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then(r => r.data ?? null)
+    : null
+
   // Partner-bank referrals — separate await because the generated Supabase
   // types don't yet cover bank_referrals/bank_referral_clicks. The helper
   // in lib/bank-referrals.ts swallows errors so a missing schema in any
@@ -504,6 +520,14 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Offer banner — persistent until the offer is completed or expired */}
+      {pendingOffer && (
+        <OfferBanner
+          offerUrl={`${APP_BASE_URL}/offer/${pendingOffer.token}`}
+          locale={locale}
+        />
+      )}
 
       {/* Member info banner — urgent, shown for MMLLC clients with a pending member info request */}
       {pendingMemberInfoRequest && (
