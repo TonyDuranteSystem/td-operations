@@ -377,6 +377,22 @@ export async function syncTDInvoiceStatus(
       .eq('td_payment_id', paymentId),
     'client_expenses.update'
   )
+
+  // When a payment transitions to Paid (via any rail: Stripe / Whop /
+  // bank-feed-matcher manual+auto / reconcile), surface a Billing-topic
+  // system message in portal-chats so staff sees a red unread dot.
+  // Non-fatal + idempotent (dedup on payment id).
+  if (expenseStatus === 'Paid') {
+    try {
+      const { emitPaymentReceivedEvent } = await import('@/lib/portal/chat-events')
+      await emitPaymentReceivedEvent({ payment_id: paymentId })
+    } catch (err) {
+      console.warn(
+        `[syncTDInvoiceStatus] non-fatal portal-chat emit failure for ${paymentId}:`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+  }
 }
 
 // ─── Reconcile TD Invoice Mirror (task 918fe55e) ─────

@@ -1994,24 +1994,48 @@ function ChatTab({
 function ServicesTab({
   serviceDeliveries,
   accounts,
-  contactId: _contactId,
+  contactId,
 }: {
   serviceDeliveries: ServiceDelivery[]
   accounts: LinkedAccount[]
   contactId: string
 }) {
   const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
+  const [addOpen, setAddOpen] = useState(false)
+  const existingTypes = serviceDeliveries
+    .filter(sd => sd.status !== 'cancelled' && sd.status !== 'completed')
+    .map(sd => sd.service_type)
+    .filter((t): t is string => !!t)
 
   if (serviceDeliveries.length === 0) {
     return (
-      <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
-        No service deliveries found
-      </div>
+      <>
+        <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
+          <p className="mb-3">No service deliveries found</p>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-800"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Service
+          </button>
+        </div>
+        <ContactAddServiceDialog open={addOpen} onClose={() => setAddOpen(false)} contactId={contactId} existingTypes={existingTypes} />
+      </>
     )
   }
 
   return (
     <div className="bg-white rounded-lg border overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b bg-zinc-50">
+        <h3 className="text-sm font-semibold text-zinc-700">Service Deliveries</h3>
+        <button
+          onClick={() => setAddOpen(true)}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-zinc-900 text-white text-xs hover:bg-zinc-800"
+        >
+          <Plus className="h-3 w-3" /> Add Service
+        </button>
+      </div>
+      <ContactAddServiceDialog open={addOpen} onClose={() => setAddOpen(false)} contactId={contactId} existingTypes={existingTypes} />
       <div className="hidden md:grid md:grid-cols-[1fr,120px,1fr,100px,80px,100px,50px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
         <span>Service</span>
         <span>Type</span>
@@ -2062,6 +2086,126 @@ function ServicesTab({
         </div>
       ))}
     </div>
+  )
+}
+
+// ─── Contact Add Service Dialog ───
+// Mirror of the account-page Add Service dialog but creates a contact-level
+// SD instead of an account-level one. Pulls service options from the catalog
+// filtered to services tagged 'contact_eligible' (catalog framework). Adding
+// a new contact-eligible service tomorrow = one INSERT to catalog_entries
+// tags, zero code change here.
+
+interface ContactServiceOption { id: string; name: string; pipeline: string | null }
+
+function ContactAddServiceDialog({ open, onClose, contactId, existingTypes }: {
+  open: boolean; onClose: () => void; contactId: string; existingTypes: string[]
+}) {
+  const router = useRouter()
+  const [serviceType, setServiceType] = useState('')
+  const [notes, setNotes] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [options, setOptions] = useState<ContactServiceOption[]>([])
+  const [loadingOptions, setLoadingOptions] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoadingOptions(true)
+    fetch('/api/service-catalog?contact_eligible=true')
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        const list = (data.services ?? []) as Array<ContactServiceOption & { active?: boolean }>
+        const filtered = list
+          .filter(s => s.active !== false && typeof s.pipeline === 'string' && s.pipeline.trim().length > 0)
+          .map(s => ({ id: s.id, name: s.name, pipeline: s.pipeline }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+        setOptions(filtered)
+      })
+      .catch(() => { if (!cancelled) toast.error('Failed to load service catalog') })
+      .finally(() => { if (!cancelled) setLoadingOptions(false) })
+    return () => { cancelled = true }
+  }, [open])
+
+  if (!open) return null
+
+  const handleCreate = async () => {
+    if (!serviceType) { toast.error('Select a service type'); return }
+    setCreating(true)
+    const res = await fetch('/api/crm/admin-actions/create-service', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contact_id: contactId, service_type: serviceType, notes: notes.trim() || undefined }),
+    })
+    const data = await res.json()
+    setCreating(false)
+    if (data.success) {
+      toast.success(`${serviceType} created — workflow + topic auto-spawned in portal-chats`)
+      setServiceType('')
+      setNotes('')
+      onClose()
+      router.refresh()
+    } else {
+      toast.error(data.error ?? 'Failed to create service')
+    }
+  }
+
+  const handleClose = () => { setServiceType(''); setNotes(''); onClose() }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/50" onClick={handleClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-4 border-b">
+            <h2 className="text-lg font-semibold">Add Service (Contact-level)</h2>
+            <button onClick={handleClose} className="p-1 rounded hover:bg-zinc-100"><X className="h-5 w-5" /></button>
+          </div>
+          <div className="px-6 py-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Service Type *</label>
+              <select
+                value={serviceType}
+                onChange={e => setServiceType(e.target.value)}
+                disabled={loadingOptions}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-zinc-50"
+              >
+                <option value="">{loadingOptions ? 'Loading…' : 'Select…'}</option>
+                {options.map(opt => {
+                  const value = opt.pipeline ?? opt.name
+                  const exists = existingTypes.includes(value)
+                  return (
+                    <option key={opt.id} value={value} disabled={exists}>
+                      {opt.name}{exists ? ' (exists)' : ''}
+                    </option>
+                  )
+                })}
+              </select>
+              {!loadingOptions && options.length === 0 && (
+                <p className="mt-1 text-xs text-amber-700">
+                  No contact-eligible services in the catalog. Tag a service with `contact_eligible` first.
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Notes</label>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+                placeholder="Optional notes…"
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={handleClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">Cancel</button>
+              <button onClick={handleCreate} disabled={creating || !serviceType}
+                className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-2">
+                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
 

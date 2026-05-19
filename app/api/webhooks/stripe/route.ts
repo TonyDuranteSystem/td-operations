@@ -236,9 +236,14 @@ async function handleCheckoutCompleted(session: StripeSession) {
 
   if (!activationPortalInvoiceId) {
     // eslint-disable-next-line no-restricted-syntax -- Stripe-webhook payment record insert; tracked by dev_task 7ebb1e0c
-    const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
+    const { data: payRow, error: payErr } = await getSupabase().from("payments").insert(paymentRecord).select("id").single()
     if (payErr) {
       console.error("[stripe-webhook] Failed to create payment:", payErr.message)
+    } else if (payRow?.id) {
+      // Surface a Billing-topic system message in portal-chats so staff sees a
+      // red unread dot the moment Stripe confirms the payment. Non-fatal.
+      const { emitPaymentReceivedEvent } = await import("@/lib/portal/chat-events")
+      await emitPaymentReceivedEvent({ payment_id: payRow.id as string, method_hint: "Stripe" })
     }
   } else {
     console.warn(`[stripe-webhook] Skipping raw payments insert — activation has draft invoice ${activationPortalInvoiceId}; auto-reconcile will flip it Paid`)

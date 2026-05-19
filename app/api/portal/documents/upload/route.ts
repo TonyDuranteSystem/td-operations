@@ -145,8 +145,25 @@ export async function POST(request: NextRequest) {
       supabaseAdmin.storage.from('portal-uploads').remove([storagePath]).catch(() => {})
     }
 
+    // Surface a Documents-topic system message in portal-chats so staff sees
+    // a red unread dot the moment the client uploads. Non-fatal + idempotent
+    // on documents.id (re-runs of webhook retries dedup).
+    try {
+      const { emitDocumentUploadedEvent } = await import('@/lib/portal/chat-events')
+      await emitDocumentUploadedEvent({
+        document_id: doc.id as string,
+        contact_id: null,  // upload route is account-scoped today (account_id only)
+        account_id: accountId,
+        file_name: fileName,
+        document_type_name: typeName,
+      })
+    } catch (e) {
+      console.warn('[documents/upload] non-fatal portal-chat emit failure:', e instanceof Error ? e.message : String(e))
+    }
+
     // For tax documents: create task + notification
     if (taxYear || categoryNum === 3) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing tax-doc task insert; left in place
       await supabaseAdmin.from('tasks').insert({
         task_title: `Review tax document: ${fileName}${taxYear ? ` (${taxYear})` : ''}`,
         assigned_to: 'Luca',

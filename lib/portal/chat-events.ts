@@ -161,3 +161,102 @@ export async function emitClientChatEvent(
 
   return { emitted: true, message_id: inserted.id as string }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Source-specific emit helpers — each call site below uses one of these so
+// the message body + topic stay consistent across the codebase. New event
+// sources tomorrow add a helper here; no other code changes.
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Emit a "payment received" event when a payment row flips to Paid.
+ * Reads the payment row by id, formats the body with invoice number + amount
+ * + payment method, and emits under the Billing topic.
+ *
+ * Non-fatal: any failure logs and swallows. Idempotent on payment id.
+ */
+export async function emitPaymentReceivedEvent(params: {
+  payment_id: string
+  /** Optional override for the payment_method label when the row doesn't
+   *  yet carry one (some webhooks emit before back-fill). */
+  method_hint?: string
+}): Promise<EmitResult> {
+  try {
+    const { data: payment } = await supabaseAdmin
+      .from("payments")
+      .select("id, contact_id, account_id, invoice_number, total, amount, amount_currency, payment_method")
+      .eq("id", params.payment_id)
+      .maybeSingle()
+    if (!payment) {
+      return { emitted: false, reason: "insert_failed", error: "payment row not found" }
+    }
+    const amount = (payment.total as number | null) ?? (payment.amount as number | null) ?? null
+    const currency = (payment.amount_currency as string | null) ?? "USD"
+    const method = (payment.payment_method as string | null) ?? params.method_hint ?? "payment"
+    const inv = (payment.invoice_number as string | null) ?? "invoice"
+    const amountFmt = amount != null ? `${currency === "EUR" ? "€" : "$"}${amount}` : ""
+    const message = `Client paid ${inv}${amountFmt ? " · " + amountFmt : ""} via ${method}.`
+    return await emitClientChatEvent({
+      contact_id: (payment.contact_id as string | null) ?? null,
+      account_id: (payment.account_id as string | null) ?? null,
+      topic: "billing",
+      message,
+      source: { table: "payments", id: params.payment_id },
+      event_kind: "payment_received",
+    })
+  } catch (err) {
+    console.warn(
+      `[emitPaymentReceivedEvent] non-fatal for payment ${params.payment_id}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { emitted: false, reason: "insert_failed", error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Emit a "document uploaded by client" event.
+ * Caller provides the metadata since the documents row may not yet exist
+ * at the moment of emit (some upload paths emit before commit).
+ */
+export async function emitDocumentUploadedEvent(params: {
+  document_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  file_name: string
+  document_type_name?: string | null
+}): Promise<EmitResult> {
+  const label = params.document_type_name
+    ? `${params.document_type_name}: ${params.file_name}`
+    : params.file_name
+  const message = `Client uploaded a document — ${label}.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "documents",
+    message,
+    source: { table: "documents", id: params.document_id },
+    event_kind: "document_uploaded",
+  })
+}
+
+/**
+ * Emit an "SS-4 signed" event — critical for EIN application kickoff.
+ * Per Antonio: when the client signs, staff must see this in portal-chats
+ * immediately so Luca can fax the form to the IRS.
+ */
+export async function emitSs4SignedEvent(params: {
+  ss4_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  company_name: string
+}): Promise<EmitResult> {
+  const message = `Client signed SS-4 for ${params.company_name} — fax to IRS to start EIN application.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "formation",
+    message,
+    source: { table: "ss4_applications", id: params.ss4_id },
+    event_kind: "ss4_signed",
+  })
+}

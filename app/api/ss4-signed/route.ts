@@ -52,6 +52,7 @@ export async function POST(req: NextRequest) {
     // ─── 1. CREATE TASK FOR LUCA ───
     if (ss4.account_id) {
       try {
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing SS-4 fax task insert; left in place
         await supabaseAdmin.from("tasks").insert({
           task_title: `Fax SS-4 to IRS: ${ss4.company_name}`,
           description: `The SS-4 for ${ss4.company_name} has been signed. Download from Drive and fax to IRS at (855) 641-6935.`,
@@ -65,6 +66,26 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         results.push({ step: "create_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
+    }
+
+    // ─── 1b. EMIT PORTAL-CHAT SYSTEM EVENT (red dot under Formation topic) ───
+    // Per Antonio: SS-4 signed is critical — staff must see it in portal-chats
+    // immediately to fax the form to the IRS. Non-fatal + idempotent on SS-4 id.
+    try {
+      const { emitSs4SignedEvent } = await import("@/lib/portal/chat-events")
+      const emitResult = await emitSs4SignedEvent({
+        ss4_id: ss4.id as string,
+        contact_id: (ss4.contact_id as string | null) ?? null,
+        account_id: (ss4.account_id as string | null) ?? null,
+        company_name: (ss4.company_name as string) || "the company",
+      })
+      results.push({
+        step: "portal_chat_emit",
+        status: emitResult.emitted ? "ok" : emitResult.reason === "already_emitted" ? "ok" : "warn",
+        detail: emitResult.emitted ? "Formation topic surfaced" : `skipped: ${emitResult.reason ?? "unknown"}`,
+      })
+    } catch (e) {
+      results.push({ step: "portal_chat_emit", status: "warn", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // ─── 2. UPDATE SERVICE DELIVERY STAGE HISTORY ───
@@ -87,6 +108,7 @@ export async function POST(req: NextRequest) {
             note: `SS-4 signed for ${ss4.company_name} — ready to fax to IRS`,
           })
 
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing SD stage_history update; left in place
           await supabaseAdmin
             .from("service_deliveries")
             .update({ stage_history: history, updated_at: new Date().toISOString() })
