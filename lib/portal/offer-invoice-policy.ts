@@ -72,3 +72,19 @@ export function getServiceLabel(contract_type: string | null | undefined): strin
       return "Service"
   }
 }
+
+/**
+ * Build the invoice line-item description.
+ * When selected_services lists specific services, use those (e.g. "Company Change Name - DF Commerce LLC").
+ * Fall back to the contract_type label + "Package" when no specific services are present.
+ */
+export function getInvoiceDescription(
+  contract_type: string | null | undefined,
+  selected_services: string[] | null | undefined,
+  client_name: string,
+): string {
+  if (selected_services && selected_services.length > 0) {
+    return `${selected_services.join(", ")} - ${client_name}`
+  }
+  return `${getServiceLabel(contract_type)} Package - ${client_name}`
+}
