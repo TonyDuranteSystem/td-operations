@@ -126,8 +126,6 @@ export default async function CalendarPage({
       .in('account_id', accountIds)
       .in('service_type', ['State RA Renewal', 'State Annual Report'])
       .in('status', ['active', 'blocked'])
-      .gte('due_date', yearStart)
-      .lte('due_date', yearEnd)
     for (const sd of sds ?? []) {
       const key = `${sd.account_id}:${sd.service_type}`
       sdMap.set(key, { id: sd.id, service_type: sd.service_type, status: sd.status, stage: sd.stage })
