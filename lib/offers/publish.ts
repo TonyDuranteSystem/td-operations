@@ -132,25 +132,23 @@ export async function publishOffer(
 
   const emailType = isNewUser && tempPassword ? "portal_access" : "portal_notification"
 
-  const subject = emailType === "portal_access"
-    ? lang === "it"
-      ? "La tua Offerta Consulenziale — Tony Durante LLC"
-      : "Your Consulting Proposal — Tony Durante LLC"
-    : lang === "it"
-      ? "Nuovo documento disponibile — Tony Durante LLC"
-      : "New document available — Tony Durante LLC"
+  const offerUrl = `${APP_BASE_URL}/offer/${token}`
+
+  const subject = lang === "it"
+    ? "La tua Offerta Consulenziale — Tony Durante LLC"
+    : "Your Consulting Proposal — Tony Durante LLC"
 
   const htmlBody = emailType === "portal_access"
     ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-    : buildPortalNotificationEmail(firstName, portalLoginUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, offerUrl, lang, pixelUrl)
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
       ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Accedi al portale per consultarla: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
       : `Hi ${firstName}, your consulting proposal is ready. Log in to review it: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
     : lang === "it"
-      ? `Ciao ${firstName}, un nuovo documento è disponibile nel tuo portale: ${portalLoginUrl}`
-      : `Hi ${firstName}, a new document is available in your portal: ${portalLoginUrl}`
+      ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Clicca qui per consultarla: ${offerUrl}`
+      : `Hi ${firstName}, your consulting proposal is ready. Click here to review it: ${offerUrl}`
 
   // Build MIME
   const fromEmail = "support@tonydurante.us"
@@ -432,25 +430,23 @@ export async function resendOfferEmail(
   const firstName = offer.client_name.split(" ")[0]
   const portalLoginUrl = `${PORTAL_BASE_URL}/portal/login`
 
-  const subject = emailType === "portal_access"
-    ? lang === "it"
-      ? "La tua Offerta Consulenziale — Tony Durante LLC"
-      : "Your Consulting Proposal — Tony Durante LLC"
-    : lang === "it"
-      ? "Nuovo documento disponibile — Tony Durante LLC"
-      : "New document available — Tony Durante LLC"
+  const offerUrl = `${APP_BASE_URL}/offer/${token}`
+
+  const subject = lang === "it"
+    ? "La tua Offerta Consulenziale — Tony Durante LLC"
+    : "Your Consulting Proposal — Tony Durante LLC"
 
   const htmlBody = emailType === "portal_access"
     ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-    : buildPortalNotificationEmail(firstName, portalLoginUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, offerUrl, lang, pixelUrl)
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
       ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Accedi al portale per consultarla: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
       : `Hi ${firstName}, your consulting proposal is ready. Log in to review it: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
     : lang === "it"
-      ? `Ciao ${firstName}, un nuovo documento è disponibile nel tuo portale: ${portalLoginUrl}`
-      : `Hi ${firstName}, a new document is available in your portal: ${portalLoginUrl}`
+      ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Clicca qui per consultarla: ${offerUrl}`
+      : `Hi ${firstName}, your consulting proposal is ready. Click here to review it: ${offerUrl}`
 
   const fromEmail = "support@tonydurante.us"
   const boundary = `boundary_${Date.now()}`
@@ -600,11 +596,11 @@ function buildPortalAccessEmail(
 </div>${pixel}`
 }
 
-// ─── Email: Portal Notification (existing user) ──────────
+// ─── Email: Portal Notification (existing user, offer-specific) ─────────
 
 function buildPortalNotificationEmail(
   firstName: string,
-  portalUrl: string,
+  offerUrl: string,
   lang: "en" | "it",
   pixelUrl: string,
 ): string {
@@ -613,16 +609,15 @@ function buildPortalNotificationEmail(
   if (lang === "it") {
     return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">Nuovo documento disponibile</h1>
+    <h1 style="color: white; margin: 0; font-size: 22px;">La tua Offerta Consulenziale</h1>
     <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
     <p>Ciao ${firstName},</p>
-    <p>Un nuovo documento è disponibile per la tua revisione nel portale clienti.</p>
-    <p>Accedi al portale per consultarlo:</p>
+    <p>Abbiamo preparato la tua offerta consulenziale personalizzata. Leggila e, se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online.</p>
     <p style="margin: 24px 0; text-align: center;">
-      <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Accedi al Portale
+      <a href="${offerUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
+        Visualizza Offerta
       </a>
     </p>
     <p style="color: #6b7280; font-size: 13px;">Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale.</p>
@@ -635,16 +630,15 @@ function buildPortalNotificationEmail(
 
   return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">New document available</h1>
+    <h1 style="color: white; margin: 0; font-size: 22px;">Your Consulting Proposal</h1>
     <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
     <p>Hi ${firstName},</p>
-    <p>A new document is available for your review in your client portal.</p>
-    <p>Log in to your portal to view it:</p>
+    <p>We have prepared your personalized consulting proposal. Review it and, if everything meets your expectations, you can sign the contract directly online.</p>
     <p style="margin: 24px 0; text-align: center;">
-      <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Log in to Portal
+      <a href="${offerUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
+        View Offer
       </a>
     </p>
     <p style="color: #6b7280; font-size: 13px;">For any questions, reply to this email or use the chat in your portal.</p>
