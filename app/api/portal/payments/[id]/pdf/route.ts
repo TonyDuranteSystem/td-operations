@@ -7,22 +7,6 @@ import { resolveMailingAddress } from '@/lib/addresses'
 
 import { TD_COMPANY } from '@/lib/config'
 
-const BANK_DETAILS: Record<string, InvoicePdfInput['bankDetails']> = {
-  USD: {
-    label: 'Relay — USD',
-    accountHolder: 'Tony Durante LLC',
-    bankName: 'Thread Bank',
-    accountNumber: '200000306770',
-    routingNumber: '064209588',
-  },
-  EUR: {
-    label: 'Banking Circle — EUR',
-    bankName: 'Banking Circle S.A.',
-    iban: 'DK8989000023658198',
-    swiftBic: 'SXPYDKKK',
-    accountHolder: 'Tony Durante LLC',
-  },
-}
 
 /**
  * GET /api/portal/payments/[id]/pdf — Generate TD invoice PDF for portal clients
@@ -105,7 +89,7 @@ export async function GET(
     total: Number(payment.total ?? payment.amount ?? 0),
 
     message: payment.message,
-    bankDetails: BANK_DETAILS[payment.amount_currency ?? 'USD'] ?? BANK_DETAILS.USD,
+    bankDetails: null,
   }
 
   const pdfBytes = await generateInvoicePdf(pdfInput)
