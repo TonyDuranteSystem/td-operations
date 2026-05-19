@@ -249,12 +249,21 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     return true
   })
 
-  // LLC type
+  // LLC type — prefer offer.entity_type (canonical source); fall back to
+  // service-name scan for legacy offers created before entity_type existed.
   let llcType = 'Single-Member LLC'
-  if (offer.services && Array.isArray(offer.services)) {
+  if (offer.entity_type === 'Multi Member LLC') {
+    llcType = 'Multi-Member LLC'
+  } else if (offer.entity_type !== 'Single Member LLC' && offer.services && Array.isArray(offer.services)) {
     const allNames = offer.services.map(s => (s.name || '').toLowerCase()).join(' ')
     if (allNames.includes('multi')) llcType = 'Multi-Member LLC'
   }
+
+  // Onboarding contracts cover existing LLCs joining ongoing management;
+  // formation contracts cover new LLC formation. Fee label and several legal
+  // clauses differ between the two.
+  const isOnboarding = offer.contract_type === 'onboarding'
+  const feeLabel = isOnboarding ? 'Onboarding Fee' : 'Setup Fee'
 
   // Payment schedule text for Key Terms
   const paymentScheduleText = installmentLines.length > 0
@@ -532,8 +541,8 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
-            <tr><th>Setup Fee</th><td>{fee} (one-time, covers all services for the first contract year)</td></tr>
-            <tr><th>Payment Schedule</th><td>Setup fee due upon signing. From the following year: {paymentScheduleText}</td></tr>
+            <tr><th>{feeLabel}</th><td>{fee} {isOnboarding ? '(one-time onboarding fee; annual maintenance billed separately starting the following year)' : '(one-time, covers all services for the first contract year)'}</td></tr>
+            <tr><th>Payment Schedule</th><td>{feeLabel} due upon signing. From the following year: {paymentScheduleText}</td></tr>
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
@@ -563,7 +572,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
         </table>
 
         {/* LEGAL SECTIONS 1-24 — Same as MSA */}
-        <LegalSections />
+        <LegalSections isOnboarding={isOnboarding} />
 
         {/* MSA SIGNATURES */}
         <div className="contract-sig-section">
@@ -600,12 +609,12 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
-            <tr><th>Setup Fee</th><td>{fee}</td></tr>
+            <tr><th>{feeLabel}</th><td>{fee}</td></tr>
           </tbody>
         </table>
 
         <div className="contract-section"><h3>Included Services</h3>
-          <p>The following services are included in the Setup Fee:</p>
+          <p>The following services are included in the {feeLabel}:</p>
           <ol>
             {servicesList.map((svc, i) => (
               <li key={i}>
@@ -631,7 +640,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
             <ul>
               <li><strong>Company documents</strong> &mdash; Articles of Organization, Operating Agreement, EIN Letter, and Lease Agreement always available</li>
               <li><strong>Service tracking</strong> &mdash; Real-time progress on all active services</li>
-              <li><strong>Document signing</strong> &mdash; Operating Agreement, Lease, SS-4 signed directly online</li>
+              <li><strong>Document signing</strong> &mdash; {isOnboarding ? 'Operating Agreement, Lease, and future filings signed directly online' : 'Operating Agreement, Lease, SS-4 signed directly online'}</li>
               <li><strong>Deadlines</strong> &mdash; Calendar with Annual Report, Registered Agent Renewal, Tax Filing dates</li>
               <li><strong>Tax documents</strong> &mdash; Upload bank statements, view filed returns</li>
               <li><strong>Document generation</strong> &mdash; Distribution Resolutions, Tax Statements on demand</li>
@@ -674,7 +683,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
         <div className="contract-section"><h3>Payment Schedule</h3>
           <table className="contract-key-terms">
             <tbody>
-              <tr><th>Setup Fee</th><td>{fee} (one-time, due upon signing)</td></tr>
+              <tr><th>{feeLabel}</th><td>{fee} (one-time, due upon signing)</td></tr>
               {installmentLines.length >= 2 && (
                 <tr><th>Annual Maintenance (from following year)</th><td>{installmentLines.map((inst, i) => <span key={i}>{i > 0 && <br />}&bull; {inst.label}: {inst.amount}</span>)}</td></tr>
               )}
@@ -856,22 +865,28 @@ function FormRow({ label, required, invalid, children }: { label: string; requir
   )
 }
 
-// Legal Sections 1-24 — identical to MSA
-function LegalSections() {
+// Legal Sections 1-24 — identical to MSA. The isOnboarding flag swaps a few
+// formation-flavored clauses (§1 purpose, §2 scope, §3 client responsibilities)
+// for management-flavored equivalents when the contract covers an existing LLC.
+function LegalSections({ isOnboarding }: { isOnboarding: boolean }) {
   return (
     <div id="legal-sections">
       <div className="contract-section"><h3>1. Purpose &amp; Structure</h3>
-        <p>The Consulting Firm provides professional consulting services related to the formation, management, and ongoing compliance of U.S. Limited Liability Companies (&ldquo;LLCs&rdquo;) for international entrepreneurs and foreign nationals.</p>
+        <p>The Consulting Firm provides professional consulting services related to the {isOnboarding ? 'management and ongoing compliance' : 'formation, management, and ongoing compliance'} of U.S. Limited Liability Companies (&ldquo;LLCs&rdquo;) for international entrepreneurs and foreign nationals.</p>
         <p>This MSA governs the general terms and conditions of the business relationship between the Parties. Specific services, deliverables, and fees are set forth in one or more Statements of Work (&ldquo;SOW&rdquo;) attached hereto and incorporated by reference.</p></div>
 
       <div className="contract-section"><h3>2. Scope of Services</h3>
         <p>The Consulting Firm shall provide the services described in the applicable SOW, which may include but are not limited to:</p>
-        <ul><li>LLC formation and state registration</li><li>EIN (Employer Identification Number) application with the IRS</li><li>Registered Agent services</li><li>Business bank account and payment processor setup assistance</li><li>Annual report filing and state compliance</li><li>Mail handling and forwarding from the U.S. business address</li><li>Ongoing administrative and operational support</li></ul>
+        {isOnboarding ? (
+          <ul><li>Registered Agent services</li><li>Annual report filing and state compliance</li><li>Mail handling and forwarding from the U.S. business address</li><li>Operating Agreement preparation, review, and updates</li><li>Tax return preparation coordination through a qualified third-party professional</li><li>Ongoing administrative and operational support</li></ul>
+        ) : (
+          <ul><li>LLC formation and state registration</li><li>EIN (Employer Identification Number) application with the IRS</li><li>Registered Agent services</li><li>Business bank account and payment processor setup assistance</li><li>Annual report filing and state compliance</li><li>Mail handling and forwarding from the U.S. business address</li><li>Ongoing administrative and operational support</li></ul>
+        )}
         <p>Any services not explicitly listed in the SOW are outside the scope of this Agreement and may be subject to additional fees.</p></div>
 
       <div className="contract-section"><h3>3. Client Responsibilities</h3>
         <p>The Client agrees to:</p>
-        <ol type="a"><li>Provide accurate, complete, and truthful information as required for LLC formation and ongoing services;</li><li>Respond to requests for information or documentation within five (5) business days;</li><li>Comply with all applicable U.S. federal, state, and local laws, as well as any laws of the Client&apos;s country of residence;</li><li>Maintain valid identification documents (passport) throughout the duration of this Agreement;</li><li>Notify the Consulting Firm promptly of any material changes in personal information, contact details, or business structure;</li><li>Not use the LLC or any services provided for illegal, fraudulent, or unethical purposes.</li></ol>
+        <ol type="a"><li>Provide accurate, complete, and truthful information as required for {isOnboarding ? 'onboarding and ongoing services' : 'LLC formation and ongoing services'};</li><li>Respond to requests for information or documentation within five (5) business days;</li><li>Comply with all applicable U.S. federal, state, and local laws, as well as any laws of the Client&apos;s country of residence;</li><li>Maintain valid identification documents (passport) throughout the duration of this Agreement;</li><li>Notify the Consulting Firm promptly of any material changes in personal information, contact details, or business structure;</li><li>Not use the LLC or any services provided for illegal, fraudulent, or unethical purposes.</li></ol>
         <p>Failure to meet these responsibilities may result in delays, additional fees, or termination of this Agreement at the Consulting Firm&apos;s sole discretion.</p></div>
 
       <div className="contract-section"><h3>4. Communication &amp; Business Hours</h3>
@@ -880,7 +895,7 @@ function LegalSections() {
         <div className="contract-subsection"><h4>4.3 Scheduled Calls</h4><p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong>. A fee of <strong>$197.00 per call</strong> may apply for non-essential calls.</p></div></div>
 
       <div className="contract-section"><h3>5. Fees &amp; Payment</h3>
-        <div className="contract-subsection"><h4>5.1 Service Fees</h4><p>The Client shall pay the Setup Fee and any applicable Annual Maintenance Fee as specified in the Key Terms Summary and the applicable SOW.</p></div>
+        <div className="contract-subsection"><h4>5.1 Service Fees</h4><p>The Client shall pay the {isOnboarding ? 'Onboarding Fee' : 'Setup Fee'} and any applicable Annual Maintenance Fee as specified in the Key Terms Summary and the applicable SOW.</p></div>
         <div className="contract-subsection"><h4>5.2 Payment Methods</h4><p>Payments may be made via:</p><ul><li><strong>Credit or debit card</strong> through the secure online checkout system;</li><li><strong>Bank wire transfer</strong> to the designated bank account.</li></ul></div>
         <div className="contract-subsection"><h4>5.3 Payment Schedule</h4><p>The payment schedule shall be as specified in the Key Terms Summary.</p></div>
         <div className="contract-subsection"><h4>5.4 Late Payment</h4><p>A late fee of <strong>1.5% per month</strong> shall accrue on unpaid balances. Services may be <strong>suspended after thirty (30) days</strong> past due.</p></div>
