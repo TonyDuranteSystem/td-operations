@@ -1510,7 +1510,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
 
   server.tool(
     "portal_invoice_send",
-    `Send a portal invoice via email with PDF attachment. Marks the invoice as 'Sent'. Uses Gmail API (from support@tonydurante.us). The email includes invoice details, bank payment instructions, and a Pay Now button if a payment link exists.
+    `Send a portal invoice via email with PDF attachment. Marks the invoice as 'Sent'. Email is sent with the client's company name as sender and Reply-To set to the client's email so any replies go directly to them. The email includes invoice details, bank payment instructions, and a Pay Now button if a payment link exists.
 
 Prerequisite: Invoice must exist (created via portal_invoice_create or portal dashboard).`,
     {
@@ -1545,15 +1545,26 @@ Prerequisite: Invoice must exist (created via portal_invoice_create or portal da
         const recipientEmail = email_to || customer?.email
         if (!recipientEmail) return { content: [{ type: "text" as const, text: "No recipient email. Provide email_to or ensure customer has email." }] }
 
+        // Get account company name and reply-to email
+        const { data: invoiceAccount } = await supabaseAdmin
+          .from("accounts")
+          .select("company_name")
+          .eq("id", invoice.account_id)
+          .single()
+        const companyName = invoiceAccount?.company_name || "Our Company"
+
+        const { getCompanyEmail } = await import("@/lib/portal/queries")
+        const replyTo = invoice.account_id ? await getCompanyEmail(invoice.account_id) : null
+
         const csym = invoice.currency === "EUR" ? "EUR " : "$"
         const customerName = customer?.name || "Client"
         const greeting = lang === "it" ? `Gentile ${customerName}` : `Dear ${customerName}`
-        const subject = `Invoice ${invoice.invoice_number} from Tony Durante LLC`
+        const subject = `Invoice ${invoice.invoice_number} from ${companyName}`
 
         const html = `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: #2563eb; padding: 24px; border-radius: 12px 12px 0 0;">
-              <h1 style="color: white; margin: 0; font-size: 20px;">Tony Durante LLC</h1>
+              <h1 style="color: white; margin: 0; font-size: 20px;">${companyName}</h1>
             </div>
             <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
               <p>${greeting},</p>
@@ -1580,8 +1591,9 @@ Prerequisite: Invoice must exist (created via portal_invoice_create or portal da
         const boundary = `boundary_${Date.now()}`
         const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
         const parts = [
-          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `From: ${companyName} <support@tonydurante.us>`,
           `To: ${recipientEmail}`,
+          ...(replyTo ? [`Reply-To: ${replyTo}`] : []),
           `Subject: ${encodedSubject}`,
           `MIME-Version: 1.0`,
           `Content-Type: multipart/alternative; boundary="${boundary}"`,

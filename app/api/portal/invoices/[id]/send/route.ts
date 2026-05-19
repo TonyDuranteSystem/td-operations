@@ -4,6 +4,7 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { gmailPost } from '@/lib/gmail'
 import { APP_BASE_URL } from '@/lib/config'
+import { getCompanyEmail } from '@/lib/portal/queries'
 
 /**
  * POST /api/portal/invoices/[id]/send — Send invoice via email to customer
@@ -47,12 +48,14 @@ export async function POST(
     return NextResponse.json({ error: 'Customer has no email address' }, { status: 400 })
   }
 
-  // Get account name for from line
+  // Get account name and reply-to email
   const { data: account } = await supabaseAdmin
     .from('accounts')
     .select('company_name')
     .eq('id', invoice.account_id)
     .single()
+
+  const replyTo = invoice.account_id ? await getCompanyEmail(invoice.account_id) : null
 
   // Get bank account — use invoice's selected account, fallback to default
   let bankAccount = null
@@ -173,12 +176,12 @@ export async function POST(
       // PDF generation failed — send without attachment
     }
 
-    // Send via Gmail (as the support account)
     const rawEmail = createRawEmail({
       from: `${companyName} <support@tonydurante.us>`,
       to: customer.email,
       subject,
       html: trackedHtml,
+      replyTo: replyTo ?? undefined,
       attachment: pdfBase64 ? { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` } : undefined,
     })
 
@@ -209,8 +212,9 @@ export async function POST(
   }
 }
 
-function createRawEmail({ from, to, subject, html, attachment }: {
+function createRawEmail({ from, to, subject, html, replyTo, attachment }: {
   from: string; to: string; subject: string; html: string
+  replyTo?: string
   attachment?: { base64: string; filename: string }
 }): string {
   const boundary = `boundary_${Date.now()}`
@@ -222,6 +226,7 @@ function createRawEmail({ from, to, subject, html, attachment }: {
   const parts = [
     `From: ${from}`,
     `To: ${to}`,
+    ...(replyTo ? [`Reply-To: ${replyTo}`] : []),
     `Subject: ${encodedSubject}`,
     `MIME-Version: 1.0`,
     `Content-Type: ${contentType}`,
