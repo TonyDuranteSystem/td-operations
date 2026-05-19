@@ -322,6 +322,15 @@ export async function dispatchWorkflowForFormCompletion<T extends Record<string,
     }
   }
 
+  // Emit portal-chat topic message (red unread dot) — non-fatal.
+  await emitTopicForWorkflow({
+    matched,
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    task_id: spawn.task_id,
+    context: { service_name: params.task_title, service_type: (submission as Record<string, unknown>).service_type as string | undefined ?? form_table, stage: undefined },
+  })
+
   return {
     spawned: true,
     workflow_slug: matched.slug,
@@ -512,9 +521,80 @@ export async function dispatchWorkflowForSdCreated(
     }
   }
 
+  // Emit portal-chat topic message (red unread dot) — non-fatal.
+  await emitTopicForWorkflow({
+    matched,
+    contact_id: delivery.contact_id ?? null,
+    account_id: delivery.account_id ?? null,
+    task_id: spawn.task_id,
+    context: {
+      service_name: delivery.service_name ?? delivery.service_type,
+      service_type: delivery.service_type,
+      stage: delivery.stage ?? undefined,
+    },
+  })
+
   return {
     spawned: true,
     workflow_slug: matched.slug,
     task_id: spawn.task_id,
+  }
+}
+
+/**
+ * Internal helper: emit a system-authored portal-chat message under the
+ * matched workflow's auto_topic. Resolves the message body from the
+ * workflow's `auto_message_template` (interpolated against the provided
+ * context) with a generic fallback when not set.
+ *
+ * Non-fatal: any failure here is logged and swallowed — task creation must
+ * not be rolled back just because the topic message couldn't be written.
+ *
+ * Per Antonio (2026-05-18): every client action needing staff attention
+ * must produce a topic with a red badge in the portal-chats thread.
+ */
+async function emitTopicForWorkflow(args: {
+  matched: MatchedWorkflow
+  contact_id: string | null
+  account_id: string | null
+  task_id: string
+  context: { service_name?: string; service_type?: string; stage?: string }
+}): Promise<void> {
+  try {
+    const meta = args.matched.raw_metadata
+    const autoTopic = typeof meta.auto_topic === "string" ? meta.auto_topic : null
+    if (!autoTopic) return // workflow opted out of topic emit
+
+    const template =
+      typeof meta.auto_message_template === "string"
+        ? (meta.auto_message_template as string)
+        : `Client triggered ${args.context.service_type ?? args.matched.slug}. Review and take next step.`
+
+    const ctx: Record<string, string> = {
+      service_type: args.context.service_type ?? "",
+      service_name: args.context.service_name ?? args.context.service_type ?? "",
+      stage: args.context.stage ?? "—",
+    }
+    const message = template.replace(/\{(\w+)\}/g, (_, key) => ctx[key] ?? `{${key}}`)
+
+    const { emitClientChatEvent } = await import("@/lib/portal/chat-events")
+    const result = await emitClientChatEvent({
+      contact_id: args.contact_id,
+      account_id: args.account_id,
+      topic: autoTopic,
+      message,
+      source: { table: "tasks", id: args.task_id },
+      event_kind: "workflow_spawned",
+    })
+    if (!result.emitted && result.reason !== "already_emitted") {
+      console.warn(
+        `[dispatch-workflow] topic emit non-fatal failure for task ${args.task_id}: ${result.reason} ${result.error ?? ""}`,
+      )
+    }
+  } catch (err) {
+    console.warn(
+      `[dispatch-workflow] topic emit threw non-fatally for task ${args.task_id}:`,
+      err instanceof Error ? err.message : String(err),
+    )
   }
 }

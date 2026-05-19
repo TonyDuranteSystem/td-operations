@@ -91,7 +91,7 @@ interface ChatAttachment {
 interface ChatMessage {
   id: string
   message: string
-  sender_type: 'client' | 'admin'
+  sender_type: 'client' | 'admin' | 'system'
   sender_name?: string | null
   account_id?: string | null
   // PR 2 Step 6 (2026-05-05): tag chosen by sender. NULL = legacy
@@ -394,9 +394,12 @@ export default function PortalChatsPage() {
     ? (messages ?? []).filter(m => m.topic === adminActiveTopic)
     : (messages ?? []).filter(m => !m.topic)
 
-  // Unread count per topic tab (client messages not yet read by admin)
+  // Unread count per topic tab (client + system messages not yet read by admin).
+  // System messages are auto-emitted on client actions (wizard submitted,
+  // document uploaded, payment received, etc.) — they must count toward the
+  // red badge so staff sees the topic immediately.
   const adminUnreadByTopic = (messages ?? []).reduce<Record<string, number>>((acc, m) => {
-    if (m.sender_type !== 'client' || m.read_at) return acc
+    if (m.sender_type === 'admin' || m.read_at) return acc
     const key = m.topic ?? ''
     acc[key] = (acc[key] ?? 0) + 1
     return acc
@@ -2263,8 +2266,33 @@ export default function PortalChatsPage() {
                 )}
                 {adminFilteredMessages.map(msg => {
                   const isAdmin = msg.sender_type === 'admin'
+                  const isSystem = msg.sender_type === 'system'
                   const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
                   const isDeleted = !!msg.deleted_at
+
+                  // System events (auto-emitted on client actions: wizard submitted,
+                  // payment received, doc uploaded, SS-4 signed, etc.). Render as a
+                  // centered amber pill with a distinct neutral style — not a chat
+                  // bubble. Strip the embedded idempotency marker before display.
+                  if (isSystem && !isDeleted) {
+                    const displayBody = msg.message.replace(/\n*<!-- chat-event:[^>]*-->\s*$/i, '').trim()
+                    const isUnread = !msg.read_at
+                    return (
+                      <div key={msg.id} className="flex justify-center my-1.5">
+                        <div className={cn(
+                          'inline-flex items-center gap-2 max-w-[85%] px-3 py-1.5 rounded-full border text-xs',
+                          isUnread
+                            ? 'bg-amber-50 border-amber-300 text-amber-900'
+                            : 'bg-zinc-50 border-zinc-200 text-zinc-600',
+                        )}>
+                          {isUnread && <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />}
+                          <Bell className="h-3 w-3 shrink-0" />
+                          <span className="leading-snug">{displayBody}</span>
+                          <span className="text-[10px] opacity-70 shrink-0">{format(parseISO(msg.created_at), 'h:mm a')}</span>
+                        </div>
+                      </div>
+                    )
+                  }
 
                   if (isDeleted) {
                     return (
