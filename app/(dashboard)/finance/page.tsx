@@ -178,7 +178,7 @@ export default async function FinancePage({
     supabaseAdmin
       .from('payments')
       .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, account_id, accounts:account_id(company_name)')
-      .not('invoice_status', 'in', '("Paid","Voided","Cancelled","Split")')
+      .not('invoice_status', 'in', '("Voided","Cancelled","Split")')
       .order('created_at', { ascending: false }),
   ])
 
