@@ -140,7 +140,14 @@ export async function publishOffer(
 
   const htmlBody = emailType === "portal_access"
     ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-    : buildPortalNotificationEmail(firstName, offerUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, {
+        title:    lang === "it" ? "La tua Offerta Consulenziale" : "Your Consulting Proposal",
+        body:     lang === "it"
+          ? "Abbiamo preparato la tua offerta consulenziale personalizzata. Leggila e, se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online."
+          : "We have prepared your personalized consulting proposal. Review it and, if everything meets your expectations, you can sign the contract directly online.",
+        ctaLabel: lang === "it" ? "Visualizza Offerta" : "View Offer",
+        ctaUrl:   offerUrl,
+      }, lang, pixelUrl)
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
@@ -438,7 +445,14 @@ export async function resendOfferEmail(
 
   const htmlBody = emailType === "portal_access"
     ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-    : buildPortalNotificationEmail(firstName, offerUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, {
+        title:    lang === "it" ? "La tua Offerta Consulenziale" : "Your Consulting Proposal",
+        body:     lang === "it"
+          ? "Abbiamo preparato la tua offerta consulenziale personalizzata. Leggila e, se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online."
+          : "We have prepared your personalized consulting proposal. Review it and, if everything meets your expectations, you can sign the contract directly online.",
+        ctaLabel: lang === "it" ? "Visualizza Offerta" : "View Offer",
+        ctaUrl:   offerUrl,
+      }, lang, pixelUrl)
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
@@ -596,52 +610,43 @@ function buildPortalAccessEmail(
 </div>${pixel}`
 }
 
-// ─── Email: Portal Notification (existing user, offer-specific) ─────────
+// ─── Email: Portal Notification (existing user) ──────────────────────────
+// Caller provides all content — template only handles layout/styling.
 
-function buildPortalNotificationEmail(
+export interface PortalNotificationContent {
+  title: string
+  body: string
+  ctaLabel: string
+  ctaUrl: string
+}
+
+export function buildPortalNotificationEmail(
   firstName: string,
-  offerUrl: string,
+  content: PortalNotificationContent,
   lang: "en" | "it",
   pixelUrl: string,
 ): string {
   const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
-
-  if (lang === "it") {
-    return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">La tua Offerta Consulenziale</h1>
-    <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
-  </div>
-  <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-    <p>Ciao ${firstName},</p>
-    <p>Abbiamo preparato la tua offerta consulenziale personalizzata. Leggila e, se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online.</p>
-    <p style="margin: 24px 0; text-align: center;">
-      <a href="${offerUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Visualizza Offerta
-      </a>
-    </p>
-    <p style="color: #6b7280; font-size: 13px;">Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale.</p>
-    <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
-    </div>
-  </div>
-</div>${pixel}`
-  }
+  const { title, body, ctaLabel, ctaUrl } = content
+  const greeting = lang === "it" ? `Ciao ${firstName},` : `Hi ${firstName},`
+  const footer = lang === "it"
+    ? "Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale."
+    : "For any questions, reply to this email or use the chat in your portal."
 
   return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">Your Consulting Proposal</h1>
+    <h1 style="color: white; margin: 0; font-size: 22px;">${title}</h1>
     <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-    <p>Hi ${firstName},</p>
-    <p>We have prepared your personalized consulting proposal. Review it and, if everything meets your expectations, you can sign the contract directly online.</p>
+    <p>${greeting}</p>
+    <p>${body}</p>
     <p style="margin: 24px 0; text-align: center;">
-      <a href="${offerUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        View Offer
+      <a href="${ctaUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
+        ${ctaLabel}
       </a>
     </p>
-    <p style="color: #6b7280; font-size: 13px;">For any questions, reply to this email or use the chat in your portal.</p>
+    <p style="color: #6b7280; font-size: 13px;">${footer}</p>
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
       Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
     </div>
