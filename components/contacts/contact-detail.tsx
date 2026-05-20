@@ -8,7 +8,7 @@ import {
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, EyeOff, X, FolderOpen, CreditCard,
-  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
+  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, ScanText,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
   Activity, Plus, GitBranch,
 } from 'lucide-react'
@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
+import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 
@@ -2495,6 +2496,18 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [processing, setProcessing] = useState<string | null>(null)
+  const [docMap, setDocMap] = useState<Record<string, { docId: string; portalVisible: boolean }>>({})
+  const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
+
+  const ocrBtn = (fileId: string) => docMap[fileId]?.docId ? (
+    <button
+      onClick={() => setOcrViewDocId(docMap[fileId].docId)}
+      className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all"
+      title="View OCR text"
+    >
+      <ScanText className="h-3.5 w-3.5" />
+    </button>
+  ) : null
 
   const handleProcess = async (driveFileId: string, fileName: string) => {
     setProcessing(driveFileId)
@@ -2524,6 +2537,7 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
         setError(json.error)
       } else {
         setData(json)
+        setDocMap(json.docMap || {})
         // Auto-expand all folders
         const exp: Record<string, boolean> = {}
         for (const f of json.folders || []) exp[f.id] = true
@@ -2546,6 +2560,7 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
 
   return (
     <div className="border rounded-lg bg-white">
+      <OcrViewerModal documentId={ocrViewDocId} onClose={() => setOcrViewDocId(null)} />
       <div className="flex items-center justify-between px-3 py-2 border-b bg-zinc-50">
         <span className="text-xs text-zinc-500">{totalFiles} files in Drive</span>
         <button onClick={fetchFiles} className="text-xs text-zinc-400 hover:text-zinc-600 flex items-center gap-1">
@@ -2570,6 +2585,7 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
                   <FileText className="h-3.5 w-3.5 text-zinc-400" />
                   <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
                   {file.size && <span className="text-xs text-zinc-400">{formatFileSize(Number(file.size))}</span>}
+                  {ocrBtn(file.id)}
                   <button
                     onClick={() => handleProcess(file.id, file.name)}
                     disabled={processing === file.id}
@@ -2589,6 +2605,7 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
                     <div key={file.id} className="flex items-center gap-2 px-3 py-1.5 ml-4 text-sm hover:bg-zinc-50 group">
                       <FileText className="h-3.5 w-3.5 text-zinc-400" />
                       <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
+                      {ocrBtn(file.id)}
                       <button
                         onClick={() => handleProcess(file.id, file.name)}
                         disabled={processing === file.id}
@@ -2615,6 +2632,7 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
             <div key={file.id} className="flex items-center gap-2 py-1 text-sm group">
               <FileText className="h-3.5 w-3.5 text-zinc-400" />
               <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
+              {ocrBtn(file.id)}
               <button
                 onClick={() => handleProcess(file.id, file.name)}
                 disabled={processing === file.id}
@@ -2652,6 +2670,7 @@ function ContactDocumentsTab({
   const [deleting, setDeleting] = useState<string | null>(null)
   const [deleteDialog, setDeleteDialog] = useState<{ docId: string; fileName: string; documentType?: string | null } | null>(null)
   const [ocrRunning, setOcrRunning] = useState<string | null>(null)
+  const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
   const [togglingVis, setTogglingVis] = useState<string | null>(null)
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
@@ -3119,6 +3138,18 @@ function ContactDocumentsTab({
                       {ocrRunning === doc.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                     </span>
                   )}
+                  {doc.drive_file_id && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); setOcrViewDocId(doc.id) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setOcrViewDocId(doc.id) } }}
+                      className="p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors"
+                      title="View OCR text"
+                    >
+                      <ScanText className="h-3.5 w-3.5" />
+                    </span>
+                  )}
                   <span
                     role="button"
                     tabIndex={0}
@@ -3160,6 +3191,7 @@ function ContactDocumentsTab({
       />
 
       {/* Preview modal */}
+      <OcrViewerModal documentId={ocrViewDocId} onClose={() => setOcrViewDocId(null)} />
       {previewDoc && previewDoc.drive_file_id && (
         <div className="fixed inset-0 z-50 bg-black/70 flex flex-col" onClick={() => setPreviewDoc(null)}>
           <div className="flex items-center justify-between px-6 py-3 bg-zinc-900 text-white shrink-0">
