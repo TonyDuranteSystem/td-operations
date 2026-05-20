@@ -69,3 +69,9 @@ export type ServiceCatalogDefaultServiceContext = "individual" | "business" | "a
 
 /** task_action_log.status — CHECK constraint */
 export type TaskActionLogStatus = "pending" | "success" | "failed" | "partial"
+
+/** workflow_dispatch_log.outcome — CHECK constraint */
+export type WorkflowDispatchLogOutcome = "spawned" | "no_trigger_match" | "ambiguous" | "snapshot_invalid" | "meta_invalid" | "spawn_failed" | "already_spawned"
+
+/** workflow_dispatch_log.trigger_source — CHECK constraint */
+export type WorkflowDispatchLogTriggerSource = "form_submission" | "sd_created" | "chain"
