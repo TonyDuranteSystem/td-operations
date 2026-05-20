@@ -8,6 +8,7 @@ import {
   HeartPulse,
   Rocket,
   Settings,
+  Workflow,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
@@ -35,6 +36,12 @@ const TOOLS: ToolTile[] = [
     description: 'What is broken right now — partial activations, audit findings, failed jobs and emails, webhook events awaiting review.',
     icon: AlertTriangle,
     adminOnly: true,
+  },
+  {
+    name: 'Workflow Issues',
+    href: '/workflow-issues',
+    description: 'Automations that failed to start a task — no matching workflow, ambiguous match, or failure. Catches issues with no client attached too.',
+    icon: Workflow,
   },
   {
     name: 'Client Health',
