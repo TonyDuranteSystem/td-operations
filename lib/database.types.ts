@@ -10854,6 +10854,60 @@ export type Database = {
         }
         Relationships: []
       }
+      workflow_dispatch_log: {
+        Row: {
+          account_id: string | null
+          actor: string | null
+          candidates: Json | null
+          chained_from_id: string | null
+          contact_id: string | null
+          created_at: string
+          delivery_id: string | null
+          details: Json
+          event_descriptor: string | null
+          event_ref: string | null
+          id: string
+          matched_workflow_slug: string | null
+          outcome: string
+          spawned_task_id: string | null
+          trigger_source: string
+        }
+        Insert: {
+          account_id?: string | null
+          actor?: string | null
+          candidates?: Json | null
+          chained_from_id?: string | null
+          contact_id?: string | null
+          created_at?: string
+          delivery_id?: string | null
+          details?: Json
+          event_descriptor?: string | null
+          event_ref?: string | null
+          id?: string
+          matched_workflow_slug?: string | null
+          outcome: string
+          spawned_task_id?: string | null
+          trigger_source: string
+        }
+        Update: {
+          account_id?: string | null
+          actor?: string | null
+          candidates?: Json | null
+          chained_from_id?: string | null
+          contact_id?: string | null
+          created_at?: string
+          delivery_id?: string | null
+          details?: Json
+          event_descriptor?: string | null
+          event_ref?: string | null
+          id?: string
+          matched_workflow_slug?: string | null
+          outcome?: string
+          spawned_task_id?: string | null
+          trigger_source?: string
+        }
+        Relationships: []
+      }
       write_buffer: {
         Row: {
           action: string
