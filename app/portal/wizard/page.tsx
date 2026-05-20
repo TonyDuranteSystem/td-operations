@@ -16,6 +16,7 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, type WizardType } from '@/lib/portal/wizard-map'
+import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
@@ -280,30 +281,24 @@ export default async function WizardPage({
   let progressId: string | null = null
   let wizardSubmitStatus: 'in_progress' | 'submitted' | null = null
 
-  // Resolve the scope column once, then build a single query. A 3-way ternary
-  // over chained supabase builders blows TS's type-instantiation depth (TS2589),
-  // so we collapse it to one builder expression.
-  // Scope precedence:
-  //  1. ?lead= new-company formation (PR #75) — keyed on lead_id.
-  //  2. Contact-owned wizard (formation) with no lead scope — keyed on
-  //     contact_id even when an account exists, so a materialized formation is
-  //     found and not re-offered as a duplicate (dev_task 21fd1f4a).
-  //  3. Account-owned wizards — keyed on account_id.
-  //  4. Pre-account fallback — contact_id.
-  const progressScope: { col: 'lead_id' | 'account_id' | 'contact_id'; val: string } | null =
-    formationLeadId
-      ? { col: 'lead_id', val: formationLeadId }
-      : (isContactScopedWizard(wizardType) && contactId)
-      ? { col: 'contact_id', val: contactId }
-      : accountId
-      ? { col: 'account_id', val: accountId }
-      : contactId
-      ? { col: 'contact_id', val: contactId }
-      : null
+  // Resolve which column to scope the lookup on (see resolveWizardProgressScope
+  // for the precedence + the lead_id-null disambiguation). Building the query
+  // dynamically over a union of columns trips TS's type-instantiation depth
+  // (TS2589) on the typed builder, so the builder is cast to any.
+  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId })
 
   const progressQuery = progressScope
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic scope column over a union trips TS2589 on the typed builder
-    ? (supabaseAdmin as any).from('wizard_progress').select('*').eq(progressScope.col, progressScope.val).eq('wizard_type', wizardType).in('status', ['in_progress', 'submitted']).order('updated_at', { ascending: false }).limit(1).maybeSingle()
+    ? (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic scope column over a union trips TS2589 on the typed builder
+        let q = (supabaseAdmin as any)
+          .from('wizard_progress')
+          .select('*')
+          .eq(progressScope.col, progressScope.val)
+          .eq('wizard_type', wizardType)
+          .in('status', ['in_progress', 'submitted'])
+        if (progressScope.restrictToNoLead) q = q.is('lead_id', null)
+        return q.order('updated_at', { ascending: false }).limit(1).maybeSingle()
+      })()
     : null
 
   if (progressQuery) {
