@@ -38,6 +38,7 @@ import { parseWorkflowSnapshot } from "@/lib/tasks/workflow-snapshot-schema"
 import { getWorkflowSchema } from "@/lib/tasks/workflow-schemas"
 import { requireWorkflowHandler } from "@/lib/tasks/workflow-registry"
 import { getWorkflowCatalogRow, resolveCatalogTransition } from "@/lib/tasks/chain-transitions"
+import { logWorkflowDispatch } from "@/lib/tasks/workflow-dispatch-log"
 import type {
   HandlerContext,
   HandlerResult,
@@ -461,6 +462,24 @@ async function finalizeSuccess(args: {
     } else {
       spawnedTaskId = spawn.task_id ?? null
     }
+    // Step 1b: observation-only chain-dispatch log. Never throws / never blocks.
+    await logWorkflowDispatch({
+      trigger_source: "chain",
+      event_descriptor: result.spawn_task.workflow_slug,
+      event_ref: task.id,
+      result: {
+        spawned: spawn.success,
+        workflow_slug: result.spawn_task.workflow_slug,
+        task_id: spawn.task_id,
+        reason: spawn.success ? undefined : "spawn_failed",
+        spawn_error: spawn.success ? undefined : spawn.error,
+      },
+      account_id: task.account_id,
+      contact_id: task.contact_id,
+      delivery_id: task.delivery_id,
+      actor: "workflow-dispatcher",
+      extra_details: { parent_task_id: task.id, mode: "handler_explicit" },
+    })
   } else {
     // Path (2) — catalog transition (Slice 5).
     const transitionKey = result.transition ?? action.slug
@@ -476,6 +495,23 @@ async function finalizeSuccess(args: {
         console.warn(
           `[dispatcher] catalog transition wants spawn_workflow='${resolved.spawn_workflow}' but no task_workflows catalog row found — skipping spawn`,
         )
+        // Step 1b: a chain continuation was intended but couldn't spawn.
+        await logWorkflowDispatch({
+          trigger_source: "chain",
+          event_descriptor: resolved.spawn_workflow,
+          event_ref: task.id,
+          result: {
+            spawned: false,
+            workflow_slug: resolved.spawn_workflow,
+            reason: "spawn_failed",
+            spawn_error: "no task_workflows catalog row for spawn_workflow",
+          },
+          account_id: task.account_id,
+          contact_id: task.contact_id,
+          delivery_id: task.delivery_id,
+          actor: "workflow-dispatcher",
+          extra_details: { parent_task_id: task.id, mode: "catalog_transition", transition_key: transitionKey },
+        })
       } else {
         // Inherit task_meta from the parent (post-action merged meta). This
         // carries chain context (submission_id, attachments, client info)
@@ -511,6 +547,24 @@ async function finalizeSuccess(args: {
         } else {
           spawnedTaskId = spawn.task_id ?? null
         }
+        // Step 1b: observation-only chain-dispatch log. Never throws / never blocks.
+        await logWorkflowDispatch({
+          trigger_source: "chain",
+          event_descriptor: resolved.spawn_workflow,
+          event_ref: task.id,
+          result: {
+            spawned: spawn.success,
+            workflow_slug: resolved.spawn_workflow,
+            task_id: spawn.task_id,
+            reason: spawn.success ? undefined : "spawn_failed",
+            spawn_error: spawn.success ? undefined : spawn.error,
+          },
+          account_id: task.account_id,
+          contact_id: task.contact_id,
+          delivery_id: task.delivery_id,
+          actor: "workflow-dispatcher",
+          extra_details: { parent_task_id: task.id, mode: "catalog_transition", transition_key: transitionKey },
+        })
       }
     }
 
