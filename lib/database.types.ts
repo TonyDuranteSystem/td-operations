@@ -10753,6 +10753,7 @@ export type Database = {
           current_step: number | null
           data: Json | null
           id: string
+          lead_id: string | null
           status: string | null
           updated_at: string | null
           wizard_type: string
@@ -10764,6 +10765,7 @@ export type Database = {
           current_step?: number | null
           data?: Json | null
           id?: string
+          lead_id?: string | null
           status?: string | null
           updated_at?: string | null
           wizard_type: string
@@ -10775,6 +10777,7 @@ export type Database = {
           current_step?: number | null
           data?: Json | null
           id?: string
+          lead_id?: string | null
           status?: string | null
           updated_at?: string | null
           wizard_type?: string
@@ -10821,6 +10824,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_client_full"
             referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "wizard_progress_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
           },
         ]
       }
