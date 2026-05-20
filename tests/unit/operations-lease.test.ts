@@ -309,6 +309,20 @@ describe("createLease — happy path", () => {
     expect(insert.yearly_rent).toBe(999)
   })
 
+  it("defaults tenant_title to 'Manager'", async () => {
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.tenant_title).toBe("Manager")
+  })
+
+  it("honors explicit tenant_title override", async () => {
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", tenant_title: "Member" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.tenant_title).toBe("Member")
+  })
+
   it("defaults term_end_date to {contract_year}-12-31", async () => {
     const { createLease } = await import("@/lib/operations/lease")
     await createLease({ account_id: "acct-1", contract_year: 2027 })
