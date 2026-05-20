@@ -15,7 +15,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
-import { isValidWizardType, type WizardType } from '@/lib/portal/wizard-map'
+import { isValidWizardType, isContactScopedWizard, type WizardType } from '@/lib/portal/wizard-map'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
@@ -137,14 +137,31 @@ export default async function WizardPage({
 
     const types = (sds || []).map(s => s.service_type)
 
-    // Check which wizard types have already been submitted
-    const progressFilter = accountId
-      ? supabaseAdmin.from('wizard_progress').select('wizard_type, status').eq('account_id', accountId).in('status', ['submitted'])
-      : supabaseAdmin.from('wizard_progress').select('wizard_type, status').eq('contact_id', contactId).in('status', ['submitted'])
-
-    const { data: submittedWizards } = await progressFilter
-
-    const submittedTypes = new Set((submittedWizards || []).map(w => w.wizard_type))
+    // Check which wizard types have already been submitted.
+    // Account-owned wizards are read by account_id. Contact-owned wizards
+    // (formation) live on the contact and never carry an account_id, so they
+    // are read by contact_id — but only contact-scoped types are taken from
+    // that query, so a submission for one account never masks another account's
+    // pending wizard. See dev_task 21fd1f4a.
+    const submittedTypes = new Set<string>()
+    if (accountId) {
+      const { data: byAccount } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('wizard_type')
+        .eq('account_id', accountId)
+        .in('status', ['submitted'])
+      for (const w of byAccount || []) submittedTypes.add(w.wizard_type)
+    }
+    if (contactId) {
+      const { data: byContact } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('wizard_type')
+        .eq('contact_id', contactId)
+        .in('status', ['submitted'])
+      for (const w of byContact || []) {
+        if (isContactScopedWizard(w.wizard_type)) submittedTypes.add(w.wizard_type)
+      }
+    }
 
     // Build list of ALL applicable wizard types (both pending and submitted)
     if (types.includes('Company Formation')) {
@@ -266,9 +283,18 @@ export default async function WizardPage({
   // Resolve the scope column once, then build a single query. A 3-way ternary
   // over chained supabase builders blows TS's type-instantiation depth (TS2589),
   // so we collapse it to one builder expression.
+  // Scope precedence:
+  //  1. ?lead= new-company formation (PR #75) — keyed on lead_id.
+  //  2. Contact-owned wizard (formation) with no lead scope — keyed on
+  //     contact_id even when an account exists, so a materialized formation is
+  //     found and not re-offered as a duplicate (dev_task 21fd1f4a).
+  //  3. Account-owned wizards — keyed on account_id.
+  //  4. Pre-account fallback — contact_id.
   const progressScope: { col: 'lead_id' | 'account_id' | 'contact_id'; val: string } | null =
     formationLeadId
       ? { col: 'lead_id', val: formationLeadId }
+      : (isContactScopedWizard(wizardType) && contactId)
+      ? { col: 'contact_id', val: contactId }
       : accountId
       ? { col: 'account_id', val: accountId }
       : contactId
