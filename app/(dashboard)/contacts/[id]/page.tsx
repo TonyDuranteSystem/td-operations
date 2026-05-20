@@ -50,7 +50,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Documents linked to this contact
     supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id')
+      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible')
       .eq('contact_id', params.id)
       .order('category', { ascending: true })
       .order('file_name', { ascending: true }),
@@ -126,14 +126,14 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     id: string; file_name: string; document_type_name: string | null; category_name: string | null
     category: number | null; drive_file_id: string | null; drive_link: string | null
     status: string | null; processed_at: string | null; mime_type: string | null
-    file_size: number | null; account_id: string | null
+    file_size: number | null; account_id: string | null; portal_visible: boolean | null
   }
   const contactDirectDocs = (docsResult.data ?? []) as DocRecord[]
   let accountDocs: DocRecord[] = []
   if (accountIds.length > 0) {
     const { data: accDocsData } = await supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id')
+      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible')
       .in('account_id', accountIds)
       .order('category', { ascending: true })
       .order('file_name', { ascending: true })
