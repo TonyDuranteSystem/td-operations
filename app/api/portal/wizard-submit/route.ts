@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, entity_type, data, account_id, contact_id, progress_id, allow_resubmit } = body
+  const { wizard_type, entity_type, data, account_id, contact_id, lead_id, progress_id, allow_resubmit } = body
 
   if (!wizard_type || !data) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
@@ -108,6 +108,7 @@ export async function POST(req: NextRequest) {
             data,
             account_id: account_id || null,
             contact_id: contact_id || null,
+            lead_id: lead_id || null,
             status: 'submitted',
             current_step: 99,
           })
@@ -183,9 +184,11 @@ export async function POST(req: NextRequest) {
         submissionRecord.entity_type = entity_type || 'SMLLC'
       }
 
-      // Only include lead_id for tables that have it (tax_return_submissions does not)
+      // Only include lead_id for tables that have it (tax_return_submissions does not).
+      // Formation-for-a-new-company submissions carry the lead so materialization
+      // can build the right company even when the contact already owns others.
       if (submissionTable !== 'tax_return_submissions') {
-        submissionRecord.lead_id = null
+        submissionRecord.lead_id = lead_id || null
       }
 
       // Only include tax_year if we resolved it (avoids NOT NULL constraint violation)
@@ -411,7 +414,7 @@ export async function POST(req: NextRequest) {
         submission_id: submissionId,
         account_id: account_id || null,
         contact_id: contact_id || null,
-        lead_id: null, // Portal submissions don't have leads
+        lead_id: lead_id || null, // Formation-for-new-company carries its lead for materialization
         company_name: companyName,
         state_of_formation: stateOfFormation,
         entity_type: entity_type || 'SMLLC',
@@ -458,6 +461,7 @@ export async function POST(req: NextRequest) {
               data,
               account_id: account_id || null,
               contact_id: contact_id || null,
+              lead_id: lead_id || null,
               status: 'submitted',
               current_step: 99,
             })
