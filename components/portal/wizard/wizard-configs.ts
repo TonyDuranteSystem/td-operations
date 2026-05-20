@@ -44,6 +44,12 @@ export const MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: false, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_zip', label: 'ZIP Code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  // Passport per individual member — every member of a multi-member LLC must
+  // provide ID. Owner's passport is collected on the Documents step; each
+  // additional individual member uploads theirs here. The upload key resolves
+  // to member_{idx}_member_passport (see wizard-client members repeater), which
+  // formation materialization reads to file each member's passport privately.
+  { name: 'member_passport', label: 'Passport Scan', labelIt: 'Scansione Passaporto', type: 'file', required: true, hint: 'Clear photo of the passport data page', hintIt: 'Foto chiara della pagina dati del passaporto', conditional: { field: 'member_type', value: 'individual' } },
 
   // ── Ownership % (always shown — applies to both types) ──
   { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true },

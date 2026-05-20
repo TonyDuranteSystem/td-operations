@@ -124,30 +124,42 @@ export async function processFile(
     // 8. Upsert document record
     const status = classification ? "classified" : (pages.length > 0 ? "unclassified" : "error")
 
+    const docRow: Record<string, unknown> = {
+      drive_file_id: fileId,
+      file_name: fileName,
+      mime_type: meta.mimeType,
+      file_size: meta.size ? parseInt(meta.size, 10) : null,
+      drive_link: meta.webViewLink || null,
+      drive_parent_folder_id: meta.parents?.[0] || null,
+      document_type_id: documentTypeId,
+      document_type_name: classification?.type || null,
+      category: classification?.category || null,
+      category_name: classification?.categoryName || null,
+      confidence: classification?.confidence || null,
+      ocr_text: ocrText || null,
+      ocr_page_count: pages.length || null,
+      account_id: accountId || null,
+      account_name: accountName || null,
+      contact_id: resolvedContactId,
+      processed_at: new Date().toISOString(),
+      status,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    }
+
+    // A personal document (category 2 = Contacts) with no resolved owner must
+    // NOT be client-visible — otherwise the portal would surface it company-
+    // wide to every member (e.g. a member's passport on an MMLLC, where
+    // auto-resolution can't pick an owner among multiple contacts). Force it
+    // hidden until an admin assigns the owner. Other categories keep their
+    // existing visibility (field omitted → preserved on re-process).
+    if (classification?.category === 2 && !resolvedContactId) {
+      docRow.portal_visible = false
+    }
+
     const { error: dbError } = await supabaseAdmin
       .from("documents")
-      .upsert({
-        drive_file_id: fileId,
-        file_name: fileName,
-        mime_type: meta.mimeType,
-        file_size: meta.size ? parseInt(meta.size, 10) : null,
-        drive_link: meta.webViewLink || null,
-        drive_parent_folder_id: meta.parents?.[0] || null,
-        document_type_id: documentTypeId,
-        document_type_name: classification?.type || null,
-        category: classification?.category || null,
-        category_name: classification?.categoryName || null,
-        confidence: classification?.confidence || null,
-        ocr_text: ocrText || null,
-        ocr_page_count: pages.length || null,
-        account_id: accountId || null,
-        account_name: accountName || null,
-        contact_id: resolvedContactId,
-        processed_at: new Date().toISOString(),
-        status,
-        error_message: null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "drive_file_id" })
+      .upsert(docRow as never, { onConflict: "drive_file_id" })
 
     if (dbError) throw new Error(`DB error: ${dbError.message}`)
 

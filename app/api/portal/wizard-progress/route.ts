@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, current_step, data, account_id, contact_id, progress_id } = body
+  const { wizard_type, current_step, data, account_id, contact_id, lead_id, progress_id } = body
 
   if (!wizard_type) {
     return NextResponse.json({ error: 'wizard_type is required' }, { status: 400 })
@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
           data: data || {},
           account_id: account_id || null,
           contact_id: contact_id || null,
+          lead_id: lead_id || null,
           status: 'in_progress',
         })
         .select('id')
