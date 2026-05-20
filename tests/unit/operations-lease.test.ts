@@ -21,6 +21,7 @@ let insertReturnsRow: { id: string; token: string; access_code: string; suite_nu
 let insertError: { message: string } | null = null
 
 const insertCalls: Array<Record<string, unknown>> = []
+const updateCalls: Array<Record<string, unknown>> = []
 const actionLogCalls: Array<Record<string, unknown>> = []
 
 // ─── Mock ────────────────────────────────────────────────
@@ -32,6 +33,7 @@ vi.mock("@/lib/supabase-admin", () => ({
       const filters: Record<string, string | number> = {}
       let selectCols = ""
       let pendingInsert: Record<string, unknown> | null = null
+      let pendingUpdate: Record<string, unknown> | null = null
       let orderCol: string | undefined
       let orderAsc = true
       let _limitVal: number | undefined
@@ -43,6 +45,10 @@ vi.mock("@/lib/supabase-admin", () => ({
         }),
         insert: vi.fn((payload: Record<string, unknown>) => {
           pendingInsert = payload
+          return chain
+        }),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          pendingUpdate = payload
           return chain
         }),
         eq: vi.fn((col: string, value: string | number) => {
@@ -70,6 +76,11 @@ vi.mock("@/lib/supabase-admin", () => ({
           const result = { data, error: insertError }
           pendingInsert = null
           return result
+        }
+        if (pendingUpdate) {
+          updateCalls.push({ table, payload: pendingUpdate, filters: { ...filters } })
+          pendingUpdate = null
+          return { data: null, error: null }
         }
         // Read path
         if (table === "accounts") {
@@ -131,6 +142,7 @@ beforeEach(() => {
   }
   insertError = null
   insertCalls.length = 0
+  updateCalls.length = 0
   actionLogCalls.length = 0
 })
 
@@ -353,6 +365,15 @@ describe("createLease — happy path", () => {
     await createLease({ account_id: "acct-2", contract_year: 2026 })
     const insert = insertCalls[0].payload as Record<string, unknown>
     expect(insert.token).toBe("acme-co-llc-2026")
+  })
+
+  it("syncs accounts.physical_address with the assigned suite after insert", async () => {
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1" })
+    const upd = updateCalls.find((c) => c.table === "accounts")
+    expect(upd).toBeDefined()
+    const payload = upd!.payload as Record<string, unknown>
+    expect(payload.physical_address).toBe("10225 Ulmerton Rd, Suite 3D-151, Largo, FL 33771")
   })
 })
 
