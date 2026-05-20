@@ -1474,7 +1474,7 @@ function DBASection({
   )
 }
 
-function MembersSection({ accountId, accountCompanyName }: { accountId: string; accountCompanyName: string }) {
+function MembersSection({ accountId, accountCompanyName, contacts }: { accountId: string; accountCompanyName: string; contacts: Contact[] }) {
   const [members, setMembers] = useState<CrmMember[]>([])
   const [loading, setLoading] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -1600,6 +1600,11 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
 
   const inputCls = 'w-full px-2.5 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
 
+  // Contacts already linked to a member — excluded from the picker so we can't
+  // link the same contact twice (which violates the one-member-per-contact rule).
+  const linkedContactIds = new Set(members.map(m => m.contact_id).filter(Boolean) as string[])
+  const availableContacts = contacts.filter(c => !linkedContactIds.has(c.id))
+
   if (loading) {
     return (
       <div className="bg-white rounded-lg border p-5">
@@ -1663,6 +1668,35 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
           </div>
           {addType === 'individual' ? (
             <div className="grid grid-cols-2 gap-2">
+              <div className="col-span-2">
+                <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Link existing contact (optional)</p>
+                <select
+                  className={inputCls}
+                  value={String(addDraft.contact_id ?? '')}
+                  onChange={e => {
+                    const cid = e.target.value || null
+                    if (!cid) {
+                      setAddDraft(d => ({ ...d, contact_id: null }))
+                      return
+                    }
+                    const picked = availableContacts.find(c => c.id === cid)
+                    setAddDraft(d => ({
+                      ...d,
+                      contact_id: cid,
+                      full_name: picked?.full_name ?? String(d.full_name ?? ''),
+                      email: picked?.email ?? String(d.email ?? ''),
+                      phone: picked?.phone ?? String(d.phone ?? ''),
+                    }))
+                  }}
+                >
+                  <option value="">— New person (type below) —</option>
+                  {availableContacts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {(c.full_name || c.email || 'Unnamed contact')}{c.email && c.full_name ? ` (${c.email})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <input placeholder="Full name *" className={inputCls} value={String(addDraft.full_name ?? '')} onChange={e => setAddDraft(d => ({ ...d, full_name: e.target.value }))} />
               <input placeholder="Email" className={inputCls} value={String(addDraft.email ?? '')} onChange={e => setAddDraft(d => ({ ...d, email: e.target.value }))} />
               <input placeholder="Phone" className={inputCls} value={String(addDraft.phone ?? '')} onChange={e => setAddDraft(d => ({ ...d, phone: e.target.value }))} />
@@ -2042,7 +2076,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
       {/* Members — any multi-member account (MMLLC or C-Corp Elected with multiple members) */}
       {account.member_structure === 'multi_member' && (
-        <MembersSection accountId={account.id} accountCompanyName={account.company_name} />
+        <MembersSection accountId={account.id} accountCompanyName={account.company_name} contacts={contacts} />
       )}
 
       {/* Notes */}
