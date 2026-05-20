@@ -7,7 +7,7 @@ import {
   ArrowLeft, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
-  Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
+  Loader2, ChevronRight, Eye, EyeOff, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
   Activity, Plus, GitBranch,
@@ -33,7 +33,7 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
-import { updateAccountContactRole } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 
@@ -168,6 +168,7 @@ interface ContactDocumentRecord {
   mime_type: string | null
   file_size: number | null
   account_id: string | null
+  portal_visible: boolean | null
 }
 
 interface ContactInvoice {
@@ -2651,6 +2652,7 @@ function ContactDocumentsTab({
   const [deleting, setDeleting] = useState<string | null>(null)
   const [deleteDialog, setDeleteDialog] = useState<{ docId: string; fileName: string; documentType?: string | null } | null>(null)
   const [ocrRunning, setOcrRunning] = useState<string | null>(null)
+  const [togglingVis, setTogglingVis] = useState<string | null>(null)
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
@@ -2676,6 +2678,23 @@ function ContactDocumentsTab({
       toast.error('Network error')
     } finally {
       setOcrRunning(null)
+    }
+  }
+
+  const handleToggleVisibility = async (docId: string, current: boolean) => {
+    setTogglingVis(docId)
+    try {
+      const result = await toggleDocumentPortalVisibility(docId, !current)
+      if (result.success) {
+        toast.success(`Portal visibility ${!current ? 'enabled' : 'disabled'}`)
+        window.location.reload()
+      } else {
+        toast.error(result.error || 'Failed to update visibility')
+        setTogglingVis(null)
+      }
+    } catch {
+      toast.error('Network error')
+      setTogglingVis(null)
     }
   }
 
@@ -3070,7 +3089,20 @@ function ContactDocumentsTab({
                     </span>
                   )}
                   {doc.drive_file_id && (
-                    <Eye className="h-4 w-4 text-muted-foreground" />
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); handleToggleVisibility(doc.id, !!doc.portal_visible) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleToggleVisibility(doc.id, !!doc.portal_visible) } }}
+                      className={cn(
+                        'p-1 rounded transition-colors',
+                        doc.portal_visible ? 'text-emerald-600 hover:bg-emerald-50' : 'text-zinc-400 hover:bg-zinc-100',
+                        togglingVis === doc.id && 'opacity-50 pointer-events-none'
+                      )}
+                      title={doc.portal_visible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}
+                    >
+                      {togglingVis === doc.id ? <Loader2 className="h-4 w-4 animate-spin" /> : doc.portal_visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                    </span>
                   )}
                   {doc.drive_file_id && doc.document_type_name && /passport|itin|ein/i.test(doc.document_type_name) && (
                     <span
