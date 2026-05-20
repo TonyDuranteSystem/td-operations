@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Loader2, X, ScanText } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface OcrData {
   file_name: string | null
@@ -26,7 +27,24 @@ export function OcrViewerModal({
 }) {
   const [data, setData] = useState<OcrData | null>(null)
   const [loading, setLoading] = useState(false)
+  const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const handleRun = async () => {
+    if (!documentId) return
+    setRunning(true)
+    try {
+      const res = await fetch(`/api/documents/${documentId}/ocr`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'OCR failed')
+      setData(d as OcrData)
+      toast.success((d as OcrData).has_ocr ? 'OCR complete' : 'Processed — no text found')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'OCR failed')
+    } finally {
+      setRunning(false)
+    }
+  }
 
   useEffect(() => {
     if (!documentId) return
@@ -82,9 +100,16 @@ export function OcrViewerModal({
           ) : data && data.has_ocr ? (
             <pre className="text-xs whitespace-pre-wrap break-words font-mono text-zinc-800 leading-relaxed">{data.ocr_text}</pre>
           ) : (
-            <div className="text-sm text-muted-foreground">
+            <div className="text-sm text-muted-foreground space-y-3">
               <p>This document hasn&apos;t been OCR&apos;d yet.</p>
-              <p className="text-xs mt-1">Run OCR from the document&apos;s actions to extract its text.</p>
+              <button
+                onClick={handleRun}
+                disabled={running}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanText className="h-4 w-4" />}
+                {running ? 'Running OCR…' : 'Run OCR'}
+              </button>
             </div>
           )}
         </div>
