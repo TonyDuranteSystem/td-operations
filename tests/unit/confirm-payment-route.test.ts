@@ -169,13 +169,49 @@ describe("confirm-payment — input validation", () => {
     expect(body.error).toMatch(/Provide one of: lead_id, account_id, contact_id, offer_token/)
   })
 
-  it("rejects when amount is missing", async () => {
+  it("rejects when amount is missing (undefined)", async () => {
+    const { amount: _omit, ...noAmount } = baseBody
     const res = await POST(
-      makeRequest({ ...baseBody, lead_id: "lead-1", amount: 0 }) as Parameters<typeof POST>[0],
+      makeRequest({ ...noAmount, lead_id: "lead-1" }) as Parameters<typeof POST>[0],
     )
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/Missing required fields/)
+    expect(body.error).toMatch(/Missing or invalid fields/)
+  })
+
+  it("rejects a negative amount", async () => {
+    const res = await POST(
+      makeRequest({ ...baseBody, lead_id: "lead-1", amount: -5 }) as Parameters<typeof POST>[0],
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/Missing or invalid fields/)
+  })
+
+  // $0 is a valid amount now: free / already-settled activations (e.g. a
+  // $0-setup onboarding contract). The activation must run, but NO invoice
+  // should be created for a zero amount.
+  it("accepts amount = 0 and creates no invoice", async () => {
+    setTable("offers", { selectMaybeSingle: { data: null, error: null } })
+    setTable("leads", {
+      selectSingle: {
+        data: { id: "lead-1", full_name: "Free Client", email: "free@example.com", phone: null, language: "en", status: "Qualified" },
+        error: null,
+      },
+    })
+    setTable("contacts", { selectMaybeSingle: { data: null, error: null } })
+    setTable("pending_activations", {
+      selectMaybeSingle: { data: null, error: null },
+      insertResult: { data: { id: "pa-free" }, error: null },
+    })
+
+    const res = await POST(
+      makeRequest({ ...baseBody, lead_id: "lead-1", amount: 0 }) as Parameters<typeof POST>[0],
+    )
+    expect(res.status).toBe(200)
+    expect(lastActivationId).toBe("pa-free")
+    // No invoice for a $0 activation
+    expect(_lastTDInvoice).toBeNull()
   })
 })
 

@@ -730,6 +730,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         contactId={primaryContact?.id}
         offer={offer}
         isAdmin={isAdmin}
+        pendingActivation={pendingActivation}
       />
 
       {/* Documents to Sign Panel */}

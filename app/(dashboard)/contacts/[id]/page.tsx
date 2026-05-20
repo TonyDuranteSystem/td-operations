@@ -63,7 +63,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Pending activations — by client_email
     supabase
       .from('pending_activations')
-      .select('id, client_email, status, signed_at, payment_confirmed_at, activated_at, payment_method, amount, currency')
+      .select('id, offer_token, client_email, status, signed_at, payment_confirmed_at, activated_at, payment_method, amount, currency')
       .eq('client_email', contact.email ?? '__no_match__')
       .order('created_at', { ascending: false }),
     // Wizard progress — by contact_id
@@ -153,7 +153,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     created_at: string; viewed_at: string | null; expires_at: string | null
   }>
   const pendingActivations = (pendingActivationsResult.data ?? []) as Array<{
-    id: string; client_email: string; status: string; signed_at: string | null
+    id: string; offer_token: string | null; client_email: string; status: string; signed_at: string | null
     payment_confirmed_at: string | null; activated_at: string | null
     payment_method: string | null; amount: number | null; currency: string | null
   }>

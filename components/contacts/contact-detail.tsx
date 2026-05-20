@@ -210,6 +210,7 @@ interface OfferRecord {
 
 interface PendingActivationRecord {
   id: string
+  offer_token: string | null
   client_email: string
   status: string
   signed_at: string | null
@@ -704,6 +705,7 @@ function OverviewTab({
         contactName={contact.full_name ?? ''}
         contactEmail={contact.email ?? ''}
         contactLanguage={contact.language}
+        pendingActivations={pendingActivations}
       />
 
       {/* Wizard Progress Card */}
@@ -1251,6 +1253,7 @@ function OfferStatusCard({
   contactName,
   contactEmail,
   contactLanguage,
+  pendingActivations = [],
 }: {
   offers: OfferRecord[]
   accounts: LinkedAccount[]
@@ -1258,6 +1261,7 @@ function OfferStatusCard({
   contactName: string
   contactEmail: string
   contactLanguage?: string | null
+  pendingActivations?: PendingActivationRecord[]
 }) {
   const [selectedAccountId, setSelectedAccountId] = useState<string>(accounts[0]?.id ?? '')
 
@@ -1280,6 +1284,12 @@ function OfferStatusCard({
   const companyName = contactName
   const accountId = selectedAccountId || null
 
+  // Match this offer's activation (by offer token) so the panel can show
+  // "Activate now" vs the persistent "Activated · payment pending" reminder.
+  const offerActivation = offerData
+    ? (pendingActivations.find(a => a.offer_token === offerData.token) ?? null)
+    : null
+
   return (
     <div className="space-y-2">
       {accounts.length > 1 && (
@@ -1301,6 +1311,7 @@ function OfferStatusCard({
         contactId={contactId}
         offer={offerData}
         isAdmin={true}
+        pendingActivation={offerActivation}
       />
     </div>
   )
