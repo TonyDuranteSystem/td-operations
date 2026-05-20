@@ -73,7 +73,7 @@ describe('syncAirwallexDeposits', () => {
         currency: 'EUR',
         sender_name: 'ATCOACHING LLC',
       }),
-      { onConflict: 'external_id' }
+      { onConflict: 'external_id', ignoreDuplicates: true }
     )
   })
 

@@ -274,10 +274,15 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
     }
   }
 
-  const totalBalance = connections.reduce((sum, conn) =>
+  // Relay is hidden from the Connected Banks UI per request — it still syncs
+  // transactions in the background; we just don't surface its card or balance.
+  const visibleConnections = connections.filter(
+    conn => !((conn.institution_name ?? conn.bank_name ?? '').toLowerCase().includes('relay'))
+  )
+  const totalBalance = visibleConnections.reduce((sum, conn) =>
     sum + (conn.accounts ?? []).reduce((s, a) => s + (a.balances.current ?? 0), 0), 0
   )
-  const totalAccounts = connections.reduce((sum, conn) => sum + (conn.accounts ?? []).length, 0)
+  const totalAccounts = visibleConnections.reduce((sum, conn) => sum + (conn.accounts ?? []).length, 0)
 
   return (
     <div className="border-b pb-4 mb-4">
@@ -286,9 +291,9 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
           <Landmark className="h-5 w-5 text-blue-600" />
           <div>
             <h3 className="text-sm font-semibold">Connected Banks</h3>
-            {!loading && connections.length > 0 && (
+            {!loading && visibleConnections.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                {connections.length} bank{connections.length !== 1 ? 's' : ''} &middot; {totalAccounts} account{totalAccounts !== 1 ? 's' : ''}{isAdmin ? ` \u00B7 ${formatCurrency(totalBalance)}` : ''}
+                {visibleConnections.length} bank{visibleConnections.length !== 1 ? 's' : ''} &middot; {totalAccounts} account{totalAccounts !== 1 ? 's' : ''}{isAdmin ? ` \u00B7 ${formatCurrency(totalBalance)}` : ''}
               </p>
             )}
           </div>
@@ -317,14 +322,14 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
 
       {loading ? (
         <p className="text-xs text-muted-foreground">Loading bank connections...</p>
-      ) : connections.length === 0 ? (
+      ) : visibleConnections.length === 0 ? (
         <div className="border-2 border-dashed rounded-lg p-6 text-center">
           <p className="text-sm text-muted-foreground font-medium">No bank accounts connected</p>
           <p className="text-xs text-muted-foreground mt-1">Connect Chase, Relay, Mercury, or First Citizens above</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {connections.map(conn => {
+          {visibleConnections.map(conn => {
             const bankKey = (conn.institution_name ?? conn.bank_name ?? '').toLowerCase()
             const matchedSources = Object.entries(BANK_SOURCE_MAP).find(([key]) => bankKey.includes(key))?.[1] ?? null
             const isActive = activeSource && matchedSources && activeSource.join() === matchedSources.join()

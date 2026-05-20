@@ -45,7 +45,7 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
         memo: txn.name,
         raw_data: txn as unknown as Json,
         status: isIncoming ? 'unmatched' : 'outgoing',
-      }, { onConflict: 'external_id' })
+      }, { onConflict: 'external_id', ignoreDuplicates: true })
 
       if (upsertErr) {
         console.error(`[plaid-sync] Failed to upsert txn ${txn.transaction_id}:`, upsertErr.message)
