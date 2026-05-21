@@ -9,11 +9,14 @@ import { NextResponse } from 'next/server'
  */
 export async function GET() {
   try {
+    const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabaseAdmin as any)
       .from('portal_announcements')
       .select('id, title, message, title_en, message_en, type, dismissible')
       .eq('active', true)
+      .or(`active_from.is.null,active_from.lte.${today}`)
+      .or(`active_until.is.null,active_until.gte.${today}`)
       .order('created_at', { ascending: false })
 
     if (error) {
