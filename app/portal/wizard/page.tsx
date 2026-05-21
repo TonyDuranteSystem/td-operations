@@ -275,6 +275,18 @@ export default async function WizardPage({
     }
   }
 
+  // A formation is for a NEW company — it must never bind to or pre-fill an
+  // EXISTING account. When the wizard resolves to formation without a ?lead=
+  // scope (e.g. an existing client reached it via a link that dropped the
+  // lead param), drop the existing-account context so we don't pre-fill the
+  // old company's name/EIN/state and so submission stays contact+lead scoped.
+  // This is the page-side half of the THW Global hijack fix (Adam Mihaly,
+  // 2026-05-20, dev_task 358e8cbe); the server backstop is in wizard-submit.
+  if (wizardType === 'formation' && !formationLeadId) {
+    accountId = ''
+    account = {}
+  }
+
   // Load saved progress — include 'submitted' so clients can edit before review
   let savedData: Record<string, unknown> = {}
   let savedStep = 0

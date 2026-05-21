@@ -50,3 +50,22 @@ export function resolveWizardProgressScope(params: {
   }
   return null
 }
+
+/**
+ * A formation submission must NEVER carry an account_id. A formation is for a
+ * NEW company and lives on the contact (+lead) until the Articles of
+ * Organization materialize the real account. Returns null for formation,
+ * otherwise the provided account id unchanged.
+ *
+ * Server-side backstop against the THW Global hijack: an existing client who
+ * reached the formation wizard via a link that dropped the ?lead= scope had
+ * their new company's data attached to their EXISTING account (Adam Mihaly,
+ * 2026-05-20, dev_task 358e8cbe).
+ */
+export function accountIdForWizardSubmission(
+  wizardType: string,
+  accountId: string | null | undefined,
+): string | null {
+  if (wizardType === "formation") return null
+  return accountId ?? null
+}

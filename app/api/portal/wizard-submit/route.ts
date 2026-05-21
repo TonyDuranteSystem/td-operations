@@ -19,6 +19,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
+import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 
 /** Extract file upload paths from wizard data.
@@ -49,11 +50,19 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, entity_type, data, account_id, contact_id, lead_id, progress_id, allow_resubmit } = body
+  const { wizard_type, entity_type, data, account_id: rawAccountId, contact_id, lead_id, progress_id, allow_resubmit } = body
 
   if (!wizard_type || !data) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
   }
+
+  // Server-side backstop: a formation is for a NEW company and lives on the
+  // contact (+lead) until the Articles of Organization materialize the real
+  // account. It must NEVER carry an account_id. Without this guard, an existing
+  // client who reached the formation wizard via any link that dropped the
+  // ?lead= scope submitted their new company onto their EXISTING account —
+  // the THW Global hijack (Adam Mihaly, 2026-05-20, dev_task 358e8cbe).
+  const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
 
   // ─── 0. SYNCHRONOUS VALIDATION ───
   // Structural fix: validate at the route boundary so the client sees field
