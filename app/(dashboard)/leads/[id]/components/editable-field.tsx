@@ -51,7 +51,23 @@ export function EditableField({
           toast.error(data.error || 'Failed to save')
           return
         }
-        toast.success('Saved')
+        if (field === 'email' && data.email_sync) {
+          const s = data.email_sync
+          const synced: string[] = []
+          if (s.offersUpdated > 0) synced.push(`${s.offersUpdated} offer${s.offersUpdated > 1 ? 's' : ''}`)
+          if (s.contactUpdated) synced.push('contact')
+          if (s.authUserUpdated) synced.push('portal login')
+          toast.success(synced.length ? `Email updated — also synced ${synced.join(', ')}` : 'Email updated')
+          // Surface collisions where a different record already owns the new email.
+          const blocked = (s.skipped as string[] | undefined)?.filter(
+            x => x.startsWith('portal:') || x.startsWith('contact:'),
+          ) ?? []
+          if (blocked.length) {
+            toast.warning(`Heads up: ${blocked.join('; ')}`)
+          }
+        } else {
+          toast.success('Saved')
+        }
         setEditing(false)
         router.refresh()
       } catch {
