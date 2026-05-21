@@ -44,7 +44,7 @@ export async function POST(
 
     if (insert.member_type === "company") {
       if (!body.member_company_name) {
-        return NextResponse.json({ error: "member_company_name is required for company members" }, { status: 400 })
+        return NextResponse.json({ error: "Company name is required for a company member." }, { status: 400 })
       }
       insert.company_name = body.member_company_name
       insert.ein = body.ein ?? null
