@@ -134,6 +134,10 @@ export interface Account {
   mailing_link_verified: boolean | null
   ra_link_verified: boolean | null
   member_structure: 'single_member' | 'multi_member' | null
+  // Authoritative member count for MMLLC — source of truth for OA generation
+  // pre-flight. Backfilled from ss4_applications.member_count; manually set
+  // by staff for legacy/external-filed clients.
+  member_count?: number | null
   created_at: string
   updated_at: string
 }
