@@ -60,6 +60,10 @@ export default async function GenerateDocumentsPage() {
         // Address fields for OA generation
         address: [m.address_line1, m.address_city, m.address_state, m.address_country].filter(Boolean).join(', ') || null,
         isPrimary: m.is_primary ?? false,
+        // Extended fields for OA signing flow
+        contact_id: m.contact_id ?? null,
+        email: m.email ?? null,
+        member_id: m.member_id,
       }))
     : ownerContact
       ? [{
@@ -68,6 +72,9 @@ export default async function GenerateDocumentsPage() {
           ownershipPct: null,
           address: null,
           isPrimary: true,
+          contact_id: contactId,
+          email: null,
+          member_id: undefined,
         }]
       : []
 
@@ -83,6 +90,7 @@ export default async function GenerateDocumentsPage() {
         logoUrl: accountDetail.invoice_logo_url,
         entityType: accountDetail.entity_type,
         registeredAgentAddress: accountDetail.registered_agent_address,
+        memberCount: (accountDetail as Record<string, unknown>).member_count as number | null ?? null,
       }}
       members={mappedMembers}
       history={historyResult.data || []}
