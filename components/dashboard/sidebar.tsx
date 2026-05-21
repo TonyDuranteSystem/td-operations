@@ -18,7 +18,6 @@ import {
   MessagesSquare,
   Search,
   Bot,
-  Rocket,
   Gauge,
   GripVertical,
   Users,
@@ -32,11 +31,8 @@ import {
   Wrench,
   Share2,
   Package,
-  HeartPulse,
   PhoneIncoming,
-  Activity,
   Mail,
-  AlertTriangle,
   ClipboardCheck,
   MapPin,
   LayoutGrid,
@@ -113,13 +109,10 @@ const defaultNavigation: NavItem[] = [
   // power-user governance (status / tags / translations).
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
-  { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, tooltip: 'Client portal management — create portal users, send invitations.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
-  { id: 'client-health', name: 'Client Health', href: '/client-health', icon: HeartPulse, tooltip: 'Stuck activations, orphan records, wrong account types, and data integrity issues.' },
-  { id: 'exceptions', name: 'Exceptions', href: '/exceptions', icon: AlertTriangle, adminOnly: true, tooltip: 'What is broken right now — partial activations, audit findings, failed jobs and emails, webhook events awaiting review. Each row has a retry action.' },
-  { id: 'config', name: 'Config', href: '/config', icon: Settings, adminOnly: true, tooltip: 'Edit SOPs, pipeline stages, and dev tasks. Replaces raw SQL editing with a guarded CRM surface logged to action_log.' },
-  { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true, tooltip: 'Developer utilities — database queries, system status, and debugging tools.' },
-  { id: 'system-health', name: 'System Health', href: '/system-health', icon: Activity, adminOnly: true, tooltip: 'Live system visibility — crons, audit findings, deploys, work locks, stuck clients.' },
+  // Operator tools consolidated into one hub page (2026-05-20) to shorten the
+  // sidebar. The individual pages still live at their own URLs; the hub links to them.
+  { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — system health, exceptions, client health, config, dev tools, portal launch.' },
 ]
 
 function SortableNavItem({ item, isActive, onMobileClose, editMode }: {

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { WorkflowIssuesLink } from '@/components/accounts/workflow-issues-link'
 import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
@@ -660,6 +661,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
               <Stethoscope className="h-3.5 w-3.5" />
               Diagnose
             </button>
+            <WorkflowIssuesLink accountId={account.id} />
             <button
               onClick={() => setShowPlaceClient(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"

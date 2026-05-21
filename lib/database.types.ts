@@ -5948,6 +5948,7 @@ export type Database = {
           tenant_ein: string | null
           tenant_email: string | null
           tenant_state: string | null
+          tenant_title: string
           term_end_date: string
           term_months: number
           term_start_date: string
@@ -5988,6 +5989,7 @@ export type Database = {
           tenant_ein?: string | null
           tenant_email?: string | null
           tenant_state?: string | null
+          tenant_title?: string
           term_end_date: string
           term_months?: number
           term_start_date: string
@@ -6028,6 +6030,7 @@ export type Database = {
           tenant_ein?: string | null
           tenant_email?: string | null
           tenant_state?: string | null
+          tenant_title?: string
           term_end_date?: string
           term_months?: number
           term_start_date?: string
