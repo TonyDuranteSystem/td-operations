@@ -212,6 +212,28 @@ export async function getEntryByServiceType(
   return all.find((e) => e.slug === slug) ?? null
 }
 
+/**
+ * Pipeline / `service_type` names tagged `start_at_wizard` — personal services
+ * (e.g. ITIN) whose SD is created at formation/onboarding WIZARD SUBMIT, in
+ * parallel, instead of being deferred to company creation. Returned as the
+ * `service_type` names used in `offers.bundled_pipelines` (e.g. "ITIN").
+ *
+ * Data-driven so adding another start-at-wizard personal service needs only a
+ * catalog tag, not a code change. See dev_task fcf5e254 + the
+ * 20260521-1605-itin-start-at-wizard-tag migration.
+ */
+export async function getStartAtWizardServiceTypes(): Promise<string[]> {
+  const all = await loadEntries()
+  const slugs = new Set(
+    all
+      .filter((e) => e.status === "active" && e.tags.includes("start_at_wizard"))
+      .map((e) => e.slug),
+  )
+  return Object.entries(SERVICE_TYPE_TO_SLUG)
+    .filter(([, slug]) => slugs.has(slug))
+    .map(([serviceType]) => serviceType)
+}
+
 /** True if the SD-type display name corresponds to a row tagged both `sd` and `sellable`. */
 export async function isStandaloneSD(sdType: string): Promise<boolean> {
   const entry = await getSDByType(sdType)

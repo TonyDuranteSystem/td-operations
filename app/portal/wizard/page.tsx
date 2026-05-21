@@ -17,6 +17,7 @@ import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, type WizardType } from '@/lib/portal/wizard-map'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
+import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
@@ -337,6 +338,52 @@ export default async function WizardPage({
     isLocked = !!sentTr
   }
 
+  // ── ITIN applicants (dev_task fcf5e254) ──
+  // When the formation/onboarding offer bundled ITIN (a start-at-wizard
+  // service), the wizard asks the client WHO applies. itinCount = how many
+  // ITINs were purchased; the client must mark exactly that many people.
+  let itinCount = 0
+  if (wizardType === 'formation' || wizardType === 'onboarding') {
+    const startAtWizard = await getStartAtWizardServiceTypes()
+    if (startAtWizard.includes('ITIN')) {
+      const offerEmails = new Set<string>()
+      if (user.email) offerEmails.add(user.email)
+      if (contact.email) offerEmails.add(String(contact.email))
+      let offerRow: { services: unknown; bundled_pipelines: string[] | null } | null = null
+      if (formationLeadId) {
+        const { data } = await supabaseAdmin
+          .from('offers')
+          .select('services, bundled_pipelines')
+          .eq('lead_id', formationLeadId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        offerRow = data as typeof offerRow
+      }
+      if (!offerRow && offerEmails.size > 0) {
+        const { data } = await supabaseAdmin
+          .from('offers')
+          .select('services, bundled_pipelines')
+          .in('client_email', Array.from(offerEmails))
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        offerRow = data as typeof offerRow
+      }
+      if (offerRow) {
+        const services = Array.isArray(offerRow.services)
+          ? (offerRow.services as Array<Record<string, unknown>>)
+          : []
+        const itinSvc = services.find((s) => s.pipeline_type === 'ITIN')
+        if (itinSvc && typeof itinSvc.quantity === 'number' && itinSvc.quantity > 0) {
+          itinCount = itinSvc.quantity
+        } else if (Array.isArray(offerRow.bundled_pipelines)) {
+          itinCount = offerRow.bundled_pipelines.filter((p) => p === 'ITIN').length
+        }
+      }
+    }
+  }
+
   // Build prefill data from contact + account
   const prefillData: Record<string, string> = {}
   if (contact.first_name) prefillData.owner_first_name = contact.first_name
@@ -590,6 +637,7 @@ export default async function WizardPage({
           locale={locale}
           initialSubmitStatus={wizardSubmitStatus}
           isLocked={isLocked}
+          itinCount={itinCount}
         />
       )}
 

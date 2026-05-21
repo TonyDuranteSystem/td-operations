@@ -286,6 +286,36 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
   }
 
+  // ─── 2b. ITIN SERVICE DELIVERIES (start-at-wizard — dev_task fcf5e254) ───
+  // ITIN is personal: it starts now, not when the company is formed. Creates a
+  // contact-scoped ITIN SD for each person the client marked "applies for ITIN"
+  // in the wizard (owner + members). No-op when the offer had no ITIN. This
+  // closes the gap where bundled ITIN was silently dropped at activation.
+  if (p.contact_id) {
+    try {
+      const { createItinDeliveriesFromWizard } = await import("@/lib/operations/itin-from-wizard")
+      const itin = await createItinDeliveriesFromWizard({
+        contactId: p.contact_id,
+        leadId: p.lead_id,
+        submitted,
+        offerToken: p.token,
+      })
+      if (itin.created === 0 && itin.skipped === 0) {
+        result.steps.push(step("itin_deliveries", "skipped", "No one applied for ITIN"))
+      } else {
+        result.steps.push(
+          step(
+            "itin_deliveries",
+            "ok",
+            `${itin.created} created, ${itin.skipped} existing — ${itin.people.map((x) => `${x.name}:${x.status}`).join(", ")}`,
+          ),
+        )
+      }
+    } catch (e) {
+      result.steps.push(step("itin_deliveries", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
   await updateJobProgress(job.id, result)
 
   // ─── 3. MARK FORM AS REVIEWED ───

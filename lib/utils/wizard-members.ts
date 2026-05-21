@@ -26,6 +26,9 @@ export type NormalizedIndividualMember = {
   member_state_province: string | null
   member_zip: string | null
   member_country: string | null
+  /** Whether this member applies for an ITIN (formation/onboarding wizard, when
+   * the offer bundles ITIN). Drives ITIN SD creation. dev_task fcf5e254. */
+  member_needs_itin: boolean | null
 }
 
 export type NormalizedCompanyMember = {
@@ -59,6 +62,15 @@ function num(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
   const n = Number(v)
   return isNaN(n) ? null : n
+}
+
+function bool(v: unknown): boolean | null {
+  if (v === null || v === undefined || v === '') return null
+  if (v === true) return true
+  if (v === false) return false
+  if (typeof v === 'string') return /^(true|yes|si|sì|1|on)$/i.test(v.trim())
+  if (typeof v === 'number') return v === 1
+  return null
 }
 
 function normalizeFromObject(raw: Record<string, unknown>): NormalizedMember {
@@ -99,6 +111,7 @@ function normalizeFromObject(raw: Record<string, unknown>): NormalizedMember {
     member_state_province: str(raw.member_state_province),
     member_zip: str(raw.member_zip),
     member_country: str(raw.member_country),
+    member_needs_itin: bool(raw.member_needs_itin),
   }
 }
 
