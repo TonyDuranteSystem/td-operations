@@ -2672,6 +2672,7 @@ function ContactDocumentsTab({
   const [ocrRunning, setOcrRunning] = useState<string | null>(null)
   const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
   const [togglingVis, setTogglingVis] = useState<string | null>(null)
+  const [activeDocScope, setActiveDocScope] = useState<string>('personal')
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
@@ -2815,7 +2816,23 @@ function ContactDocumentsTab({
     return 'Other'
   }
 
-  const grouped = documents.reduce<Record<string, ContactDocumentRecord[]>>((acc, doc) => {
+  // Document scopes: "Personal" (no company attached) + one per company the
+  // contact belongs to. A doc carrying an account_id belongs to that company's
+  // scope; a doc with no account_id is personal. Lets staff see each company's
+  // files on its own tab instead of one merged pile (Adam Mihaly owns THW + LUMA).
+  const docScopes = [
+    { key: 'personal', label: 'Personal', count: documents.filter(d => !d.account_id).length },
+    ...accounts.map(a => ({
+      key: a.id,
+      label: a.company_name,
+      count: documents.filter(d => d.account_id === a.id).length,
+    })),
+  ]
+  const scopedDocuments = activeDocScope === 'personal'
+    ? documents.filter(d => !d.account_id)
+    : documents.filter(d => d.account_id === activeDocScope)
+
+  const grouped = scopedDocuments.reduce<Record<string, ContactDocumentRecord[]>>((acc, doc) => {
     const section = getContactSection(doc)
     if (!acc[section]) acc[section] = []
     acc[section].push(doc)
@@ -3050,7 +3067,7 @@ function ContactDocumentsTab({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{documents.length} documents</p>
+        <p className="text-sm text-muted-foreground">{scopedDocuments.length} documents</p>
         <div className="flex items-center gap-2">
           {driveFolderUrl && (
             <a
@@ -3068,6 +3085,37 @@ function ContactDocumentsTab({
       </div>
       {fileBrowserSection}
       {uploadPanel}
+
+      {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
+      <div className="flex flex-wrap gap-2 border-b pb-2">
+        {docScopes.map(scope => (
+          <button
+            key={scope.key}
+            onClick={() => setActiveDocScope(scope.key)}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+              activeDocScope === scope.key
+                ? 'bg-blue-600 text-white'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            )}
+          >
+            {scope.label || 'Company'}
+            <span className={cn(
+              'text-[10px] px-1.5 py-0.5 rounded-full',
+              activeDocScope === scope.key ? 'bg-white/20 text-white' : 'bg-white text-zinc-500'
+            )}>
+              {scope.count}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {scopedDocuments.length === 0 && (
+        <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
+          <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
+          <p>No documents in this section</p>
+        </div>
+      )}
 
       {sortedCategories.map(category => (
         <div key={category} className="space-y-2">
