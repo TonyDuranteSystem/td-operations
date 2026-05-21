@@ -1486,6 +1486,7 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
   const [addType, setAddType] = useState<'individual' | 'company'>('individual')
   const [addDraft, setAddDraft] = useState<Record<string, string | number | null>>({})
   const [adding, setAdding] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CrmMember | null>(null)
   const [sendingForm, setSendingForm] = useState(false)
   const [formRequest, setFormRequest] = useState<{ status: string; created_at: string; submitted_at: string | null } | null>(null)
@@ -1561,6 +1562,7 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
 
   const handleAdd = async () => {
     setAdding(true)
+    setAddError(null)
     try {
       const body = addType === 'company'
         ? { member_type: 'company', member_company_name: addDraft.company_name, ...addDraft }
@@ -1577,7 +1579,9 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
       setAddDraft({})
       toast.success('Member added')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add member')
+      // Show the plain-language reason right here in the form (persistent),
+      // not just a toast that disappears.
+      setAddError(err instanceof Error && err.message ? err.message : 'Could not add the member.')
     } finally {
       setAdding(false)
     }
@@ -1724,12 +1728,18 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
               <input placeholder="Rep country" className={inputCls} value={String(addDraft.representative_address_country ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_country: e.target.value }))} />
             </div>
           )}
+          {addError && (
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>{addError}</span>
+            </div>
+          )}
           <div className="flex gap-2">
             <button onClick={handleAdd} disabled={adding} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
               {adding ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
               Add
             </button>
-            <button onClick={() => { setShowAddForm(false); setAddDraft({}) }} className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50">Cancel</button>
+            <button onClick={() => { setShowAddForm(false); setAddDraft({}); setAddError(null) }} className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50">Cancel</button>
           </div>
         </div>
       )}

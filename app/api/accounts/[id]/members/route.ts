@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { explainFailure } from "@/lib/errors/explain-failure"
 
 export const dynamic = "force-dynamic"
 
@@ -43,7 +44,7 @@ export async function POST(
 
     if (insert.member_type === "company") {
       if (!body.member_company_name) {
-        return NextResponse.json({ error: "member_company_name is required for company members" }, { status: 400 })
+        return NextResponse.json({ error: "Company name is required for a company member." }, { status: 400 })
       }
       insert.company_name = body.member_company_name
       insert.ein = body.ein ?? null
@@ -79,7 +80,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: explainFailure(error).message }, { status: 400 })
 
     // MM5: individual members with a contact must also get account_contacts for portal access
     if (insert.member_type === "individual" && insert.contact_id) {
@@ -146,7 +147,7 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: explainFailure(error).message }, { status: 400 })
     if (!data) return NextResponse.json({ error: "Member not found" }, { status: 404 })
     return NextResponse.json({ data })
   } catch (err) {
