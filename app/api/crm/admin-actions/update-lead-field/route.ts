@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { syncLeadEmailToOfferArtifacts } from "@/lib/offers/sync-offer-email"
 
 const ALLOWED_FIELDS = [
   "full_name",
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
 
     const { data: lead } = await supabaseAdmin
       .from("leads")
-      .select("full_name")
+      .select("full_name, email")
       .eq("id", lead_id)
       .single()
 
@@ -76,16 +77,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
+    // When the email is corrected, carry the fix across to the offer + portal
+    // artifacts that were created from the old address, so a re-send reaches
+    // the right inbox and does not spawn a duplicate portal account.
+    let emailSync: Awaited<ReturnType<typeof syncLeadEmailToOfferArtifacts>> | undefined
+    if (field === "email" && normalizedValue) {
+      // The lead row is already updated; a propagation failure must not undo
+      // that or 500 the request — it is best-effort and self-reports.
+      try {
+        emailSync = await syncLeadEmailToOfferArtifacts({
+          leadId: lead_id,
+          oldEmail: lead.email,
+          newEmail: normalizedValue,
+        })
+      } catch (syncErr) {
+        emailSync = {
+          offersUpdated: 0,
+          contactUpdated: false,
+          authUserUpdated: false,
+          skipped: [`sync failed: ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`],
+        }
+      }
+    }
+
     logAction({
       actor: "crm-admin",
       action_type: "update",
       table_name: "leads",
       record_id: lead_id,
       summary: `Updated ${field} for lead "${lead.full_name}"`,
-      details: { lead_id, field, new_value: normalizedValue, admin_email: user?.email },
+      details: { lead_id, field, new_value: normalizedValue, admin_email: user?.email, email_sync: emailSync ?? null },
     })
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, email_sync: emailSync ?? null })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: msg }, { status: 500 })

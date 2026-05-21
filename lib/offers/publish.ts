@@ -193,21 +193,16 @@ export async function publishOffer(
   // ─── 5. safeSend — email first, status updates after ───
   const result = await safeSend<{ id: string; threadId: string }>({
     idempotencyCheck: async () => {
+      // The offer's own status is the only identity-correct guard against a
+      // double-publish: only a 'draft' offer can be published, and publishing
+      // flips it to 'sent'. We deliberately do NOT gate on email_tracking —
+      // that table is keyed by offer_token (a string that gets reused when an
+      // offer is deleted then recreated with the same slug, and is left stale
+      // by reset-offer), so a token-based "already sent" check falsely blocks a
+      // freshly (re)created draft. The status column cannot be inherited that
+      // way, so it is the correct guard.
       if (offer.status !== "draft") {
         return { alreadySent: true, message: `Offer already published (status: ${offer.status}).` }
-      }
-      // Also check email_tracking for THIS specific offer token + recent time
-      const { data: existing } = await supabaseAdmin
-        .from("email_tracking")
-        .select("tracking_id, created_at")
-        .eq("offer_token", token)
-        .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-        .limit(1)
-      if (existing?.length) {
-        return {
-          alreadySent: true,
-          message: `This offer was already sent (tracked: ${existing[0].tracking_id} at ${existing[0].created_at}). Set status back to 'draft' to resend.`,
-        }
       }
       return null
     },
