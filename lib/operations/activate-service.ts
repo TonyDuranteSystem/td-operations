@@ -1378,6 +1378,30 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     }
   }
 
+  // ─── STEP 4c: Flip lead to Converted ─────────────────────
+  // Lives here so it fires regardless of which caller triggered the activation
+  // (confirm-payment, Stripe, Whop, retry, etc.). The .neq guard makes it
+  // idempotent — no-op if the lead is already Converted.
+  if (leadId) {
+    const { data: flippedRows } = await dbWriteSafe(
+      supabase
+        .from("leads")
+        .update({ status: "Converted", updated_at: new Date().toISOString() })
+        .eq("id", leadId)
+        .neq("status", "Converted")
+        .select("id"),
+      "leads.update"
+    )
+    const wasFlipped = Array.isArray(flippedRows) && flippedRows.length > 0
+    steps.push({
+      step: "lead_converted",
+      status: "done",
+      detail: wasFlipped
+        ? `Lead ${leadId.slice(0, 8)} → Converted`
+        : `Lead ${leadId.slice(0, 8)} already Converted`,
+    })
+  }
+
   // ─── STEP 5: Notify Luca + Antonio via email ──────────
   try {
     const { gmailPost } = await import("@/lib/gmail")
