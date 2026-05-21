@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff } from 'lucide-react'
+import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail } from 'lucide-react'
 
 type Result =
   | { kind: 'ok'; message: string }
@@ -17,6 +17,13 @@ export function MaintenancePanel() {
   const [bannerSaving, setBannerSaving] = useState(false)
   const [bannerResult, setBannerResult] = useState<Result | null>(null)
 
+  // Portal-message admin email toggle (app_settings.portal_admin_email_on_client_message)
+  const EMAIL_KEY = 'portal_admin_email_on_client_message'
+  const [emailOn, setEmailOn] = useState(true)
+  const [emailLoaded, setEmailLoaded] = useState(false)
+  const [emailSaving, setEmailSaving] = useState(false)
+  const [emailResult, setEmailResult] = useState<Result | null>(null)
+
   useEffect(() => {
     let cancelled = false
     fetch('/api/admin/renewal-banner-year')
@@ -26,6 +33,41 @@ export function MaintenancePanel() {
       .finally(() => { if (!cancelled) setBannerLoaded(true) })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/app-settings?key=${EMAIL_KEY}`)
+      .then(r => r.json())
+      // default ON: only false when explicitly stored false
+      .then(d => { if (!cancelled) setEmailOn(d.value !== false) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setEmailLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleToggleEmail = async () => {
+    const next = !emailOn
+    setEmailSaving(true)
+    setEmailResult(null)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: EMAIL_KEY, value: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setEmailResult({ kind: 'error', message: data.error || 'Save failed' })
+      } else {
+        setEmailOn(next)
+        setEmailResult({ kind: 'ok', message: next ? 'On — emails will be sent for new portal messages' : 'Off — no more emails for portal messages (push still active)' })
+      }
+    } catch (err) {
+      setEmailResult({ kind: 'error', message: err instanceof Error ? err.message : 'Network error' })
+    } finally {
+      setEmailSaving(false)
+    }
+  }
 
   const handleSaveBannerYear = async () => {
     setBannerSaving(true)
@@ -156,6 +198,43 @@ export function MaintenancePanel() {
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}>
               {bannerResult.message}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Mail className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Email on new portal messages</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            When on, a client&apos;s portal chat message emails support@tonydurante.us. Turn off to stop
+            those emails — push notifications still arrive either way.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleEmail}
+              disabled={!emailLoaded || emailSaving}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                emailOn
+                  ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              {emailSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {emailOn ? 'On' : 'Off'}
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {emailLoaded ? (emailOn ? 'Emails are being sent' : 'Emails are silenced') : 'Loading…'}
+            </span>
+          </div>
+          {emailResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              emailResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {emailResult.message}
             </div>
           )}
         </div>

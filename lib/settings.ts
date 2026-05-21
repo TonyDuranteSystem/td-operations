@@ -19,6 +19,7 @@ export type AppSettingKey =
   | "tax_season_paused" // boolean — when true, Tax Return banner + wizard + intake are gated.
   | "renewal_banner_min_year" // number — minimum agreement_year for the portal renewal-MSA banner to show. Default 2027 (hides 2026 in purgatory). Bump higher to hide future years too.
   | "auto_activate_confidence_threshold" // 'exact' (default) | 'exact_or_high' — which match confidence levels trigger auto-activation. Anything below threshold goes to the bank-feed review queue.
+  | "portal_admin_email_on_client_message" // boolean — when true (default), a client portal chat message emails support@tonydurante.us. Set false to silence those emails (push notifications are unaffected). Toggled in Dev Tools → Maintenance.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,
@@ -49,6 +50,14 @@ export async function setAppSetting(
 export async function isTaxSeasonPaused(): Promise<boolean> {
   const v = await getAppSetting<boolean>("tax_season_paused", false)
   return v === true
+}
+
+/** Whether a client's portal chat message should email support@tonydurante.us.
+ *  Defaults to true (emails on) so behavior is unchanged until ops opts out.
+ *  Push notifications to admin devices are independent of this flag. */
+export async function isPortalAdminEmailEnabled(): Promise<boolean> {
+  const v = await getAppSetting<boolean>("portal_admin_email_on_client_message", true)
+  return v !== false
 }
 
 /** Minimum agreement_year for the portal renewal-MSA banner to render.
