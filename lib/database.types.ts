@@ -125,6 +125,7 @@ export type Database = {
           lead_source: string | null
           legal_link_verified: boolean
           mailing_link_verified: boolean
+          member_count: number | null
           member_structure: string | null
           notes: string | null
           onboarding_date: string | null
@@ -207,6 +208,7 @@ export type Database = {
           lead_source?: string | null
           legal_link_verified?: boolean
           mailing_link_verified?: boolean
+          member_count?: number | null
           member_structure?: string | null
           notes?: string | null
           onboarding_date?: string | null
@@ -289,6 +291,7 @@ export type Database = {
           lead_source?: string | null
           legal_link_verified?: boolean
           mailing_link_verified?: boolean
+          member_count?: number | null
           member_structure?: string | null
           notes?: string | null
           onboarding_date?: string | null
@@ -3512,6 +3515,7 @@ export type Database = {
           kyc_status: string | null
           language: string | null
           last_name: string | null
+          lead_id: string | null
           notes: string | null
           passport_expiry_date: string | null
           passport_number: string | null
@@ -3562,6 +3566,7 @@ export type Database = {
           kyc_status?: string | null
           language?: string | null
           last_name?: string | null
+          lead_id?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3612,6 +3617,7 @@ export type Database = {
           kyc_status?: string | null
           language?: string | null
           last_name?: string | null
+          lead_id?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3635,6 +3641,13 @@ export type Database = {
           zoho_contact_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "contacts_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "contacts_primary_company_id_fkey"
             columns: ["primary_company_id"]
