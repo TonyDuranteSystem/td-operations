@@ -296,6 +296,20 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
           summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
         })
 
+        // ─── 9b. SYNC member_count TO ACCOUNTS ───
+        // Only backfill if accounts.member_count is not already set — the SS-4
+        // is the authoritative source; don't overwrite a manually corrected value.
+        // Cast needed: member_count not yet in generated types (migration pending production).
+        if (memberCount && entityType === "MMLLC") {
+          // eslint-disable-next-line no-restricted-syntax
+          await supabaseAdmin
+            .from("accounts")
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            .update({ member_count: memberCount } as any)
+            .eq("id", params.account_id)
+            .is("member_count", null)
+        }
+
         // ─── 10. RETURN RESULT ───
         const previewUrl = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`
 
@@ -350,7 +364,7 @@ Note: signed records (status='signed') cannot be updated.`,
       try {
         const { data: ss4, error: fetchErr } = await supabaseAdmin
           .from("ss4_applications")
-          .select("id, token, status, company_name, access_code, county_and_state")
+          .select("id, token, status, company_name, access_code, county_and_state, entity_type")
           .eq("account_id", params.account_id)
           .maybeSingle()
 
@@ -418,6 +432,17 @@ Note: signed records (status='signed') cannot be updated.`,
           account_id: params.account_id,
           summary: `Updated SS-4 for ${ss4.company_name} — fields: ${Object.keys(updates).filter(k => k !== "updated_at").join(", ")}`,
         })
+
+        // Sync corrected member_count back to accounts (always overwrite on explicit update)
+        // Cast needed: member_count not yet in generated types (migration pending production).
+        if (params.member_count !== undefined && ss4.entity_type === "MMLLC") {
+          // eslint-disable-next-line no-restricted-syntax
+          await supabaseAdmin
+            .from("accounts")
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            .update({ member_count: params.member_count } as any)
+            .eq("id", params.account_id)
+        }
 
         const newStatus = (updates.status as string | undefined) || ss4.status
         const previewUrl = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`

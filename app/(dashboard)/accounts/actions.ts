@@ -18,7 +18,7 @@ export async function updateAccountField(
   updatedAt: string
 ): Promise<ActionResult> {
   const allowedFields = [
-    'company_name', 'entity_type', 'member_structure', 'account_type', 'status', 'ein_number', 'filing_id',
+    'company_name', 'entity_type', 'member_structure', 'member_count', 'account_type', 'status', 'ein_number', 'filing_id',
     'state_of_formation', 'formation_date', 'physical_address',
     'registered_agent_provider', 'ra_renewal_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
@@ -34,13 +34,19 @@ export async function updateAccountField(
   }
 
   const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified'])
+  const integerFields = new Set(['member_count'])
 
   // EIN inputs are normalized to canonical XX-XXXXXXX. A non-empty input that
   // fails normalization is rejected — matches the dedicated record-ein-received
   // endpoint's validation contract.
-  let coercedValue: string | boolean | null
+  let coercedValue: string | boolean | number | null
   if (booleanFields.has(field)) {
     coercedValue = value === 'true'
+  } else if (integerFields.has(field)) {
+    coercedValue = value.trim() === '' ? null : parseInt(value, 10)
+    if (coercedValue !== null && isNaN(coercedValue as number)) {
+      return { success: false, error: `${field} must be a whole number` }
+    }
   } else if (field === 'ein_number' && value && value.trim()) {
     const normalized = normalizeEIN(value)
     if (!normalized) {

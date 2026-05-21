@@ -76,9 +76,33 @@ export default async function PortalSignOAPage() {
   if (!oa) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <div className="text-center space-y-2">
+        <div className="text-center space-y-3 max-w-md px-4">
           <p className="text-zinc-500 text-lg">No Operating Agreement found.</p>
-          <p className="text-zinc-400 text-sm">Your Operating Agreement will appear here once it has been generated.</p>
+          <p className="text-zinc-400 text-sm">
+            Your Operating Agreement hasn&apos;t been created yet — go to{' '}
+            <a href="/portal/documents/generate" className="text-blue-500 hover:text-blue-400 underline">
+              Documents → Generate
+            </a>
+            {' '}to create it.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Voided OA — show same helpful message
+  if (oa.status === 'voided') {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-center space-y-3 max-w-md px-4">
+          <p className="text-zinc-500 text-lg">Operating Agreement outdated.</p>
+          <p className="text-zinc-400 text-sm">
+            Your previous Operating Agreement was voided. Go to{' '}
+            <a href="/portal/documents/generate" className="text-blue-500 hover:text-blue-400 underline">
+              Documents → Generate
+            </a>
+            {' '}to create a new one.
+          </p>
         </div>
       </div>
     )

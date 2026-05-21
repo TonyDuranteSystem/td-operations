@@ -1476,7 +1476,7 @@ function DBASection({
   )
 }
 
-function MembersSection({ accountId, accountCompanyName, contacts }: { accountId: string; accountCompanyName: string; contacts: Contact[] }) {
+function MembersSection({ accountId, accountCompanyName, contacts, memberCount: initialMemberCount, accountUpdatedAt }: { accountId: string; accountCompanyName: string; contacts: Contact[]; memberCount: number | null; accountUpdatedAt: string }) {
   const [members, setMembers] = useState<CrmMember[]>([])
   const [loading, setLoading] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -1491,6 +1491,10 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
   const [sendingForm, setSendingForm] = useState(false)
   const [formRequest, setFormRequest] = useState<{ status: string; created_at: string; submitted_at: string | null } | null>(null)
   const [hasPrimaryContact, setHasPrimaryContact] = useState(true)
+  const [memberCount, setMemberCount] = useState<number | null>(initialMemberCount)
+  const [editingMemberCount, setEditingMemberCount] = useState(false)
+  const [memberCountDraft, setMemberCountDraft] = useState('')
+  const [savingMemberCount, setSavingMemberCount] = useState(false)
 
   const loadFormRequest = () => {
     fetch(`/api/accounts/${accountId}/member-info-form`)
@@ -1604,6 +1608,22 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
     }
   }
 
+  const handleSaveMemberCount = async () => {
+    setSavingMemberCount(true)
+    try {
+      const result = await updateAccountField(accountId, 'member_count', memberCountDraft, accountUpdatedAt)
+      if (!result.success) throw new Error(result.error ?? 'Failed to save')
+      const parsed = memberCountDraft.trim() === '' ? null : parseInt(memberCountDraft, 10)
+      setMemberCount(isNaN(parsed as number) ? null : parsed)
+      setEditingMemberCount(false)
+      toast.success('Member count saved')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSavingMemberCount(false)
+    }
+  }
+
   const inputCls = 'w-full px-2.5 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
 
   // Contacts already linked to a member — excluded from the picker so we can't
@@ -1624,9 +1644,40 @@ function MembersSection({ accountId, accountCompanyName, contacts }: { accountId
   return (
     <div className="bg-white rounded-lg border p-5 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          Members ({members.length})
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+            Members ({members.length})
+          </h3>
+          {/* Official member count from SS-4 or manually set by staff */}
+          <div className="flex items-center gap-1.5">
+            {editingMemberCount ? (
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  className="w-16 px-1.5 py-0.5 text-xs border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  value={memberCountDraft}
+                  onChange={e => setMemberCountDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSaveMemberCount(); if (e.key === 'Escape') setEditingMemberCount(false) }}
+                  autoFocus
+                />
+                <button onClick={handleSaveMemberCount} disabled={savingMemberCount} className="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50">
+                  {savingMemberCount ? <Loader2 className="h-3 w-3 animate-spin inline" /> : 'Save'}
+                </button>
+                <button onClick={() => setEditingMemberCount(false)} className="text-xs text-zinc-400 hover:text-zinc-600">Cancel</button>
+              </>
+            ) : (
+              <button
+                onClick={() => { setMemberCountDraft(memberCount?.toString() ?? ''); setEditingMemberCount(true) }}
+                className="text-xs text-zinc-500 hover:text-zinc-700 border border-dashed border-zinc-300 px-2 py-0.5 rounded"
+                title="Official member count (from SS-4 or set manually). Used for OA generation validation."
+              >
+                {memberCount != null ? `${memberCount} official` : 'Set member count'}
+              </button>
+            )}
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5">
             <button
@@ -2088,7 +2139,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
       {/* Members — any multi-member account (MMLLC or C-Corp Elected with multiple members) */}
       {account.member_structure === 'multi_member' && (
-        <MembersSection accountId={account.id} accountCompanyName={account.company_name} contacts={contacts} />
+        <MembersSection accountId={account.id} accountCompanyName={account.company_name} contacts={contacts} memberCount={account.member_count ?? null} accountUpdatedAt={account.updated_at} />
       )}
 
       {/* Notes */}
