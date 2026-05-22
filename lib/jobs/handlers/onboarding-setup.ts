@@ -1349,6 +1349,22 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("staff_notification", "error", e instanceof Error ? e.message : String(e)))
   }
 
+  // ─── NOTIFICATION CENTER: staff action card (account-scoped, no client-chat write) ───
+  if (account_id) {
+    try {
+      const { emitActionNeeded } = await import("@/lib/notifications/act-event")
+      await emitActionNeeded({
+        event: "onboarding_wizard_submitted",
+        account_id,
+        contact_id: contact_id ?? null,
+        source_ref: `onboarding_wizard_submitted:${token}`,
+      })
+      result.steps.push(step("action_card", "ok", "Notification Center card ensured"))
+    } catch (e) {
+      result.steps.push(step("action_card", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
   // Summary
   const okCount = result.steps.filter(s => s.status === "ok").length
   const errCount = result.steps.filter(s => s.status === "error").length

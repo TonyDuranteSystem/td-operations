@@ -15,6 +15,7 @@ import { DevToolsPanel } from '@/components/dashboard/dev-tools-panel'
 import { OperationsPipelineCard } from '@/components/dashboard/cards/operations-pipeline'
 import { ActiveOnboardingsCard } from '@/components/dashboard/cards/active-onboardings'
 import { RevenuePipelineCard } from '@/components/dashboard/cards/revenue-pipeline'
+import { ActionBoard } from '@/components/dashboard/action-board'
 
 export default async function DashboardPage() {
   const supabase = createClient()
@@ -28,7 +29,14 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Row 0: Operations Pipeline (full width) */}
+        {/* Row 0: Notification Center — staff action board (full width) */}
+        <div className="lg:col-span-3">
+          <CardErrorBoundary fallbackTitle="To Do — from chats">
+            <ActionBoard />
+          </CardErrorBoundary>
+        </div>
+
+        {/* Row 0a: Operations Pipeline (full width) */}
         <div className="lg:col-span-3">
           <CardErrorBoundary fallbackTitle="Operations Pipeline">
             <OperationsPipelineCard />

@@ -576,6 +576,19 @@ export async function POST(req: NextRequest) {
       )
     } catch { /* non-blocking */ }
 
+    // --- STEP 9: Notification Center staff card (contact-scoped, no client-chat write) ---
+    try {
+      const { emitActionNeeded } = await import("@/lib/notifications/act-event")
+      await emitActionNeeded({
+        event: "itin_wizard_submitted",
+        contact_id: contactId ?? null,
+        source_ref: `itin_wizard_submitted:${submission_id}`,
+      })
+      results.push({ step: "action_card", status: "ok", detail: "Notification Center card ensured" })
+    } catch (e) {
+      results.push({ step: "action_card", status: "warn", detail: e instanceof Error ? e.message : String(e) })
+    }
+
     // eslint-disable-next-line no-console
     console.log(`[itin-form-completed] ${displayName}: ${results.length} steps. ${results.filter(r => r.status === "ok").length} ok, ${results.filter(r => r.status === "error").length} errors`)
 
