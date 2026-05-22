@@ -98,7 +98,12 @@ export function ThreadWhatsNewPanel({
       fetch(`${CHAT_API}?${param}&limit=50`)
         .then((r) => r.json())
         .then((d: { messages?: RawMessage[] }) =>
-          (d.messages || []).filter((m) => m.sender_type === 'system').map(parseNote).reverse(),
+          // Only internal chat-event notes (carry the marker) — exclude other
+          // system messages like the out-of-office auto-reply (client-facing).
+          (d.messages || [])
+            .filter((m) => m.sender_type === 'system' && MARKER_RE.test(m.message))
+            .map(parseNote)
+            .reverse(),
         ),
     enabled: !!param,
     refetchInterval: 30_000,

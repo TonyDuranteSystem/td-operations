@@ -33,11 +33,13 @@ export async function GET(req: NextRequest) {
     if (!wantCounts) {
       return NextResponse.json({ error: "Unsupported query" }, { status: 400 })
     }
-    // Unhandled system notes grouped by the thread they belong to.
+    // Unhandled chat-event notes grouped by thread. Only notes carrying the
+    // marker — excludes other system messages like the out-of-office auto-reply.
     const { data, error } = await supabaseAdmin
       .from("portal_messages")
       .select("account_id, contact_id")
       .eq("sender_type", "system")
+      .ilike("message", "%<!-- chat-event:%")
       .is("handled_at", null)
       .is("deleted_at", null)
       .limit(5000)
