@@ -26,6 +26,19 @@ import {
 
 type Tab = 'columns' | 'events'
 
+// Plain-English "when this happens" line per event slug (falls back to the
+// catalog display_name). Keeps the editor friendly without extra catalog data.
+const EVENT_WHEN: Record<string, string> = {
+  itin_wizard_submitted: 'A client submits their ITIN information',
+  formation_wizard_submitted: 'A client submits their company-formation information',
+  onboarding_wizard_submitted: 'A client finishes onboarding their existing company',
+  tax_wizard_submitted: 'A client submits their tax information',
+  banking_wizard_submitted: 'A client submits a banking application',
+  ss4_signed: 'A client signs the SS-4 (EIN application)',
+  tax_return_signed: 'A client signs their tax return',
+  itin_number_provided: 'A client gives us their existing ITIN number',
+}
+
 export function ManageColumnsDialog({
   open,
   onClose,
@@ -42,6 +55,7 @@ export function ManageColumnsDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
+  const [draft, setDraft] = useState<Record<string, string>>({}) // live card-text edits per event id
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -185,34 +199,48 @@ export function ManageColumnsDialog({
           {tab === 'events' && !loading && (
             <>
               <p className="text-xs text-muted-foreground mb-2">
-                What each card says when a client does something. Edit the text, or switch an event off if you don’t want
-                a card for it. (Events are fixed — you can’t add new ones here.)
+                When a client does one of these things, a card appears on your board. For each, write what your team
+                should do — or switch it off if you don’t want a card. (These moments are fixed; you can’t add new ones here.)
               </p>
-              {events.map((ev) => (
-                <div key={ev.id} className={`border rounded-lg px-2 py-2 ${ev.enabled ? '' : 'opacity-50'}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] font-medium text-zinc-700">{ev.display_name}</span>
-                    <label className="flex items-center gap-1 text-[11px] text-zinc-500">
-                      <input
-                        type="checkbox"
-                        checked={ev.enabled}
-                        disabled={busy}
-                        onChange={(e) => run(() => setActionEventEnabled(ev.id, e.target.checked))}
-                      />
-                      {ev.enabled ? 'On' : 'Off'}
-                    </label>
+              {events.map((ev) => {
+                const text = draft[ev.id] ?? ev.next_step
+                return (
+                  <div key={ev.id} className={`border rounded-lg p-3 ${ev.enabled ? '' : 'opacity-60'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium text-zinc-800">{EVENT_WHEN[ev.slug] || ev.display_name}</p>
+                      <label className="flex items-center gap-1 text-[11px] text-zinc-500 shrink-0 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={ev.enabled}
+                          disabled={busy}
+                          onChange={(e) => run(() => setActionEventEnabled(ev.id, e.target.checked))}
+                        />
+                        Show a card
+                      </label>
+                    </div>
+                    <label className="block text-[11px] text-zinc-400 mt-1.5 mb-0.5">What the card should say (what your team does):</label>
+                    <input
+                      value={text}
+                      disabled={busy || !ev.enabled}
+                      onChange={(e) => setDraft((d) => ({ ...d, [ev.id]: e.target.value }))}
+                      onBlur={() => {
+                        const v = (draft[ev.id] ?? '').trim()
+                        if (v && v !== ev.next_step) run(() => updateActionEventText(ev.id, v))
+                      }}
+                      className="w-full text-sm border rounded px-2 py-1"
+                    />
+                    {ev.enabled && (
+                      <div className="mt-2 rounded-md bg-zinc-50 border p-2">
+                        <p className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1">Card preview</p>
+                        <div className="rounded bg-white border p-2 shadow-sm">
+                          <p className="text-sm font-medium text-zinc-900">Client name</p>
+                          <p className="text-xs text-zinc-600 mt-0.5">{text || '(write what to do above)'}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <input
-                    defaultValue={ev.next_step}
-                    disabled={busy || !ev.enabled}
-                    onBlur={(e) => {
-                      const v = e.target.value.trim()
-                      if (v && v !== ev.next_step) run(() => updateActionEventText(ev.id, v))
-                    }}
-                    className="w-full text-sm border rounded px-2 py-1"
-                  />
-                </div>
-              ))}
+                )
+              })}
             </>
           )}
 

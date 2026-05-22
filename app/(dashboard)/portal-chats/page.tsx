@@ -342,6 +342,7 @@ export default function PortalChatsPage() {
   type OpenAction = {
     id: string
     action_type: string
+    label: string | null
     updated_at: string | null
     message_id: string | null
     account_id: string | null
@@ -354,6 +355,15 @@ export default function PortalChatsPage() {
     queryKey: ['open-message-actions'],
     queryFn: () => fetch('/api/crm/admin-actions/message-actions?open=true').then(r => r.json()).then(d => d.actions || []),
     refetchInterval: 30_000,
+    enabled: sidebarView === 'actions',
+  })
+  // Board columns (catalog-driven) so the Actions list mirrors the dashboard
+  // board — including custom columns like "Wait for the IRS".
+  type ActionBoardCol = { slug: string; display_name: string; order: number; terminal: boolean }
+  const { data: actionBoardColumns } = useQuery<ActionBoardCol[]>({
+    queryKey: ['action-board-columns'],
+    queryFn: () => fetch('/api/crm/admin-actions/message-actions?columns=true').then(r => r.json()).then(d => d.columns || []),
+    refetchInterval: 60_000,
     enabled: sidebarView === 'actions',
   })
 
@@ -1586,23 +1596,30 @@ export default function PortalChatsPage() {
             </div>
           ) : (
             (() => {
-              const order: string[] = ['action_needed', 'in_progress', 'waiting_on_client']
+              // Catalog-driven order/labels so this mirrors the dashboard board
+              // (incl. custom columns). Falls back to the legacy 3 if the catalog
+              // hasn't loaded yet. Terminal (Done) cards are already excluded
+              // server-side (open = resolved_at IS NULL).
+              const cols = (actionBoardColumns || []).filter(c => !c.terminal).sort((a, b) => a.order - b.order)
+              const order: string[] = cols.length ? cols.map(c => c.slug) : ['action_needed', 'in_progress', 'waiting_on_client']
+              const nameFor = (slug: string) => cols.find(c => c.slug === slug)?.display_name || ACTION_TAG_CONFIG[slug]?.label || slug
               const grouped = order
                 .map(type => ({ type, items: openActions.filter(a => a.action_type === type) }))
                 .filter(g => g.items.length > 0)
               return grouped.map(({ type, items }) => {
                 const cfg = ACTION_TAG_CONFIG[type]
-                const TagIcon = cfg.icon
+                const TagIcon = cfg?.icon ?? AlertCircle
                 return (
                   <div key={type}>
                     <div className="px-4 py-2 bg-zinc-50 border-b flex items-center gap-2">
-                      <TagIcon className={cn('h-3.5 w-3.5', cfg.color)} />
-                      <span className={cn('text-xs font-semibold uppercase tracking-wider', cfg.color)}>{cfg.label}</span>
-                      <span className={cn('ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full', cfg.bg, cfg.color)}>{items.length}</span>
+                      <TagIcon className={cn('h-3.5 w-3.5', cfg?.color ?? 'text-zinc-500')} />
+                      <span className={cn('text-xs font-semibold uppercase tracking-wider', cfg?.color ?? 'text-zinc-600')}>{nameFor(type)}</span>
+                      <span className={cn('ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full', cfg?.bg ?? 'bg-zinc-200', cfg?.color ?? 'text-zinc-700')}>{items.length}</span>
                     </div>
                     {items.map(action => {
                       const clientName = action.accounts?.company_name || action.contacts?.full_name || '—'
-                      const preview = action.portal_messages?.message?.slice(0, 90) || '(attachment)'
+                      // Staff action cards carry their "what to do" in label; fall back to a message preview.
+                      const detail = action.label || action.portal_messages?.message?.slice(0, 90) || '(no details)'
                       return (
                         <button
                           key={action.id}
@@ -1619,7 +1636,7 @@ export default function PortalChatsPage() {
                               {action.updated_at ? format(parseISO(action.updated_at), 'MMM d') : ''}
                             </span>
                           </div>
-                          <p className="text-xs text-zinc-500 line-clamp-2">{preview}</p>
+                          <p className="text-xs text-zinc-500 line-clamp-2">{detail}</p>
                         </button>
                       )
                     })}

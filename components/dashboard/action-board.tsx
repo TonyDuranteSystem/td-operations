@@ -55,6 +55,7 @@ export function ActionBoard() {
   const [loading, setLoading] = useState(true)
   const [movingId, setMovingId] = useState<string | null>(null)
   const [editingColumns, setEditingColumns] = useState(false)
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -129,6 +130,10 @@ export function ActionBoard() {
       </div>
       <ManageColumnsDialog open={editingColumns} onClose={() => setEditingColumns(false)} onChanged={load} />
 
+      {total > 0 && (
+        <p className="text-[11px] text-zinc-400 mb-2">Drag a card between columns, or use the dropdown on each card.</p>
+      )}
+
       {total === 0 ? (
         <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
           <CheckCircle2 className="h-8 w-8 mb-2 text-emerald-400" />
@@ -140,7 +145,18 @@ export function ActionBoard() {
             const colCards = cards.filter((c) => c.action_type === col.slug)
             const Icon = COLUMN_ICON[col.slug] ?? AlertCircle
             return (
-              <div key={col.slug} className="min-w-[230px] w-[230px] shrink-0 rounded-lg bg-zinc-50 border p-2">
+              <div
+                key={col.slug}
+                onDragOver={(e) => { e.preventDefault(); if (dragOverCol !== col.slug) setDragOverCol(col.slug) }}
+                onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverCol(null) }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const id = e.dataTransfer.getData('text/plain')
+                  setDragOverCol(null)
+                  if (id) move(id, col.slug)
+                }}
+                className={`min-w-[230px] w-[230px] shrink-0 rounded-lg border p-2 transition-colors ${dragOverCol === col.slug ? 'bg-violet-50 border-violet-300' : 'bg-zinc-50'}`}
+              >
                 <div className="flex items-center gap-1.5 mb-2 px-1">
                   <Icon className="h-3.5 w-3.5 text-zinc-500" />
                   <span className="text-xs font-semibold text-zinc-700">{col.display_name}</span>
@@ -157,7 +173,12 @@ export function ActionBoard() {
                         ? `/contacts/${card.contact_id}`
                         : '/portal-chats'
                     return (
-                      <div key={card.id} className="rounded-md bg-white border p-2.5 shadow-sm">
+                      <div
+                        key={card.id}
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.setData('text/plain', card.id); e.dataTransfer.effectAllowed = 'move' }}
+                        className={`rounded-md bg-white border p-2.5 shadow-sm cursor-grab active:cursor-grabbing ${movingId === card.id ? 'opacity-50' : ''}`}
+                      >
                         <Link href={href} className="block group">
                           <div className="flex items-center gap-1.5">
                             {isCompany ? (
