@@ -436,21 +436,6 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     }
   }
 
-  // ─── 7. NOTIFICATION CENTER: staff action card (contact-scoped, no client-chat write) ───
-  if (p.contact_id) {
-    try {
-      const { emitActionNeeded } = await import("@/lib/notifications/act-event")
-      await emitActionNeeded({
-        event: "formation_wizard_submitted",
-        contact_id: p.contact_id,
-        source_ref: `formation_wizard_submitted:${p.token}`,
-      })
-      result.steps.push(step("action_card", "ok", "Notification Center card ensured"))
-    } catch (e) {
-      result.steps.push(step("action_card", "error", e instanceof Error ? e.message : String(e)))
-    }
-  }
-
   // Summary
   const okCount = result.steps.filter(s => s.status === "ok").length
   const errCount = result.steps.filter(s => s.status === "error").length

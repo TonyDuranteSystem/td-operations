@@ -88,21 +88,6 @@ export async function POST(req: NextRequest) {
       results.push({ step: "portal_chat_emit", status: "warn", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // ─── 1c. NOTIFICATION CENTER: staff action card (no client-chat write) ───
-    // Staff-only card on the action board: "Fax to IRS". Idempotent per SS-4.
-    try {
-      const { emitActionNeeded } = await import("@/lib/notifications/act-event")
-      await emitActionNeeded({
-        event: "ss4_signed",
-        account_id: (ss4.account_id as string | null) ?? null,
-        contact_id: (ss4.contact_id as string | null) ?? null,
-        source_ref: `ss4_signed:${ss4.id}`,
-      })
-      results.push({ step: "action_card", status: "ok", detail: "Notification Center card ensured" })
-    } catch (e) {
-      results.push({ step: "action_card", status: "warn", detail: e instanceof Error ? e.message : String(e) })
-    }
-
     // ─── 2. UPDATE SERVICE DELIVERY STAGE HISTORY ───
     if (ss4.account_id) {
       try {
