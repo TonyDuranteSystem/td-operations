@@ -37,12 +37,15 @@ export function NewCardDialog({
   const [selected, setSelected] = useState<AccountResult | null>(null)
   const [label, setLabel] = useState('')
   const [col, setCol] = useState('')
+  const [remind, setRemind] = useState('') // yyyy-mm-dd, optional
+  const [priority, setPriority] = useState<'normal' | 'high' | 'urgent'>('normal')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setQ(''); setResults([]); setSelected(null); setLabel(''); setError(null)
+      setRemind(''); setPriority('normal')
       setCol(columns.find((c) => !c.terminal)?.slug ?? '')
     }
   }, [open, columns])
@@ -64,12 +67,15 @@ export function NewCardDialog({
   const create = useCallback(async () => {
     if (!selected || !label.trim() || busy) return
     setBusy(true); setError(null)
-    const res = await createManualCard({ label, account_id: selected.id, action_type: col })
+    // Reminder is a date-only picker; store as end-of-day ISO so it isn't
+    // "overdue" the morning you set it for today.
+    const remind_at = remind ? new Date(`${remind}T17:00:00`).toISOString() : null
+    const res = await createManualCard({ label, account_id: selected.id, action_type: col, remind_at, priority })
     setBusy(false)
     if (!res.success) { setError(res.error || 'Could not create the card'); return }
     onCreated()
     onClose()
-  }, [selected, label, col, busy, onCreated, onClose])
+  }, [selected, label, col, remind, priority, busy, onCreated, onClose])
 
   if (!open) return null
   const openCols = columns.filter((c) => !c.terminal)
@@ -151,6 +157,31 @@ export function NewCardDialog({
                 <option key={c.slug} value={c.slug}>{c.display_name}</option>
               ))}
             </select>
+          </div>
+
+          {/* 4. Reminder + priority */}
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="block text-[11px] font-medium text-zinc-500 mb-1">Remind me by (optional)</label>
+              <input
+                type="date"
+                value={remind}
+                onChange={(e) => setRemind(e.target.value)}
+                className="w-full text-sm border rounded px-2 py-1.5 bg-white"
+              />
+            </div>
+            <div className="w-32">
+              <label className="block text-[11px] font-medium text-zinc-500 mb-1">Priority</label>
+              <select
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as 'normal' | 'high' | 'urgent')}
+                className="w-full text-sm border rounded px-2 py-1.5 bg-white"
+              >
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
           </div>
 
           <button

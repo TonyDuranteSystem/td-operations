@@ -18,10 +18,17 @@
  * renaming the Done column never strands cards. See sysdoc notification-center-plan.
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export const dynamic = "force-dynamic"
+
+// Loose handle for message_actions writes touching remind_at/priority — not in
+// the generated Database types until the migration is promoted to prod + types
+// regenerated. Mirrors lib/notifications/act-event.ts. Remove after type regen.
+// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-plan
+const db = supabaseAdmin as unknown as SupabaseClient
 
 const LEGACY_COLUMNS = ["action_needed", "in_progress", "waiting_on_client", "done"]
 
@@ -51,6 +58,46 @@ export async function GET(req: NextRequest) {
     const messageId = req.nextUrl.searchParams.get("message_id")
     const openOnly = req.nextUrl.searchParams.get("open") === "true"
     const wantColumns = req.nextUrl.searchParams.get("columns") === "true"
+    const wantCounts = req.nextUrl.searchParams.get("counts") === "true"
+
+    // Per-thread open-card counts for the purple dot in the portal-chats list.
+    // Driven entirely by message_actions (the To-Do board) — NOT the tasks table.
+    // `attention` = the thread has a card that is High/Urgent priority OR overdue,
+    // so the dot can render brighter.
+    if (wantCounts) {
+      const { data, error: err } = await db
+        .from("message_actions")
+        .select("account_id, contact_id, priority, remind_at")
+        .is("resolved_at", null)
+        .limit(2000)
+      if (err) throw err
+      const by_account: Record<string, number> = {}
+      const by_contact: Record<string, number> = {}
+      const attention_accounts: Record<string, boolean> = {}
+      const attention_contacts: Record<string, boolean> = {}
+      const now = Date.now()
+      for (const r of (data ?? []) as Array<{
+        account_id: string | null
+        contact_id: string | null
+        priority: string | null
+        remind_at: string | null
+      }>) {
+        const hot =
+          r.priority === "high" ||
+          r.priority === "urgent" ||
+          (r.remind_at != null && new Date(r.remind_at).getTime() < now)
+        if (r.account_id) {
+          by_account[r.account_id] = (by_account[r.account_id] ?? 0) + 1
+          if (hot) attention_accounts[r.account_id] = true
+        } else if (r.contact_id) {
+          by_contact[r.contact_id] = (by_contact[r.contact_id] ?? 0) + 1
+          if (hot) attention_contacts[r.contact_id] = true
+        }
+      }
+      const total = Object.values(by_account).reduce((s, n) => s + n, 0) +
+        Object.values(by_contact).reduce((s, n) => s + n, 0)
+      return NextResponse.json({ by_account, by_contact, attention_accounts, attention_contacts, total })
+    }
 
     // Board columns (ordered) from the catalog, for the kanban header.
     if (wantColumns) {
@@ -77,10 +124,10 @@ export async function GET(req: NextRequest) {
     // Joins are nullable-safe — staff cards have message_id NULL, so consumers
     // render `label` (the next step) rather than a message preview.
     if (openOnly) {
-      const { data: enriched, error: err } = await supabaseAdmin
+      const { data: enriched, error: err } = await db
         .from("message_actions")
         .select(`
-          id, action_type, label, assigned_to, source_ref, created_at, updated_at,
+          id, action_type, label, assigned_to, source_ref, remind_at, priority, created_at, updated_at,
           message_id, account_id, contact_id,
           portal_messages(message),
           accounts(company_name),
@@ -184,36 +231,56 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
-    const { id, action_type, assigned_to, label } = body
+    const { id, action_type, assigned_to, label, remind_at, priority } = body
 
-    if (!id || !action_type) {
-      return NextResponse.json({ error: "Missing id or action_type" }, { status: 400 })
+    if (!id) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 })
+    }
+    // At least one mutable field must be present (move OR reminder/priority edit).
+    if (
+      action_type === undefined &&
+      assigned_to === undefined &&
+      label === undefined &&
+      remind_at === undefined &&
+      priority === undefined
+    ) {
+      return NextResponse.json({ error: "Nothing to update" }, { status: 400 })
     }
 
-    const { valid, terminal } = await loadColumns()
-    if (!valid.has(action_type)) {
-      return NextResponse.json(
-        { error: `Invalid action_type. Must be one of: ${Array.from(valid).join(", ")}` },
-        { status: 400 },
-      )
+    const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
+
+    // Column move (optional). Setting a terminal column resolves the card.
+    if (action_type !== undefined) {
+      const { valid, terminal } = await loadColumns()
+      if (!valid.has(action_type)) {
+        return NextResponse.json(
+          { error: `Invalid action_type. Must be one of: ${Array.from(valid).join(", ")}` },
+          { status: 400 },
+        )
+      }
+      updateData.action_type = action_type
+      updateData.resolved_at = terminal.has(action_type) ? new Date().toISOString() : null
     }
 
-    const updateData: Record<string, unknown> = {
-      action_type,
-      updated_at: new Date().toISOString(),
-      resolved_at: terminal.has(action_type) ? new Date().toISOString() : null,
-    }
     if (assigned_to !== undefined) updateData.assigned_to = assigned_to
     if (label !== undefined) updateData.label = label
+    // remind_at: ISO string to set, null/"" to clear.
+    if (remind_at !== undefined) updateData.remind_at = remind_at || null
+    if (priority !== undefined) {
+      if (!["normal", "high", "urgent"].includes(priority)) {
+        return NextResponse.json({ error: "Invalid priority" }, { status: 400 })
+      }
+      updateData.priority = priority
+    }
 
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await db
       .from("message_actions")
       .update(updateData)
       .eq("id", id)
       .select()
       .single()
     if (error) throw error
-    return NextResponse.json({ action: data, moved: true })
+    return NextResponse.json({ action: data, moved: action_type !== undefined })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: msg }, { status: 500 })

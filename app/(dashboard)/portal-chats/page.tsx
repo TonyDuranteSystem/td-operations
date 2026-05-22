@@ -14,6 +14,7 @@ import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import { ThreadTasksPanel } from '@/components/portal-chats/thread-tasks-panel'
+import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 import {
@@ -379,6 +380,22 @@ export default function PortalChatsPage() {
     queryKey: ['portal-chat-open-task-counts'],
     queryFn: () => fetch('/api/tasks/open-counts').then(r => r.json()),
     refetchInterval: 120_000, // fallback reconciliation; realtime subscription below is primary
+  })
+
+  // Per-thread open To-Do counts from the NEW board (message_actions), NOT the
+  // tasks table. Drives the PURPLE dot next to a client in the thread list —
+  // brighter when a card is High/Urgent or overdue. The orange task dot above is
+  // legacy (task board Antonio is retiring); this is its replacement.
+  const { data: openTodoCounts } = useQuery<{
+    by_account: Record<string, number>
+    by_contact: Record<string, number>
+    attention_accounts: Record<string, boolean>
+    attention_contacts: Record<string, boolean>
+    total: number
+  }>({
+    queryKey: ['portal-chat-open-todo-counts'],
+    queryFn: () => fetch('/api/crm/admin-actions/message-actions?counts=true').then(r => r.json()),
+    refetchInterval: 30_000,
   })
 
   // Fetch messages for selected thread (by account_id or contact_id)
@@ -1495,6 +1512,29 @@ export default function PortalChatsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                    {/* To-Do dot: PURPLE pill = open To-Do cards (message_actions, the
+                        new board). Brighter when a card is High/Urgent or overdue.
+                        Replaces the legacy orange task dot below. */}
+                    {(() => {
+                      const todoCount = thread.account_id
+                        ? openTodoCounts?.by_account?.[thread.account_id] ?? 0
+                        : thread.contact_id
+                          ? openTodoCounts?.by_contact?.[thread.contact_id] ?? 0
+                          : 0
+                      const hot = thread.account_id
+                        ? openTodoCounts?.attention_accounts?.[thread.account_id] ?? false
+                        : thread.contact_id
+                          ? openTodoCounts?.attention_contacts?.[thread.contact_id] ?? false
+                          : false
+                      return todoCount > 0 ? (
+                        <span
+                          className={`px-1.5 py-0.5 rounded-full text-xs font-semibold text-white ${hot ? 'bg-violet-600' : 'bg-violet-400'}`}
+                          title={`${todoCount} open to-do${todoCount === 1 ? '' : 's'}${hot ? ' — needs attention' : ''}`}
+                        >
+                          {todoCount}
+                        </span>
+                      ) : null
+                    })()}
                     {/* Task dot: orange pill showing open-task count for this thread (Phase 2 Layer 1) */}
                     {(() => {
                       const taskCount = thread.account_id
@@ -2237,7 +2277,12 @@ export default function PortalChatsPage() {
             )}
 
             {chatViewMode === 'tasks' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
-              <ThreadTasksPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
+              <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+                {/* NEW To-Do board (message_actions) — create here, reflects on the CRM dashboard */}
+                <ThreadTodoPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
+                {/* Legacy task board (tasks table) — kept until retired */}
+                <ThreadTasksPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
+              </div>
             ) : (
             <>
 

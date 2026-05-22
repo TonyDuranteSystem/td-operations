@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus } from 'lucide-react'
+import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock } from 'lucide-react'
 import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 
@@ -27,17 +27,51 @@ interface Column {
   terminal: boolean
 }
 
+type Priority = 'normal' | 'high' | 'urgent'
+
 interface Card {
   id: string
   action_type: string
   label: string | null
   assigned_to: string | null
   created_at: string
+  remind_at: string | null
+  priority: Priority | null
   message_id: string | null
   account_id: string | null
   contact_id: string | null
   accounts: { company_name: string } | null
   contacts: { full_name: string } | null
+}
+
+const PRIORITY_RANK: Record<Priority, number> = { urgent: 0, high: 1, normal: 2 }
+
+/** Reminder urgency for colouring/sorting: -1 none, 0 overdue, 1 due today, 2 upcoming. */
+function remindState(remind_at: string | null): { rank: number; overdue: boolean; dueToday: boolean } {
+  if (!remind_at) return { rank: 3, overdue: false, dueToday: false }
+  const due = new Date(remind_at).getTime()
+  const now = Date.now()
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+  if (due < now) return { rank: 0, overdue: true, dueToday: false }
+  if (due <= endOfToday.getTime()) return { rank: 1, overdue: false, dueToday: true }
+  return { rank: 2, overdue: false, dueToday: false }
+}
+
+/** Sort within a column: priority first, then reminder urgency, then oldest first. */
+function sortCards(a: Card, b: Card): number {
+  const pa = PRIORITY_RANK[(a.priority ?? 'normal') as Priority]
+  const pb = PRIORITY_RANK[(b.priority ?? 'normal') as Priority]
+  if (pa !== pb) return pa - pb
+  const ra = remindState(a.remind_at).rank
+  const rb = remindState(b.remind_at).rank
+  if (ra !== rb) return ra - rb
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+}
+
+const PRIORITY_PILL: Record<Priority, string> = {
+  urgent: 'bg-red-100 text-red-700 border-red-200',
+  high: 'bg-amber-100 text-amber-700 border-amber-200',
+  normal: 'bg-zinc-100 text-zinc-500 border-zinc-200',
 }
 
 const COLUMN_ICON: Record<string, React.ElementType> = {
@@ -102,6 +136,27 @@ export function ActionBoard() {
     [load],
   )
 
+  // Set reminder date and/or priority on a card (no column move).
+  const updateCard = useCallback(
+    async (id: string, patch: { remind_at?: string | null; priority?: Priority }) => {
+      setCards((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c))) // optimistic
+      try {
+        const res = await fetch(API, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, ...patch }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || 'Could not update the card')
+        }
+      } finally {
+        await load()
+      }
+    },
+    [load],
+  )
+
   const visibleColumns = columns.filter((c) => !c.terminal)
   const total = cards.length
 
@@ -152,7 +207,7 @@ export function ActionBoard() {
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-1">
           {visibleColumns.map((col) => {
-            const colCards = cards.filter((c) => c.action_type === col.slug)
+            const colCards = cards.filter((c) => c.action_type === col.slug).slice().sort(sortCards)
             const Icon = COLUMN_ICON[col.slug] ?? AlertCircle
             return (
               <div
@@ -182,12 +237,24 @@ export function ActionBoard() {
                       : card.contact_id
                         ? `/contacts/${card.contact_id}`
                         : '/portal-chats'
+                    const priority = (card.priority ?? 'normal') as Priority
+                    const rem = remindState(card.remind_at)
+                    // Left accent: red if urgent/overdue, amber if high/due-today.
+                    const accent =
+                      priority === 'urgent' || rem.overdue
+                        ? 'border-l-4 border-l-red-400'
+                        : priority === 'high' || rem.dueToday
+                          ? 'border-l-4 border-l-amber-400'
+                          : ''
+                    const remindInput = card.remind_at
+                      ? new Date(card.remind_at).toISOString().slice(0, 10)
+                      : ''
                     return (
                       <div
                         key={card.id}
                         draggable
                         onDragStart={(e) => { e.dataTransfer.setData('text/plain', card.id); e.dataTransfer.effectAllowed = 'move' }}
-                        className={`rounded-md bg-white border p-2.5 shadow-sm cursor-grab active:cursor-grabbing ${movingId === card.id ? 'opacity-50' : ''}`}
+                        className={`rounded-md bg-white border p-2.5 shadow-sm cursor-grab active:cursor-grabbing ${accent} ${movingId === card.id ? 'opacity-50' : ''}`}
                       >
                         <Link href={href} className="block group">
                           <div className="flex items-center gap-1.5">
@@ -199,27 +266,62 @@ export function ActionBoard() {
                             <span className="text-sm font-medium text-zinc-900 truncate group-hover:underline">
                               {clientName}
                             </span>
+                            {priority !== 'normal' && (
+                              <span className={`ml-auto text-[9px] font-semibold uppercase tracking-wide border rounded px-1 py-px ${PRIORITY_PILL[priority]}`}>
+                                {priority}
+                              </span>
+                            )}
                           </div>
                           {card.label && <p className="text-xs text-zinc-600 mt-1">{card.label}</p>}
                         </Link>
-                        <div className="flex items-center justify-end mt-2">
+                        <div className="flex items-center justify-between mt-2 gap-1">
+                          {card.remind_at ? (
+                            <span className={`flex items-center gap-1 text-[10px] ${rem.overdue ? 'text-red-600 font-medium' : rem.dueToday ? 'text-amber-600' : 'text-zinc-500'}`}>
+                              <CalendarClock className="h-3 w-3" />
+                              {rem.overdue ? 'Overdue · ' : ''}
+                              {new Date(card.remind_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-zinc-300">No reminder</span>
+                          )}
                           <span className="text-[10px] text-zinc-400">
                             {formatDistanceToNow(new Date(card.created_at), { addSuffix: true })}
                           </span>
                         </div>
-                        <select
-                          aria-label="Move card"
-                          disabled={movingId === card.id}
-                          value={card.action_type}
-                          onChange={(e) => move(card.id, e.target.value)}
-                          className="mt-2 w-full text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-600 disabled:opacity-50"
-                        >
-                          {columns.map((c) => (
-                            <option key={c.slug} value={c.slug}>
-                              {c.terminal ? `✓ ${c.display_name}` : `Move to: ${c.display_name}`}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex gap-1 mt-2">
+                          <select
+                            aria-label="Move card"
+                            disabled={movingId === card.id}
+                            value={card.action_type}
+                            onChange={(e) => move(card.id, e.target.value)}
+                            className="flex-1 min-w-0 text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-600 disabled:opacity-50"
+                          >
+                            {columns.map((c) => (
+                              <option key={c.slug} value={c.slug}>
+                                {c.terminal ? `✓ ${c.display_name}` : `Move to: ${c.display_name}`}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            aria-label="Priority"
+                            value={priority}
+                            onChange={(e) => updateCard(card.id, { priority: e.target.value as Priority })}
+                            className="text-[11px] border rounded px-1 py-1 bg-white text-zinc-600"
+                            title="Priority"
+                          >
+                            <option value="normal">○</option>
+                            <option value="high">!</option>
+                            <option value="urgent">!!</option>
+                          </select>
+                        </div>
+                        <input
+                          type="date"
+                          aria-label="Reminder date"
+                          value={remindInput}
+                          onChange={(e) => updateCard(card.id, { remind_at: e.target.value ? new Date(`${e.target.value}T17:00:00`).toISOString() : null })}
+                          className="mt-1 w-full text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-500"
+                          title="Set a reminder date"
+                        />
                       </div>
                     )
                   })}

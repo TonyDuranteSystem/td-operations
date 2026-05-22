@@ -11,6 +11,7 @@
  * notification-center-plan / dev_task 529b26cc.
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js"
 import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
@@ -25,6 +26,12 @@ import {
   restoreEntry,
   updateMetadata,
 } from "@/lib/catalog/framework"
+
+// Loose handle for message_actions writes touching remind_at/priority — not in
+// the generated Database types until the migration is promoted to prod + types
+// regenerated. Mirrors lib/notifications/act-event.ts. Remove after type regen.
+// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-plan
+const db = supabaseAdmin as unknown as SupabaseClient
 
 const CATALOG = "action_board_columns"
 const EVENTS = "action_events"
@@ -221,11 +228,15 @@ export async function setActionEventEnabled(id: string, enabled: boolean): Promi
 // A staff-placed card (not from a client event). Uses only existing
 // message_actions columns (message_id NULL = staff-only, never client chat).
 
+export type CardPriority = "normal" | "high" | "urgent"
+
 export async function createManualCard(input: {
   label: string
   account_id?: string | null
   contact_id?: string | null
   action_type?: string
+  remind_at?: string | null
+  priority?: CardPriority
 }): Promise<ActionResult<true>> {
   return safeAction(async () => {
     await uiActor()
@@ -239,12 +250,17 @@ export async function createManualCard(input: {
     const chosen = cols.find((c) => c.slug === input.action_type)
     const action_type = chosen && !chosen.terminal ? chosen.slug : firstOpen
 
-    const { error } = await supabaseAdmin.from("message_actions").insert({
+    const priority: CardPriority =
+      input.priority && ["normal", "high", "urgent"].includes(input.priority) ? input.priority : "normal"
+
+    const { error } = await db.from("message_actions").insert({
       message_id: null,
       account_id: input.account_id ?? null,
       contact_id: input.contact_id ?? null,
       action_type,
       label,
+      remind_at: input.remind_at || null,
+      priority,
     })
     if (error) throw new Error(error.message)
     revalidatePath("/")
