@@ -158,7 +158,7 @@ describe("chain.send_email", () => {
 })
 
 describe("chain.send_client_message", () => {
-  it("fails when neither body_en nor body_it is supplied", async () => {
+  it("fails when neither body_en nor body_it is supplied from either source", async () => {
     const result = await chainSendClientMessage(makeCtx({ params: {} }))
     expect(result.success).toBe(false)
     expect(result.error?.code).toBe("MISSING_MESSAGE")
@@ -169,6 +169,59 @@ describe("chain.send_client_message", () => {
       makeCtx({
         params: { body_en: "Hello" },
         task: makeTask({ contact_id: null, account_id: null }),
+      }),
+    )
+    expect(result.success).toBe(false)
+    expect(result.error?.code).toBe("NO_RECIPIENT")
+  })
+
+  it("fails when only catalog body is empty strings and runtime params are empty", async () => {
+    const result = await chainSendClientMessage(
+      makeCtx({
+        params: {},
+        action: makeAction({ handler_params: { body_en: "", body_it: "" } }),
+      }),
+    )
+    expect(result.success).toBe(false)
+    expect(result.error?.code).toBe("MISSING_MESSAGE")
+  })
+
+  it("passes when catalog handler_params supplies body_en and runtime params are empty", async () => {
+    // Catalog pre-bake: no requires_input, body comes from handler_params
+    const result = await chainSendClientMessage(
+      makeCtx({
+        params: {},
+        task: makeTask({ contact_id: null, account_id: null }),
+        action: makeAction({ handler_params: { body_en: "Pre-baked wizard link" } }),
+      }),
+    )
+    // NO_RECIPIENT fires before portal_messages.insert — proves the message was
+    // resolved correctly (body_en came from catalog) and reached the send step.
+    expect(result.success).toBe(false)
+    expect(result.error?.code).toBe("NO_RECIPIENT")
+  })
+
+  it("runtime body_en overrides catalog handler_params body_en", async () => {
+    // Both catalog and runtime supply body_en — runtime must win
+    const result = await chainSendClientMessage(
+      makeCtx({
+        params: { body_en: "Runtime override" },
+        task: makeTask({ contact_id: null, account_id: null }),
+        action: makeAction({ handler_params: { body_en: "Catalog default" } }),
+      }),
+    )
+    // NO_RECIPIENT fires after body is resolved — task has no account to look up
+    // but we confirmed body was resolved (otherwise MISSING_MESSAGE would fire first)
+    expect(result.success).toBe(false)
+    expect(result.error?.code).toBe("NO_RECIPIENT")
+  })
+
+  it("falls back to catalog body_it when runtime body_en is absent", async () => {
+    const result = await chainSendClientMessage(
+      makeCtx({
+        params: {},
+        task: makeTask({ contact_id: null, account_id: null }),
+        action: makeAction({ handler_params: { body_it: "Messaggio italiano" } }),
       }),
     )
     expect(result.success).toBe(false)

@@ -55,8 +55,17 @@ export const chainSpawnNextWorkflowParams = z.object({
   assigned_to: z.string().min(1).optional(),
 })
 
-/** Message body (en/it) comes from operator's requires_input. */
-export const chainSendClientMessageParams = z.object({}).strict()
+/**
+ * Message body can be pre-baked in catalog handler_params (body_en / body_it)
+ * so actions send without operator input. When both catalog and runtime params
+ * carry body_en, runtime wins (operator override). At least one of body_en or
+ * body_it must be non-empty at execution time (from either source).
+ */
+export const chainSendClientMessageParams = z.object({
+  body_en: z.string().optional(),
+  body_it: z.string().optional(),
+  topic: z.string().optional(),
+}).strict()
 
 /** Recipient, subject, body come from operator's requires_input. */
 export const chainSendEmailParams = z.object({}).strict()
