@@ -32,6 +32,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { APP_BASE_URL } from "@/lib/config"
+import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 
 export const dynamic = "force-dynamic"
 
@@ -83,60 +84,14 @@ export async function GET(
   }
   const currency = rawCurrency as "usd" | "eur"
 
-  // Resolve recipient email + display name (same priority as
-  // /api/workflows/create-invoice-checkout: contact_id → account owner →
-  // account.communication_email).
-  let clientName = "Client"
-  let clientEmail: string | undefined
-  let accountCommunicationEmail: string | null = null
-
-  if (payment.account_id) {
-    const { data: account } = await supabase
-      .from("accounts")
-      .select("company_name, communication_email")
-      .eq("id", payment.account_id)
-      .single()
-    if (account?.company_name) clientName = account.company_name
-    if (account?.communication_email) accountCommunicationEmail = account.communication_email
-  }
-
-  if (payment.contact_id) {
-    const { data: contact } = await supabase
-      .from("contacts")
-      .select("email, full_name")
-      .eq("id", payment.contact_id)
-      .single()
-    if (contact?.email) clientEmail = contact.email
-    if (!payment.account_id && contact?.full_name) clientName = contact.full_name
-  } else if (payment.account_id) {
-    const { data: link } = await supabase
-      .from("account_contacts")
-      .select("contact_id")
-      .eq("account_id", payment.account_id)
-      .eq("role", "owner")
-      .limit(1)
-      .maybeSingle()
-
-    if (link?.contact_id) {
-      const { data: contact } = await supabase
-        .from("contacts")
-        .select("email")
-        .eq("id", link.contact_id)
-        .single()
-      if (contact?.email) clientEmail = contact.email
-    }
-  }
-
-  if (!clientEmail && accountCommunicationEmail) {
-    clientEmail = accountCommunicationEmail
-  }
-
-  if (!clientEmail) {
+  const recipient = await resolvePaymentRecipient(payment, supabase)
+  if (!recipient) {
     return new NextResponse(
       "Could not determine your email for payment. Please contact support.",
       { status: 500 }
     )
   }
+  const { email: clientEmail, name: clientName } = recipient
 
   // Create Stripe Checkout session via shared helper
   const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
