@@ -16,8 +16,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2 } from 'lucide-react'
+import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus } from 'lucide-react'
 import { ManageColumnsDialog } from './action-board-columns-dialog'
+import { NewCardDialog } from './action-board-new-card-dialog'
 
 interface Column {
   slug: string
@@ -56,6 +57,7 @@ export function ActionBoard() {
   const [movingId, setMovingId] = useState<string | null>(null)
   const [editingColumns, setEditingColumns] = useState(false)
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
+  const [newCardOpen, setNewCardOpen] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -119,6 +121,13 @@ export function ActionBoard() {
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-full">{total}</span>
           <button
+            onClick={() => setNewCardOpen(true)}
+            className="flex items-center gap-1 text-[11px] font-medium text-zinc-600 hover:text-zinc-900 border rounded px-2 py-0.5"
+            title="Add a card"
+          >
+            <Plus className="h-3 w-3" /> New card
+          </button>
+          <button
             onClick={() => setEditingColumns(true)}
             className="text-zinc-400 hover:text-zinc-700"
             aria-label="Edit board columns"
@@ -129,6 +138,7 @@ export function ActionBoard() {
         </div>
       </div>
       <ManageColumnsDialog open={editingColumns} onClose={() => setEditingColumns(false)} onChanged={load} />
+      <NewCardDialog open={newCardOpen} onClose={() => setNewCardOpen(false)} onCreated={load} columns={columns} />
 
       {total > 0 && (
         <p className="text-[11px] text-zinc-400 mb-2">Drag a card between columns, or use the dropdown on each card.</p>

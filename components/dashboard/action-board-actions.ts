@@ -216,3 +216,38 @@ export async function setActionEventEnabled(id: string, enabled: boolean): Promi
     return true as const
   })
 }
+
+// ─── Manual cards ────────────────────────────────────────────────────────────
+// A staff-placed card (not from a client event). Uses only existing
+// message_actions columns (message_id NULL = staff-only, never client chat).
+
+export async function createManualCard(input: {
+  label: string
+  account_id?: string | null
+  contact_id?: string | null
+  action_type?: string
+}): Promise<ActionResult<true>> {
+  return safeAction(async () => {
+    await uiActor()
+    const label = (input.label || "").trim()
+    if (!label) throw new Error("Write what needs to be done")
+    if (!input.account_id && !input.contact_id) throw new Error("Pick a client for this card")
+
+    // Land in the chosen column if valid + non-terminal, else the first column.
+    const cols = (await listEntries(CATALOG, {})).map(toRow).sort((a, b) => a.order - b.order)
+    const firstOpen = cols.find((c) => !c.terminal)?.slug ?? "action_needed"
+    const chosen = cols.find((c) => c.slug === input.action_type)
+    const action_type = chosen && !chosen.terminal ? chosen.slug : firstOpen
+
+    const { error } = await supabaseAdmin.from("message_actions").insert({
+      message_id: null,
+      account_id: input.account_id ?? null,
+      contact_id: input.contact_id ?? null,
+      action_type,
+      label,
+    })
+    if (error) throw new Error(error.message)
+    revalidatePath("/")
+    return true as const
+  })
+}
