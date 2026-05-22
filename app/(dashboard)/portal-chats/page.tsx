@@ -195,6 +195,7 @@ export default function PortalChatsPage() {
     clientName: string
     label?: string
     sourceRef?: string
+    noteId?: string // the What's New note this card was opened from (marked handled on save)
   } | null>(null)
   // Internal team chat
   const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>('chats')
@@ -390,19 +391,18 @@ export default function PortalChatsPage() {
     refetchInterval: 120_000, // fallback reconciliation; realtime subscription below is primary
   })
 
-  // Per-thread open To-Do counts from the NEW board (message_actions), NOT the
-  // tasks table. Drives the PURPLE dot next to a client in the thread list —
-  // brighter when a card is High/Urgent or overdue. The orange task dot above is
-  // legacy (task board Antonio is retiring); this is its replacement.
-  const { data: openTodoCounts } = useQuery<{
+  // Per-thread PURPLE dot = count of UNHANDLED "What's New" notes (incoming
+  // client-action notifications not yet triaged). Ticking a note handled — or
+  // opening a card from it — drops it off; unticking brings it back. This is a
+  // "needs a look" signal, NOT the tasks table (legacy orange dot) and NOT the
+  // open-card count: it clears once you've dealt with the new thing.
+  const { data: whatsNewCounts } = useQuery<{
     by_account: Record<string, number>
     by_contact: Record<string, number>
-    attention_accounts: Record<string, boolean>
-    attention_contacts: Record<string, boolean>
     total: number
   }>({
-    queryKey: ['portal-chat-open-todo-counts'],
-    queryFn: () => fetch('/api/crm/admin-actions/message-actions?counts=true').then(r => r.json()),
+    queryKey: ['portal-chat-whats-new-counts'],
+    queryFn: () => fetch('/api/crm/admin-actions/whats-new?counts=true').then(r => r.json()),
     refetchInterval: 30_000,
   })
 
@@ -1520,26 +1520,21 @@ export default function PortalChatsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                    {/* To-Do dot: PURPLE pill = open To-Do cards (message_actions, the
-                        new board). Brighter when a card is High/Urgent or overdue.
-                        Replaces the legacy orange task dot below. */}
+                    {/* What's New dot: PURPLE pill = UNHANDLED incoming notes for
+                        this client. Clears as you tick them handled / open a card;
+                        gone at zero. Replaces the legacy orange task dot below. */}
                     {(() => {
-                      const todoCount = thread.account_id
-                        ? openTodoCounts?.by_account?.[thread.account_id] ?? 0
+                      const newCount = thread.account_id
+                        ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
                         : thread.contact_id
-                          ? openTodoCounts?.by_contact?.[thread.contact_id] ?? 0
+                          ? whatsNewCounts?.by_contact?.[thread.contact_id] ?? 0
                           : 0
-                      const hot = thread.account_id
-                        ? openTodoCounts?.attention_accounts?.[thread.account_id] ?? false
-                        : thread.contact_id
-                          ? openTodoCounts?.attention_contacts?.[thread.contact_id] ?? false
-                          : false
-                      return todoCount > 0 ? (
+                      return newCount > 0 ? (
                         <span
-                          className={`px-1.5 py-0.5 rounded-full text-xs font-semibold text-white ${hot ? 'bg-violet-600' : 'bg-violet-400'}`}
-                          title={`${todoCount} open to-do${todoCount === 1 ? '' : 's'}${hot ? ' — needs attention' : ''}`}
+                          className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-violet-600"
+                          title={`${newCount} new item${newCount === 1 ? '' : 's'} to look at`}
                         >
-                          {todoCount}
+                          {newCount}
                         </span>
                       ) : null
                     })()}
@@ -2300,7 +2295,7 @@ export default function PortalChatsPage() {
               <ThreadWhatsNewPanel
                 accountId={selectedAccountId || selectedCompanyId}
                 contactId={selectedContactId}
-                onOpenCard={({ label, sourceRef }) => {
+                onOpenCard={({ noteId, label, sourceRef }) => {
                   const acctId = selectedAccountId || selectedCompanyId
                   setCardPreset({
                     accountId: acctId ?? null,
@@ -2311,6 +2306,7 @@ export default function PortalChatsPage() {
                       'this client',
                     label,
                     sourceRef: sourceRef ?? undefined,
+                    noteId,
                   })
                 }}
               />
@@ -3255,11 +3251,23 @@ export default function PortalChatsPage() {
         preset={cardPreset}
         columns={(actionBoardColumns || []).map((c) => ({ slug: c.slug, display_name: c.display_name, terminal: c.terminal }))}
         onClose={() => setCardPreset(null)}
-        onCreated={() => {
+        onCreated={async () => {
+          // Opening a card from a What's New note marks that note handled, so it
+          // drops off the purple dot. (No note → manual card, nothing to mark.)
+          const noteId = cardPreset?.noteId
+          if (noteId) {
+            try {
+              await fetch('/api/crm/admin-actions/whats-new', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message_id: noteId, handled: true }),
+              })
+            } catch { /* non-fatal: the manual Handled tick still works */ }
+          }
           setCardPreset(null)
-          queryClient.invalidateQueries({ queryKey: ['thread-whats-new-cards'] })
+          queryClient.invalidateQueries({ queryKey: ['thread-whats-new'] })
+          queryClient.invalidateQueries({ queryKey: ['portal-chat-whats-new-counts'] })
           queryClient.invalidateQueries({ queryKey: ['thread-todos'] })
-          queryClient.invalidateQueries({ queryKey: ['portal-chat-open-todo-counts'] })
           queryClient.invalidateQueries({ queryKey: ['open-message-actions'] })
         }}
       />

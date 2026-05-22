@@ -15,13 +15,13 @@
  * See sysdoc notification-center-plan.
  */
 
-import { useCallback, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Loader2, Sparkles, Plus, CheckCircle2 } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
 const CHAT_API = '/api/portal/chat'
-const ACTIONS_API = '/api/crm/admin-actions/message-actions'
+const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
 
 interface RawMessage {
   id: string
@@ -31,11 +31,8 @@ interface RawMessage {
   created_at: string
   account_id: string | null
   contact_id: string | null
-}
-interface CardRow {
-  source_ref: string | null
-  created_by: string | null
-  resolved_at: string | null
+  handled_at?: string | null
+  handled_by?: string | null
 }
 
 export interface WhatsNewNote {
@@ -45,6 +42,8 @@ export interface WhatsNewNote {
   sourceRef: string | null
   text: string
   created_at: string
+  handledAt: string | null
+  handledBy: string | null
 }
 
 // Best-guess next step per event kind. Honest + generic — the data often can't
@@ -66,7 +65,16 @@ function parseNote(m: RawMessage): WhatsNewNote {
   const kind = match?.[1] ?? null
   const sourceRef = match?.[2] ?? null
   const text = m.message.replace(MARKER_RE, '').trim()
-  return { id: m.id, topic: m.topic, kind, sourceRef, text, created_at: m.created_at }
+  return {
+    id: m.id,
+    topic: m.topic,
+    kind,
+    sourceRef,
+    text,
+    created_at: m.created_at,
+    handledAt: m.handled_at ?? null,
+    handledBy: m.handled_by ?? null,
+  }
 }
 
 export function ThreadWhatsNewPanel({
@@ -76,8 +84,10 @@ export function ThreadWhatsNewPanel({
 }: {
   accountId: string | null
   contactId: string | null
-  onOpenCard: (note: { label: string; sourceRef: string | null }) => void
+  onOpenCard: (note: { noteId: string; label: string; sourceRef: string | null }) => void
 }) {
+  const qc = useQueryClient()
+  const [togglingId, setTogglingId] = useState<string | null>(null)
   const scopeKey = accountId ?? contactId
   const param = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : null
 
@@ -94,30 +104,36 @@ export function ThreadWhatsNewPanel({
     refetchInterval: 30_000,
   })
 
-  // Cards already created for this client — used to mark a note "handled".
-  const { data: cards } = useQuery<CardRow[]>({
-    queryKey: ['thread-whats-new-cards', scopeKey],
-    queryFn: () =>
-      fetch(`${ACTIONS_API}?${param}`)
-        .then((r) => r.json())
-        .then((d: { actions?: CardRow[] }) => d.actions || []),
-    enabled: !!param,
-    refetchInterval: 30_000,
-  })
+  // Tick / untick a note as handled. Handled notes drop off the purple dot;
+  // unticking brings the dot back.
+  const toggleHandled = useCallback(
+    async (note: WhatsNewNote) => {
+      setTogglingId(note.id)
+      try {
+        const res = await fetch(WHATS_NEW_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message_id: note.id, handled: !note.handledAt }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || 'Could not update')
+        }
+      } finally {
+        await qc.invalidateQueries({ queryKey: ['thread-whats-new'] })
+        await qc.invalidateQueries({ queryKey: ['portal-chat-whats-new-counts'] })
+        setTogglingId(null)
+      }
+    },
+    [qc],
+  )
 
-  // Map source_ref → who handled it (latest card wins).
-  const handled = useMemo(() => {
-    const m = new Map<string, { by: string | null; resolved: boolean }>()
-    for (const c of cards ?? []) {
-      if (c.source_ref) m.set(c.source_ref, { by: c.created_by, resolved: !!c.resolved_at })
-    }
-    return m
-  }, [cards])
-
+  // Opening a card from a note hands triage off to the dashboard card editor;
+  // the page marks the note handled once the card is saved.
   const open = useCallback(
     (note: WhatsNewNote) => {
       const label = (note.kind && SUGGEST[note.kind]) || note.text
-      onOpenCard({ label, sourceRef: note.sourceRef })
+      onOpenCard({ noteId: note.id, label, sourceRef: note.sourceRef })
     },
     [onOpenCard],
   )
@@ -148,9 +164,10 @@ export function ThreadWhatsNewPanel({
           </div>
         ) : (
           notes.map((note) => {
-            const h = note.sourceRef ? handled.get(note.sourceRef) : undefined
+            const handled = !!note.handledAt
+            const busy = togglingId === note.id
             return (
-              <div key={note.id} className="rounded-md border bg-white p-2.5">
+              <div key={note.id} className={`rounded-md border bg-white p-2.5 ${handled ? 'opacity-60' : ''}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     {note.topic && (
@@ -161,17 +178,10 @@ export function ThreadWhatsNewPanel({
                     <p className="text-sm text-zinc-800">{note.text}</p>
                     <p className="text-[10px] text-zinc-400 mt-1">
                       {formatDistanceToNow(new Date(note.created_at), { addSuffix: true })}
+                      {handled && note.handledBy ? ` · handled by ${note.handledBy}` : ''}
                     </p>
                   </div>
-                  {h ? (
-                    <span
-                      className="shrink-0 flex items-center gap-1 text-[10px] text-emerald-600"
-                      title={h.by ? `Handled by ${h.by}${h.resolved ? ' (done)' : ''}` : 'Handled'}
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      {h.resolved ? 'Done' : 'Handled'}{h.by ? ` · ${h.by}` : ''}
-                    </span>
-                  ) : (
+                  {!handled && (
                     <button
                       onClick={() => open(note)}
                       className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-0.5 bg-white"
@@ -181,14 +191,29 @@ export function ThreadWhatsNewPanel({
                     </button>
                   )}
                 </div>
-                {/* Already handled, but still allow making another card. */}
-                {h && (
-                  <div className="mt-1.5 text-right">
+                {/* Handled toggle — ticking drops it off the purple dot; unticking brings it back. */}
+                <div className="mt-1.5 flex items-center justify-between">
+                  <button
+                    disabled={busy}
+                    onClick={() => toggleHandled(note)}
+                    className={`flex items-center gap-1 text-[11px] ${handled ? 'text-emerald-600 hover:text-emerald-800' : 'text-zinc-500 hover:text-zinc-800'} disabled:opacity-50`}
+                    title={handled ? 'Mark as not handled (the dot returns)' : 'Mark handled — I know what to do (no card needed)'}
+                  >
+                    {busy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : handled ? (
+                      <CheckSquare className="h-3.5 w-3.5" />
+                    ) : (
+                      <Square className="h-3.5 w-3.5" />
+                    )}
+                    {handled ? 'Handled' : 'Mark handled'}
+                  </button>
+                  {handled && (
                     <button onClick={() => open(note)} className="text-[10px] text-zinc-400 hover:text-violet-700">
-                      + another card
+                      + card
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )
           })
