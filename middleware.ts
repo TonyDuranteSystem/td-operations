@@ -82,7 +82,11 @@ function isPublicPath(pathname: string): boolean {
 }
 
 function isPortalPath(pathname: string): boolean {
-  return pathname.startsWith('/portal')
+  // Match ONLY the client portal route group — `/portal` and `/portal/...`.
+  // Must NOT match staff dashboard pages that merely share the prefix
+  // (`/portal-chats`, `/portal-launch`), or clients would not be redirected
+  // away from them. See sysdoc notification-center-workflow-integration-plan.
+  return pathname === '/portal' || pathname.startsWith('/portal/')
 }
 
 function isDashboardPath(pathname: string): boolean {
