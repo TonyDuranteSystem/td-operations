@@ -70,6 +70,11 @@
             "type": "command",
             "command": "bash .claude/hooks/r095-gate.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/assumption-check.sh",
+            "timeout": 5
           }
         ]
       }
@@ -86,6 +91,17 @@
             "type": "prompt",
             "prompt": "CRITICAL: Context compaction is about to happen. The auto-save script just ran but it only saves a minimal checkpoint. You MUST NOW save DETAILED progress to dev_tasks via execute_sql with: (1) EVERY file changed, (2) EVERY commit hash, (3) EVERY CRM/DB update made, (4) exact state of in-progress work, (5) what is PENDING with specific details. Also sysdoc_update('session-context') if system state changed. This is your LAST CHANCE — after compaction you will NOT remember any of this.",
             "timeout": 120
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/user-prompt-contract.sh",
+            "timeout": 5
           }
         ]
       }
