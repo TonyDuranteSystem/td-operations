@@ -125,6 +125,7 @@ export type Database = {
           lead_source: string | null
           legal_link_verified: boolean
           mailing_link_verified: boolean
+          member_count: number | null
           member_structure: string | null
           notes: string | null
           onboarding_date: string | null
@@ -207,6 +208,7 @@ export type Database = {
           lead_source?: string | null
           legal_link_verified?: boolean
           mailing_link_verified?: boolean
+          member_count?: number | null
           member_structure?: string | null
           notes?: string | null
           onboarding_date?: string | null
@@ -289,6 +291,7 @@ export type Database = {
           lead_source?: string | null
           legal_link_verified?: boolean
           mailing_link_verified?: boolean
+          member_count?: number | null
           member_structure?: string | null
           notes?: string | null
           onboarding_date?: string | null
@@ -3512,6 +3515,7 @@ export type Database = {
           kyc_status: string | null
           language: string | null
           last_name: string | null
+          lead_id: string | null
           notes: string | null
           passport_expiry_date: string | null
           passport_number: string | null
@@ -3562,6 +3566,7 @@ export type Database = {
           kyc_status?: string | null
           language?: string | null
           last_name?: string | null
+          lead_id?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3612,6 +3617,7 @@ export type Database = {
           kyc_status?: string | null
           language?: string | null
           last_name?: string | null
+          lead_id?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3635,6 +3641,13 @@ export type Database = {
           zoho_contact_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "contacts_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "contacts_primary_company_id_fkey"
             columns: ["primary_company_id"]
@@ -5948,6 +5961,7 @@ export type Database = {
           tenant_ein: string | null
           tenant_email: string | null
           tenant_state: string | null
+          tenant_title: string
           term_end_date: string
           term_months: number
           term_start_date: string
@@ -5988,6 +6002,7 @@ export type Database = {
           tenant_ein?: string | null
           tenant_email?: string | null
           tenant_state?: string | null
+          tenant_title?: string
           term_end_date: string
           term_months?: number
           term_start_date: string
@@ -6028,6 +6043,7 @@ export type Database = {
           tenant_ein?: string | null
           tenant_email?: string | null
           tenant_state?: string | null
+          tenant_title?: string
           term_end_date?: string
           term_months?: number
           term_start_date?: string
@@ -10753,6 +10769,7 @@ export type Database = {
           current_step: number | null
           data: Json | null
           id: string
+          lead_id: string | null
           status: string | null
           updated_at: string | null
           wizard_type: string
@@ -10764,6 +10781,7 @@ export type Database = {
           current_step?: number | null
           data?: Json | null
           id?: string
+          lead_id?: string | null
           status?: string | null
           updated_at?: string | null
           wizard_type: string
@@ -10775,6 +10793,7 @@ export type Database = {
           current_step?: number | null
           data?: Json | null
           id?: string
+          lead_id?: string | null
           status?: string | null
           updated_at?: string | null
           wizard_type?: string
@@ -10822,6 +10841,13 @@ export type Database = {
             referencedRelation: "v_client_full"
             referencedColumns: ["contact_id"]
           },
+          {
+            foreignKeyName: "wizard_progress_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
         ]
       }
       work_locks: {
@@ -10851,6 +10877,60 @@ export type Database = {
           locked_by?: string
           reason?: string
           released_at?: string | null
+        }
+        Relationships: []
+      }
+      workflow_dispatch_log: {
+        Row: {
+          account_id: string | null
+          actor: string | null
+          candidates: Json | null
+          chained_from_id: string | null
+          contact_id: string | null
+          created_at: string
+          delivery_id: string | null
+          details: Json
+          event_descriptor: string | null
+          event_ref: string | null
+          id: string
+          matched_workflow_slug: string | null
+          outcome: string
+          spawned_task_id: string | null
+          trigger_source: string
+        }
+        Insert: {
+          account_id?: string | null
+          actor?: string | null
+          candidates?: Json | null
+          chained_from_id?: string | null
+          contact_id?: string | null
+          created_at?: string
+          delivery_id?: string | null
+          details?: Json
+          event_descriptor?: string | null
+          event_ref?: string | null
+          id?: string
+          matched_workflow_slug?: string | null
+          outcome: string
+          spawned_task_id?: string | null
+          trigger_source: string
+        }
+        Update: {
+          account_id?: string | null
+          actor?: string | null
+          candidates?: Json | null
+          chained_from_id?: string | null
+          contact_id?: string | null
+          created_at?: string
+          delivery_id?: string | null
+          details?: Json
+          event_descriptor?: string | null
+          event_ref?: string | null
+          id?: string
+          matched_workflow_slug?: string | null
+          outcome?: string
+          spawned_task_id?: string | null
+          trigger_source?: string
         }
         Relationships: []
       }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
-import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText } from 'lucide-react'
+import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText, Send, AlertTriangle, Check, X } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import DistributionResolutionTemplate from '@/components/portal/distribution-resolution-template'
 import TaxStatementTemplate from '@/components/portal/tax-statement-template'
@@ -31,6 +31,9 @@ interface HistoryItem {
 interface ExtendedMemberInfo extends MemberInfo {
   address?: string | null
   isPrimary?: boolean
+  contact_id?: string | null
+  email?: string | null
+  member_id?: string
 }
 
 interface Props {
@@ -44,6 +47,7 @@ interface Props {
     logoUrl: string | null
     entityType: string | null
     registeredAgentAddress?: string | null
+    memberCount?: number | null
   }
   members: ExtendedMemberInfo[]
   history: HistoryItem[]
@@ -134,6 +138,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const [isGenerating, setIsGenerating] = useState(false)
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>(initialHistory)
+  const [oaCreateStatus, setOaCreateStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [oaCreateError, setOaCreateError] = useState<string | null>(null)
 
   const documentRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -154,6 +160,21 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const fiscalYearOptions = getFiscalYearOptions()
 
   const isOA = selectedType === 'operating_agreement'
+  const isMMLC = account.entityType === 'MMLLC'
+
+  // Pre-flight validation for MMLLC OA — runs whenever OA is selected
+  const oaPreflight = isMMLC ? (() => {
+    const memberCountOk = account.memberCount != null
+      ? members.length === account.memberCount
+      : null // null = not configured, can't check
+    const allHavePortal = members.every(m => m.contact_id != null)
+    const ownershipTotal = members.reduce((s, m) => s + (m.ownershipPct ?? 0), 0)
+    const ownershipOk = Math.abs(ownershipTotal - 100) < 0.01
+    const missingPortal = members.filter(m => !m.contact_id).map(m => m.fullName)
+    return { memberCountOk, allHavePortal, ownershipOk, ownershipTotal, missingPortal }
+  })() : null
+
+  const oaCanProceed = !isMMLC || (oaPreflight?.allHavePortal === true)
 
   // Members with addresses resolved from OA state (for OA template)
   const oaMembers = members.map((m, i) => ({
@@ -315,10 +336,37 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     }
   }
 
+  const handleCreateAndSend = async () => {
+    setOaCreateStatus('sending')
+    setOaCreateError(null)
+    try {
+      const memberAddresses = members.map((_, i) => oaMemberAddresses[i] || '')
+      const res = await fetch('/api/portal/operating-agreement/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: account.id,
+          effective_date: oaEffectiveDate,
+          member_addresses: memberAddresses,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to create Operating Agreement')
+      setOaCreateStatus('sent')
+      await saveToHistory('pending_signatures')
+      setStage('done')
+    } catch (err) {
+      setOaCreateStatus('error')
+      setOaCreateError(err instanceof Error ? err.message : 'Something went wrong')
+    }
+  }
+
   const handleReset = () => {
     setStage('selection')
     setSelectedType(null)
     setSignatureImage(null)
+    setOaCreateStatus('idle')
+    setOaCreateError(null)
     setFormData({
       amount: 0,
       fiscalYear: new Date().getFullYear() - 1,
@@ -493,6 +541,50 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           {/* OA-specific fields */}
           {isOA ? (
             <div className="space-y-4">
+              {/* Pre-flight validation panel — MMLLC only */}
+              {isMMLC && oaPreflight && (
+                <div className="rounded-lg border border-zinc-700 bg-zinc-800/60 p-4 space-y-2">
+                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Pre-flight Check</p>
+                  {/* Member count */}
+                  {account.memberCount != null ? (
+                    <div className="flex items-center gap-2 text-sm">
+                      {oaPreflight.memberCountOk
+                        ? <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+                        : <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />}
+                      <span className={oaPreflight.memberCountOk ? 'text-zinc-300' : 'text-amber-300'}>
+                        {members.length} member{members.length !== 1 ? 's' : ''} in system
+                        {!oaPreflight.memberCountOk && ` (SS-4 says ${account.memberCount})`}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-sm">
+                      <AlertTriangle className="h-4 w-4 text-zinc-500 shrink-0" />
+                      <span className="text-zinc-500">Member count not confirmed — contact your advisor if unsure</span>
+                    </div>
+                  )}
+                  {/* Portal access */}
+                  <div className="flex items-start gap-2 text-sm">
+                    {oaPreflight.allHavePortal
+                      ? <Check className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+                      : <X className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />}
+                    <span className={oaPreflight.allHavePortal ? 'text-zinc-300' : 'text-red-300'}>
+                      {oaPreflight.allHavePortal
+                        ? 'All members have portal accounts'
+                        : `Cannot send — ${oaPreflight.missingPortal.join(', ')} ${oaPreflight.missingPortal.length === 1 ? 'has' : 'have'} no portal account. Contact support.`}
+                    </span>
+                  </div>
+                  {/* Ownership */}
+                  <div className="flex items-center gap-2 text-sm">
+                    {oaPreflight.ownershipOk
+                      ? <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+                      : <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />}
+                    <span className={oaPreflight.ownershipOk ? 'text-zinc-300' : 'text-amber-300'}>
+                      Ownership: {members.map(m => `${m.ownershipPct ?? '?'}%`).join(' + ')} = {oaPreflight.ownershipTotal.toFixed(0)}%
+                      {!oaPreflight.ownershipOk && ' (should be 100%)'}
+                    </span>
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">{l('effectiveDate', lang)} *</label>
                 <input
@@ -577,8 +669,9 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           <div className="flex justify-end">
             <button
               onClick={handlePreview}
-              disabled={!isOA && formData.amount <= 0}
+              disabled={(!isOA && formData.amount <= 0) || (isOA && !oaCanProceed)}
               className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
+              title={isOA && !oaCanProceed ? 'All members must have portal accounts to proceed' : undefined}
             >
               {l('preview', lang)}
             </button>
@@ -668,22 +761,38 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
           {/* Action buttons (preview stage) */}
           {stage === 'preview' && (
-            <div className="flex items-center gap-3 justify-end">
+            <div className="flex items-center gap-3 justify-end flex-wrap">
               <button
                 onClick={handleDownloadPdf}
                 disabled={isGenerating}
-                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
+                className="px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
               >
                 {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                 {isGenerating ? l('generating', lang) : l('downloadPdf', lang)}
               </button>
-              <button
-                onClick={handleSignAndDownload}
-                className="px-6 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
-              >
-                <PenLine size={16} />
-                {l('signAndDownload', lang)}
-              </button>
+              {isOA ? (
+                <div className="space-y-1">
+                  <button
+                    onClick={handleCreateAndSend}
+                    disabled={oaCreateStatus === 'sending'}
+                    className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
+                  >
+                    {oaCreateStatus === 'sending' ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                    {oaCreateStatus === 'sending' ? 'Sending...' : (lang === 'it' ? 'Crea e Invia per Firma' : 'Create & Send for Signing')}
+                  </button>
+                  {oaCreateError && (
+                    <p className="text-xs text-red-400 text-right">{oaCreateError}</p>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={handleSignAndDownload}
+                  className="px-6 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
+                >
+                  <PenLine size={16} />
+                  {l('signAndDownload', lang)}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -691,9 +800,24 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
       {/* === DONE STAGE === */}
       {stage === 'done' && (
-        <div className="flex flex-col items-center justify-center py-16 space-y-4">
+        <div className="flex flex-col items-center justify-center py-16 space-y-4 text-center">
           <CheckCircle2 size={48} className="text-green-400" />
-          <h2 className="text-xl font-semibold text-zinc-100">{l('success', lang)}</h2>
+          <h2 className="text-xl font-semibold text-zinc-100">
+            {oaCreateStatus === 'sent'
+              ? (lang === 'it' ? 'Firma avviata!' : 'Signing process started!')
+              : l('success', lang)}
+          </h2>
+          {oaCreateStatus === 'sent' && (
+            <p className="text-sm text-zinc-400 max-w-sm">
+              {isMMLC
+                ? (lang === 'it'
+                  ? 'Ogni socio ha ricevuto il link personale per firmare l\'Atto Costitutivo nel portale.'
+                  : 'Each member has received their personal signing link in the portal. You will be notified once all members have signed.')
+                : (lang === 'it'
+                  ? 'Il tuo Atto Costitutivo è pronto per la firma. Vai alla sezione Firma per completare il processo.'
+                  : 'Your Operating Agreement is ready to sign. Go to the Sign section to complete the process.')}
+            </p>
+          )}
           <button
             onClick={handleReset}
             className="mt-4 px-6 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium text-sm transition"

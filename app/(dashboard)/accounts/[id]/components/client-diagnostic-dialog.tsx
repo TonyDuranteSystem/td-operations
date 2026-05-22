@@ -427,12 +427,18 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
                                         onClick={(e) => {
                                           e.stopPropagation()
                                           if (needsForm && check.fix!.action === 'record_payment') {
-                                            if (!paymentForm.amount || parseFloat(paymentForm.amount) <= 0) {
-                                              toast.error('Enter a valid amount')
+                                            const amt = paymentForm.amount.trim()
+                                            const amtNum = Number(amt)
+                                            // $0 is allowed (free / already-settled contract — the
+                                            // activation still runs, no payment row is written). Block
+                                            // only a blank, non-numeric, or negative amount. Blank is
+                                            // never silently treated as 0.
+                                            if (amt === '' || Number.isNaN(amtNum) || amtNum < 0) {
+                                              toast.error('Enter an amount (use 0 for a free / already-settled activation)')
                                               return
                                             }
                                             executeFix(check, {
-                                              amount: parseFloat(paymentForm.amount),
+                                              amount: amtNum,
                                               currency: paymentForm.currency,
                                               payment_method: paymentForm.payment_method,
                                               bank_name: paymentForm.bank_name || undefined,

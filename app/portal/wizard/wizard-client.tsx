@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
 import { WizardField } from '@/components/portal/wizard/wizard-field'
-import { getWizardConfig, MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 interface FieldError {
@@ -21,11 +21,16 @@ interface WizardClientProps {
   progressId: string | null
   accountId: string
   contactId: string
+  /** Set for a formation wizard scoped to a NEW company's lead (no account yet). */
+  leadId: string
   locale: 'en' | 'it'
   /** Status of a previous submission (if any) */
   initialSubmitStatus?: 'in_progress' | 'submitted' | null
   /** Locked when Antonio has reviewed — no more editing allowed */
   isLocked?: boolean
+  /** How many ITINs the offer bundled (start-at-wizard). 0 = no ITIN question.
+   * When > 0 the wizard asks who applies and requires exactly this many "Yes". */
+  itinCount?: number
 }
 
 export function WizardClient({
@@ -37,11 +42,25 @@ export function WizardClient({
   progressId,
   accountId,
   contactId,
+  leadId,
   locale,
   initialSubmitStatus,
   isLocked,
+  itinCount = 0,
 }: WizardClientProps) {
-  const { steps, fields } = getWizardConfig(wizardType, entityType)
+  const { steps, fields: baseFields } = getWizardConfig(wizardType, entityType)
+
+  // Inject the per-person "applies for ITIN?" field into the owner step and the
+  // members step when the offer bundled ITIN (itinCount > 0). Done here (not in
+  // the static config) so the question only appears for clients who bought ITIN.
+  // dev_task fcf5e254.
+  const fields = useMemo(() => {
+    if (itinCount <= 0) return baseFields
+    const f: Record<string, typeof baseFields[string]> = { ...baseFields }
+    if (Array.isArray(f.owner)) f.owner = [...f.owner, OWNER_ITIN_FIELD]
+    if (Array.isArray(f.members)) f.members = [...f.members, MEMBER_ITIN_FIELD]
+    return f
+  }, [baseFields, itinCount])
 
   // Merge prefill → saved → current (saved takes precedence over prefill, but only for non-empty values)
   // Empty saved values (from stale records saved before prefill fix) must NOT override prefill
@@ -84,7 +103,10 @@ export function WizardClient({
       fd.append('file', file)
       fd.append('field_name', fieldName)
       fd.append('wizard_type', wizardType)
-      fd.append('identifier', accountId || contactId || 'unknown')
+      // Prefer leadId so a new-company formation's uploads stay in their own
+      // folder (not co-mingled with an existing account or contact).
+      fd.append('identifier', leadId || accountId || contactId || 'unknown')
+      if (leadId) fd.append('lead_id', leadId)
 
       const res = await fetch('/api/portal/wizard-upload', {
         method: 'POST',
@@ -102,25 +124,48 @@ export function WizardClient({
       console.error('[wizard-upload] network error', { err, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
       return null
     }
-  }, [wizardType, accountId, contactId])
+  }, [wizardType, accountId, contactId, leadId])
+
+  const isEmptyValue = (val: unknown) =>
+    val === undefined || val === null || val === false || val === '' || (typeof val === 'string' && !val.trim())
 
   // Validate current step
   const validateStep = useCallback(() => {
     const stepId = steps[currentStep].id
     const stepFields = fields[stepId] || []
+
+    // Members step: every field lives under an indexed key (member_{idx}_{name}),
+    // so validate each of the memberCount members against the indexed keys.
+    // The generic loop below checks bare field.name keys (which are always empty
+    // here) and would wrongly block the step — that bug only surfaced once the
+    // MMLLC members step started rendering.
+    if (stepId === 'members') {
+      for (let idx = 0; idx < memberCount; idx++) {
+        const rawType = formData[`member_${idx}_member_type`]
+        const resolvedType = (rawType === undefined || rawType === null || rawType === '') ? 'individual' : String(rawType)
+        for (const field of stepFields) {
+          if (field.conditional) {
+            const refValue = field.conditional.field === 'member_type'
+              ? resolvedType
+              : formData[`member_${idx}_${field.conditional.field}`]
+            if (String(refValue) !== field.conditional.value) continue
+          }
+          if (field.required && isEmptyValue(formData[`member_${idx}_${field.name}`])) return false
+        }
+      }
+      return true
+    }
+
     for (const field of stepFields) {
       // Skip validation for hidden conditional fields
       if (field.conditional) {
         const refValue = formData[field.conditional.field]
         if (String(refValue) !== field.conditional.value) continue
       }
-      if (field.required) {
-        const val = formData[field.name]
-        if (val === undefined || val === null || val === false || val === '' || (typeof val === 'string' && !val.trim())) return false
-      }
+      if (field.required && isEmptyValue(formData[field.name])) return false
     }
     return true
-  }, [currentStep, steps, fields, formData])
+  }, [currentStep, steps, fields, formData, memberCount])
 
   // Save progress to wizard_progress table
   const handleSave = useCallback(async () => {
@@ -132,6 +177,7 @@ export function WizardClient({
         data: formData,
         account_id: accountId || null,
         contact_id: contactId || null,
+        lead_id: leadId || null,
         progress_id: currentProgressId,
       }
 
@@ -153,13 +199,30 @@ export function WizardClient({
     } finally {
       setIsSaving(false)
     }
-  }, [wizardType, currentStep, formData, accountId, contactId, currentProgressId, locale])
+  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, locale])
 
   // Submit wizard
   const handleSubmit = useCallback(async () => {
     if (!validateStep()) {
       toast.error(locale === 'it' ? 'Compila tutti i campi obbligatori' : 'Please fill all required fields')
       return
+    }
+
+    // ITIN: the offer dictates how many were purchased; the client must mark
+    // exactly that many people as applicants. dev_task fcf5e254.
+    if (itinCount > 0) {
+      let chosen = formData.owner_needs_itin === 'Yes' ? 1 : 0
+      for (let idx = 0; idx < memberCount; idx++) {
+        if (formData[`member_${idx}_member_needs_itin`] === 'Yes') chosen++
+      }
+      if (chosen !== itinCount) {
+        toast.error(
+          locale === 'it'
+            ? `Seleziona esattamente ${itinCount} persona/e che richiedono l'ITIN (selezionate: ${chosen}).`
+            : `Select exactly ${itinCount} person(s) to apply for the ITIN (you selected ${chosen}).`,
+        )
+        return
+      }
     }
 
     setIsSubmitting(true)
@@ -174,6 +237,7 @@ export function WizardClient({
           data: formData,
           account_id: accountId || null,
           contact_id: contactId || null,
+          lead_id: leadId || null,
           progress_id: currentProgressId,
           allow_resubmit: isResubmitMode || undefined,
         }),
@@ -199,14 +263,14 @@ export function WizardClient({
     } finally {
       setIsSubmitting(false)
     }
-  }, [wizardType, entityType, formData, accountId, contactId, currentProgressId, validateStep, locale, isResubmitMode])
+  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, validateStep, locale, isResubmitMode, itinCount, memberCount])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
     setCurrentStep(step)
     // Auto-save in background (only if user has entered data)
     const hasData = Object.keys(formData).some(k => formData[k] !== undefined && formData[k] !== '')
-    if (hasData && (accountId || contactId)) {
+    if (hasData && (accountId || contactId || leadId)) {
       fetch('/api/portal/wizard-progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -216,6 +280,7 @@ export function WizardClient({
           data: formData,
           account_id: accountId || null,
           contact_id: contactId || null,
+          lead_id: leadId || null,
           progress_id: currentProgressId,
         }),
       }).then(res => res.ok ? res.json() : null)
@@ -224,7 +289,7 @@ export function WizardClient({
           console.warn('[wizard] Auto-save failed — data preserved in memory')
         })
     }
-  }, [wizardType, formData, accountId, contactId, currentProgressId])
+  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId])
 
   // Locked screen — Antonio has reviewed the data, no more editing
   if (isLocked) {
@@ -371,7 +436,7 @@ export function WizardClient({
                       // Clear this member's fields
                       setFormData(prev => {
                         const next = { ...prev }
-                        MEMBER_FIELDS.forEach(f => { delete next[`member_${idx}_${f.name}`] })
+                        stepFields.forEach(f => { delete next[`member_${idx}_${f.name}`] })
                         return next
                       })
                     }}
@@ -382,7 +447,7 @@ export function WizardClient({
                 )}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {MEMBER_FIELDS
+                {stepFields
                   .filter(field => {
                     if (!field.conditional) return true
                     // Evaluate conditional relative to this member's own member_type field.
@@ -395,11 +460,12 @@ export function WizardClient({
                     return resolved === field.conditional.value
                   })
                   .map(field => (
-                    <div key={`${idx}_${field.name}`} className={field.type === 'select' || field.type === 'textarea' ? 'md:col-span-2' : ''}>
+                    <div key={`${idx}_${field.name}`} className={field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''}>
                       <WizardField
                         field={field}
                         value={formData[`member_${idx}_${field.name}`] ?? ''}
                         onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
+                        onFileUpload={(name, file) => handleFileUpload(`member_${idx}_${name}`, file)}
                         locale={locale}
                       />
                     </div>

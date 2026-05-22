@@ -2219,7 +2219,7 @@ export default function PortalChatsPage() {
               </div>
             )}
 
-            {chatViewMode === 'tasks' && (selectedAccountId || selectedCompanyId) ? (
+            {chatViewMode === 'tasks' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
               <ThreadTasksPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
             ) : (
             <>
@@ -3155,7 +3155,7 @@ export default function PortalChatsPage() {
       )}
 
       {/* AI Assistant side panel */}
-      {aiPanelOpen && (selectedAccountId || selectedThreadId) && (
+      {aiPanelOpen && (selectedAccountId || selectedContactId || selectedThreadId) && (
         <div className="w-[320px] lg:w-[360px] shrink-0 border-l flex flex-col bg-white">
           <div className="px-4 py-3 border-b flex items-center justify-between bg-gradient-to-r from-violet-50 to-blue-50">
             <div className="flex items-center gap-2">

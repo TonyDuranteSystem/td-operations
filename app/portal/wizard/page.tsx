@@ -15,14 +15,17 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
-import { isValidWizardType, type WizardType } from '@/lib/portal/wizard-map'
+import { isValidWizardType, isContactScopedWizard, type WizardType } from '@/lib/portal/wizard-map'
+import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
+import { getStartAtWizardServiceTypes } from '@/lib/services'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 
 export default async function WizardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string }>
+  searchParams: Promise<{ type?: string; lead?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -53,10 +56,46 @@ export default async function WizardPage({
     if (c) contact = c as unknown as Record<string, string>
   }
 
-  // Get account details
+  // Allow explicit type override via ?type= query param (e.g. from tax banner)
+  // and ?lead= scope (formation for a NEW company — see formationLeadId below).
+  const { type: typeParam, lead: leadParam } = await searchParams
+  const forcedType = isValidWizardType(typeParam) ? typeParam : null
+
+  // ── Formation-for-a-new-company scope ──────────────────────────────────────
+  // When ?lead=<lead_id> is present AND the offer on that lead belongs to this
+  // logged-in user, the wizard is for a BRAND NEW company that has no account
+  // yet. We must NOT load any existing account (that bug pre-filled THW Global
+  // LLC's data for Adam Mihaly). The wizard is scoped to the lead instead.
+  // Ownership check: the offer's client_email must match the user/contact email
+  // — never trust a raw ?lead= param from the client.
+  let formationLeadId: string | null = null
+  let formationEntityType: string | null = null
+  if (leadParam) {
+    const ownerEmails = new Set<string>()
+    if (user.email) ownerEmails.add(user.email.toLowerCase())
+    if (contact.email) ownerEmails.add(String(contact.email).toLowerCase())
+    const { data: leadOffer } = await supabaseAdmin
+      .from('offers')
+      .select('client_email, contract_type, entity_type')
+      .eq('lead_id', leadParam)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (
+      leadOffer?.contract_type === 'formation' &&
+      leadOffer.client_email &&
+      ownerEmails.has(String(leadOffer.client_email).toLowerCase())
+    ) {
+      formationLeadId = leadParam
+      formationEntityType = (leadOffer.entity_type as string | null) ?? null
+    }
+  }
+
+  // Get account details — SKIPPED when scoped to a formation lead (no account
+  // exists yet for the new company).
   let account: Record<string, string> = {}
   let accountId = cookieAccountId || ''
-  if (contactId) {
+  if (contactId && !formationLeadId) {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id')
@@ -77,19 +116,20 @@ export default async function WizardPage({
     }
   }
 
-  // Allow explicit type override via ?type= query param (e.g. from tax banner)
-  const { type: typeParam } = await searchParams
-  const forcedType = isValidWizardType(typeParam) ? typeParam : null
+  // Formation lead scope forces a blank formation wizard with no account context.
+  if (formationLeadId) {
+    accountId = ''
+  }
 
   // Determine wizard type from offer or service deliveries
-  let wizardType: WizardType = forcedType || 'onboarding'
-  let entityType = account.entity_type || 'SMLLC'
+  let wizardType: WizardType = forcedType || (formationLeadId ? 'formation' : 'onboarding')
+  let entityType = account.entity_type || formationEntityType || 'SMLLC'
   let isItinRenewal = false
 
   // Collect ALL pending wizard types from service deliveries
   const pendingWizardTypes: { type: WizardType; label: string; serviceType: string }[] = []
 
-  if (!forcedType && (accountId || contactId)) {
+  if (!forcedType && !formationLeadId && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
     const sdQuery = accountId
       ? supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('account_id', accountId).in('status', ['active']).limit(10)
@@ -99,14 +139,31 @@ export default async function WizardPage({
 
     const types = (sds || []).map(s => s.service_type)
 
-    // Check which wizard types have already been submitted
-    const progressFilter = accountId
-      ? supabaseAdmin.from('wizard_progress').select('wizard_type, status').eq('account_id', accountId).in('status', ['submitted'])
-      : supabaseAdmin.from('wizard_progress').select('wizard_type, status').eq('contact_id', contactId).in('status', ['submitted'])
-
-    const { data: submittedWizards } = await progressFilter
-
-    const submittedTypes = new Set((submittedWizards || []).map(w => w.wizard_type))
+    // Check which wizard types have already been submitted.
+    // Account-owned wizards are read by account_id. Contact-owned wizards
+    // (formation) live on the contact and never carry an account_id, so they
+    // are read by contact_id — but only contact-scoped types are taken from
+    // that query, so a submission for one account never masks another account's
+    // pending wizard. See dev_task 21fd1f4a.
+    const submittedTypes = new Set<string>()
+    if (accountId) {
+      const { data: byAccount } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('wizard_type')
+        .eq('account_id', accountId)
+        .in('status', ['submitted'])
+      for (const w of byAccount || []) submittedTypes.add(w.wizard_type)
+    }
+    if (contactId) {
+      const { data: byContact } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('wizard_type')
+        .eq('contact_id', contactId)
+        .in('status', ['submitted'])
+      for (const w of byContact || []) {
+        if (isContactScopedWizard(w.wizard_type)) submittedTypes.add(w.wizard_type)
+      }
+    }
 
     // Build list of ALL applicable wizard types (both pending and submitted)
     if (types.includes('Company Formation')) {
@@ -219,17 +276,43 @@ export default async function WizardPage({
     }
   }
 
+  // A formation is for a NEW company — it must never bind to or pre-fill an
+  // EXISTING account. When the wizard resolves to formation without a ?lead=
+  // scope (e.g. an existing client reached it via a link that dropped the
+  // lead param), drop the existing-account context so we don't pre-fill the
+  // old company's name/EIN/state and so submission stays contact+lead scoped.
+  // This is the page-side half of the THW Global hijack fix (Adam Mihaly,
+  // 2026-05-20, dev_task 358e8cbe); the server backstop is in wizard-submit.
+  if (wizardType === 'formation' && !formationLeadId) {
+    accountId = ''
+    account = {}
+  }
+
   // Load saved progress — include 'submitted' so clients can edit before review
   let savedData: Record<string, unknown> = {}
   let savedStep = 0
   let progressId: string | null = null
   let wizardSubmitStatus: 'in_progress' | 'submitted' | null = null
 
-  const progressQuery = accountId
-    ? supabaseAdmin.from('wizard_progress').select('*').eq('account_id', accountId).eq('wizard_type', wizardType).in('status', ['in_progress', 'submitted']).order('updated_at', { ascending: false }).limit(1).maybeSingle()
-    : contactId
-      ? supabaseAdmin.from('wizard_progress').select('*').eq('contact_id', contactId).eq('wizard_type', wizardType).in('status', ['in_progress', 'submitted']).order('updated_at', { ascending: false }).limit(1).maybeSingle()
-      : null
+  // Resolve which column to scope the lookup on (see resolveWizardProgressScope
+  // for the precedence + the lead_id-null disambiguation). Building the query
+  // dynamically over a union of columns trips TS's type-instantiation depth
+  // (TS2589) on the typed builder, so the builder is cast to any.
+  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId })
+
+  const progressQuery = progressScope
+    ? (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic scope column over a union trips TS2589 on the typed builder
+        let q = (supabaseAdmin as any)
+          .from('wizard_progress')
+          .select('*')
+          .eq(progressScope.col, progressScope.val)
+          .eq('wizard_type', wizardType)
+          .in('status', ['in_progress', 'submitted'])
+        if (progressScope.restrictToNoLead) q = q.is('lead_id', null)
+        return q.order('updated_at', { ascending: false }).limit(1).maybeSingle()
+      })()
+    : null
 
   if (progressQuery) {
     const { data: progress } = await progressQuery
@@ -253,6 +336,52 @@ export default async function WizardPage({
       .limit(1)
       .maybeSingle()
     isLocked = !!sentTr
+  }
+
+  // ── ITIN applicants (dev_task fcf5e254) ──
+  // When the formation/onboarding offer bundled ITIN (a start-at-wizard
+  // service), the wizard asks the client WHO applies. itinCount = how many
+  // ITINs were purchased; the client must mark exactly that many people.
+  let itinCount = 0
+  if (wizardType === 'formation' || wizardType === 'onboarding') {
+    const startAtWizard = await getStartAtWizardServiceTypes()
+    if (startAtWizard.includes('ITIN')) {
+      const offerEmails = new Set<string>()
+      if (user.email) offerEmails.add(user.email)
+      if (contact.email) offerEmails.add(String(contact.email))
+      let offerRow: { services: unknown; bundled_pipelines: string[] | null } | null = null
+      if (formationLeadId) {
+        const { data } = await supabaseAdmin
+          .from('offers')
+          .select('services, bundled_pipelines')
+          .eq('lead_id', formationLeadId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        offerRow = data as typeof offerRow
+      }
+      if (!offerRow && offerEmails.size > 0) {
+        const { data } = await supabaseAdmin
+          .from('offers')
+          .select('services, bundled_pipelines')
+          .in('client_email', Array.from(offerEmails))
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        offerRow = data as typeof offerRow
+      }
+      if (offerRow) {
+        const services = Array.isArray(offerRow.services)
+          ? (offerRow.services as Array<Record<string, unknown>>)
+          : []
+        const itinSvc = services.find((s) => s.pipeline_type === 'ITIN')
+        if (itinSvc && typeof itinSvc.quantity === 'number' && itinSvc.quantity > 0) {
+          itinCount = itinSvc.quantity
+        } else if (Array.isArray(offerRow.bundled_pipelines)) {
+          itinCount = offerRow.bundled_pipelines.filter((p) => p === 'ITIN').length
+        }
+      }
+    }
   }
 
   // Build prefill data from contact + account
@@ -283,9 +412,11 @@ export default async function WizardPage({
     prefillData.previous_itin = contact.itin_number
   }
 
-  // Normalize entity type
-  if (entityType === 'Single Member LLC') entityType = 'SMLLC'
-  if (entityType === 'Multi-Member LLC') entityType = 'MMLLC'
+  // Normalize entity type so the wizard config turns on the right steps. The
+  // MMLLC "add members" step only renders for 'MMLLC'; the stored value is
+  // "Multi Member LLC" (space), which the old exact-string check missed —
+  // breaking member-add for every multi-member client. See normalizeEntityType.
+  entityType = normalizeEntityType(entityType)
 
   // Build wizard list with submission status for the selector
   // Query all wizard progress for this account to know which are submitted
@@ -502,9 +633,11 @@ export default async function WizardPage({
           progressId={progressId}
           accountId={accountId}
           contactId={contactId || ''}
+          leadId={formationLeadId || ''}
           locale={locale}
           initialSubmitStatus={wizardSubmitStatus}
           isLocked={isLocked}
+          itinCount={itinCount}
         />
       )}
 

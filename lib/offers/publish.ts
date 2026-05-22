@@ -132,25 +132,30 @@ export async function publishOffer(
 
   const emailType = isNewUser && tempPassword ? "portal_access" : "portal_notification"
 
-  const subject = emailType === "portal_access"
-    ? lang === "it"
-      ? "La tua Offerta Consulenziale — Tony Durante LLC"
-      : "Your Consulting Proposal — Tony Durante LLC"
-    : lang === "it"
-      ? "Nuovo documento disponibile — Tony Durante LLC"
-      : "New document available — Tony Durante LLC"
+  const offerUrl = `${APP_BASE_URL}/offer/${token}`
+
+  const subject = lang === "it"
+    ? "La tua Offerta Consulenziale — Tony Durante LLC"
+    : "Your Consulting Proposal — Tony Durante LLC"
 
   const htmlBody = emailType === "portal_access"
     ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-    : buildPortalNotificationEmail(firstName, portalLoginUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, {
+        title:    lang === "it" ? "La tua Offerta Consulenziale" : "Your Consulting Proposal",
+        body:     lang === "it"
+          ? "Abbiamo preparato la tua offerta consulenziale personalizzata. Leggila e, se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online."
+          : "We have prepared your personalized consulting proposal. Review it and, if everything meets your expectations, you can sign the contract directly online.",
+        ctaLabel: lang === "it" ? "Visualizza Offerta" : "View Offer",
+        ctaUrl:   offerUrl,
+      }, lang, pixelUrl)
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
       ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Accedi al portale per consultarla: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
       : `Hi ${firstName}, your consulting proposal is ready. Log in to review it: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
     : lang === "it"
-      ? `Ciao ${firstName}, un nuovo documento è disponibile nel tuo portale: ${portalLoginUrl}`
-      : `Hi ${firstName}, a new document is available in your portal: ${portalLoginUrl}`
+      ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Clicca qui per consultarla: ${offerUrl}`
+      : `Hi ${firstName}, your consulting proposal is ready. Click here to review it: ${offerUrl}`
 
   // Build MIME
   const fromEmail = "support@tonydurante.us"
@@ -188,21 +193,16 @@ export async function publishOffer(
   // ─── 5. safeSend — email first, status updates after ───
   const result = await safeSend<{ id: string; threadId: string }>({
     idempotencyCheck: async () => {
+      // The offer's own status is the only identity-correct guard against a
+      // double-publish: only a 'draft' offer can be published, and publishing
+      // flips it to 'sent'. We deliberately do NOT gate on email_tracking —
+      // that table is keyed by offer_token (a string that gets reused when an
+      // offer is deleted then recreated with the same slug, and is left stale
+      // by reset-offer), so a token-based "already sent" check falsely blocks a
+      // freshly (re)created draft. The status column cannot be inherited that
+      // way, so it is the correct guard.
       if (offer.status !== "draft") {
         return { alreadySent: true, message: `Offer already published (status: ${offer.status}).` }
-      }
-      // Also check email_tracking for THIS specific offer token + recent time
-      const { data: existing } = await supabaseAdmin
-        .from("email_tracking")
-        .select("tracking_id, created_at")
-        .eq("offer_token", token)
-        .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-        .limit(1)
-      if (existing?.length) {
-        return {
-          alreadySent: true,
-          message: `This offer was already sent (tracked: ${existing[0].tracking_id} at ${existing[0].created_at}). Set status back to 'draft' to resend.`,
-        }
       }
       return null
     },
@@ -432,25 +432,30 @@ export async function resendOfferEmail(
   const firstName = offer.client_name.split(" ")[0]
   const portalLoginUrl = `${PORTAL_BASE_URL}/portal/login`
 
-  const subject = emailType === "portal_access"
-    ? lang === "it"
-      ? "La tua Offerta Consulenziale — Tony Durante LLC"
-      : "Your Consulting Proposal — Tony Durante LLC"
-    : lang === "it"
-      ? "Nuovo documento disponibile — Tony Durante LLC"
-      : "New document available — Tony Durante LLC"
+  const offerUrl = `${APP_BASE_URL}/offer/${token}`
+
+  const subject = lang === "it"
+    ? "La tua Offerta Consulenziale — Tony Durante LLC"
+    : "Your Consulting Proposal — Tony Durante LLC"
 
   const htmlBody = emailType === "portal_access"
     ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-    : buildPortalNotificationEmail(firstName, portalLoginUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, {
+        title:    lang === "it" ? "La tua Offerta Consulenziale" : "Your Consulting Proposal",
+        body:     lang === "it"
+          ? "Abbiamo preparato la tua offerta consulenziale personalizzata. Leggila e, se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online."
+          : "We have prepared your personalized consulting proposal. Review it and, if everything meets your expectations, you can sign the contract directly online.",
+        ctaLabel: lang === "it" ? "Visualizza Offerta" : "View Offer",
+        ctaUrl:   offerUrl,
+      }, lang, pixelUrl)
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
       ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Accedi al portale per consultarla: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
       : `Hi ${firstName}, your consulting proposal is ready. Log in to review it: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
     : lang === "it"
-      ? `Ciao ${firstName}, un nuovo documento è disponibile nel tuo portale: ${portalLoginUrl}`
-      : `Hi ${firstName}, a new document is available in your portal: ${portalLoginUrl}`
+      ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Clicca qui per consultarla: ${offerUrl}`
+      : `Hi ${firstName}, your consulting proposal is ready. Click here to review it: ${offerUrl}`
 
   const fromEmail = "support@tonydurante.us"
   const boundary = `boundary_${Date.now()}`
@@ -600,54 +605,43 @@ function buildPortalAccessEmail(
 </div>${pixel}`
 }
 
-// ─── Email: Portal Notification (existing user) ──────────
+// ─── Email: Portal Notification (existing user) ──────────────────────────
+// Caller provides all content — template only handles layout/styling.
 
-function buildPortalNotificationEmail(
+export interface PortalNotificationContent {
+  title: string
+  body: string
+  ctaLabel: string
+  ctaUrl: string
+}
+
+export function buildPortalNotificationEmail(
   firstName: string,
-  portalUrl: string,
+  content: PortalNotificationContent,
   lang: "en" | "it",
   pixelUrl: string,
 ): string {
   const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
-
-  if (lang === "it") {
-    return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">Nuovo documento disponibile</h1>
-    <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
-  </div>
-  <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-    <p>Ciao ${firstName},</p>
-    <p>Un nuovo documento è disponibile per la tua revisione nel portale clienti.</p>
-    <p>Accedi al portale per consultarlo:</p>
-    <p style="margin: 24px 0; text-align: center;">
-      <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Accedi al Portale
-      </a>
-    </p>
-    <p style="color: #6b7280; font-size: 13px;">Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale.</p>
-    <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
-    </div>
-  </div>
-</div>${pixel}`
-  }
+  const { title, body, ctaLabel, ctaUrl } = content
+  const greeting = lang === "it" ? `Ciao ${firstName},` : `Hi ${firstName},`
+  const footer = lang === "it"
+    ? "Per qualsiasi domanda, rispondi a questa email o usa la chat nel portale."
+    : "For any questions, reply to this email or use the chat in your portal."
 
   return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">New document available</h1>
+    <h1 style="color: white; margin: 0; font-size: 22px;">${title}</h1>
     <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-    <p>Hi ${firstName},</p>
-    <p>A new document is available for your review in your client portal.</p>
-    <p>Log in to your portal to view it:</p>
+    <p>${greeting}</p>
+    <p>${body}</p>
     <p style="margin: 24px 0; text-align: center;">
-      <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Log in to Portal
+      <a href="${ctaUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
+        ${ctaLabel}
       </a>
     </p>
-    <p style="color: #6b7280; font-size: 13px;">For any questions, reply to this email or use the chat in your portal.</p>
+    <p style="color: #6b7280; font-size: 13px;">${footer}</p>
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
       Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
     </div>

@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard, Check, X,
+  CheckCircle2, Clock,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { CreateOfferDialog } from './create-offer-dialog'
@@ -40,6 +41,14 @@ interface AccountOfferPanelProps {
   contactId?: string | null
   offer: OfferData | null
   isAdmin: boolean
+  /** Activation state for this offer's contract. Works for both account and
+   *  individual (contact) pages. Used to show "Activate now" vs a persistent
+   *  "Activated · payment pending" reminder. */
+  pendingActivation?: {
+    status: string | null
+    activated_at: string | null
+    payment_confirmed_at: string | null
+  } | null
 }
 
 export function AccountOfferPanel({
@@ -49,11 +58,13 @@ export function AccountOfferPanel({
   clientLanguage,
   contactId,
   offer,
-  isAdmin: _isAdmin,
+  isAdmin,
+  pendingActivation = null,
 }: AccountOfferPanelProps) {
   const router = useRouter()
   const [showCreateOffer, setShowCreateOffer] = useState(false)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
+  const [activatingNow, setActivatingNow] = useState(false)
   const [sendingOffer, setSendingOffer] = useState(false)
   const [showSendConfirm, setShowSendConfirm] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -66,6 +77,46 @@ export function AccountOfferPanel({
   const hasOffer = !!offer
   const isOfferDraft = hasOffer && offer.status === 'draft'
   const isOfferClosed = hasOffer && (offer.status === 'expired' || offer.status === 'completed' || offer.contract_type === 'renewal')
+
+  // Activation state (decoupled from payment). "Activated · payment pending"
+  // is the persistent reminder that the contract was turned on before the
+  // money arrived — it stays visible so the activation isn't forgotten.
+  const isActivated = !!pendingActivation?.activated_at || pendingActivation?.status === 'activated'
+  const isPaid = !!pendingActivation?.payment_confirmed_at
+  const activatedAwaitingPayment = isActivated && !isPaid
+  // "Activate now" only makes sense before activation, on a signed contract.
+  const canActivateNow = isAdmin && hasOffer && offer.status === 'signed' && !isActivated
+
+  const handleActivateNow = async () => {
+    if (!offer?.token) return
+    if (!confirm(
+      `Activate ${companyName} now?\n\n` +
+      `This turns their contract on immediately — WITHOUT requiring payment. ` +
+      `Use it when you have a receipt/confirmation but the money isn't in yet.\n\n` +
+      `The contract stays marked as owed until you link a payment.`
+    )) {
+      return
+    }
+    setActivatingNow(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/activate-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offer.token }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || `Failed to activate (HTTP ${res.status})`)
+        return
+      }
+      toast.success(data.message || 'Contract activated')
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Network error — please try again')
+    } finally {
+      setActivatingNow(false)
+    }
+  }
   // Use the current host so the View Offer link works on the sandbox preview
   // and any other branch deployment. Falls back to production for SSR (window
   // is undefined during the server render of this 'use client' component).
@@ -207,6 +258,16 @@ export function AccountOfferPanel({
                   <Eye className="h-3 w-3" /> {offer.view_count} views
                 </span>
               )}
+              {activatedAwaitingPayment && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded bg-amber-100 text-amber-700 flex items-center gap-1" title="The contract was activated before payment. It stays marked as owed until a payment is linked.">
+                  <Clock className="h-3 w-3" /> Activated · payment pending
+                </span>
+              )}
+              {isActivated && isPaid && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" /> Activated
+                </span>
+              )}
             </div>
 
             {/* Cost summary */}
@@ -344,6 +405,21 @@ export function AccountOfferPanel({
                 >
                   <CreditCard className="h-3.5 w-3.5" />
                   Confirm Payment
+                </button>
+              )}
+
+              {/* Activate now — turn the contract on without requiring payment
+                  (owner decides; link the money later). Works for account and
+                  individual since it resolves by offer token. */}
+              {canActivateNow && (
+                <button
+                  onClick={handleActivateNow}
+                  disabled={activatingNow}
+                  title="Turn this contract on now, without requiring payment. Link the money later."
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                >
+                  {activatingNow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  Activate now
                 </button>
               )}
 

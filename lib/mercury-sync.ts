@@ -195,7 +195,7 @@ export async function syncMercuryTransactions(
             memo,
             raw_data: txn as unknown as Json,
             status: isIncoming ? 'unmatched' : 'outgoing',
-          }, { onConflict: 'external_id' })
+          }, { onConflict: 'external_id', ignoreDuplicates: true })
 
         if (upsertErr) {
           console.error(`[mercury-sync] Upsert error for ${txn.id}:`, upsertErr.message)

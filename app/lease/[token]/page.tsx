@@ -16,6 +16,7 @@ interface LeaseAgreement {
   tenant_ein: string | null
   tenant_state: string | null
   tenant_contact_name: string
+  tenant_title: string
   tenant_email: string | null
   landlord_name: string
   landlord_address: string
@@ -291,6 +292,7 @@ export default function LeasePage() {
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 50, marginBottom: 16 }} />
             <h2 style={{ fontSize: 20, color: '#222', margin: 0 }}>Verify Your Identity</h2>
             <p style={{ fontSize: 14, color: '#666', marginTop: 8 }}>Enter the email address associated with this lease to view it.</p>
@@ -336,6 +338,7 @@ export default function LeasePage() {
 
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 48, marginBottom: 16 }} />
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, letterSpacing: 1 }}>OFFICE LEASE AGREEMENT</h1>
           <div style={{ width: 60, height: 2, background: '#0A3161', margin: '12px auto' }} />
@@ -357,7 +360,7 @@ export default function LeasePage() {
           <p style={{ margin: 0 }}>
             <strong>TENANT:</strong><br />
             {lease.tenant_company}, {tenantStateDisplay} Limited Liability Company{tenantEinDisplay}<br />
-            Represented by: {lease.tenant_contact_name}, Owner/Member<br />
+            Represented by: {lease.tenant_contact_name}, {lease.tenant_title}<br />
             <em>(&ldquo;Tenant&rdquo;)</em>
           </p>
         </div>
@@ -499,7 +502,7 @@ export default function LeasePage() {
             <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>Tenant</p>
             <p style={{ fontWeight: 700, marginBottom: 12 }}>{lease.tenant_company}</p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{lease.tenant_contact_name}</strong></p>
-            <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: Owner/Member</p>
+            <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: {lease.tenant_title}</p>
             <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
 
             {/* Signature canvas */}

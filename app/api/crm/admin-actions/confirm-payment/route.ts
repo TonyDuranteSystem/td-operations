@@ -90,9 +90,19 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
-    if (!amount || !currency || !contract_type) {
+    // amount === 0 is valid (free / already-settled activation — no invoice is
+    // created downstream). Reject only a missing/non-numeric/negative amount.
+    if (
+      amount === undefined ||
+      amount === null ||
+      typeof amount !== "number" ||
+      Number.isNaN(amount) ||
+      amount < 0 ||
+      !currency ||
+      !contract_type
+    ) {
       return NextResponse.json(
-        { error: "Missing required fields: amount, currency, contract_type" },
+        { error: "Missing or invalid fields: amount (>= 0), currency, contract_type" },
         { status: 400 }
       )
     }
@@ -431,7 +441,7 @@ export async function POST(request: Request) {
     // an invoice_number, the client_expenses mirror, and an idempotency_key
     // tied to (lead_id + payment_date + amount) so retrying the button does
     // not double-charge or double-record.
-    if (!existingActivation?.portal_invoice_id) {
+    if (!existingActivation?.portal_invoice_id && amount > 0) {
       try {
         const { createTDInvoice } = await import("@/lib/portal/td-invoice")
         const paidDate = payment_date || new Date().toISOString().split("T")[0]

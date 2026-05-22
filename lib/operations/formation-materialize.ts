@@ -192,30 +192,41 @@ export async function materializeFormationCompany(
     }
     steps.push({ step: "fetch_chosen_name", status: "ok", detail: chosenName })
 
-    // 3. Idempotency — if ANY non-cancelled account is already linked to this
-    // contact, no-op. This intentionally skips legacy "Pending Formation"
-    // placeholders too: per Antonio's rule, historic placeholders are LEFT
-    // ALONE; the new materialization flow is for clients with no prior
-    // account at all (which is what the post-PR1 flow produces).
+    // 3. Idempotency — skip only if THIS formation's company already exists for
+    // the contact, matched by the chosen company name. An existing client
+    // opening a NEW, differently-named company must NOT be blocked. The old
+    // guard skipped whenever the contact had ANY non-cancelled account, which
+    // made a second company impossible to materialize (e.g. Adam Mihaly already
+    // owns THW Global LLC, so his new LUMA company could never be created).
+    // Matching on the chosen name still prevents double-materializing the same
+    // formation (a re-run finds the just-created company and no-ops) and leaves
+    // legacy placeholders / other companies alone.
     const { data: existingLinks } = await supabaseAdmin
       .from("account_contacts")
       .select("account_id, accounts:account_id(id, company_name, status)")
       .eq("contact_id", params.contact_id)
 
     if (existingLinks && existingLinks.length > 0) {
-      const activeLink = existingLinks.find(l => {
+      const chosenLower = chosenName.toLowerCase().trim()
+      const sameCompany = existingLinks.find(l => {
         const acc = l.accounts as unknown as { id: string; company_name: string; status: string } | null
-        return acc && acc.status !== "Cancelled" && acc.status !== "Closed"
+        return acc && acc.status !== "Cancelled" && acc.status !== "Closed" &&
+          (acc.company_name || "").toLowerCase().trim() === chosenLower
       })
-      if (activeLink) {
-        const acc = activeLink.accounts as unknown as { id: string; company_name: string; status: string }
+      if (sameCompany) {
+        const acc = sameCompany.accounts as unknown as { id: string; company_name: string; status: string }
         steps.push({
           step: "idempotency_check",
           status: "skipped",
-          detail: `Account already linked: ${acc.company_name} (${acc.status}). Materialization skipped — legacy placeholders are left alone per the architectural rule.`,
+          detail: `"${acc.company_name}" (${acc.status}) already materialized for this contact — this formation is already a company.`,
         })
         return { success: true, outcome: "already_materialized", account_id: acc.id, steps }
       }
+      steps.push({
+        step: "idempotency_check",
+        status: "ok",
+        detail: `Contact has ${existingLinks.length} existing account link(s), none named "${chosenName}" — proceeding to create the new company.`,
+      })
     }
 
     // 4. State + entity_type.
@@ -456,8 +467,10 @@ export async function materializeFormationCompany(
 
               // Copy member passport from Supabase storage to Drive (we'll add to
               // the company folder after we create it; for now, just queue the
-              // path for the post-folder upload).
-              const passportPath = uploadPaths.find(p => p.includes(`passport_member_${i}`))
+              // path for the post-folder upload). Match both the portal wizard
+              // key (member_{i}_member_passport) and the legacy standalone-form
+              // key (passport_member_{i}).
+              const passportPath = uploadPaths.find(p => p.includes(`member_${i}_member_passport`) || p.includes(`passport_member_${i}`))
               if (passportPath && membContactId) {
                 pendingMemberPassports.push({
                   contact_id: membContactId,
@@ -522,19 +535,84 @@ export async function materializeFormationCompany(
         detail: folderResult.created ? "Company Drive folder created" : "Company Drive folder already exists, linked",
       })
 
-      const contactFolderId = ownerContact?.drive_folder_id || (() => {
-        const u = ownerContact?.gdrive_folder_url
-        if (!u) return null
-        const m = u.match(/folders\/([a-zA-Z0-9_-]+)/)
-        return m?.[1] ?? null
-      })()
-      if (contactFolderId && contactFolderId !== folderResult.folderId) {
-        const migrationResult = await migrateContactToCompany(contactFolderId, folderResult.folderId, params.contact_id)
-        steps.push({
-          step: "drive_migration",
-          status: migrationResult.errors.length > 0 ? "error" : "ok",
-          detail: `${migrationResult.moved} file(s) migrated${migrationResult.errors.length > 0 ? `, ${migrationResult.errors.length} error(s)` : ""}`,
-        })
+      // Multi-company guard: if the owner already belongs to another active
+      // company, their contact Drive folder may live INSIDE that company —
+      // migrating it would drag the other company's files along and re-point
+      // the contact away from it. So for multi-company owners we do NOT migrate;
+      // instead we copy the owner passport from storage straight into THIS
+      // company's "2. Contacts" (same path as additional members) and relink the
+      // staging passport document to this account. Single-company owners keep
+      // the original migrate behavior (their contact folder is their own).
+      const ownerHasOtherActiveAccount = (existingLinks ?? []).some(l => {
+        const acc = l.accounts as unknown as { status: string } | null
+        return acc && acc.status !== "Cancelled" && acc.status !== "Closed"
+      })
+
+      if (ownerHasOtherActiveAccount) {
+        const ownerPassportPath = typeof submitted.passport_owner === "string"
+          ? submitted.passport_owner
+          : uploadPaths.find(p => p.includes("passport_owner")) || null
+        if (ownerPassportPath && companyContactsSubfolderId) {
+          try {
+            const cleanPath = ownerPassportPath.replace(/^\/+/, "")
+            const { data: blob, error: dlErr } = await supabaseAdmin.storage
+              .from("onboarding-uploads")
+              .download(cleanPath)
+            if (dlErr || !blob) {
+              steps.push({ step: "owner_passport_copy", status: "error", detail: dlErr?.message || "Download failed" })
+            } else {
+              const fileName = cleanPath.split("/").pop() || "passport.pdf"
+              const buffer = Buffer.from(await blob.arrayBuffer())
+              const mimeType = blob.type || "application/octet-stream"
+              const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, companyContactsSubfolderId) as { id: string }
+              const newLink = `https://drive.google.com/file/d/${driveFile.id}/view`
+              // Relink the staging owner-passport doc row (created by
+              // formation_setup with account_id=null) to this company + the new
+              // Drive file, so there is exactly one row in the right place.
+              const { data: relinked } = await supabaseAdmin
+                .from("documents")
+                .update({ account_id: accountId, drive_file_id: driveFile.id, drive_link: newLink, updated_at: new Date().toISOString() })
+                .eq("contact_id", params.contact_id)
+                .eq("document_type_name", "Passport")
+                .eq("category", 2)
+                .is("account_id", null)
+                .select("id")
+              if (!relinked || relinked.length === 0) {
+                await supabaseAdmin.from("documents").insert({
+                  file_name: fileName,
+                  drive_file_id: driveFile.id,
+                  drive_link: newLink,
+                  document_type_name: "Passport",
+                  category: 2,
+                  category_name: "Contacts",
+                  status: "classified",
+                  contact_id: params.contact_id,
+                  account_id: accountId,
+                  portal_visible: true,
+                })
+              }
+              steps.push({ step: "owner_passport_copy", status: "ok", detail: `Owner passport placed in company 2.Contacts (${driveFile.id})` })
+            }
+          } catch (e) {
+            steps.push({ step: "owner_passport_copy", status: "error", detail: e instanceof Error ? e.message : String(e) })
+          }
+        }
+        steps.push({ step: "drive_migration", status: "skipped", detail: "Multi-company owner — contact folder NOT migrated (other company left intact)" })
+      } else {
+        const contactFolderId = ownerContact?.drive_folder_id || (() => {
+          const u = ownerContact?.gdrive_folder_url
+          if (!u) return null
+          const m = u.match(/folders\/([a-zA-Z0-9_-]+)/)
+          return m?.[1] ?? null
+        })()
+        if (contactFolderId && contactFolderId !== folderResult.folderId) {
+          const migrationResult = await migrateContactToCompany(contactFolderId, folderResult.folderId, params.contact_id)
+          steps.push({
+            step: "drive_migration",
+            status: migrationResult.errors.length > 0 ? "error" : "ok",
+            detail: `${migrationResult.moved} file(s) migrated${migrationResult.errors.length > 0 ? `, ${migrationResult.errors.length} error(s)` : ""}`,
+          })
+        }
       }
     } catch (driveErr) {
       steps.push({ step: "drive_folder", status: "error", detail: driveErr instanceof Error ? driveErr.message : String(driveErr) })

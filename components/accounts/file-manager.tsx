@@ -6,11 +6,12 @@ import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
   MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2, Search,
   RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet, Globe,
-  FolderPlus, Link2, ShieldCheck, Upload,
+  FolderPlus, Link2, ShieldCheck, Upload, ScanText,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ function FileRow({
   index,
   onRefresh,
   onPreview,
+  onViewOcr,
   docInfo,
 }: {
   file: DriveFile
@@ -83,6 +85,7 @@ function FileRow({
   index: number
   onRefresh: () => void
   onPreview: (file: DriveFile) => void
+  onViewOcr?: (docId: string) => void
   docInfo?: DocInfo
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -325,6 +328,17 @@ function FileRow({
             <Search className="h-3.5 w-3.5" />
           </button>
 
+          {/* View OCR text — shown when this Drive file has a CRM document record */}
+          {docInfo?.docId && onViewOcr && (
+            <button
+              onClick={() => onViewOcr(docInfo.docId)}
+              className="p-1 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors shrink-0"
+              title="View OCR text"
+            >
+              <ScanText className="h-3.5 w-3.5" />
+            </button>
+          )}
+
           {/* Portal visibility toggle — shown for all files, processes unprocessed ones on click */}
           <button
               onClick={handleTogglePortalVisibility}
@@ -450,6 +464,7 @@ function FolderSection({
   allFolders,
   onRefresh,
   onPreview,
+  onViewOcr,
   docMap,
   defaultExpanded = true,
   depth = 0,
@@ -459,6 +474,7 @@ function FolderSection({
   allFolders: FolderData[]
   onRefresh: () => void
   onPreview: (file: DriveFile) => void
+  onViewOcr?: (docId: string) => void
   docMap: Record<string, DocInfo>
   defaultExpanded?: boolean
   depth?: number
@@ -514,6 +530,7 @@ function FolderSection({
                     index={idx}
                     onRefresh={onRefresh}
                     onPreview={onPreview}
+                    onViewOcr={onViewOcr}
                     docInfo={docMap[file.id]}
                   />
                 ))}
@@ -531,6 +548,7 @@ function FolderSection({
               allFolders={allFolders}
               onRefresh={onRefresh}
               onPreview={onPreview}
+              onViewOcr={onViewOcr}
               docMap={docMap}
               defaultExpanded={false}
               depth={depth + 1}
@@ -573,6 +591,7 @@ const ACCOUNT_UPLOAD_CATEGORIES = ['Company', 'Tax', 'Banking', 'Correspondence'
 export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
+  const [ocrDocId, setOcrDocId] = useState<string | null>(null)
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
@@ -820,6 +839,7 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
 
   return (
     <div className="space-y-2">
+      <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {/* Validation result banner */}
       {validationResult && (
         <div className={cn(
@@ -970,6 +990,7 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
               allFolders={folders}
               onRefresh={handleRefresh}
               onPreview={setPreviewFile}
+              onViewOcr={setOcrDocId}
               docMap={docMap}
             />
           ))}
@@ -992,6 +1013,7 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
                         index={idx}
                         onRefresh={handleRefresh}
                         onPreview={setPreviewFile}
+                        onViewOcr={setOcrDocId}
                         docInfo={docMap[file.id]}
                       />
                     ))}

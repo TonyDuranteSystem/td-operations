@@ -1349,6 +1349,34 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("staff_notification", "error", e instanceof Error ? e.message : String(e)))
   }
 
+  // ─── ITIN SERVICE DELIVERIES (start-at-wizard — dev_task fcf5e254) ───
+  // ITIN is personal — start it now for each person the client marked "applies
+  // for ITIN" in the wizard (owner + members). No-op when the offer had no ITIN.
+  if (contact_id) {
+    try {
+      const { createItinDeliveriesFromWizard } = await import("@/lib/operations/itin-from-wizard")
+      const itin = await createItinDeliveriesFromWizard({
+        contactId: contact_id,
+        leadId: p.lead_id,
+        submitted,
+        offerToken: token,
+      })
+      if (itin.created === 0 && itin.skipped === 0) {
+        result.steps.push(step("itin_deliveries", "skipped", "No one applied for ITIN"))
+      } else {
+        result.steps.push(
+          step(
+            "itin_deliveries",
+            "ok",
+            `${itin.created} created, ${itin.skipped} existing — ${itin.people.map((x) => `${x.name}:${x.status}`).join(", ")}`,
+          ),
+        )
+      }
+    } catch (e) {
+      result.steps.push(step("itin_deliveries", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
   // Summary
   const okCount = result.steps.filter(s => s.status === "ok").length
   const errCount = result.steps.filter(s => s.status === "error").length

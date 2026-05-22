@@ -36,6 +36,7 @@ import { getWorkflowSchema } from "@/lib/tasks/workflow-schemas"
 import { parseTriggeredBy, matchesFilter } from "@/lib/tasks/workflow-trigger-schema"
 import { interpolateStringStrict } from "@/lib/template-interpolation"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
+import { logWorkflowDispatch } from "@/lib/tasks/workflow-dispatch-log"
 import type { WorkflowSnapshot } from "@/lib/tasks/types"
 
 /**
@@ -165,8 +166,12 @@ export interface DispatchFormCompletionParams<T extends Record<string, unknown>>
  * and spawn the corresponding workflow task. Returns spawned=false (with a
  * specific reason) when no spawn happened — the caller's responsibility is
  * to fall back to its legacy plain-task creation in that case.
+ *
+ * NOTE: this is the inner implementation. The exported
+ * `dispatchWorkflowForFormCompletion` wraps it to record one
+ * workflow_dispatch_log row (observation-only). Behavior is identical.
  */
-export async function dispatchWorkflowForFormCompletion<T extends Record<string, unknown>>(
+async function dispatchWorkflowForFormCompletionInner<T extends Record<string, unknown>>(
   params: DispatchFormCompletionParams<T>,
 ): Promise<DispatchResult> {
   const { form_table, submission, build_task_meta, actor } = params
@@ -338,6 +343,37 @@ export async function dispatchWorkflowForFormCompletion<T extends Record<string,
   }
 }
 
+/**
+ * Public entry point for form-completion dispatch. Runs the inner dispatcher
+ * unchanged, then records one observation-only workflow_dispatch_log row. The
+ * log write is timeout-bounded and never throws, so it cannot change or slow
+ * the dispatch outcome the caller receives.
+ */
+export async function dispatchWorkflowForFormCompletion<T extends Record<string, unknown>>(
+  params: DispatchFormCompletionParams<T>,
+): Promise<DispatchResult> {
+  const result = await dispatchWorkflowForFormCompletionInner(params)
+
+  const submissionId = (() => {
+    const v = (params.submission as Record<string, unknown>).id
+    return typeof v === "string" ? v : null
+  })()
+
+  await logWorkflowDispatch({
+    trigger_source: "form_submission",
+    event_descriptor: params.form_table,
+    event_ref: params.idempotency?.value ?? submissionId,
+    result,
+    account_id: params.account_id ?? null,
+    contact_id: params.contact_id ?? null,
+    delivery_id: params.delivery_id ?? null,
+    actor: params.actor,
+    extra_details: { form_table: params.form_table },
+  })
+
+  return result
+}
+
 // ─── SD-created dispatcher (Slice 9) ─────────────────────────────────────
 
 export interface DispatchSdCreatedParams {
@@ -375,8 +411,12 @@ export interface DispatchSdCreatedParams {
  * Always-on idempotency: uses task_meta.service_delivery_id as the dedup key.
  * Two SD inserts for the same SD id (unlikely, but a retry could cause it)
  * → second call returns reason='already_spawned' with the existing task_id.
+ *
+ * NOTE: this is the inner implementation. The exported
+ * `dispatchWorkflowForSdCreated` wraps it to record one
+ * workflow_dispatch_log row (observation-only). Behavior is identical.
  */
-export async function dispatchWorkflowForSdCreated(
+async function dispatchWorkflowForSdCreatedInner(
   params: DispatchSdCreatedParams,
 ): Promise<DispatchResult> {
   const { delivery, build_task_meta, actor } = params
@@ -539,6 +579,32 @@ export async function dispatchWorkflowForSdCreated(
     workflow_slug: matched.slug,
     task_id: spawn.task_id,
   }
+}
+
+/**
+ * Public entry point for SD-created dispatch. Runs the inner dispatcher
+ * unchanged, then records one observation-only workflow_dispatch_log row. The
+ * log write is timeout-bounded and never throws, so it cannot change or slow
+ * the dispatch outcome the caller receives.
+ */
+export async function dispatchWorkflowForSdCreated(
+  params: DispatchSdCreatedParams,
+): Promise<DispatchResult> {
+  const result = await dispatchWorkflowForSdCreatedInner(params)
+
+  await logWorkflowDispatch({
+    trigger_source: "sd_created",
+    event_descriptor: params.delivery.service_type,
+    event_ref: params.delivery.id,
+    result,
+    account_id: params.delivery.account_id ?? null,
+    contact_id: params.delivery.contact_id ?? null,
+    delivery_id: params.delivery.id,
+    actor: params.actor,
+    extra_details: { service_type: params.delivery.service_type },
+  })
+
+  return result
 }
 
 /**

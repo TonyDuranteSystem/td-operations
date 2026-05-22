@@ -39,6 +39,11 @@ LANGUAGE RULES (CRITICAL):
 - The intro field for the OTHER language MUST be an empty string ""; do NOT translate or duplicate the intro into the other language.
 - "strategy", "next_steps", "future_developments", and "immediate_actions" MUST be written in ${otherSectionsLang}.
 
+CONTRACT TYPE RULES (CRITICAL — shapes the entire content):
+- "formation": client is forming a BRAND NEW LLC. Cover formation steps, EIN application, registered agent setup, state filing.
+- "onboarding": client ALREADY HAS an existing LLC and is joining Tony Durante's ongoing management. Do NOT mention entity formation, LLC registration, or gathering formation documents — the company exists. Focus on: integrating into ongoing compliance management, collecting existing company documents, setting up accounting systems, understanding their current compliance state, registered agent and annual filing management going forward.
+- "renewal": client is renewing an existing annual management agreement. Focus on continuity, service upgrades, and the upcoming year's compliance calendar.
+
 Other rules:
 - Output ONLY the JSON object. No markdown, no code fences, no explanation.
 - All content must be relevant to the specific client and services selected.

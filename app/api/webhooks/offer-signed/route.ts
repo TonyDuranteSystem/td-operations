@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
-import { decideInvoiceAtSigning, getServiceLabel } from "@/lib/portal/offer-invoice-policy"
+import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
 
 export async function POST(req: NextRequest) {
   try {
@@ -256,8 +256,6 @@ export async function POST(req: NextRequest) {
         total_amount: totalAmount,
       })
       if (invoiceDecision.create) {
-        const serviceLabel = getServiceLabel(contractType)
-
         const currency = (() => {
           const raw = summaryArr[0]?.total || summaryArr[0]?.total_label || ""
           if (raw.includes("€") || raw.toUpperCase().includes("EUR")) return "EUR" as const
@@ -267,7 +265,7 @@ export async function POST(req: NextRequest) {
         const invoiceResult = await createTDInvoice({
           contact_id: contactId,
           line_items: [{
-            description: `${serviceLabel} Package - ${offer.client_name}`,
+            description: getInvoiceDescription(contractType, selectedServices, offer.client_name),
             unit_price: totalAmount,
             quantity: 1,
           }],

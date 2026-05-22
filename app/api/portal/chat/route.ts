@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
+import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
@@ -249,9 +250,12 @@ export async function POST(request: NextRequest) {
     }).catch(() => {})
   }
 
-  // Notify admin when client sends a message
+  // Notify admin when client sends a message. The email is gated by an
+  // app_settings toggle (Dev Tools → Maintenance); push is always sent.
   if (senderType === 'client') {
-    notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
+    if (await isPortalAdminEmailEnabled()) {
+      notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
+    }
     pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {})
   }
 

@@ -55,22 +55,40 @@ export async function GET(
 
   const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, physical_address, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('company_name, physical_address, ein_number, portal_tier, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', payment.account_id)
     .single()
 
-  // Get primary contact email for bill-to
-  const { data: contactLink } = await supabaseAdmin
-    .from('account_contacts')
-    .select('contacts(first_name, last_name, email)')
-    .eq('account_id', payment.account_id)
-    .eq('role', 'Owner')
-    .limit(1)
-    .maybeSingle()
+  // Get primary contact for bill-to (via account link, or direct contact_id fallback)
+  const [contactLinkResult, directContactResult] = await Promise.all([
+    payment.account_id
+      ? supabaseAdmin
+          .from('account_contacts')
+          .select('contacts(first_name, last_name, email)')
+          .eq('account_id', payment.account_id)
+          .eq('role', 'Owner')
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    !payment.account_id && payment.contact_id
+      ? supabaseAdmin
+          .from('contacts')
+          .select('first_name, last_name, email')
+          .eq('id', payment.contact_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
 
-  const contact = (contactLink as unknown as { contacts: { first_name: string; last_name: string; email: string } })?.contacts
+  const contact = (contactLinkResult.data as unknown as { contacts: { first_name: string; last_name: string; email: string } })?.contacts
+    ?? (directContactResult.data as { first_name: string; last_name: string; email: string } | null)
 
   const isCredit = payment.invoice_status === 'Credit'
+  const isPortalClient = account?.portal_tier === 'active'
+  const currency = payment.amount_currency ?? 'USD'
+
+  const billToName = account?.company_name
+    ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null)
+    ?? 'Client'
 
   const pdfInput: InvoicePdfInput = {
     companyName: TD_COMPANY.name,
@@ -80,12 +98,12 @@ export async function GET(
     documentType: isCredit ? 'CREDIT NOTE' : 'INVOICE',
     invoiceNumber: payment.invoice_number ?? 'DRAFT',
     status: payment.invoice_status,
-    currency: payment.amount_currency ?? 'USD',
+    currency,
     issueDate: payment.issue_date ?? new Date().toISOString().split('T')[0],
     dueDate: payment.due_date,
 
     billTo: {
-      name: account?.company_name ?? 'Client',
+      name: billToName,
       email: contact?.email ?? null,
       address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
     },
@@ -96,7 +114,7 @@ export async function GET(
     total: Number(payment.total ?? payment.amount ?? 0),
 
     message: payment.message,
-    bankDetails: BANK_DETAILS[payment.amount_currency ?? 'USD'] ?? BANK_DETAILS.USD,
+    bankDetails: isPortalClient ? null : (BANK_DETAILS[currency] ?? BANK_DETAILS.USD),
   }
 
   const pdfBytes = await generateInvoicePdf(pdfInput)

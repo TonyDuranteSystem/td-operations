@@ -70,6 +70,31 @@ export function isUIOnlyType(type: string): type is UIOnlyType {
 }
 
 /**
+ * Wizard types owned by the BUYER (contact), not the company.
+ *
+ * Per the formation architecture (Antonio, 2026-05-03/04, sysdoc
+ * 'ops-2026-05-03-formation-architecture-decision-and-plan'): a formation is
+ * purchased by an individual before any company exists, so its wizard_progress
+ * and submission live on the contact and NEVER migrate to the account — even
+ * after the company is materialized (materialization sets account_id on the
+ * service delivery, not on wizard_progress). When NOT scoped to a specific
+ * new-company lead (PR #75's ?lead= flow), the portal must look these up by
+ * contact_id, not account_id. Otherwise, the moment a contact gains a linked
+ * account the portal stops finding the formation and re-offers it, creating a
+ * duplicate (Lorenzo Cannas, dev_task 21fd1f4a).
+ *
+ * Account-owned wizards (onboarding, banking, tax, closure, company_info) stay
+ * account-scoped — they belong to the company.
+ */
+export const CONTACT_SCOPED_WIZARD_TYPES = ["formation"] as const
+
+export type ContactScopedWizardType = (typeof CONTACT_SCOPED_WIZARD_TYPES)[number]
+
+export function isContactScopedWizard(type: string | undefined): boolean {
+  return CONTACT_SCOPED_WIZARD_TYPES.includes(type as ContactScopedWizardType)
+}
+
+/**
  * wizard_type → submission table name. Null for types with no submission
  * table (must be in BANKING_INLINE_TYPES, UI_ONLY_TYPES, or the
  * wizard-submit route silently drops the submission).

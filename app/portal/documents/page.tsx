@@ -58,7 +58,13 @@ export default async function PortalDocumentsPage() {
       .or(`category.in.(${COMPANY_CATEGORIES.join(',')}),contact_id.is.null`)
       .order('created_at', { ascending: false })
       .limit(100)
-    companyDocs = (cdData ?? []) as DocRow[]
+    // Personal documents (category 2 = Contacts) must NEVER surface as company-
+    // wide docs — not even when their owner is unresolved (contact_id null),
+    // which the `contact_id.is.null` branch above would otherwise let through.
+    // They appear ONLY in "My Documents" for their owner; an ownerless personal
+    // doc stays hidden from all clients until an admin assigns it. This closes a
+    // multi-member leak where an unassigned passport could be shown to everyone.
+    companyDocs = (cdData ?? []).filter(d => d.category !== 2) as DocRow[]
 
     // My docs: personal category (Contacts = 2) belonging to this contact only
     const { data: mdData } = await supabaseAdmin

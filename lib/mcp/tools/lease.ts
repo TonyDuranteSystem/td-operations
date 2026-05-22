@@ -52,6 +52,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
       security_deposit: z.number().optional().describe("Security deposit in USD (default: 150)"),
       square_feet: z.number().optional().describe("Office square footage (default: 120)"),
       language: z.string().optional().describe("Language: 'en' or 'it' (default: 'en')"),
+      tenant_title: z.string().optional().describe("Tenant signature title (default: 'Manager'). Use 'Member' or 'Owner' when applicable."),
     },
     async (params) => {
       try {
@@ -69,6 +70,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           security_deposit: params.security_deposit,
           square_feet: params.square_feet,
           language: params.language as "en" | "it" | undefined,
+          tenant_title: params.tenant_title,
           actor: "claude.ai",
         })
 

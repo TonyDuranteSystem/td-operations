@@ -18,6 +18,7 @@ import { describe, it, expect } from "vitest"
 import {
   decideInvoiceAtSigning,
   getServiceLabel,
+  getInvoiceDescription,
   NEW_CONTRACT_TYPES,
 } from "@/lib/portal/offer-invoice-policy"
 
@@ -130,5 +131,25 @@ describe("getServiceLabel — mapping", () => {
     expect(getServiceLabel(null)).toBe("Service")
     expect(getServiceLabel(undefined)).toBe("Service")
     expect(getServiceLabel("")).toBe("Service")
+  })
+})
+
+describe("getInvoiceDescription — description building", () => {
+  it("uses selected_services when present", () => {
+    expect(
+      getInvoiceDescription("formation", ["Company Change Name"], "DF Commerce LLC"),
+    ).toBe("Company Change Name - DF Commerce LLC")
+  })
+
+  it("joins multiple selected_services with comma", () => {
+    expect(
+      getInvoiceDescription("formation", ["LLC Formation", "EIN Application"], "Acme LLC"),
+    ).toBe("LLC Formation, EIN Application - Acme LLC")
+  })
+
+  it("falls back to contract_type label when selected_services is empty", () => {
+    expect(getInvoiceDescription("formation", [], "Acme LLC")).toBe("LLC Formation Package - Acme LLC")
+    expect(getInvoiceDescription("onboarding", null, "Acme LLC")).toBe("LLC Onboarding Package - Acme LLC")
+    expect(getInvoiceDescription("formation", undefined, "Acme LLC")).toBe("LLC Formation Package - Acme LLC")
   })
 })

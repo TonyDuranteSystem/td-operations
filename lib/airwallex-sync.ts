@@ -153,7 +153,7 @@ export async function syncAirwallexDeposits(
             memo: [senderName, senderReference].filter(Boolean).join(' — '),
             raw_data: deposit as unknown as Json,
             status: 'unmatched',
-          }, { onConflict: 'external_id' })
+          }, { onConflict: 'external_id', ignoreDuplicates: true })
 
         if (upsertErr) {
           console.error(`[airwallex-sync] Upsert error for ${depositId}:`, upsertErr.message)

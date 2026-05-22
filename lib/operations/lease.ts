@@ -56,6 +56,8 @@ export interface CreateLeaseParams {
   square_feet?: number
   /** Default: derived from contact.language; falls back to 'en'. */
   language?: "en" | "it"
+  /** Tenant signature title. Default: 'Manager'. */
+  tenant_title?: string
   /**
    * When true, the (account_id + contract_year) duplicate check is
    * skipped. Default false. Used by flows that re-generate a lease
@@ -206,6 +208,7 @@ export async function createLease(
         tenant_state: account.state_of_formation || null,
         tenant_contact_name: contact.full_name,
         tenant_email: contact.email || null,
+        tenant_title: params.tenant_title ?? 'Manager',
         premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
         suite_number: suiteNumber,
         square_feet: params.square_feet ?? 120,
@@ -231,7 +234,13 @@ export async function createLease(
       }
     }
 
-    // 7. Log
+    // 7. Sync physical_address on the account so OA generation picks up the suite
+    await supabaseAdmin
+      .from("accounts")
+      .update({ physical_address: `10225 Ulmerton Rd, Suite ${suiteNumber}, Largo, FL 33771` })
+      .eq("id", params.account_id)
+
+    // 8. Log
     logAction({
       actor: params.actor || "system",
       action_type: "create",

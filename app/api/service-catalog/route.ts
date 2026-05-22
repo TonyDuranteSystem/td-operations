@@ -5,11 +5,23 @@ import { NextRequest, NextResponse } from 'next/server'
 /**
  * GET /api/service-catalog
  * Returns services sorted by sort_order.
- * ?include_inactive=true  → return all (active + inactive)
- * default                 → active only
+ *
+ *   ?include_inactive=true   → return all (active + inactive)
+ *   ?contact_eligible=true   → restrict to services tagged 'contact_eligible'
+ *                              in catalog_entries(catalog_id='services'). Used
+ *                              by the contact-detail Add Service dialog so
+ *                              only services that legitimately exist on a
+ *                              contact without an account (ITIN, Banking
+ *                              Physical, Formation, Notary, Shipping,
+ *                              Consulting per the catalog tag) are listed.
+ *                              Adding a new contact-eligible service tomorrow
+ *                              = one INSERT to the catalog tag, no code change.
+ *
+ *   default                  → active only
  */
 export async function GET(request: NextRequest) {
   const includeInactive = request.nextUrl.searchParams.get('include_inactive') === 'true'
+  const contactEligibleOnly = request.nextUrl.searchParams.get('contact_eligible') === 'true'
 
   let query = supabaseAdmin
     .from('service_catalog')
@@ -22,7 +34,30 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ services: data ?? [] })
+
+  let services = data ?? []
+  if (contactEligibleOnly) {
+    // Join with catalog_entries.services on slug; keep only rows whose tag
+    // array includes 'contact_eligible'. Two-query approach (over a SQL join)
+    // because service_catalog and catalog_entries live in the same schema but
+    // PostgREST can't natively join non-FK tables here. Both queries are tiny.
+    const { data: eligible } = await supabaseAdmin
+      .from('catalog_entries')
+      .select('slug, tags')
+      .eq('catalog_id', 'services')
+      .eq('status', 'active')
+    const eligibleSlugs = new Set(
+      (eligible ?? [])
+        .filter(e => {
+          const tags = (e.tags as unknown[] | null) ?? []
+          return Array.isArray(tags) && tags.includes('contact_eligible')
+        })
+        .map(e => e.slug as string),
+    )
+    services = services.filter(s => s.slug && eligibleSlugs.has(s.slug))
+  }
+
+  return NextResponse.json({ services })
 }
 
 /**

@@ -44,6 +44,12 @@ export const MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: false, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_zip', label: 'ZIP Code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
   { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  // Passport per individual member — every member of a multi-member LLC must
+  // provide ID. Owner's passport is collected on the Documents step; each
+  // additional individual member uploads theirs here. The upload key resolves
+  // to member_{idx}_member_passport (see wizard-client members repeater), which
+  // formation materialization reads to file each member's passport privately.
+  { name: 'member_passport', label: 'Passport Scan', labelIt: 'Scansione Passaporto', type: 'file', required: true, hint: 'Clear photo of the passport data page', hintIt: 'Foto chiara della pagina dati del passaporto', conditional: { field: 'member_type', value: 'individual' } },
 
   // ── Ownership % (always shown — applies to both types) ──
   { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true },
@@ -66,6 +72,39 @@ export const MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_rep_address_zip', label: 'Representative ZIP', labelIt: 'CAP Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
   { name: 'member_rep_address_country', label: 'Representative Country', labelIt: 'Paese Rappresentante', type: 'country', required: false, conditional: { field: 'member_type', value: 'company' } },
 ]
+
+// ─── "Applies for ITIN?" per-person fields (dev_task fcf5e254) ──
+// Injected by wizard-client ONLY when the offer bundled a start-at-wizard ITIN
+// purchase (itinCount > 0). The offer dictates HOW MANY ITINs were bought; the
+// client marks WHO applies. Required so the choice is explicit; wizard-client
+// also enforces that the number of "Yes" answers equals the purchased quantity.
+export const OWNER_ITIN_FIELD: FieldConfig = {
+  name: 'owner_needs_itin',
+  label: 'Apply for an ITIN for this person?',
+  labelIt: 'Richiedere un ITIN per questa persona?',
+  type: 'select',
+  required: true,
+  options: [
+    { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    { value: 'No', label: 'No', labelIt: 'No' },
+  ],
+  hint: 'Your offer includes ITIN application(s).',
+  hintIt: 'La tua offerta include la richiesta ITIN.',
+}
+
+export const MEMBER_ITIN_FIELD: FieldConfig = {
+  name: 'member_needs_itin',
+  label: 'Apply for an ITIN for this member?',
+  labelIt: 'Richiedere un ITIN per questo membro?',
+  type: 'select',
+  required: true,
+  options: [
+    { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    { value: 'No', label: 'No', labelIt: 'No' },
+  ],
+  // Individual members only — company members do not get a personal ITIN.
+  conditional: { field: 'member_type', value: 'individual' },
+}
 
 // ─── FORMATION ─────────────────────────────────────────────
 

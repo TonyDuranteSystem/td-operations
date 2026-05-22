@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import { X, Loader2, CreditCard, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
@@ -102,6 +102,17 @@ export function ConfirmPaymentDialog({
     return 'EUR'
   })()
 
+  // Prefill amount + currency from the offer when the dialog opens. The fields
+  // stay editable so the admin can override (e.g. a $0-setup contract that was
+  // actually paid $1000 by wire). Keyed on offer token + open so re-opening
+  // re-seeds but mid-edit re-renders don't clobber the admin's input.
+  useEffect(() => {
+    if (!open || !offer) return
+    setAmount(offerTotal != null ? String(offerTotal) : '')
+    setCurrency(offerCurrency)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, offer?.token])
+
   if (!open) return null
 
   const handlePipelineToggle = (pipeline: string) => {
@@ -115,13 +126,16 @@ export function ConfirmPaymentDialog({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
 
-    const finalAmount = hasOffer && offerTotal ? offerTotal : Number(amount)
-    const finalCurrency = hasOffer ? offerCurrency : currency
+    const amountTrimmed = amount.trim()
+    const finalAmount = Number(amountTrimmed)
+    const finalCurrency = currency
     const finalContractType = hasOffer && offer?.contract_type ? offer.contract_type : contractType
     const finalPipelines = hasOffer ? offerPipelines : selectedPipelines
 
-    if (!finalAmount || finalAmount <= 0) {
-      toast.error('Amount is required and must be > 0')
+    // $0 is allowed (free / already-settled activation). Only block a blank
+    // field, a non-number, or a negative — never silently treat blank as 0.
+    if (amountTrimmed === '' || Number.isNaN(finalAmount) || finalAmount < 0) {
+      toast.error('Enter an amount (use 0 for a free / already-settled activation)')
       return
     }
 
@@ -310,35 +324,44 @@ export function ConfirmPaymentDialog({
               />
             </div>
 
+            {/* Amount + Currency — always editable. Prefilled from the offer
+                when one exists, but the admin can override (e.g. a $0-setup
+                contract that was actually paid by wire). Enter 0 to activate a
+                free / already-settled contract without creating an invoice. */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">Amount *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {hasOffer && (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Prefilled from offer — edit if the paid amount differs. Use 0 for a free activation (no invoice created).
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Currency</label>
+                <select
+                  value={currency}
+                  onChange={e => setCurrency(e.target.value as 'USD' | 'EUR')}
+                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="EUR">EUR (€)</option>
+                  <option value="USD">USD ($)</option>
+                </select>
+              </div>
+            </div>
+
             {/* Mode 2 — Manual fields (no offer + lead path only) */}
             {!hasOffer && leadId && (
               <>
-                {/* Amount + Currency */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Amount *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={amount}
-                      onChange={e => setAmount(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Currency</label>
-                    <select
-                      value={currency}
-                      onChange={e => setCurrency(e.target.value as 'USD' | 'EUR')}
-                      className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="EUR">EUR (€)</option>
-                      <option value="USD">USD ($)</option>
-                    </select>
-                  </div>
-                </div>
-
                 {/* Contract Type */}
                 <div>
                   <label className="block text-sm font-medium mb-1">Contract Type *</label>

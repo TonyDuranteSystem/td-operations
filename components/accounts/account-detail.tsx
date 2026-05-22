@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { WorkflowIssuesLink } from '@/components/accounts/workflow-issues-link'
 import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
@@ -660,6 +661,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
               <Stethoscope className="h-3.5 w-3.5" />
               Diagnose
             </button>
+            <WorkflowIssuesLink accountId={account.id} />
             <button
               onClick={() => setShowPlaceClient(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
@@ -730,6 +732,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         contactId={primaryContact?.id}
         offer={offer}
         isAdmin={isAdmin}
+        pendingActivation={pendingActivation}
       />
 
       {/* Documents to Sign Panel */}
@@ -1473,7 +1476,7 @@ function DBASection({
   )
 }
 
-function MembersSection({ accountId, accountCompanyName }: { accountId: string; accountCompanyName: string }) {
+function MembersSection({ accountId, accountCompanyName, contacts, memberCount: initialMemberCount, accountUpdatedAt }: { accountId: string; accountCompanyName: string; contacts: Contact[]; memberCount: number | null; accountUpdatedAt: string }) {
   const [members, setMembers] = useState<CrmMember[]>([])
   const [loading, setLoading] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -1483,10 +1486,15 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
   const [addType, setAddType] = useState<'individual' | 'company'>('individual')
   const [addDraft, setAddDraft] = useState<Record<string, string | number | null>>({})
   const [adding, setAdding] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CrmMember | null>(null)
   const [sendingForm, setSendingForm] = useState(false)
   const [formRequest, setFormRequest] = useState<{ status: string; created_at: string; submitted_at: string | null } | null>(null)
   const [hasPrimaryContact, setHasPrimaryContact] = useState(true)
+  const [memberCount, setMemberCount] = useState<number | null>(initialMemberCount)
+  const [editingMemberCount, setEditingMemberCount] = useState(false)
+  const [memberCountDraft, setMemberCountDraft] = useState('')
+  const [savingMemberCount, setSavingMemberCount] = useState(false)
 
   const loadFormRequest = () => {
     fetch(`/api/accounts/${accountId}/member-info-form`)
@@ -1558,6 +1566,7 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
 
   const handleAdd = async () => {
     setAdding(true)
+    setAddError(null)
     try {
       const body = addType === 'company'
         ? { member_type: 'company', member_company_name: addDraft.company_name, ...addDraft }
@@ -1574,7 +1583,9 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
       setAddDraft({})
       toast.success('Member added')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add member')
+      // Show the plain-language reason right here in the form (persistent),
+      // not just a toast that disappears.
+      setAddError(err instanceof Error && err.message ? err.message : 'Could not add the member.')
     } finally {
       setAdding(false)
     }
@@ -1597,7 +1608,28 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
     }
   }
 
+  const handleSaveMemberCount = async () => {
+    setSavingMemberCount(true)
+    try {
+      const result = await updateAccountField(accountId, 'member_count', memberCountDraft, accountUpdatedAt)
+      if (!result.success) throw new Error(result.error ?? 'Failed to save')
+      const parsed = memberCountDraft.trim() === '' ? null : parseInt(memberCountDraft, 10)
+      setMemberCount(isNaN(parsed as number) ? null : parsed)
+      setEditingMemberCount(false)
+      toast.success('Member count saved')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSavingMemberCount(false)
+    }
+  }
+
   const inputCls = 'w-full px-2.5 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
+
+  // Contacts already linked to a member — excluded from the picker so we can't
+  // link the same contact twice (which violates the one-member-per-contact rule).
+  const linkedContactIds = new Set(members.map(m => m.contact_id).filter(Boolean) as string[])
+  const availableContacts = contacts.filter(c => !linkedContactIds.has(c.id))
 
   if (loading) {
     return (
@@ -1612,9 +1644,40 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
   return (
     <div className="bg-white rounded-lg border p-5 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          Members ({members.length})
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+            Members ({members.length})
+          </h3>
+          {/* Official member count from SS-4 or manually set by staff */}
+          <div className="flex items-center gap-1.5">
+            {editingMemberCount ? (
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  className="w-16 px-1.5 py-0.5 text-xs border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  value={memberCountDraft}
+                  onChange={e => setMemberCountDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSaveMemberCount(); if (e.key === 'Escape') setEditingMemberCount(false) }}
+                  autoFocus
+                />
+                <button onClick={handleSaveMemberCount} disabled={savingMemberCount} className="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50">
+                  {savingMemberCount ? <Loader2 className="h-3 w-3 animate-spin inline" /> : 'Save'}
+                </button>
+                <button onClick={() => setEditingMemberCount(false)} className="text-xs text-zinc-400 hover:text-zinc-600">Cancel</button>
+              </>
+            ) : (
+              <button
+                onClick={() => { setMemberCountDraft(memberCount?.toString() ?? ''); setEditingMemberCount(true) }}
+                className="text-xs text-zinc-500 hover:text-zinc-700 border border-dashed border-zinc-300 px-2 py-0.5 rounded"
+                title="Official member count (from SS-4 or set manually). Used for OA generation validation."
+              >
+                {memberCount != null ? `${memberCount} official` : 'Set member count'}
+              </button>
+            )}
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5">
             <button
@@ -1662,6 +1725,35 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
           </div>
           {addType === 'individual' ? (
             <div className="grid grid-cols-2 gap-2">
+              <div className="col-span-2">
+                <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Link existing contact (optional)</p>
+                <select
+                  className={inputCls}
+                  value={String(addDraft.contact_id ?? '')}
+                  onChange={e => {
+                    const cid = e.target.value || null
+                    if (!cid) {
+                      setAddDraft(d => ({ ...d, contact_id: null }))
+                      return
+                    }
+                    const picked = availableContacts.find(c => c.id === cid)
+                    setAddDraft(d => ({
+                      ...d,
+                      contact_id: cid,
+                      full_name: picked?.full_name ?? String(d.full_name ?? ''),
+                      email: picked?.email ?? String(d.email ?? ''),
+                      phone: picked?.phone ?? String(d.phone ?? ''),
+                    }))
+                  }}
+                >
+                  <option value="">— New person (type below) —</option>
+                  {availableContacts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {(c.full_name || c.email || 'Unnamed contact')}{c.email && c.full_name ? ` (${c.email})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <input placeholder="Full name *" className={inputCls} value={String(addDraft.full_name ?? '')} onChange={e => setAddDraft(d => ({ ...d, full_name: e.target.value }))} />
               <input placeholder="Email" className={inputCls} value={String(addDraft.email ?? '')} onChange={e => setAddDraft(d => ({ ...d, email: e.target.value }))} />
               <input placeholder="Phone" className={inputCls} value={String(addDraft.phone ?? '')} onChange={e => setAddDraft(d => ({ ...d, phone: e.target.value }))} />
@@ -1687,12 +1779,18 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
               <input placeholder="Rep country" className={inputCls} value={String(addDraft.representative_address_country ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_country: e.target.value }))} />
             </div>
           )}
+          {addError && (
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>{addError}</span>
+            </div>
+          )}
           <div className="flex gap-2">
             <button onClick={handleAdd} disabled={adding} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
               {adding ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
               Add
             </button>
-            <button onClick={() => { setShowAddForm(false); setAddDraft({}) }} className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50">Cancel</button>
+            <button onClick={() => { setShowAddForm(false); setAddDraft({}); setAddError(null) }} className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50">Cancel</button>
           </div>
         </div>
       )}
@@ -2041,7 +2139,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
       {/* Members — any multi-member account (MMLLC or C-Corp Elected with multiple members) */}
       {account.member_structure === 'multi_member' && (
-        <MembersSection accountId={account.id} accountCompanyName={account.company_name} />
+        <MembersSection accountId={account.id} accountCompanyName={account.company_name} contacts={contacts} memberCount={account.member_count ?? null} accountUpdatedAt={account.updated_at} />
       )}
 
       {/* Notes */}

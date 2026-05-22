@@ -12,6 +12,8 @@ export interface AnnouncementRow {
   type: 'info' | 'warning' | 'success'
   active: boolean
   dismissible: boolean
+  active_from: string | null
+  active_until: string | null
   created_at: string
   updated_at: string
 }
@@ -38,6 +40,8 @@ function AnnouncementDialog({
   const [type, setType] = useState<'info' | 'warning' | 'success'>(row?.type ?? 'info')
   const [dismissible, setDismissible] = useState(row?.dismissible !== false)
   const [active, setActive] = useState(row?.active !== false)
+  const [activeFrom, setActiveFrom] = useState(row?.active_from ?? '')
+  const [activeUntil, setActiveUntil] = useState(row?.active_until ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -56,6 +60,8 @@ function AnnouncementDialog({
         type,
         dismissible,
         active,
+        active_from: activeFrom || null,
+        active_until: activeUntil || null,
       })
       onClose()
     } catch (err) {
@@ -87,6 +93,21 @@ function AnnouncementDialog({
               className={`${fieldCls} resize-none`}
               placeholder="Message text shown to all portal clients..." />
           </div>
+        </div>
+
+        {/* Date range */}
+        <div className="grid grid-cols-2 gap-3 pt-1 border-t border-zinc-100">
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1">Show from (optional)</label>
+            <input type="date" value={activeFrom} onChange={e => setActiveFrom(e.target.value)}
+              className={fieldCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1">Hide after (optional)</label>
+            <input type="date" value={activeUntil} onChange={e => setActiveUntil(e.target.value)}
+              className={fieldCls} />
+          </div>
+          <p className="col-span-2 text-xs text-zinc-400">Leave blank for no date limit. Both dates are inclusive.</p>
         </div>
 
         {/* Settings */}
@@ -204,7 +225,7 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
                 <th className="px-4 py-2 font-medium">Title</th>
                 <th className="px-4 py-2 font-medium">Type</th>
                 <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Created</th>
+                <th className="px-4 py-2 font-medium">Date Range</th>
                 <th className="px-4 py-2 font-medium w-28"></th>
               </tr>
             </thead>
@@ -226,7 +247,9 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
                     </span>
                   </td>
                   <td className="px-4 py-3 text-zinc-500 text-xs">
-                    {new Date(row.created_at).toLocaleDateString()}
+                    {row.active_from || row.active_until
+                      ? <span>{row.active_from ?? '∞'} → {row.active_until ?? '∞'}</span>
+                      : <span className="text-zinc-400">Always</span>}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
