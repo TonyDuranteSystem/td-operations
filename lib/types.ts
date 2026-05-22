@@ -465,7 +465,7 @@ export interface ChatAttachment {
 export interface PortalMessage {
   id: string
   account_id: string | null
-  sender_type: 'client' | 'admin'
+  sender_type: 'client' | 'admin' | 'system'
   sender_id: string
   sender_name: string | null
   contact_id: string | null

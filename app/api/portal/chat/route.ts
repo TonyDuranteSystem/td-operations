@@ -5,6 +5,8 @@ import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/port
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL } from '@/lib/config'
+import { isOfficeOpen } from '@/lib/portal/office-hours'
+import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -252,11 +254,20 @@ export async function POST(request: NextRequest) {
 
   // Notify admin when client sends a message. The email is gated by an
   // app_settings toggle (Dev Tools → Maintenance); push is always sent.
+  // Also send an out-of-office auto-reply when the office is closed.
   if (senderType === 'client') {
     if (await isPortalAdminEmailEnabled()) {
       notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
     }
     pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {})
+
+    if (!isOfficeOpen()) {
+      sendOfficeClosedAutoReply({
+        account_id: account_id || null,
+        contact_id: resolvedContactId,
+        topic,
+      }).catch(() => {})
+    }
   }
 
   // Audit log

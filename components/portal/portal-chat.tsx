@@ -37,7 +37,9 @@ function toInternalPath(url: string): string | null {
 }
 
 function renderMessageText(text: string, isOwn: boolean) {
-  const parts = text.split(URL_PATTERN)
+  // Strip HTML comment markers used as system-message dedup anchors.
+  const cleaned = text.replace(/<!--[\s\S]*?-->/g, '').trim()
+  const parts = cleaned.split(URL_PATTERN)
   const linkClass = cn(
     'underline underline-offset-2 break-all',
     isOwn ? 'text-blue-100 hover:text-white' : 'text-blue-600 hover:text-blue-800'
@@ -504,7 +506,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                     )}
                     {!isOwn && (
                       <p className="text-[10px] font-medium text-zinc-500 mb-0.5">
-                        {msg.sender_type === 'admin' ? t('chat.team') : (msg.sender_name || t('chat.you'))}
+                        {msg.sender_type === 'admin' || msg.sender_type === 'system' ? t('chat.team') : (msg.sender_name || t('chat.you'))}
                       </p>
                     )}
                     {isOwn && msg.sender_name && msg.sender_id !== userId && (
