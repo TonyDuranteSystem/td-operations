@@ -1,11 +1,21 @@
 /**
- * Message Actions API
+ * Message Actions API — staff action tags + Notification Center cards.
  *
- * GET  ?account_id=...  — fetch all actions for an account's messages (for tag display)
- * GET  ?message_id=...  — fetch action for a specific message
- * GET  ?open=true       — fetch all open actions (for dashboard Action Items)
+ * GET  ?account_id=...  — actions for an account's messages (tag display)
+ * GET  ?message_id=...  — action for a specific message
+ * GET  ?open=true       — all OPEN actions (resolved_at IS NULL) for the
+ *                         Actions view + dashboard board. Includes staff
+ *                         Notification Center cards (message_id NULL).
  * POST { message_id, contact_id, account_id, action_type, label?, created_by? }
- *   — upsert an action tag on a message (one action per message)
+ *   — upsert a human tag on a message (one per message). message_id required.
+ * PATCH { id, action_type, assigned_to?, label? }
+ *   — move a card to another column (used by the kanban board). Setting a
+ *     TERMINAL column (catalog metadata.terminal=true, e.g. Done) stamps
+ *     resolved_at; any non-terminal column clears it.
+ *
+ * Columns are catalog-driven (catalog_entries, catalog_id='action_board_columns').
+ * "Open" is defined by resolved_at IS NULL — NOT by action_type != 'done' — so
+ * renaming the Done column never strands cards. See sysdoc notification-center-plan.
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -13,15 +23,81 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export const dynamic = "force-dynamic"
 
+const LEGACY_COLUMNS = ["action_needed", "in_progress", "waiting_on_client", "done"]
+
+/** Active board columns + which are terminal, from the catalog (with a safe fallback). */
+async function loadColumns(): Promise<{ valid: Set<string>; terminal: Set<string> }> {
+  const valid = new Set<string>()
+  const terminal = new Set<string>()
+  const { data } = await supabaseAdmin
+    .from("catalog_entries")
+    .select("slug, metadata")
+    .eq("catalog_id", "action_board_columns")
+    .eq("status", "active")
+  for (const r of data ?? []) {
+    valid.add(r.slug as string)
+    if ((r.metadata as Record<string, unknown> | null)?.terminal === true) terminal.add(r.slug as string)
+  }
+  if (valid.size === 0) {
+    LEGACY_COLUMNS.forEach((s) => valid.add(s))
+    terminal.add("done")
+  }
+  return { valid, terminal }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const accountId = req.nextUrl.searchParams.get("account_id")
     const messageId = req.nextUrl.searchParams.get("message_id")
     const openOnly = req.nextUrl.searchParams.get("open") === "true"
+    const wantColumns = req.nextUrl.searchParams.get("columns") === "true"
+
+    // Board columns (ordered) from the catalog, for the kanban header.
+    if (wantColumns) {
+      const { data } = await supabaseAdmin
+        .from("catalog_entries")
+        .select("slug, display_name, metadata")
+        .eq("catalog_id", "action_board_columns")
+        .eq("status", "active")
+      const columns = (data ?? [])
+        .map((r) => {
+          const m = (r.metadata ?? {}) as Record<string, unknown>
+          return {
+            slug: r.slug as string,
+            display_name: r.display_name as string,
+            order: Number(m.order ?? 999),
+            terminal: m.terminal === true,
+          }
+        })
+        .sort((a, b) => a.order - b.order)
+      return NextResponse.json({ columns })
+    }
+
+    // Open feed for the Actions view + dashboard board: open = resolved_at IS NULL.
+    // Joins are nullable-safe — staff cards have message_id NULL, so consumers
+    // render `label` (the next step) rather than a message preview.
+    if (openOnly) {
+      const { data: enriched, error: err } = await supabaseAdmin
+        .from("message_actions")
+        .select(`
+          id, action_type, label, assigned_to, source_ref, created_at, updated_at,
+          message_id, account_id, contact_id,
+          portal_messages(message),
+          accounts(company_name),
+          contacts(full_name)
+        `)
+        .is("resolved_at", null)
+        .order("created_at", { ascending: false })
+        .limit(200)
+      if (err) throw err
+      return NextResponse.json({ actions: enriched })
+    }
 
     let query = supabaseAdmin
       .from("message_actions")
-      .select("id, message_id, contact_id, account_id, action_type, label, created_by, resolved_at, created_at")
+      .select(
+        "id, message_id, contact_id, account_id, action_type, label, assigned_to, source_ref, created_by, resolved_at, created_at",
+      )
       .order("created_at", { ascending: false })
 
     if (messageId) {
@@ -30,30 +106,8 @@ export async function GET(req: NextRequest) {
       query = query.eq("account_id", accountId)
     }
 
-    if (openOnly) {
-      query = query.neq("action_type", "done")
-    }
-
-    // When fetching all open actions, join message text + client names for the Actions tab
-    if (openOnly) {
-      const { data: enriched, error: err } = await supabaseAdmin
-        .from("message_actions")
-        .select(`
-          id, action_type, created_at, updated_at, message_id, account_id, contact_id,
-          portal_messages(message),
-          accounts(company_name),
-          contacts(full_name)
-        `)
-        .neq("action_type", "done")
-        .order("updated_at", { ascending: false })
-        .limit(200)
-      if (err) throw err
-      return NextResponse.json({ actions: enriched })
-    }
-
     const { data, error } = await query.limit(200)
     if (error) throw error
-
     return NextResponse.json({ actions: data })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -70,12 +124,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing message_id or action_type" }, { status: 400 })
     }
 
-    const validTypes = ["action_needed", "in_progress", "waiting_on_client", "done"]
-    if (!validTypes.includes(action_type)) {
-      return NextResponse.json({ error: `Invalid action_type. Must be one of: ${validTypes.join(", ")}` }, { status: 400 })
+    const { valid, terminal } = await loadColumns()
+    if (!valid.has(action_type)) {
+      return NextResponse.json(
+        { error: `Invalid action_type. Must be one of: ${Array.from(valid).join(", ")}` },
+        { status: 400 },
+      )
     }
+    const resolvedAt = terminal.has(action_type) ? new Date().toISOString() : null
 
-    // Upsert: check if action already exists for this message
+    // Upsert: one action per message.
     const { data: existing } = await supabaseAdmin
       .from("message_actions")
       .select("id")
@@ -84,18 +142,13 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
 
     if (existing) {
-      // Update existing action
       const updateData: Record<string, unknown> = {
         action_type,
         updated_at: new Date().toISOString(),
+        resolved_at: resolvedAt,
       }
       if (label !== undefined) updateData.label = label
       if (created_by) updateData.created_by = created_by
-      if (action_type === "done") {
-        updateData.resolved_at = new Date().toISOString()
-      } else {
-        updateData.resolved_at = null
-      }
 
       const { data, error } = await supabaseAdmin
         .from("message_actions")
@@ -103,12 +156,10 @@ export async function POST(req: NextRequest) {
         .eq("id", existing.id)
         .select()
         .single()
-
       if (error) throw error
       return NextResponse.json({ action: data, updated: true })
     }
 
-    // Insert new action
     const { data, error } = await supabaseAdmin
       .from("message_actions")
       .insert({
@@ -118,13 +169,51 @@ export async function POST(req: NextRequest) {
         action_type,
         label: label || null,
         created_by: created_by || null,
-        resolved_at: action_type === "done" ? new Date().toISOString() : null,
+        resolved_at: resolvedAt,
       })
       .select()
       .single()
-
     if (error) throw error
     return NextResponse.json({ action: data, created: true })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { id, action_type, assigned_to, label } = body
+
+    if (!id || !action_type) {
+      return NextResponse.json({ error: "Missing id or action_type" }, { status: 400 })
+    }
+
+    const { valid, terminal } = await loadColumns()
+    if (!valid.has(action_type)) {
+      return NextResponse.json(
+        { error: `Invalid action_type. Must be one of: ${Array.from(valid).join(", ")}` },
+        { status: 400 },
+      )
+    }
+
+    const updateData: Record<string, unknown> = {
+      action_type,
+      updated_at: new Date().toISOString(),
+      resolved_at: terminal.has(action_type) ? new Date().toISOString() : null,
+    }
+    if (assigned_to !== undefined) updateData.assigned_to = assigned_to
+    if (label !== undefined) updateData.label = label
+
+    const { data, error } = await supabaseAdmin
+      .from("message_actions")
+      .update(updateData)
+      .eq("id", id)
+      .select()
+      .single()
+    if (error) throw error
+    return NextResponse.json({ action: data, moved: true })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: msg }, { status: 500 })

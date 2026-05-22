@@ -333,6 +333,22 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Notification Center: staff action card (account-scoped, no client-chat write).
+        // Idempotent per account+provider so a resubmission won't duplicate the card.
+        if (capturedAccountId) {
+          try {
+            const { emitActionNeeded } = await import('@/lib/notifications/act-event')
+            await emitActionNeeded({
+              event: 'banking_wizard_submitted',
+              account_id: capturedAccountId,
+              contact_id: capturedContactId || null,
+              source_ref: `banking_wizard_submitted:${capturedAccountId}:${capturedWizardType}`,
+            })
+          } catch (e) {
+            console.error('[wizard-submit] Action card error:', e)
+          }
+        }
+
         // Advance Banking Fintech service delivery: Data Collection → Application Submitted
         if (capturedAccountId) {
           try {
