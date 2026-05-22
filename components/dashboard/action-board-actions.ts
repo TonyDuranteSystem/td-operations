@@ -45,6 +45,17 @@ async function uiActor(): Promise<Actor> {
   return { kind: "ui", userId: user.id }
 }
 
+/** Like uiActor but also returns a human label for `created_by` (who acted) —
+ *  used so the shared "handled by …" marker on a What's New note is readable. */
+async function uiActorAndName(): Promise<{ actor: Actor; name: string }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) throw new Error("Not authorized")
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>
+  const name = (typeof meta.full_name === "string" && meta.full_name) || user.email || user.id
+  return { actor: { kind: "ui", userId: user.id }, name }
+}
+
 export interface BoardColumnRow {
   id: string
   slug: string
@@ -237,9 +248,13 @@ export async function createManualCard(input: {
   action_type?: string
   remind_at?: string | null
   priority?: CardPriority
+  /** Links the card back to the What's New note it was created from, e.g.
+   *  "payments:<id>". Matches the chat-event marker's `src=`. Enables the
+   *  shared "handled" indicator + dedup. */
+  source_ref?: string | null
 }): Promise<ActionResult<true>> {
   return safeAction(async () => {
-    await uiActor()
+    const { name } = await uiActorAndName()
     const label = (input.label || "").trim()
     if (!label) throw new Error("Write what needs to be done")
     if (!input.account_id && !input.contact_id) throw new Error("Pick a client for this card")
@@ -261,6 +276,8 @@ export async function createManualCard(input: {
       label,
       remind_at: input.remind_at || null,
       priority,
+      source_ref: input.source_ref || null,
+      created_by: name,
     })
     if (error) throw new Error(error.message)
     revalidatePath("/")

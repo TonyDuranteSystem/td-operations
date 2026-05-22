@@ -13,8 +13,9 @@ import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/clie
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
-import { ThreadTasksPanel } from '@/components/portal-chats/thread-tasks-panel'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
+import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
+import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 import {
@@ -185,8 +186,16 @@ export default function PortalChatsPage() {
   const [pendingAdminFiles, setPendingAdminFiles] = useState<PendingAdminFile[]>([])
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
-  // Right-pane sub-tab: switches between chat messages and the per-thread Tasks list
-  const [chatViewMode, setChatViewMode] = useState<'messages' | 'tasks'>('messages')
+  // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo'>('messages')
+  // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
+  const [cardPreset, setCardPreset] = useState<{
+    accountId?: string | null
+    contactId?: string | null
+    clientName: string
+    label?: string
+    sourceRef?: string
+  } | null>(null)
   // Internal team chat
   const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>('chats')
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
@@ -365,7 +374,6 @@ export default function PortalChatsPage() {
     queryKey: ['action-board-columns'],
     queryFn: () => fetch('/api/crm/admin-actions/message-actions?columns=true').then(r => r.json()).then(d => d.columns || []),
     refetchInterval: 60_000,
-    enabled: sidebarView === 'actions',
   })
 
   // Fetch open-task counts per thread. Merged with the threads list client-side
@@ -2085,16 +2093,28 @@ export default function PortalChatsPage() {
                   Messages
                 </button>
                 <button
-                  onClick={() => setChatViewMode('tasks')}
+                  onClick={() => setChatViewMode('whatsnew')}
                   className={cn(
                     'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
-                    chatViewMode === 'tasks'
-                      ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/30'
+                    chatViewMode === 'whatsnew'
+                      ? 'text-amber-600 border-b-2 border-amber-500 bg-amber-50/30'
+                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                  )}
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  What&apos;s New
+                </button>
+                <button
+                  onClick={() => setChatViewMode('todo')}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                    chatViewMode === 'todo'
+                      ? 'text-violet-600 border-b-2 border-violet-600 bg-violet-50/30'
                       : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
                   )}
                 >
                   <ClipboardList className="h-3.5 w-3.5" />
-                  Tasks
+                  To Do
                 </button>
               </div>
             )}
@@ -2276,13 +2296,26 @@ export default function PortalChatsPage() {
               </div>
             )}
 
-            {chatViewMode === 'tasks' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
-              <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
-                {/* NEW To-Do board (message_actions) — create here, reflects on the CRM dashboard */}
-                <ThreadTodoPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
-                {/* Legacy task board (tasks table) — kept until retired */}
-                <ThreadTasksPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
-              </div>
+            {chatViewMode === 'whatsnew' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
+              <ThreadWhatsNewPanel
+                accountId={selectedAccountId || selectedCompanyId}
+                contactId={selectedContactId}
+                onOpenCard={({ label, sourceRef }) => {
+                  const acctId = selectedAccountId || selectedCompanyId
+                  setCardPreset({
+                    accountId: acctId ?? null,
+                    contactId: acctId ? null : selectedContactId,
+                    clientName:
+                      selectedName?.company ||
+                      threads?.find((t) => (selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId))?.company_name ||
+                      'this client',
+                    label,
+                    sourceRef: sourceRef ?? undefined,
+                  })
+                }}
+              />
+            ) : chatViewMode === 'todo' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
+              <ThreadTodoPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
             ) : (
             <>
 
@@ -3215,6 +3248,21 @@ export default function PortalChatsPage() {
           onClose={() => setQuickCreate(null)}
         />
       )}
+
+      {/* To-Do card editor — same card used on the dashboard, opened from a What's New note */}
+      <NewCardDialog
+        open={!!cardPreset}
+        preset={cardPreset}
+        columns={(actionBoardColumns || []).map((c) => ({ slug: c.slug, display_name: c.display_name, terminal: c.terminal }))}
+        onClose={() => setCardPreset(null)}
+        onCreated={() => {
+          setCardPreset(null)
+          queryClient.invalidateQueries({ queryKey: ['thread-whats-new-cards'] })
+          queryClient.invalidateQueries({ queryKey: ['thread-todos'] })
+          queryClient.invalidateQueries({ queryKey: ['portal-chat-open-todo-counts'] })
+          queryClient.invalidateQueries({ queryKey: ['open-message-actions'] })
+        }}
+      />
 
       {/* AI Assistant side panel */}
       {aiPanelOpen && (selectedAccountId || selectedContactId || selectedThreadId) && (

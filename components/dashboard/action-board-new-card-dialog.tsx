@@ -26,11 +26,22 @@ export function NewCardDialog({
   onClose,
   onCreated,
   columns,
+  preset,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
   columns: Col[]
+  /** When opened from a "What's New" note: the client is already known and the
+   *  next-step + source link are pre-filled. The same dialog otherwise lets
+   *  staff search for a client manually. */
+  preset?: {
+    accountId?: string | null
+    contactId?: string | null
+    clientName: string
+    label?: string
+    sourceRef?: string
+  } | null
 }) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<AccountResult[]>([])
@@ -42,13 +53,22 @@ export function NewCardDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const isPreset = !!preset
+
   useEffect(() => {
     if (open) {
-      setQ(''); setResults([]); setSelected(null); setLabel(''); setError(null)
+      setQ(''); setResults([]); setError(null)
       setRemind(''); setPriority('normal')
       setCol(columns.find((c) => !c.terminal)?.slug ?? '')
+      if (preset) {
+        // Client is known — show it fixed; pre-fill the suggested next step.
+        setSelected({ id: preset.accountId || preset.contactId || 'preset', company_name: preset.clientName, contact_name: null })
+        setLabel(preset.label ?? '')
+      } else {
+        setSelected(null); setLabel('')
+      }
     }
-  }, [open, columns])
+  }, [open, columns, preset])
 
   // debounced client search (reuses the portal-chat account search)
   useEffect(() => {
@@ -70,12 +90,23 @@ export function NewCardDialog({
     // Reminder is a date-only picker; store as end-of-day ISO so it isn't
     // "overdue" the morning you set it for today.
     const remind_at = remind ? new Date(`${remind}T17:00:00`).toISOString() : null
-    const res = await createManualCard({ label, account_id: selected.id, action_type: col, remind_at, priority })
+    // Preset → use the known client ids; manual search → selected is an account.
+    const account_id = preset ? preset.accountId ?? null : selected.id
+    const contact_id = preset ? preset.contactId ?? null : null
+    const res = await createManualCard({
+      label,
+      account_id,
+      contact_id,
+      action_type: col,
+      remind_at,
+      priority,
+      source_ref: preset?.sourceRef ?? null,
+    })
     setBusy(false)
     if (!res.success) { setError(res.error || 'Could not create the card'); return }
     onCreated()
     onClose()
-  }, [selected, label, col, remind, priority, busy, onCreated, onClose])
+  }, [selected, label, col, remind, priority, busy, preset, onCreated, onClose])
 
   if (!open) return null
   const openCols = columns.filter((c) => !c.terminal)
@@ -105,7 +136,9 @@ export function NewCardDialog({
                   {selected.company_name}
                   {selected.contact_name ? <span className="text-zinc-400">· {selected.contact_name}</span> : null}
                 </span>
-                <button onClick={() => setSelected(null)} className="text-[11px] text-zinc-500 hover:text-zinc-800">change</button>
+                {!isPreset && (
+                  <button onClick={() => setSelected(null)} className="text-[11px] text-zinc-500 hover:text-zinc-800">change</button>
+                )}
               </div>
             ) : (
               <>
