@@ -98,6 +98,11 @@ export function usePortalChat(accountId: string | null, contactId: string) {
 
     const handleInsert = (payload: { new: unknown }) => {
       const newMessage = payload.new as PortalMessage
+      // This hook is client-only. Internal staff notifications (sender_type
+      // 'system' — "Client paid…", "fax to IRS") must never appear in the client
+      // portal, including via realtime. The server GET already excludes them on
+      // load; this drops any that arrive live. See sysdoc notification-center-plan.
+      if ((newMessage as { sender_type?: string }).sender_type === 'system') return
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]

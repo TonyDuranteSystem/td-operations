@@ -64,6 +64,12 @@ export async function GET(request: NextRequest) {
   // Client users never see soft-deleted messages. Admins see them so they can render tombstones.
   if (authContactId) {
     query = query.is('deleted_at', null)
+    // Internal staff notifications (sender_type='system', e.g. "Client paid…",
+    // "fax to IRS to start EIN") are written in OUR language ABOUT the client and
+    // must NEVER reach the client portal. They feed the staff "What's New" view
+    // only. Verified: every system message carries a chat-event marker — none are
+    // client-facing. See sysdoc notification-center-plan (leak fix, 2026-05-22).
+    query = query.neq('sender_type', 'system')
   }
 
   // Threading: contact_id param returns the unified per-contact thread.
