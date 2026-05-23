@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { X, ArrowLeft, ArrowRight, Trash2, Plus, CheckCircle2 } from 'lucide-react'
+import { WHATS_NEW_DEFAULT_STEPS } from '@/lib/notifications/whats-new-defaults'
 import {
   listBoardColumns,
   addBoardColumn,
@@ -22,6 +23,7 @@ import {
   setActionEventEnabled,
   listWhatsNewEvents,
   setWhatsNewEventVisible,
+  setWhatsNewEventSuggestedStep,
   type BoardColumnRow,
   type ActionEventRow,
   type WhatsNewEventRow,
@@ -254,24 +256,38 @@ export function ManageColumnsDialog({
             <>
               <p className="text-xs text-muted-foreground mb-2">
                 Choose which client events show in the <strong>What&apos;s New</strong> feed (and count toward the purple
-                dot). Turn off the noise; keep only what your team needs to act on. Each one is independent.
+                dot), and the suggested to-do that pre-fills when you click <em>Open card</em>. Each one is independent.
               </p>
               {whatsNew.map((ev) => (
-                <label
+                <div
                   key={ev.id}
-                  className={`flex items-center justify-between gap-2 border rounded-lg px-3 py-2 cursor-pointer ${ev.visible ? '' : 'opacity-60'}`}
+                  className={`border rounded-lg px-3 py-2 ${ev.visible ? '' : 'opacity-60'}`}
                 >
-                  <span className="text-sm text-zinc-800">{ev.display_name}</span>
-                  <span className="flex items-center gap-1.5 text-[11px] text-zinc-500 shrink-0 whitespace-nowrap">
-                    <input
-                      type="checkbox"
-                      checked={ev.visible}
-                      disabled={busy}
-                      onChange={(e) => run(() => setWhatsNewEventVisible(ev.id, e.target.checked))}
-                    />
-                    Show in What&apos;s New
-                  </span>
-                </label>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm text-zinc-800">{ev.display_name}</span>
+                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-500 shrink-0 whitespace-nowrap cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={ev.visible}
+                        disabled={busy}
+                        onChange={(e) => run(() => setWhatsNewEventVisible(ev.id, e.target.checked))}
+                      />
+                      Show in What&apos;s New
+                    </label>
+                  </div>
+                  <label className="block text-[11px] text-zinc-400 mt-1.5 mb-0.5">Suggested to-do when you open a card:</label>
+                  <input
+                    defaultValue={ev.suggested_step ?? WHATS_NEW_DEFAULT_STEPS[ev.slug] ?? ''}
+                    disabled={busy}
+                    placeholder="e.g. Ship the card to the client"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim()
+                      const current = ev.suggested_step ?? WHATS_NEW_DEFAULT_STEPS[ev.slug] ?? ''
+                      if (v !== current) run(() => setWhatsNewEventSuggestedStep(ev.id, v))
+                    }}
+                    className="w-full text-sm border rounded px-2 py-1"
+                  />
+                </div>
               ))}
             </>
           )}

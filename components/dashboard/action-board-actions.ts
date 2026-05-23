@@ -244,6 +244,8 @@ export interface WhatsNewEventRow {
   slug: string
   display_name: string
   visible: boolean
+  /** Per-event override for the "Open card" suggested next step (null = use code default). */
+  suggested_step: string | null
   order: number
 }
 
@@ -259,6 +261,7 @@ export async function listWhatsNewEvents(): Promise<ActionResult<WhatsNewEventRo
           slug: e.slug,
           display_name: e.display_name,
           visible: m.visible !== false,
+          suggested_step: typeof m.suggested_step === "string" ? m.suggested_step : null,
           order: Number(m.order ?? 999),
         }
       })
@@ -273,6 +276,24 @@ export async function setWhatsNewEventVisible(id: string, visible: boolean): Pro
     const cur = entries.find((e) => e.id === id)
     if (!cur) throw new Error("Event not found")
     const meta = { ...((cur.metadata as Record<string, unknown>) ?? {}), visible }
+    await updateMetadata(id, meta, WHATS_NEW_REASON, actor)
+    revalidatePath("/")
+    return true as const
+  })
+}
+
+/** Set the per-event "Open card" suggested next step. Empty clears the override
+ *  (falls back to the code default). */
+export async function setWhatsNewEventSuggestedStep(id: string, step: string): Promise<ActionResult<true>> {
+  return safeAction(async () => {
+    const actor = await uiActor()
+    const entries = await listEntries(WHATS_NEW, {})
+    const cur = entries.find((e) => e.id === id)
+    if (!cur) throw new Error("Event not found")
+    const meta = { ...((cur.metadata as Record<string, unknown>) ?? {}) }
+    const clean = step.trim()
+    if (clean) meta.suggested_step = clean
+    else delete meta.suggested_step
     await updateMetadata(id, meta, WHATS_NEW_REASON, actor)
     revalidatePath("/")
     return true as const

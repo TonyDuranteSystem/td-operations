@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { suggestedStepFor } from "@/lib/notifications/whats-new-defaults"
 
 export const dynamic = "force-dynamic"
 
@@ -48,18 +49,27 @@ function parseMarker(message: string): { kind: string | null; src: string | null
   return { kind: m?.[1] ?? null, src: m?.[2] ?? null }
 }
 
-/** Visibility config: event_key → visible. Unknown keys default to VISIBLE
- *  (never silently hide a brand-new event the catalog hasn't learned yet). */
-async function loadVisibility(): Promise<Map<string, boolean>> {
+interface EventConfig {
+  /** false only if explicitly toggled off; unknown keys default to VISIBLE. */
+  visible: boolean
+  /** per-event override for the "Open card" suggested next step (Board Settings). */
+  suggested_step: string | null
+}
+
+/** Per-event config from the whats_new_events catalog (visible + suggested_step). */
+async function loadConfig(): Promise<Map<string, EventConfig>> {
   const { data } = await supabaseAdmin
     .from("catalog_entries")
     .select("slug, metadata")
     .eq("catalog_id", "whats_new_events")
     .eq("status", "active")
-  const map = new Map<string, boolean>()
+  const map = new Map<string, EventConfig>()
   for (const r of data ?? []) {
-    const visible = (r.metadata as Record<string, unknown> | null)?.visible !== false
-    map.set(r.slug as string, visible)
+    const m = (r.metadata as Record<string, unknown> | null) ?? {}
+    map.set(r.slug as string, {
+      visible: m.visible !== false,
+      suggested_step: typeof m.suggested_step === "string" ? m.suggested_step : null,
+    })
   }
   return map
 }
@@ -131,13 +141,13 @@ export async function GET(req: NextRequest) {
         .limit(5000)
       if (error) throw error
       const notes = (data ?? []) as RawNote[]
-      const [visibility, keys] = await Promise.all([loadVisibility(), resolveEventKeys(notes)])
+      const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(notes)])
       const by_account: Record<string, number> = {}
       const by_contact: Record<string, number> = {}
       for (const n of notes) {
         const key = keys.get(n)
         // Hidden only if explicitly toggled off; unknown/unresolved keys show.
-        if (key && visibility.get(key) === false) continue
+        if (key && config.get(key)?.visible === false) continue
         if (n.account_id) by_account[n.account_id] = (by_account[n.account_id] ?? 0) + 1
         else if (n.contact_id) by_contact[n.contact_id] = (by_contact[n.contact_id] ?? 0) + 1
       }
@@ -165,11 +175,11 @@ export async function GET(req: NextRequest) {
       const { data, error } = await q
       if (error) throw error
       const notes = (data ?? []) as RawNote[]
-      const [visibility, keys] = await Promise.all([loadVisibility(), resolveEventKeys(notes)])
+      const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(notes)])
       const out = notes
         .filter((n) => {
           const key = keys.get(n)
-          return !(key && visibility.get(key) === false)
+          return !(key && config.get(key)?.visible === false)
         })
         .map((n) => {
           // For workflow_spawned notes, expose the linked task id so the panel
@@ -177,12 +187,15 @@ export async function GET(req: NextRequest) {
           const m = n.message.match(MARKER_RE)
           const src = m?.[2] ?? null
           const task_id = src && src.startsWith("tasks:") ? src.slice("tasks:".length) : null
+          const key = keys.get(n)
           return {
             id: n.id,
-            event_key: keys.get(n),
+            event_key: key,
             task_id,
             topic: n.topic ?? null,
             text: n.message.replace(MARKER_RE, "").trim(),
+            // Suggested next step for "Open card": per-event override → code default.
+            suggested_step: suggestedStepFor(key, key ? config.get(key)?.suggested_step : null),
             created_at: n.created_at,
             handled_at: n.handled_at ?? null,
             handled_by: n.handled_by ?? null,

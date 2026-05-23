@@ -27,25 +27,12 @@ interface ApiNote {
   task_id: string | null
   topic: string | null
   text: string
+  /** Suggested next step for "Open card" — resolved server-side (per-event
+   *  override from Board Settings → code default). Editable, no longer hardcoded. */
+  suggested_step: string
   created_at: string
   handled_at: string | null
   handled_by: string | null
-}
-
-// Best-guess next step per event. Honest + generic — the user edits it. Keyed by
-// event_key (chat-event kind, or workflow slug for "started X" notes).
-const SUGGEST: Record<string, string> = {
-  payment_received: 'Confirm what this payment was for and take the next step (e.g. ship card)',
-  ss4_signed: 'Fax the SS-4 to the IRS to start the EIN application',
-  document_uploaded: 'Review the document the client uploaded',
-  itin_review: 'Review the ITIN submission (W-7 / 1040-NR)',
-  banking_review_payset: 'Process / monitor the Payset banking application',
-  banking_review_relay: 'Process / monitor the Relay banking application',
-  banking_physical_progress: 'Handle the physical bank card step',
-  tax_form_review: 'Review the tax submission',
-  formation_progress: 'Verify the formation data + check the LLC name',
-  onboarding_progress: 'Verify onboarding + RA change on Harbor',
-  closure_progress: 'Begin the closure / dissolution steps',
 }
 
 export function ThreadWhatsNewPanel({
@@ -115,7 +102,7 @@ export function ThreadWhatsNewPanel({
 
   const open = useCallback(
     (note: ApiNote) => {
-      const label = (note.event_key && SUGGEST[note.event_key]) || note.text
+      const label = note.suggested_step || note.text
       onOpenCard({ noteId: note.id, label })
     },
     [onOpenCard],
