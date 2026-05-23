@@ -11,8 +11,13 @@
  *     like the account page's Add-Service dialog.
  *   • Create invoice → the canonical InvoiceDialog + createInvoice server action,
  *     which carries content-based idempotency (R098) so a double-click never makes
- *     a duplicate. ACCOUNT-ONLY (createInvoice keys on account_id), so the button
- *     only shows when the card/note has an account.
+ *     a duplicate. Billing always flows through an ACCOUNT (an individual gets one
+ *     auto-created via the dialog's "New Customer" — createOneTimeCustomer makes a
+ *     contact + account). So Invoice shows for BOTH account and contact cards: an
+ *     account card pre-fills its account; a contact card opens the dialog so staff
+ *     pick/confirm the individual's account (their personal account, their company,
+ *     or create a new customer) — the correct, flexible billing target per service
+ *     (ITIN/Individual TR → personal; Business TR → company).
  *
  * Both require an explicit confirm (the modal/dialog submit) — nothing fires on a
  * single click. createSD can spawn its own workflow + What's New note (expected
@@ -53,15 +58,13 @@ export function CardCreateActions({
         >
           <Briefcase className="h-3 w-3" /> Service
         </button>
-        {accountId && (
-          <button
-            onClick={() => setInvOpen(true)}
-            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
-            title="Create an invoice for this client"
-          >
-            <FileText className="h-3 w-3" /> Invoice
-          </button>
-        )}
+        <button
+          onClick={() => setInvOpen(true)}
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
+          title="Create an invoice for this client"
+        >
+          <FileText className="h-3 w-3" /> Invoice
+        </button>
       </div>
 
       {svcOpen && (
@@ -73,19 +76,20 @@ export function CardCreateActions({
         />
       )}
 
-      {accountId && (
-        <InvoiceDialog
-          open={invOpen}
-          onClose={() => setInvOpen(false)}
-          mode="invoice"
-          defaultValues={{ accountId, accountName: clientName }}
-          onCreateInvoice={async (input) => {
-            const r = await createInvoice(input)
-            if (r.success) { toast.success('Invoice created (Draft)'); onDone?.() }
-            return r
-          }}
-        />
-      )}
+      <InvoiceDialog
+        open={invOpen}
+        onClose={() => setInvOpen(false)}
+        mode="invoice"
+        // Account card → pre-fill its account. Contact card → leave the customer
+        // unset so staff pick/confirm the individual's account (or create one),
+        // which is the correct billing target for an individual.
+        defaultValues={accountId ? { accountId, accountName: clientName } : undefined}
+        onCreateInvoice={async (input) => {
+          const r = await createInvoice(input)
+          if (r.success) { toast.success('Invoice created (Draft)'); onDone?.() }
+          return r
+        }}
+      />
     </>
   )
 }
