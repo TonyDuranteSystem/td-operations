@@ -2531,7 +2531,7 @@ export default function PortalChatsPage() {
                   // centered amber pill with a distinct neutral style — not a chat
                   // bubble. Strip the embedded idempotency marker before display.
                   if (isSystem && !isDeleted) {
-                    const displayBody = msg.message.replace(/\n*<!-- chat-event:[^>]*-->\s*$/i, '').trim()
+                    const displayBody = msg.message.replace(/<!--[\s\S]*?-->/g, '').trim()
                     const isUnread = !msg.read_at
                     return (
                       <div key={msg.id} className="flex justify-center my-1.5">
