@@ -52,6 +52,9 @@ export type MemberInfoRequestsStatus = "pending" | "submitted"
 /** members.member_type — CHECK constraint */
 export type MembersMemberType = "individual" | "company"
 
+/** message_actions.priority — CHECK constraint */
+export type MessageActionsPriority = "normal" | "high" | "urgent"
+
 /** payments.installment — CHECK constraint */
 export type PaymentsInstallment = "Setup Fee" | "Installment 1 (Jan)" | "Installment 2 (Jun)" | "Annual Payment" | "One-Time Service" | "Custom" | "One-Time" | "One-time" | "ITIN"
 

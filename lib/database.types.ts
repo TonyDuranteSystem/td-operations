@@ -6347,37 +6347,49 @@ export type Database = {
         Row: {
           account_id: string | null
           action_type: string
+          assigned_to: string | null
           contact_id: string | null
           created_at: string | null
           created_by: string | null
           id: string
           label: string | null
           message_id: string | null
+          priority: string
+          remind_at: string | null
           resolved_at: string | null
+          source_ref: string | null
           updated_at: string | null
         }
         Insert: {
           account_id?: string | null
           action_type: string
+          assigned_to?: string | null
           contact_id?: string | null
           created_at?: string | null
           created_by?: string | null
           id?: string
           label?: string | null
           message_id?: string | null
+          priority?: string
+          remind_at?: string | null
           resolved_at?: string | null
+          source_ref?: string | null
           updated_at?: string | null
         }
         Update: {
           account_id?: string | null
           action_type?: string
+          assigned_to?: string | null
           contact_id?: string | null
           created_at?: string | null
           created_by?: string | null
           id?: string
           label?: string | null
           message_id?: string | null
+          priority?: string
+          remind_at?: string | null
           resolved_at?: string | null
+          source_ref?: string | null
           updated_at?: string | null
         }
         Relationships: [
@@ -8306,6 +8318,8 @@ export type Database = {
       portal_announcements: {
         Row: {
           active: boolean
+          active_from: string | null
+          active_until: string | null
           created_at: string
           dismissible: boolean
           id: string
@@ -8318,6 +8332,8 @@ export type Database = {
         }
         Insert: {
           active?: boolean
+          active_from?: string | null
+          active_until?: string | null
           created_at?: string
           dismissible?: boolean
           id?: string
@@ -8330,6 +8346,8 @@ export type Database = {
         }
         Update: {
           active?: boolean
+          active_from?: string | null
+          active_until?: string | null
           created_at?: string
           dismissible?: boolean
           id?: string
@@ -8474,6 +8492,8 @@ export type Database = {
           deleted_at: string | null
           deleted_by: string | null
           edited_at: string | null
+          handled_at: string | null
+          handled_by: string | null
           id: string
           message: string
           original_message: string | null
@@ -8494,6 +8514,8 @@ export type Database = {
           deleted_at?: string | null
           deleted_by?: string | null
           edited_at?: string | null
+          handled_at?: string | null
+          handled_by?: string | null
           id?: string
           message: string
           original_message?: string | null
@@ -8514,6 +8536,8 @@ export type Database = {
           deleted_at?: string | null
           deleted_by?: string | null
           edited_at?: string | null
+          handled_at?: string | null
+          handled_by?: string | null
           id?: string
           message?: string
           original_message?: string | null
