@@ -18,7 +18,6 @@
  * renaming the Done column never strands cards. See sysdoc notification-center-plan.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
@@ -38,11 +37,8 @@ async function requireStaff(): Promise<NextResponse | null> {
   return null
 }
 
-// Loose handle for message_actions writes touching remind_at/priority — not in
-// the generated Database types until the migration is promoted to prod + types
-// regenerated. Mirrors lib/notifications/act-event.ts. Remove after type regen.
-// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-plan
-const db = supabaseAdmin as unknown as SupabaseClient
+// Handle for message_actions writes touching remind_at/priority.
+const db = supabaseAdmin
 
 const LEGACY_COLUMNS = ["action_needed", "in_progress", "waiting_on_client", "done"]
 

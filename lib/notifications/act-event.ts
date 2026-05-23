@@ -25,16 +25,11 @@
  * back the real client-action handling.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 
-// Loosely-typed handle for message_actions ops. The new columns assigned_to /
-// source_ref are not in the generated Database types until the migration is
-// promoted to production and types are regenerated, so we deliberately bypass
-// the typed generics here (also avoids supabase-js "excessively deep" inference).
-// eslint-disable-next-line no-restricted-syntax -- assigned_to/source_ref aren't in the generated Database types until the migration is promoted to prod + types regenerated; loose handle is intentional and temporary (remove after type regen). See sysdoc notification-center-plan.
-const db = supabaseAdmin as unknown as SupabaseClient
+// Handle for message_actions ops (assigned_to / source_ref now in generated types).
+const db = supabaseAdmin
 
 /** Catalog slugs in `action_events`. Keep in sync with the seed migration. */
 export type ActEvent =
@@ -182,7 +177,7 @@ export async function emitActionNeeded(params: EmitActionNeededParams): Promise<
         .eq("status", "active"),
     ])
 
-    const meta = (evRes.data?.metadata ?? null) as ActionEventMeta | null
+    const meta = (evRes.data?.metadata ?? null) as unknown as ActionEventMeta | null
     const columns: BoardColumn[] = (colRes.data ?? []).map((r) => {
       const m = (r.metadata ?? {}) as Record<string, unknown>
       return { slug: r.slug as string, order: Number(m.order ?? 999), terminal: m.terminal === true }

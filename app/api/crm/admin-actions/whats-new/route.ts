@@ -20,7 +20,6 @@
  * portal). See sysdoc notification-center-workflow-integration-plan.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
@@ -28,11 +27,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export const dynamic = "force-dynamic"
 
-// handled_at/handled_by aren't in the generated Database types until the
-// migration is promoted to prod + types regenerated. Loose handle (mirrors
-// lib/notifications/act-event.ts). Remove after type regen.
-// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-workflow-integration-plan
-const db = supabaseAdmin as unknown as SupabaseClient
+// Handle for portal_messages handled_at/handled_by ops.
+const db = supabaseAdmin
 
 const MARKER_RE = /<!--\s*chat-event:\s*kind=(\S+)\s+src=(\S+)\s*-->/
 

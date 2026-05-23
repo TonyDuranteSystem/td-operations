@@ -11,7 +11,6 @@
  * notification-center-plan / dev_task 529b26cc.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js"
 import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
@@ -27,11 +26,8 @@ import {
   updateMetadata,
 } from "@/lib/catalog/framework"
 
-// Loose handle for message_actions writes touching remind_at/priority — not in
-// the generated Database types until the migration is promoted to prod + types
-// regenerated. Mirrors lib/notifications/act-event.ts. Remove after type regen.
-// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-plan
-const db = supabaseAdmin as unknown as SupabaseClient
+// Handle for message_actions writes touching remind_at/priority/source_ref.
+const db = supabaseAdmin
 
 const CATALOG = "action_board_columns"
 const EVENTS = "action_events"
