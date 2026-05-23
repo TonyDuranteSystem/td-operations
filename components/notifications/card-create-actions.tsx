@@ -89,6 +89,19 @@ export function CardCreateActions({
           if (r.success) { toast.success('Invoice created (Draft)'); onDone?.() }
           return r
         }}
+        // Wire the Send half so "Create & Send" actually delivers (PDF + email +
+        // status → Sent). Without this the dialog silently only drafts. Mirrors
+        // the account page's handler — POST /api/invoices/[id]/send.
+        onSendInvoice={async (paymentId) => {
+          const res = await fetch(`/api/invoices/${paymentId}/send`, { method: 'POST' })
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}))
+            return { success: false, error: d.error || 'Invoice created, but sending failed — try Send from the invoice.' }
+          }
+          toast.success('Invoice created & sent')
+          onDone?.()
+          return { success: true }
+        }}
       />
     </>
   )
