@@ -1,10 +1,6 @@
 {
   "crons": [
     {
-      "path": "/api/qb/refresh",
-      "schedule": "0 */6 * * *"
-    },
-    {
       "path": "/api/sync-drive",
       "schedule": "0 */6 * * *"
     },

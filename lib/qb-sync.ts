@@ -20,6 +20,17 @@ interface QbSyncResult {
   error?: string
 }
 
+// ─── QB kill-switch ─────────────────────────────────────
+// QuickBooks was decommissioned (Antonio, 2026-05-23) — nothing must sync to QB.
+// Every sync function below no-ops UNLESS QB_ENABLED is explicitly "true"
+// (default OFF). The early return happens BEFORE any DB read/write or QB API
+// call, so disabled syncs leave no qb_sync_status writes and no log noise. The
+// fire-and-forget call sites (invoice send, bank match, void) are left intact —
+// they just do nothing now. Re-enabling is a single env flag. See dev_task
+// eca3ce5c (QB decommission).
+const QB_ENABLED = process.env.QB_ENABLED === "true"
+const QB_DISABLED_RESULT: QbSyncResult = { success: false, error: "QuickBooks sync disabled" }
+
 // ─── Sync Invoice to QB ─────────────────────────────────
 
 /**
@@ -29,6 +40,7 @@ interface QbSyncResult {
  * Call this AFTER invoice is sent (status = Sent).
  */
 export async function syncInvoiceToQB(paymentId: string): Promise<QbSyncResult> {
+  if (!QB_ENABLED) return QB_DISABLED_RESULT
   try {
     // Fetch payment + items + account
     const { data: payment, error: pErr } = await supabaseAdmin
@@ -176,6 +188,7 @@ export async function syncPaymentToQB(
   paymentId: string,
   opts?: { paymentDate?: string; paymentMethod?: string; reference?: string }
 ): Promise<QbSyncResult> {
+  if (!QB_ENABLED) return QB_DISABLED_RESULT
   try {
     const { data: payment } = await supabaseAdmin
       .from("payments")
@@ -225,6 +238,7 @@ export async function syncPaymentToQB(
  * Void the corresponding QB invoice when a CRM invoice is voided.
  */
 export async function syncVoidToQB(paymentId: string): Promise<QbSyncResult> {
+  if (!QB_ENABLED) return QB_DISABLED_RESULT
   try {
     const { data: payment } = await supabaseAdmin
       .from("payments")

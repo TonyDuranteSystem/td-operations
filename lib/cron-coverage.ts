@@ -20,7 +20,7 @@
  * (tests/unit/cron-coverage.test.ts) will catch any drift.
  */
 export const SCHEDULED_CRONS: Record<string, string> = {
-  "/api/qb/refresh": "0 */6 * * *",
+  // /api/qb/refresh removed — QuickBooks decommissioned (dev_task eca3ce5c).
   "/api/sync-drive": "0 */6 * * *",
   "/api/sync-airtable": "0 */6 * * *",
   "/api/cron/check-wire-payments": "0 */6 * * *",
