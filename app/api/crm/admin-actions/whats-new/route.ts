@@ -110,6 +110,16 @@ async function resolveEventKeys(notes: RawNote[]): Promise<Map<RawNote, string |
 
 export async function GET(req: NextRequest) {
   try {
+    // Staff-only: these notes are internal (about the client). A client must
+    // never read them — and the notes endpoint takes an arbitrary account_id /
+    // contact_id, so without this gate any authenticated user could read any
+    // client's notes. See sysdoc notification-center-workflow-integration-plan.
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user || !isDashboardUser(user)) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 })
+    }
+
     const sp = req.nextUrl.searchParams
     const wantCounts = sp.get("counts") === "true"
     const wantNotes = sp.get("notes") === "true"
