@@ -18,6 +18,7 @@ import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
+import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
   validateMetadata as validateTopicMetadata,
@@ -3400,17 +3401,23 @@ function QuickCreateModal({ type, messageText, accountId, companyName, onClose }
         if (!res.ok) throw new Error('Failed to create service delivery')
         toast.success('Service delivery created')
       } else if (type === 'invoice') {
-        const res = await fetch('/api/qb/create-invoice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customer_name: companyName,
-            line_items: [{ description: invDescription, amount: Number(invAmount) || 0, quantity: 1 }],
-            memo: invMemo || undefined,
-          }),
+        // Create a TD invoice in our system (Supabase) — NOT QuickBooks. QB is
+        // decommissioned; this is the canonical path used by the account page and
+        // the Notification Center card button (createInvoice → createTDInvoice,
+        // content-idempotent). Creates a Draft; staff "Send" separately.
+        const amount = Number(invAmount) || 0
+        const today = new Date().toISOString().split('T')[0]
+        const r = await createInvoice({
+          account_id: accountId,
+          description: invDescription || 'Invoice',
+          amount_currency: 'USD',
+          issue_date: today,
+          discount: 0,
+          items: [{ description: invDescription || 'Invoice', quantity: 1, unit_price: amount, amount, sort_order: 0 }],
+          message: invMemo || undefined,
         })
-        if (!res.ok) throw new Error('Failed to create invoice')
-        toast.success('Invoice created')
+        if (!r.success) throw new Error(r.error || 'Failed to create invoice')
+        toast.success('Invoice created (Draft)')
       }
       onClose()
     } catch (err) {
