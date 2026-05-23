@@ -11,6 +11,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus, CalendarClock, Check, Moon } from 'lucide-react'
 import { createManualCard } from '@/components/dashboard/action-board-actions'
+import { CardCreateActions } from '@/components/notifications/card-create-actions'
 
 const API = '/api/crm/admin-actions/message-actions'
 
@@ -256,6 +257,9 @@ export function ThreadTodoPanel({
                       aria-label="Snooze until"
                     />
                   </label>
+                </div>
+                <div className="mt-1.5 pt-1.5 border-t">
+                  <CardCreateActions accountId={card.account_id} contactId={card.contact_id} onDone={refreshAll} />
                 </div>
               </div>
             )

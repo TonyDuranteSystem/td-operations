@@ -19,6 +19,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock, Moon, Check } from 'lucide-react'
 import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
+import { CardCreateActions } from '@/components/notifications/card-create-actions'
 
 interface Column {
   slug: string
@@ -365,6 +366,14 @@ export function ActionBoard() {
                               className="min-w-0 flex-1 text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-500"
                             />
                           </label>
+                        </div>
+                        <div className="mt-1.5 pt-1.5 border-t">
+                          <CardCreateActions
+                            accountId={card.account_id}
+                            contactId={card.contact_id}
+                            clientName={clientName}
+                            onDone={load}
+                          />
                         </div>
                       </div>
                     )

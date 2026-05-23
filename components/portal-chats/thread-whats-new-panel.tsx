@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
+import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import type { Task } from '@/lib/types'
 
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
@@ -194,6 +195,19 @@ export function ThreadWhatsNewPanel({
                     </button>
                   )}
                 </div>
+                {/* Money actions — not on workflow notes (those carry their own action buttons). */}
+                {!wfTask && (
+                  <div className="mt-1.5 pt-1.5 border-t">
+                    <CardCreateActions
+                      accountId={accountId}
+                      contactId={contactId}
+                      onDone={() => {
+                        qc.invalidateQueries({ queryKey: ['thread-whats-new'] })
+                        qc.invalidateQueries({ queryKey: ['portal-chat-thread-tasks'] })
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             )
           })
