@@ -20,11 +20,14 @@ import {
   listActionEvents,
   updateActionEventText,
   setActionEventEnabled,
+  listWhatsNewEvents,
+  setWhatsNewEventVisible,
   type BoardColumnRow,
   type ActionEventRow,
+  type WhatsNewEventRow,
 } from './action-board-actions'
 
-type Tab = 'columns' | 'events'
+type Tab = 'columns' | 'events' | 'whatsnew'
 
 // Plain-English "when this happens" line per event slug (falls back to the
 // catalog display_name). Keeps the editor friendly without extra catalog data.
@@ -51,6 +54,7 @@ export function ManageColumnsDialog({
   const [tab, setTab] = useState<Tab>('columns')
   const [rows, setRows] = useState<BoardColumnRow[]>([])
   const [events, setEvents] = useState<ActionEventRow[]>([])
+  const [whatsNew, setWhatsNew] = useState<WhatsNewEventRow[]>([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -59,10 +63,11 @@ export function ManageColumnsDialog({
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [cols, evs] = await Promise.all([listBoardColumns(), listActionEvents()])
+    const [cols, evs, wn] = await Promise.all([listBoardColumns(), listActionEvents(), listWhatsNewEvents()])
     if (cols.success && cols.data) setRows(cols.data)
     else if (!cols.success) setError(cols.error || 'Could not load columns')
     if (evs.success && evs.data) setEvents(evs.data)
+    if (wn.success && wn.data) setWhatsNew(wn.data)
     setLoading(false)
   }, [])
 
@@ -99,7 +104,7 @@ export function ManageColumnsDialog({
         </div>
 
         <div className="flex gap-1 px-4 pt-3">
-          {(['columns', 'events'] as Tab[]).map((t) => (
+          {(['columns', 'events', 'whatsnew'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -107,7 +112,7 @@ export function ManageColumnsDialog({
                 tab === t ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:text-zinc-800'
               }`}
             >
-              {t === 'columns' ? 'Columns' : 'Card text'}
+              {t === 'columns' ? 'Columns' : t === 'events' ? 'Card text' : "What's New"}
             </button>
           ))}
         </div>
@@ -241,6 +246,33 @@ export function ManageColumnsDialog({
                   </div>
                 )
               })}
+            </>
+          )}
+
+          {/* ── WHAT'S NEW (per-event show/hide) ── */}
+          {tab === 'whatsnew' && !loading && (
+            <>
+              <p className="text-xs text-muted-foreground mb-2">
+                Choose which client events show in the <strong>What&apos;s New</strong> feed (and count toward the purple
+                dot). Turn off the noise; keep only what your team needs to act on. Each one is independent.
+              </p>
+              {whatsNew.map((ev) => (
+                <label
+                  key={ev.id}
+                  className={`flex items-center justify-between gap-2 border rounded-lg px-3 py-2 cursor-pointer ${ev.visible ? '' : 'opacity-60'}`}
+                >
+                  <span className="text-sm text-zinc-800">{ev.display_name}</span>
+                  <span className="flex items-center gap-1.5 text-[11px] text-zinc-500 shrink-0 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={ev.visible}
+                      disabled={busy}
+                      onChange={(e) => run(() => setWhatsNewEventVisible(ev.id, e.target.checked))}
+                    />
+                    Show in What&apos;s New
+                  </span>
+                </label>
+              ))}
             </>
           )}
 

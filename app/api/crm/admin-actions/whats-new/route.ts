@@ -1,16 +1,23 @@
 /**
- * What's New (Notification Center) — handled state for incoming system notes.
+ * What's New (Notification Center) — the staff feed of incoming client-action
+ * notes, their handled state, and per-event visibility.
  *
- * GET  ?counts=true  — per-account/contact count of UNHANDLED system notes
- *                      (sender_type='system', handled_at IS NULL). Drives the
- *                      PURPLE per-thread dot in portal-chats: present while
- *                      something new is untriaged, gone once all are handled.
- * POST { message_id, handled } — tick/untick a note as handled. Handling means
- *                      "I opened a card for it" or "I know what to do, no card".
- *                      Unticking clears it so the dot returns. Staff-only.
+ * GET ?counts=true                 — per-account/contact count of UNHANDLED,
+ *                                    VISIBLE chat-event notes. Drives the PURPLE
+ *                                    per-thread dot.
+ * GET ?notes=true&account_id|contact_id — the VISIBLE chat-event notes for one
+ *                                    client (the What's New feed), enriched with
+ *                                    event_key + cleaned text + handled state.
+ * POST { message_id, handled }     — tick/untick a note handled. Staff-only.
  *
- * Notes are STAFF-ONLY (system messages are filtered out of the client portal).
- * See sysdoc notification-center-plan.
+ * Visibility is catalog-driven (`whats_new_events`, editable in Board Settings).
+ * Each note resolves to an event_key: the chat-event `kind`, except
+ * `workflow_spawned` notes which key off the linked task's `workflow_slug` (so
+ * Formation / Closure / etc. are independent switches). Both the feed and the
+ * dot count use the SAME config — single source of truth.
+ *
+ * Notes are STAFF-ONLY (system chat-event notes are filtered out of the client
+ * portal). See sysdoc notification-center-workflow-integration-plan.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js"
@@ -24,35 +31,153 @@ export const dynamic = "force-dynamic"
 // handled_at/handled_by aren't in the generated Database types until the
 // migration is promoted to prod + types regenerated. Loose handle (mirrors
 // lib/notifications/act-event.ts). Remove after type regen.
-// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-plan
+// eslint-disable-next-line no-restricted-syntax -- temporary until prod type regen; see sysdoc notification-center-workflow-integration-plan
 const db = supabaseAdmin as unknown as SupabaseClient
+
+const MARKER_RE = /<!--\s*chat-event:\s*kind=(\S+)\s+src=(\S+)\s*-->/
+
+interface RawNote {
+  id?: string
+  account_id: string | null
+  contact_id: string | null
+  message: string
+  topic?: string | null
+  created_at?: string
+  handled_at?: string | null
+  handled_by?: string | null
+}
+
+function parseMarker(message: string): { kind: string | null; src: string | null } {
+  const m = message.match(MARKER_RE)
+  return { kind: m?.[1] ?? null, src: m?.[2] ?? null }
+}
+
+/** Visibility config: event_key → visible. Unknown keys default to VISIBLE
+ *  (never silently hide a brand-new event the catalog hasn't learned yet). */
+async function loadVisibility(): Promise<Map<string, boolean>> {
+  const { data } = await supabaseAdmin
+    .from("catalog_entries")
+    .select("slug, metadata")
+    .eq("catalog_id", "whats_new_events")
+    .eq("status", "active")
+  const map = new Map<string, boolean>()
+  for (const r of data ?? []) {
+    const visible = (r.metadata as Record<string, unknown> | null)?.visible !== false
+    map.set(r.slug as string, visible)
+  }
+  return map
+}
+
+/** For workflow_spawned notes, resolve the linked task → workflow_slug. */
+async function resolveTaskSlugs(taskIds: string[]): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>()
+  if (taskIds.length === 0) return map
+  const { data } = await db
+    .from("tasks")
+    .select("id, workflow_slug")
+    .in("id", taskIds)
+  for (const t of (data ?? []) as Array<{ id: string; workflow_slug: string | null }>) {
+    map.set(t.id, t.workflow_slug ?? null)
+  }
+  return map
+}
+
+/** event_key for a note: the chat-event kind, except workflow_spawned which
+ *  keys off the linked task's workflow_slug. Returns null if unresolvable. */
+function eventKeyFor(kind: string | null, src: string | null, taskSlugs: Map<string, string | null>): string | null {
+  if (!kind) return null
+  if (kind !== "workflow_spawned") return kind
+  // src = "tasks:<id>"
+  const taskId = src && src.startsWith("tasks:") ? src.slice("tasks:".length) : null
+  return taskId ? taskSlugs.get(taskId) ?? null : null
+}
+
+/** Resolve event_key per note, batching the tasks lookup for workflow_spawned. */
+async function resolveEventKeys(notes: RawNote[]): Promise<Map<RawNote, string | null>> {
+  const taskIds: string[] = []
+  const parsed = notes.map((n) => {
+    const p = parseMarker(n.message)
+    if (p.kind === "workflow_spawned" && p.src?.startsWith("tasks:")) {
+      taskIds.push(p.src.slice("tasks:".length))
+    }
+    return { note: n, ...p }
+  })
+  const taskSlugs = await resolveTaskSlugs(Array.from(new Set(taskIds)))
+  const out = new Map<RawNote, string | null>()
+  for (const { note, kind, src } of parsed) out.set(note, eventKeyFor(kind, src, taskSlugs))
+  return out
+}
 
 export async function GET(req: NextRequest) {
   try {
-    const wantCounts = req.nextUrl.searchParams.get("counts") === "true"
-    if (!wantCounts) {
-      return NextResponse.json({ error: "Unsupported query" }, { status: 400 })
+    const sp = req.nextUrl.searchParams
+    const wantCounts = sp.get("counts") === "true"
+    const wantNotes = sp.get("notes") === "true"
+
+    if (wantCounts) {
+      const { data, error } = await db
+        .from("portal_messages")
+        .select("account_id, contact_id, message")
+        .eq("sender_type", "system")
+        .ilike("message", "%<!-- chat-event:%")
+        .is("handled_at", null)
+        .is("deleted_at", null)
+        .limit(5000)
+      if (error) throw error
+      const notes = (data ?? []) as RawNote[]
+      const [visibility, keys] = await Promise.all([loadVisibility(), resolveEventKeys(notes)])
+      const by_account: Record<string, number> = {}
+      const by_contact: Record<string, number> = {}
+      for (const n of notes) {
+        const key = keys.get(n)
+        // Hidden only if explicitly toggled off; unknown/unresolved keys show.
+        if (key && visibility.get(key) === false) continue
+        if (n.account_id) by_account[n.account_id] = (by_account[n.account_id] ?? 0) + 1
+        else if (n.contact_id) by_contact[n.contact_id] = (by_contact[n.contact_id] ?? 0) + 1
+      }
+      const total = Object.values(by_account).reduce((s, n) => s + n, 0) +
+        Object.values(by_contact).reduce((s, n) => s + n, 0)
+      return NextResponse.json({ by_account, by_contact, total })
     }
-    // Unhandled chat-event notes grouped by thread. Only notes carrying the
-    // marker — excludes other system messages like the out-of-office auto-reply.
-    const { data, error } = await supabaseAdmin
-      .from("portal_messages")
-      .select("account_id, contact_id")
-      .eq("sender_type", "system")
-      .ilike("message", "%<!-- chat-event:%")
-      .is("handled_at", null)
-      .is("deleted_at", null)
-      .limit(5000)
-    if (error) throw error
-    const by_account: Record<string, number> = {}
-    const by_contact: Record<string, number> = {}
-    for (const r of (data ?? []) as Array<{ account_id: string | null; contact_id: string | null }>) {
-      if (r.account_id) by_account[r.account_id] = (by_account[r.account_id] ?? 0) + 1
-      else if (r.contact_id) by_contact[r.contact_id] = (by_contact[r.contact_id] ?? 0) + 1
+
+    if (wantNotes) {
+      const accountId = sp.get("account_id")
+      const contactId = sp.get("contact_id")
+      if (!accountId && !contactId) {
+        return NextResponse.json({ error: "account_id or contact_id required" }, { status: 400 })
+      }
+      let q = db
+        .from("portal_messages")
+        .select("id, account_id, contact_id, message, topic, created_at, handled_at, handled_by")
+        .eq("sender_type", "system")
+        .ilike("message", "%<!-- chat-event:%")
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .limit(100)
+      if (accountId) q = q.eq("account_id", accountId)
+      else q = q.eq("contact_id", contactId as string)
+      const { data, error } = await q
+      if (error) throw error
+      const notes = (data ?? []) as RawNote[]
+      const [visibility, keys] = await Promise.all([loadVisibility(), resolveEventKeys(notes)])
+      const out = notes
+        .filter((n) => {
+          const key = keys.get(n)
+          return !(key && visibility.get(key) === false)
+        })
+        .map((n) => ({
+          id: n.id,
+          event_key: keys.get(n),
+          topic: n.topic ?? null,
+          text: n.message.replace(MARKER_RE, "").trim(),
+          created_at: n.created_at,
+          handled_at: n.handled_at ?? null,
+          handled_by: n.handled_by ?? null,
+        }))
+      return NextResponse.json({ notes: out })
     }
-    const total = Object.values(by_account).reduce((s, n) => s + n, 0) +
-      Object.values(by_contact).reduce((s, n) => s + n, 0)
-    return NextResponse.json({ by_account, by_contact, total })
+
+    return NextResponse.json({ error: "Unsupported query" }, { status: 400 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: msg }, { status: 500 })

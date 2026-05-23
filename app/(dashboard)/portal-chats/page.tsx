@@ -2295,7 +2295,7 @@ export default function PortalChatsPage() {
               <ThreadWhatsNewPanel
                 accountId={selectedAccountId || selectedCompanyId}
                 contactId={selectedContactId}
-                onOpenCard={({ noteId, label, sourceRef }) => {
+                onOpenCard={({ noteId, label }) => {
                   const acctId = selectedAccountId || selectedCompanyId
                   setCardPreset({
                     accountId: acctId ?? null,
@@ -2305,7 +2305,6 @@ export default function PortalChatsPage() {
                       threads?.find((t) => (selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId))?.company_name ||
                       'this client',
                     label,
-                    sourceRef: sourceRef ?? undefined,
                     noteId,
                   })
                 }}

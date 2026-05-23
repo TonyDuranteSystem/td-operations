@@ -35,6 +35,7 @@ const db = supabaseAdmin as unknown as SupabaseClient
 
 const CATALOG = "action_board_columns"
 const EVENTS = "action_events"
+const WHATS_NEW = "whats_new_events"
 const EVENTS_REASON = "Edited Notification Center card wording via dashboard UI"
 const REASON = "Edited Notification Center board columns via dashboard UI"
 
@@ -230,6 +231,53 @@ export async function setActionEventEnabled(id: string, enabled: boolean): Promi
     const actor = await uiActor()
     if (enabled) await restoreEntry(id, EVENTS_REASON, actor)
     else await deprecateEntry(id, EVENTS_REASON, actor)
+    revalidatePath("/")
+    return true as const
+  })
+}
+
+// ─── What's New visibility (whats_new_events) ────────────────────────────────
+// Per-event show/hide for the What's New feed. The feed + the purple dot both
+// read this catalog. Each event is its own switch (Formation / Closure / etc.
+// are independent). See sysdoc notification-center-workflow-integration-plan.
+
+const WHATS_NEW_REASON = "Edited What's New event visibility via dashboard UI"
+
+export interface WhatsNewEventRow {
+  id: string
+  slug: string
+  display_name: string
+  visible: boolean
+  order: number
+}
+
+export async function listWhatsNewEvents(): Promise<ActionResult<WhatsNewEventRow[]>> {
+  return safeAction(async () => {
+    await uiActor()
+    const entries = await listEntries(WHATS_NEW, {})
+    return entries
+      .map((e) => {
+        const m = (e.metadata ?? {}) as Record<string, unknown>
+        return {
+          id: e.id,
+          slug: e.slug,
+          display_name: e.display_name,
+          visible: m.visible !== false,
+          order: Number(m.order ?? 999),
+        }
+      })
+      .sort((a, b) => a.order - b.order)
+  })
+}
+
+export async function setWhatsNewEventVisible(id: string, visible: boolean): Promise<ActionResult<true>> {
+  return safeAction(async () => {
+    const actor = await uiActor()
+    const entries = await listEntries(WHATS_NEW, {})
+    const cur = entries.find((e) => e.id === id)
+    if (!cur) throw new Error("Event not found")
+    const meta = { ...((cur.metadata as Record<string, unknown>) ?? {}), visible }
+    await updateMetadata(id, meta, WHATS_NEW_REASON, actor)
     revalidatePath("/")
     return true as const
   })

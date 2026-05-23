@@ -2,17 +2,14 @@
 
 /**
  * ThreadWhatsNewPanel — the "What's New" feed inside /portal-chats for one
- * client: the internal system notes (sender_type='system' chat-events — "Client
- * paid…", "signed SS-4 — fax to IRS", "uploaded a document", wizard/onboarding
- * triggered) that the team must triage. These are STAFF-ONLY (hidden from the
- * client portal — see the leak fix in /api/portal/chat).
+ * client: the incoming client-action notes the team must triage. Reads from
+ * /api/crm/admin-actions/whats-new?notes=true, which returns only the events
+ * turned ON in Board Settings (per-event show/hide) and resolves each note to
+ * its event. STAFF-ONLY (system chat-event notes are hidden from the client).
  *
- * Each note has an "Open card" action that opens the SAME card editor used on
- * the dashboard (NewCardDialog), pre-attached to this client with a suggested
- * next step + a source link. Once a card exists for a note, the note shows a
- * shared "Handled by …" marker so Antonio and Luca never double-work it.
- *
- * See sysdoc notification-center-plan.
+ * Each note: "Open card" opens the SAME dashboard card editor pre-attached to
+ * this client; a Handled toggle marks it triaged (drops it off the purple dot).
+ * See sysdoc notification-center-workflow-integration-plan.
  */
 
 import { useCallback, useState } from 'react'
@@ -20,61 +17,32 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
-const CHAT_API = '/api/portal/chat'
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
 
-interface RawMessage {
+interface ApiNote {
   id: string
-  sender_type: string
-  message: string
+  event_key: string | null
   topic: string | null
-  created_at: string
-  account_id: string | null
-  contact_id: string | null
-  handled_at?: string | null
-  handled_by?: string | null
-}
-
-export interface WhatsNewNote {
-  id: string
-  topic: string | null
-  kind: string | null
-  sourceRef: string | null
   text: string
   created_at: string
-  handledAt: string | null
-  handledBy: string | null
+  handled_at: string | null
+  handled_by: string | null
 }
 
-// Best-guess next step per event kind. Honest + generic — the data often can't
-// tell us the real task (e.g. a $64 payment whose description says
-// "annual_renewal" was actually a card-shipping fee), so this is only a starting
-// suggestion the user edits. See notification-center-plan.
+// Best-guess next step per event. Honest + generic — the user edits it. Keyed by
+// event_key (chat-event kind, or workflow slug for "started X" notes).
 const SUGGEST: Record<string, string> = {
   payment_received: 'Confirm what this payment was for and take the next step (e.g. ship card)',
   ss4_signed: 'Fax the SS-4 to the IRS to start the EIN application',
   document_uploaded: 'Review the document the client uploaded',
-  wizard_submitted: "Review the client's submission and take the next step",
-  workflow_spawned: 'Review and take the next step',
-}
-
-const MARKER_RE = /<!--\s*chat-event:\s*kind=(\S+)\s+src=(\S+)\s*-->/
-
-function parseNote(m: RawMessage): WhatsNewNote {
-  const match = m.message.match(MARKER_RE)
-  const kind = match?.[1] ?? null
-  const sourceRef = match?.[2] ?? null
-  const text = m.message.replace(MARKER_RE, '').trim()
-  return {
-    id: m.id,
-    topic: m.topic,
-    kind,
-    sourceRef,
-    text,
-    created_at: m.created_at,
-    handledAt: m.handled_at ?? null,
-    handledBy: m.handled_by ?? null,
-  }
+  itin_review: 'Review the ITIN submission (W-7 / 1040-NR)',
+  banking_review_payset: 'Process / monitor the Payset banking application',
+  banking_review_relay: 'Process / monitor the Relay banking application',
+  banking_physical_progress: 'Handle the physical bank card step',
+  tax_form_review: 'Review the tax submission',
+  formation_progress: 'Verify the formation data + check the LLC name',
+  onboarding_progress: 'Verify onboarding + RA change on Harbor',
+  closure_progress: 'Begin the closure / dissolution steps',
 }
 
 export function ThreadWhatsNewPanel({
@@ -84,41 +52,31 @@ export function ThreadWhatsNewPanel({
 }: {
   accountId: string | null
   contactId: string | null
-  onOpenCard: (note: { noteId: string; label: string; sourceRef: string | null }) => void
+  onOpenCard: (note: { noteId: string; label: string }) => void
 }) {
   const qc = useQueryClient()
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const scopeKey = accountId ?? contactId
   const param = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : null
 
-  // System notes for this client (staff sees them; client portal does not).
-  const { data: notes, isLoading } = useQuery<WhatsNewNote[]>({
+  const { data: notes, isLoading } = useQuery<ApiNote[]>({
     queryKey: ['thread-whats-new', scopeKey],
     queryFn: () =>
-      fetch(`${CHAT_API}?${param}&limit=50`)
+      fetch(`${WHATS_NEW_API}?notes=true&${param}`)
         .then((r) => r.json())
-        .then((d: { messages?: RawMessage[] }) =>
-          // Only internal chat-event notes (carry the marker) — exclude other
-          // system messages like the out-of-office auto-reply (client-facing).
-          (d.messages || [])
-            .filter((m) => m.sender_type === 'system' && MARKER_RE.test(m.message))
-            .map(parseNote)
-            .reverse(),
-        ),
+        .then((d: { notes?: ApiNote[] }) => d.notes || []),
     enabled: !!param,
     refetchInterval: 30_000,
   })
 
-  // Tick / untick a note as handled. Handled notes drop off the purple dot;
-  // unticking brings the dot back.
   const toggleHandled = useCallback(
-    async (note: WhatsNewNote) => {
+    async (note: ApiNote) => {
       setTogglingId(note.id)
       try {
         const res = await fetch(WHATS_NEW_API, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message_id: note.id, handled: !note.handledAt }),
+          body: JSON.stringify({ message_id: note.id, handled: !note.handled_at }),
         })
         if (!res.ok) {
           const d = await res.json().catch(() => ({}))
@@ -133,12 +91,10 @@ export function ThreadWhatsNewPanel({
     [qc],
   )
 
-  // Opening a card from a note hands triage off to the dashboard card editor;
-  // the page marks the note handled once the card is saved.
   const open = useCallback(
-    (note: WhatsNewNote) => {
-      const label = (note.kind && SUGGEST[note.kind]) || note.text
-      onOpenCard({ noteId: note.id, label, sourceRef: note.sourceRef })
+    (note: ApiNote) => {
+      const label = (note.event_key && SUGGEST[note.event_key]) || note.text
+      onOpenCard({ noteId: note.id, label })
     },
     [onOpenCard],
   )
@@ -165,11 +121,11 @@ export function ThreadWhatsNewPanel({
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <CheckCircle2 className="h-9 w-9 text-zinc-200 mb-2" />
             <p className="text-sm font-medium text-zinc-500">Nothing new</p>
-            <p className="text-xs text-zinc-400">Client actions (payments, signatures, uploads) show up here.</p>
+            <p className="text-xs text-zinc-400">Client actions (payments, signatures, submissions) show up here.</p>
           </div>
         ) : (
           notes.map((note) => {
-            const handled = !!note.handledAt
+            const handled = !!note.handled_at
             const busy = togglingId === note.id
             return (
               <div key={note.id} className={`rounded-md border bg-white p-2.5 ${handled ? 'opacity-60' : ''}`}>
@@ -183,7 +139,7 @@ export function ThreadWhatsNewPanel({
                     <p className="text-sm text-zinc-800">{note.text}</p>
                     <p className="text-[10px] text-zinc-400 mt-1">
                       {formatDistanceToNow(new Date(note.created_at), { addSuffix: true })}
-                      {handled && note.handledBy ? ` · handled by ${note.handledBy}` : ''}
+                      {handled && note.handled_by ? ` · handled by ${note.handled_by}` : ''}
                     </p>
                   </div>
                   {!handled && (
@@ -196,7 +152,6 @@ export function ThreadWhatsNewPanel({
                     </button>
                   )}
                 </div>
-                {/* Handled toggle — ticking drops it off the purple dot; unticking brings it back. */}
                 <div className="mt-1.5 flex items-center justify-between">
                   <button
                     disabled={busy}
