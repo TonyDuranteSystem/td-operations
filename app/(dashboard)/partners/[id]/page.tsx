@@ -7,6 +7,7 @@ import { PartnerHeaderActions, type PartnerData, type ManagedAccount } from './c
 import { ManagedClientsSection } from './components/managed-clients-section'
 import { PartnerPayoutsSection, type PayoutRow } from './components/partner-payouts-section'
 import { BackButton } from '@/components/ui/back-button'
+import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { labelForServiceStatic } from '@/lib/services'
 
 export const dynamic = 'force-dynamic'
@@ -319,6 +320,9 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
 
       {/* Partner Payouts — Phase 3C */}
       <PartnerPayoutsSection partnerId={partner.id} payouts={payouts} />
+
+      {/* Notification Center roll-up for the partner's underlying contact */}
+      {contact?.id && <EntityActivitySummary contactId={contact.id} />}
     </div>
   )
 }

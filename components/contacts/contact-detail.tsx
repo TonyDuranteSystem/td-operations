@@ -30,6 +30,7 @@ import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
 import { EditableField } from '@/components/accounts/editable-field'
+import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
@@ -391,6 +392,9 @@ export function ContactDetail({
 
       {/* Lifecycle Timeline */}
       <LifecycleTimeline events={timelineEvents} defaultOpen={false} />
+
+      {/* Notification Center roll-up: What's New + To-Do + Workflow for this contact */}
+      <EntityActivitySummary contactId={contact.id} />
 
       {/* Tabs */}
       <div className="border-b">

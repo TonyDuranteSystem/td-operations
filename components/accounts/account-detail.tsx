@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
+import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { PortalUserButton } from './portal-user-button'
 import { PortalTransitionButton } from './portal-transition-button'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
@@ -2124,6 +2125,9 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           </div>
         </div>
       </div>
+
+      {/* Notification Center roll-up: What's New + To-Do + Workflow for this account */}
+      <EntityActivitySummary accountId={account.id} />
 
       {/* Billing — only for Client-type accounts (vendors/tenants/leads do not have annual installments) */}
       {account.account_type === 'Client' && (

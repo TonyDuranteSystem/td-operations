@@ -156,7 +156,12 @@ interface PendingAdminFile {
 export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
-  const [selectedContactId, setSelectedContactId] = useState<string | null>(null)
+  // `?contact=<id>` deep-links a contact-scoped thread (e.g. from the entity
+  // summary widget on a contact page). Symmetric with `?account=`; account wins
+  // if both are somehow present. See sysdoc notification-center-phase2-cards-summary-plan.
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(
+    urlParams.get('account') ? null : urlParams.get('contact'),
+  )
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
   const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string }[]>([])
