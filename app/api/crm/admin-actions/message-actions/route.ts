@@ -20,9 +20,23 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
+import { createClient } from "@/lib/supabase/server"
+import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export const dynamic = "force-dynamic"
+
+/** Staff-only guard. The To-Do board is internal: a client must never read it
+ *  (returns all clients' cards) or move/resolve cards. Returns null if allowed,
+ *  or a 403 response to return. See sysdoc notification-center-workflow-integration-plan. */
+async function requireStaff(): Promise<NextResponse | null> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 })
+  }
+  return null
+}
 
 // Loose handle for message_actions writes touching remind_at/priority — not in
 // the generated Database types until the migration is promoted to prod + types
@@ -54,6 +68,8 @@ async function loadColumns(): Promise<{ valid: Set<string>; terminal: Set<string
 
 export async function GET(req: NextRequest) {
   try {
+    const denied = await requireStaff()
+    if (denied) return denied
     const accountId = req.nextUrl.searchParams.get("account_id")
     const messageId = req.nextUrl.searchParams.get("message_id")
     const openOnly = req.nextUrl.searchParams.get("open") === "true"
@@ -164,6 +180,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const denied = await requireStaff()
+    if (denied) return denied
     const body = await req.json()
     const { message_id, contact_id, account_id, action_type, label, created_by } = body
 
@@ -230,6 +248,8 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
+    const denied = await requireStaff()
+    if (denied) return denied
     const body = await req.json()
     const { id, action_type, assigned_to, label, remind_at, priority } = body
 
