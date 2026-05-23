@@ -175,15 +175,23 @@ export async function GET(req: NextRequest) {
           const key = keys.get(n)
           return !(key && visibility.get(key) === false)
         })
-        .map((n) => ({
-          id: n.id,
-          event_key: keys.get(n),
-          topic: n.topic ?? null,
-          text: n.message.replace(MARKER_RE, "").trim(),
-          created_at: n.created_at,
-          handled_at: n.handled_at ?? null,
-          handled_by: n.handled_by ?? null,
-        }))
+        .map((n) => {
+          // For workflow_spawned notes, expose the linked task id so the panel
+          // can render that workflow task's action buttons + SLA inline.
+          const m = n.message.match(MARKER_RE)
+          const src = m?.[2] ?? null
+          const task_id = src && src.startsWith("tasks:") ? src.slice("tasks:".length) : null
+          return {
+            id: n.id,
+            event_key: keys.get(n),
+            task_id,
+            topic: n.topic ?? null,
+            text: n.message.replace(MARKER_RE, "").trim(),
+            created_at: n.created_at,
+            handled_at: n.handled_at ?? null,
+            handled_by: n.handled_by ?? null,
+          }
+        })
       return NextResponse.json({ notes: out })
     }
 

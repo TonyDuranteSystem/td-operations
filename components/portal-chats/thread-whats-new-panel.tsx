@@ -12,16 +12,19 @@
  * See sysdoc notification-center-workflow-integration-plan.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
+import type { Task } from '@/lib/types'
 
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
 
 interface ApiNote {
   id: string
   event_key: string | null
+  task_id: string | null
   topic: string | null
   text: string
   created_at: string
@@ -68,6 +71,25 @@ export function ThreadWhatsNewPanel({
     enabled: !!param,
     refetchInterval: 30_000,
   })
+
+  // Open workflow tasks for this client — used to render the workflow's action
+  // buttons + SLA inline on its What's New note. Key matches what
+  // WorkflowTaskCard invalidates (['portal-chat-thread-tasks']) so actions refresh.
+  const { data: wfTasks } = useQuery<Task[]>({
+    queryKey: ['portal-chat-thread-tasks', scopeKey],
+    queryFn: () =>
+      fetch(`/api/tasks/by-thread?${param}`)
+        .then((r) => r.json())
+        .then((d: { tasks?: Task[] }) => (d.tasks || []).filter((t) => t.workflow_snapshot)),
+    enabled: !!param,
+    refetchInterval: 30_000,
+  })
+  const taskById = useMemo(() => {
+    const m = new Map<string, Task>()
+    for (const t of wfTasks ?? []) m.set(t.id, t)
+    return m
+  }, [wfTasks])
+  const today = new Date().toISOString().split('T')[0]
 
   const toggleHandled = useCallback(
     async (note: ApiNote) => {
@@ -127,6 +149,8 @@ export function ThreadWhatsNewPanel({
           notes.map((note) => {
             const handled = !!note.handled_at
             const busy = togglingId === note.id
+            // Workflow notes carry the workflow task's own actions + SLA inline.
+            const wfTask = note.task_id ? taskById.get(note.task_id) : undefined
             return (
               <div key={note.id} className={`rounded-md border bg-white p-2.5 ${handled ? 'opacity-60' : ''}`}>
                 <div className="flex items-start justify-between gap-2">
@@ -142,7 +166,9 @@ export function ThreadWhatsNewPanel({
                       {handled && note.handled_by ? ` · handled by ${note.handled_by}` : ''}
                     </p>
                   </div>
-                  {!handled && (
+                  {/* No "Open card" for workflow notes — the workflow itself IS the to-do
+                      and its action buttons are shown below. */}
+                  {!handled && !wfTask && (
                     <button
                       onClick={() => open(note)}
                       className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-0.5 bg-white"
@@ -152,6 +178,13 @@ export function ThreadWhatsNewPanel({
                     </button>
                   )}
                 </div>
+
+                {/* Workflow note → render the workflow task's own stage actions + SLA inline. */}
+                {wfTask && (
+                  <div className="mt-2 rounded-md bg-zinc-50 border p-1.5">
+                    <WorkflowTaskCard task={wfTask} today={today} role="admin" />
+                  </div>
+                )}
                 <div className="mt-1.5 flex items-center justify-between">
                   <button
                     disabled={busy}
