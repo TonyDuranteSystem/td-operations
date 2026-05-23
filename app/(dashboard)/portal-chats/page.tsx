@@ -377,19 +377,6 @@ export default function PortalChatsPage() {
     refetchInterval: 60_000,
   })
 
-  // Fetch open-task counts per thread. Merged with the threads list client-side
-  // to render the orange dot next to the blue unread-messages badge and to
-  // surface the total open-task count in the browser tab title. Invalidated
-  // by the tasks realtime subscription below.
-  const { data: openTaskCounts } = useQuery<{
-    by_account: Record<string, number>
-    by_contact: Record<string, number>
-    total: number
-  }>({
-    queryKey: ['portal-chat-open-task-counts'],
-    queryFn: () => fetch('/api/tasks/open-counts').then(r => r.json()),
-    refetchInterval: 120_000, // fallback reconciliation; realtime subscription below is primary
-  })
 
   // Per-thread PURPLE dot = count of UNHANDLED "What's New" notes (incoming
   // client-action notifications not yet triaged). Ticking a note handled — or
@@ -534,8 +521,7 @@ export default function PortalChatsPage() {
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (payload: any) => {
-          // Invalidate counts + any per-thread tasks panel that's currently open
-          queryClient.invalidateQueries({ queryKey: ['portal-chat-open-task-counts'] })
+          // Refresh the inline workflow cards shown in What's New (Step 3).
           queryClient.invalidateQueries({ queryKey: ['portal-chat-thread-tasks'] })
 
           // Toast + sound only on fresh INSERTs (not updates/deletes)
@@ -1001,17 +987,17 @@ export default function PortalChatsPage() {
     if (!threads) return
 
     const totalUnread = threads.reduce((sum, t) => sum + t.unread_count, 0)
-    const totalOpenTasks = openTaskCounts?.total ?? 0
+    const totalNew = whatsNewCounts?.total ?? 0
 
-    // Update tab title with unread count AND open task count (Phase 2 Layer 1).
-    // Format: (52/3) Portal Chats — 52 unread messages, 3 open tasks.
+    // Tab title: unread messages + unhandled What's New items.
+    // Format: (52/3) Portal Chats — 52 unread messages, 3 new things to look at.
     // Omits each segment when its count is zero.
-    if (totalUnread > 0 && totalOpenTasks > 0) {
-      document.title = `(${totalUnread}/${totalOpenTasks}) Portal Chats`
+    if (totalUnread > 0 && totalNew > 0) {
+      document.title = `(${totalUnread}/${totalNew}) Portal Chats`
     } else if (totalUnread > 0) {
       document.title = `(${totalUnread}) Portal Chats`
-    } else if (totalOpenTasks > 0) {
-      document.title = `(${totalOpenTasks} tasks) Portal Chats`
+    } else if (totalNew > 0) {
+      document.title = `(${totalNew} new) Portal Chats`
     } else {
       document.title = 'Portal Chats'
     }
@@ -1039,7 +1025,7 @@ export default function PortalChatsPage() {
     }
 
     prevTotalUnreadRef.current = totalUnread
-  }, [threads, openTaskCounts?.total, playSound, notificationsEnabled])
+  }, [threads, whatsNewCounts?.total, playSound, notificationsEnabled])
 
   // Reset tab title on unmount
   useEffect(() => {
@@ -1538,22 +1524,7 @@ export default function PortalChatsPage() {
                         </span>
                       ) : null
                     })()}
-                    {/* Task dot: orange pill showing open-task count for this thread (Phase 2 Layer 1) */}
-                    {(() => {
-                      const taskCount = thread.account_id
-                        ? openTaskCounts?.by_account?.[thread.account_id] ?? 0
-                        : thread.contact_id
-                          ? openTaskCounts?.by_contact?.[thread.contact_id] ?? 0
-                          : 0
-                      return taskCount > 0 ? (
-                        <span
-                          className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-orange-500 text-white"
-                          title={`${taskCount} open task${taskCount === 1 ? '' : 's'}`}
-                        >
-                          {taskCount}
-                        </span>
-                      ) : null
-                    })()}
+                    {/* (Legacy orange task-count dot retired — purple What's New dot above is the single signal now.) */}
                     {thread.unread_count > 0 && (
                       <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white">
                         {thread.unread_count}

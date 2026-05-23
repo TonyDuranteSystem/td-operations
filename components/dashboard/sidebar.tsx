@@ -6,7 +6,6 @@ import { createClient } from '@/lib/supabase/client'
 import {
   LayoutDashboard,
   MessageSquare,
-  ClipboardList,
   FileText,
   Building2,
   TrendingUp,
@@ -101,7 +100,11 @@ const defaultNavigation: NavItem[] = [
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },
-  { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList, tooltip: 'Kanban board for manual and auto-generated tasks. Use message tags for daily work instead.' },
+  // Task Board (/tasks) intentionally NOT in the sidebar — retired in favor of
+  // the Notification Center (Portal Chats → What's New / To Do). The workflow
+  // engine + the /tasks page stay alive at the URL; daily work happens in
+  // What's New (workflow steps surface there with their action buttons + SLA).
+  // See sysdoc notification-center-workflow-integration-plan.
   { id: 'service-catalog', name: 'Service Catalog', href: '/service-catalog', icon: Package, tooltip: 'Manage services + stages + workflows — one place to add, edit, and publish everything about a service.' },
   // /catalog (generic framework UI) intentionally NOT in the sidebar since the
   // workflow-editor consolidation (2026-05-18). Service Catalog handles services
