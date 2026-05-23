@@ -156,7 +156,7 @@ Always communicate in English. Be direct and efficient.
 ## Run unit tests after every code change — MANDATORY
 Before saying "it works" or "done", run `npm run test:unit`. If you didn't run tests, it's NOT done.
 
-## Workflow System — conventions (Slices 0-10 + flexibility pass + editor on `workflow-system-slice-1` branch, not yet on production)
+## Workflow System — conventions (Slices 0-13 + flexibility pass + editor — LIVE ON PRODUCTION since commit `1dfb55c8`; do not re-flag as "not yet on production")
 
 Full design: `sysdoc_read('workflows-system-master-plan')`. Current state + extension cookbook: `sysdoc_read('workflows-system-slices-8-10-final-state')`. These rules are the minimum a session needs.
 
