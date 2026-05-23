@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 
 export const dynamic = "force-dynamic"
 
@@ -68,65 +69,14 @@ export async function POST(req: NextRequest) {
     }
     const currency = rawCurrency as "usd" | "eur"
 
-    // Resolve client name + email
-    // Email resolution order (first hit wins):
-    //   1. payment.contact_id → contacts.email
-    //   2. account_contacts owner → contacts.email
-    //   3. accounts.communication_email (fallback for accounts with no linked owner)
-    let clientName = "Client"
-    let clientEmail: string | undefined
-    let accountCommunicationEmail: string | null = null
-
-    // Fetch account info (name + fallback email) first
-    if (payment.account_id) {
-      const { data: account } = await supabase
-        .from("accounts")
-        .select("company_name, communication_email")
-        .eq("id", payment.account_id)
-        .single()
-      if (account?.company_name) clientName = account.company_name
-      if (account?.communication_email) accountCommunicationEmail = account.communication_email
-    }
-
-    // Email: prefer direct contact_id on payment, fall back to account owner
-    if (payment.contact_id) {
-      const { data: contact } = await supabase
-        .from("contacts")
-        .select("email, full_name")
-        .eq("id", payment.contact_id)
-        .single()
-      if (contact?.email) clientEmail = contact.email
-      if (!payment.account_id && contact?.full_name) clientName = contact.full_name
-    } else if (payment.account_id) {
-      const { data: link } = await supabase
-        .from("account_contacts")
-        .select("contact_id")
-        .eq("account_id", payment.account_id)
-        .eq("role", "owner")
-        .limit(1)
-        .maybeSingle()
-
-      if (link?.contact_id) {
-        const { data: contact } = await supabase
-          .from("contacts")
-          .select("email")
-          .eq("id", link.contact_id)
-          .single()
-        if (contact?.email) clientEmail = contact.email
-      }
-    }
-
-    // Final fallback: account.communication_email
-    if (!clientEmail && accountCommunicationEmail) {
-      clientEmail = accountCommunicationEmail
-    }
-
-    if (!clientEmail) {
+    const recipient = await resolvePaymentRecipient(payment, supabase)
+    if (!recipient) {
       return NextResponse.json(
         { error: "Could not resolve client email from payment" },
         { status: 400 }
       )
     }
+    const { email: clientEmail, name: clientName } = recipient
 
     // Create Stripe Checkout session via shared helper
     const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")

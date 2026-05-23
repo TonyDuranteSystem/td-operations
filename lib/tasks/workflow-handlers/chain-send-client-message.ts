@@ -34,14 +34,25 @@ async function pickLanguage(contactId: string | null): Promise<"en" | "it"> {
 export const chainSendClientMessage: WorkflowHandler = async (
   ctx: HandlerContext,
 ): Promise<HandlerResult> => {
-  const params = (ctx.params ?? {}) as {
+  // Catalog handler_params supply pre-baked defaults; runtime params (operator
+  // input via requires_input modal) override them. This lets catalog-driven
+  // actions send without any operator input while still allowing customisation.
+  const catalog = (ctx.action.handler_params ?? {}) as {
     body_en?: unknown
     body_it?: unknown
     topic?: unknown
   }
-  const en = typeof params.body_en === "string" ? params.body_en.trim() : ""
-  const it = typeof params.body_it === "string" ? params.body_it.trim() : ""
-  const topic = typeof params.topic === "string" ? params.topic.trim() : ctx.workflow.auto_topic
+  const runtime = (ctx.params ?? {}) as {
+    body_en?: unknown
+    body_it?: unknown
+    topic?: unknown
+  }
+  const pick = (r: unknown, c: unknown) =>
+    (typeof r === "string" && r.trim() ? r.trim() : typeof c === "string" ? c.trim() : "")
+  const en = pick(runtime.body_en, catalog.body_en)
+  const it = pick(runtime.body_it, catalog.body_it)
+  const topicRaw = runtime.topic ?? catalog.topic
+  const topic = typeof topicRaw === "string" ? topicRaw.trim() : ctx.workflow.auto_topic
 
   if (!en && !it) {
     return {
