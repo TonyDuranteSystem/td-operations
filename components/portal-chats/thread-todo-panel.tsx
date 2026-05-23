@@ -9,7 +9,7 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, CalendarClock, Check } from 'lucide-react'
+import { Loader2, Plus, CalendarClock, Check, Moon } from 'lucide-react'
 import { createManualCard } from '@/components/dashboard/action-board-actions'
 
 const API = '/api/crm/admin-actions/message-actions'
@@ -122,6 +122,33 @@ export function ThreadTodoPanel({
     [columns, refreshAll],
   )
 
+  // Snooze: hide the card from every open-card reader until the chosen date
+  // (09:00 local). The card vanishes on the next refetch. Guard: only accept a
+  // future date — enforces "hide until later" AND ignores the implausible
+  // mid-typing dates a native date field emits per keystroke (year 0202 etc.),
+  // so we write once, cleanly.
+  const snooze = useCallback(
+    async (id: string, dateStr: string) => {
+      const d = new Date(`${dateStr}T09:00:00`)
+      if (isNaN(d.getTime()) || d.getTime() <= Date.now()) return
+      const snoozed_until = d.toISOString()
+      const res = await fetch(API, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, snoozed_until }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setError(d.error || 'Could not snooze the to-do')
+        return
+      }
+      refreshAll()
+    },
+    [refreshAll],
+  )
+
+  const todayStr = new Date().toISOString().slice(0, 10)
+
   if (!accountId && !contactId) {
     return (
       <div className="flex items-center justify-center py-6">
@@ -219,6 +246,16 @@ export function ThreadTodoPanel({
                       {new Date(card.remind_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                     </span>
                   )}
+                  <label className="ml-auto flex items-center gap-1 text-[10px] text-zinc-400 cursor-pointer" title="Hide this card until a date">
+                    <Moon className="h-3 w-3" />
+                    <input
+                      type="date"
+                      min={todayStr}
+                      onChange={(e) => e.target.value && snooze(card.id, e.target.value)}
+                      className="text-[10px] border rounded px-1 py-0.5 text-zinc-500 bg-white"
+                      aria-label="Snooze until"
+                    />
+                  </label>
                 </div>
               </div>
             )

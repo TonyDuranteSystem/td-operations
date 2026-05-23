@@ -42,6 +42,19 @@ const db = supabaseAdmin
 
 const LEGACY_COLUMNS = ["action_needed", "in_progress", "waiting_on_client", "done"]
 
+/**
+ * The canonical "open card is currently visible" predicate, as a PostgREST .or()
+ * string: a card hidden by snooze (snoozed_until in the future) drops out of every
+ * open-card reader until that time. Pair with `.is("resolved_at", null)`.
+ * Snooze applies to CARDS only — What's New notes (portal_messages) are unaffected.
+ * Single source of truth so the board, the purple-dot count, the To-Do panel, and
+ * the summary widget never disagree. See sysdoc
+ * notification-center-phase2-cards-summary-plan.
+ */
+function notSnoozedOr(): string {
+  return `snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`
+}
+
 /** Active board columns + which are terminal, from the catalog (with a safe fallback). */
 async function loadColumns(): Promise<{ valid: Set<string>; terminal: Set<string> }> {
   const valid = new Set<string>()
@@ -81,6 +94,7 @@ export async function GET(req: NextRequest) {
         .from("message_actions")
         .select("account_id, contact_id, priority, remind_at")
         .is("resolved_at", null)
+        .or(notSnoozedOr())
         .limit(2000)
       if (err) throw err
       const by_account: Record<string, number> = {}
@@ -136,16 +150,24 @@ export async function GET(req: NextRequest) {
     // Joins are nullable-safe — staff cards have message_id NULL, so consumers
     // render `label` (the next step) rather than a message preview.
     if (openOnly) {
-      const { data: enriched, error: err } = await db
+      // Optional server-side entity filter. The dashboard board fetches ALL open
+      // cards (no entity param); the per-entity summary widget passes account_id
+      // or contact_id so we never ship every client's cards to one entity page.
+      const contactId = req.nextUrl.searchParams.get("contact_id")
+      let openQ = db
         .from("message_actions")
         .select(`
-          id, action_type, label, assigned_to, source_ref, remind_at, priority, created_at, updated_at,
+          id, action_type, label, assigned_to, source_ref, remind_at, priority, snoozed_until, created_at, updated_at,
           message_id, account_id, contact_id,
           portal_messages(message),
           accounts(company_name),
           contacts(full_name)
         `)
         .is("resolved_at", null)
+        .or(notSnoozedOr())
+      if (accountId) openQ = openQ.eq("account_id", accountId)
+      else if (contactId) openQ = openQ.eq("contact_id", contactId)
+      const { data: enriched, error: err } = await openQ
         .order("created_at", { ascending: false })
         .limit(200)
       if (err) throw err
@@ -247,18 +269,19 @@ export async function PATCH(req: NextRequest) {
     const denied = await requireStaff()
     if (denied) return denied
     const body = await req.json()
-    const { id, action_type, assigned_to, label, remind_at, priority } = body
+    const { id, action_type, assigned_to, label, remind_at, priority, snoozed_until } = body
 
     if (!id) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 })
     }
-    // At least one mutable field must be present (move OR reminder/priority edit).
+    // At least one mutable field must be present (move OR reminder/priority/snooze edit).
     if (
       action_type === undefined &&
       assigned_to === undefined &&
       label === undefined &&
       remind_at === undefined &&
-      priority === undefined
+      priority === undefined &&
+      snoozed_until === undefined
     ) {
       return NextResponse.json({ error: "Nothing to update" }, { status: 400 })
     }
@@ -282,6 +305,8 @@ export async function PATCH(req: NextRequest) {
     if (label !== undefined) updateData.label = label
     // remind_at: ISO string to set, null/"" to clear.
     if (remind_at !== undefined) updateData.remind_at = remind_at || null
+    // snoozed_until: ISO string to hide the card until that time; null/"" to un-snooze.
+    if (snoozed_until !== undefined) updateData.snoozed_until = snoozed_until || null
     if (priority !== undefined) {
       if (!["normal", "high", "urgent"].includes(priority)) {
         return NextResponse.json({ error: "Invalid priority" }, { status: 400 })

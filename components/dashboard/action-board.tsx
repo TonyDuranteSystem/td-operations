@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock } from 'lucide-react'
+import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock, Moon, Check } from 'lucide-react'
 import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 
@@ -36,6 +36,7 @@ interface Card {
   assigned_to: string | null
   created_at: string
   remind_at: string | null
+  snoozed_until: string | null
   priority: Priority | null
   message_id: string | null
   account_id: string | null
@@ -136,9 +137,10 @@ export function ActionBoard() {
     [load],
   )
 
-  // Set reminder date and/or priority on a card (no column move).
+  // Set reminder date, priority, and/or snooze on a card (no column move).
+  // snoozed_until in the future hides the card from the board until that time.
   const updateCard = useCallback(
-    async (id: string, patch: { remind_at?: string | null; priority?: Priority }) => {
+    async (id: string, patch: { remind_at?: string | null; priority?: Priority; snoozed_until?: string | null }) => {
       setCards((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c))) // optimistic
       try {
         const res = await fetch(API, {
@@ -151,11 +153,28 @@ export function ActionBoard() {
           throw new Error(d.error || 'Could not update the card')
         }
       } finally {
-        await load()
+        await load() // a freshly-snoozed card drops off on reload
       }
     },
     [load],
   )
+
+  // Snooze from a date input. Empty = un-snooze. Guard: only accept a date
+  // strictly in the future — this both enforces "snooze = hide until later" AND
+  // ignores the implausible mid-typing dates a native date field emits per
+  // keystroke (e.g. year 0202 before 2026 is finished), so we write once, cleanly.
+  const snoozeFromInput = useCallback(
+    (id: string, value: string) => {
+      if (!value) { updateCard(id, { snoozed_until: null }); return }
+      const d = new Date(`${value}T09:00:00`)
+      if (isNaN(d.getTime()) || d.getTime() <= Date.now()) return
+      updateCard(id, { snoozed_until: d.toISOString() })
+    },
+    [updateCard],
+  )
+
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const terminalSlug = columns.find((c) => c.terminal)?.slug ?? null
 
   const visibleColumns = columns.filter((c) => !c.terminal)
   const total = cards.length
@@ -313,15 +332,40 @@ export function ActionBoard() {
                             <option value="high">!</option>
                             <option value="urgent">!!</option>
                           </select>
+                          {terminalSlug && (
+                            <button
+                              disabled={movingId === card.id}
+                              onClick={() => move(card.id, terminalSlug)}
+                              className="flex items-center gap-0.5 text-[11px] text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded px-1.5 py-1 disabled:opacity-50"
+                              title="Mark done"
+                              aria-label="Mark done"
+                            >
+                              <Check className="h-3 w-3" />
+                            </button>
+                          )}
                         </div>
-                        <input
-                          type="date"
-                          aria-label="Reminder date"
-                          value={remindInput}
-                          onChange={(e) => updateCard(card.id, { remind_at: e.target.value ? new Date(`${e.target.value}T17:00:00`).toISOString() : null })}
-                          className="mt-1 w-full text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-500"
-                          title="Set a reminder date"
-                        />
+                        <div className="flex gap-1 mt-1">
+                          <label className="flex-1 flex items-center gap-1 text-[10px] text-zinc-400" title="Set a reminder date (colours the card, does not hide it)">
+                            <CalendarClock className="h-3 w-3 shrink-0" />
+                            <input
+                              type="date"
+                              aria-label="Reminder date"
+                              value={remindInput}
+                              onChange={(e) => updateCard(card.id, { remind_at: e.target.value ? new Date(`${e.target.value}T17:00:00`).toISOString() : null })}
+                              className="min-w-0 flex-1 text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-500"
+                            />
+                          </label>
+                          <label className="flex-1 flex items-center gap-1 text-[10px] text-zinc-400" title="Snooze: hide this card until the chosen date">
+                            <Moon className="h-3 w-3 shrink-0" />
+                            <input
+                              type="date"
+                              aria-label="Snooze until"
+                              min={todayStr}
+                              onChange={(e) => snoozeFromInput(card.id, e.target.value)}
+                              className="min-w-0 flex-1 text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-500"
+                            />
+                          </label>
+                        </div>
                       </div>
                     )
                   })}
