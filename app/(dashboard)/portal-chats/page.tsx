@@ -164,6 +164,13 @@ export default function PortalChatsPage() {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(
     urlParams.get('account') ? null : urlParams.get('contact'),
   )
+  // `?message=<id>` deep-links to a specific message — used by Notification Center
+  // To-Do cards created from a message (the ⋯ → "To Do" action). Once messages for
+  // the scoped thread load, we switch to the message's topic, scroll to it, and
+  // flash a highlight ring. See message-actions route + action-board card href.
+  const [targetMessageId] = useState<string | null>(urlParams.get('message'))
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const didScrollToTargetRef = useRef(false)
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
   const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string }[]>([])
@@ -423,6 +430,28 @@ export default function PortalChatsPage() {
     ? (messages ?? []).filter(m => m.topic === adminActiveTopic)
     : (messages ?? []).filter(m => !m.topic)
 
+  // Deep-link to a specific message (?message=<id>, set by a Notification Center
+  // To-Do card). When the scoped thread's messages have loaded, switch to that
+  // message's topic so it renders, scroll it into view, and flash a highlight ring.
+  // Runs once per page load (didScrollToTargetRef guard) so a refetch doesn't yank
+  // the view back. Missing/old message → no-op, never crashes.
+  useEffect(() => {
+    if (!targetMessageId || didScrollToTargetRef.current) return
+    if (!messages || messages.length === 0) return
+    const target = messages.find(m => m.id === targetMessageId)
+    if (!target) { didScrollToTargetRef.current = true; return } // outside the loaded window
+    didScrollToTargetRef.current = true
+    setAdminActiveTopic(target.topic ?? null)
+    const flash = window.setTimeout(() => {
+      const el = document.getElementById(`pc-msg-${targetMessageId}`)
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedMessageId(targetMessageId)
+      window.setTimeout(() => setHighlightedMessageId(null), 2800)
+    }, 120) // let the topic switch re-render the list first
+    return () => window.clearTimeout(flash)
+  }, [targetMessageId, messages])
+
   // Unread count per topic tab (client + system messages not yet read by admin).
   // System messages are auto-emitted on client actions (wizard submitted,
   // document uploaded, payment received, etc.) — they must count toward the
@@ -674,6 +703,41 @@ export default function PortalChatsPage() {
     },
     onError: () => {
       toast.error('Failed to tag message')
+    },
+  })
+
+  // Create a Notification Center To-Do card FROM a single message. Lands the card
+  // in the board's first non-terminal column (action_needed) with message_id set,
+  // so the dashboard board card deep-links back to this exact message (?message=).
+  // Reuses the message-actions POST (upsert: one card per message) — if the message
+  // is already tagged, this re-opens it into action_needed and refreshes the label.
+  const addTodoMutation = useMutation({
+    mutationFn: async ({ messageId, label }: { messageId: string; label: string }) => {
+      const res = await fetch('/api/crm/admin-actions/message-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message_id: messageId,
+          contact_id: selectedContactId || null,
+          account_id: selectedAccountId || null,
+          action_type: 'action_needed',
+          label: label.slice(0, 200) || null,
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not add the to-do')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['message-actions', selectedAccountId || selectedContactId] })
+      queryClient.invalidateQueries({ queryKey: ['open-message-actions'] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-open-todo-counts'] })
+      toast.success('Added to the To-Do board')
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to add the to-do')
     },
   })
 
@@ -2413,6 +2477,12 @@ export default function PortalChatsPage() {
                           >
                             <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
                           </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-violet-700 hover:bg-violet-50 cursor-pointer outline-none"
+                            onSelect={() => addTodoMutation.mutate({ messageId: msg.id, label: msg.message })}
+                          >
+                            <ClipboardList className="h-3.5 w-3.5 text-violet-500" /> To Do
+                          </DropdownMenu.Item>
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
                           <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                             Tag Message
@@ -2553,14 +2623,15 @@ export default function PortalChatsPage() {
                   )
 
                   return (
-                    <div key={msg.id} className={cn('flex items-end gap-1', isAdmin ? 'justify-end' : 'justify-start')}>
+                    <div key={msg.id} id={`pc-msg-${msg.id}`} className={cn('flex items-end gap-1 scroll-mt-4', isAdmin ? 'justify-end' : 'justify-start')}>
                       {isAdmin && actionButton}
                       <div
                         className={cn(
-                          'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden',
+                          'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden transition-shadow',
                           isAdmin
                             ? 'bg-blue-600 text-white'
-                            : 'bg-zinc-100 text-zinc-900'
+                            : 'bg-zinc-100 text-zinc-900',
+                          highlightedMessageId === msg.id && 'ring-2 ring-amber-400 ring-offset-2'
                         )}
                       >
                         {/* Member badge — for account-level threads (multi-member LLC), show who wrote each client message */}

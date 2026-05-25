@@ -258,10 +258,16 @@ export function ActionBoard() {
                     const isCompany = !!card.account_id
                     const clientName =
                       card.accounts?.company_name || card.contacts?.full_name || 'Unknown'
+                    // A card created FROM a message (message_id set) deep-links back to
+                    // that exact message in Portal Chats (?message=<id> scrolls + flashes
+                    // it). Cards without a message keep the legacy entity link.
+                    const msgParam = card.message_id ? `&message=${card.message_id}` : ''
                     const href = card.account_id
-                      ? `/portal-chats?account=${card.account_id}`
+                      ? `/portal-chats?account=${card.account_id}${msgParam}`
                       : card.contact_id
-                        ? `/contacts/${card.contact_id}`
+                        ? card.message_id
+                          ? `/portal-chats?contact=${card.contact_id}${msgParam}`
+                          : `/contacts/${card.contact_id}`
                         : '/portal-chats'
                     const priority = (card.priority ?? 'normal') as Priority
                     const rem = remindState(card.remind_at)
