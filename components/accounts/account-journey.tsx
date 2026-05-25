@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { CheckCircle2, Download, Clock, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { BankReferralsPanel, type BankReferralEntry } from './bank-referrals-panel'
+import { HelpDot } from '@/components/help/help-dot'
 
 // --- Types ---
 
@@ -343,6 +344,7 @@ export function AccountJourney(props: AccountJourneyProps) {
         <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">
           Account Journey
         </h3>
+        <HelpDot helpKey="account.journey" />
       </div>
 
       {/* Desktop horizontal */}
