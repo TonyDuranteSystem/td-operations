@@ -1321,7 +1321,7 @@ export default function PortalChatsPage() {
       )}>
         <div className="px-4 py-3 border-b">
           <div className="flex items-center justify-between mb-2">
-            <h1 className="text-lg font-semibold text-zinc-900">Portal Chats</h1>
+            <h1 className="flex items-center gap-1 text-lg font-semibold text-zinc-900">Portal Chats <HelpDot helpKey="chat.page_tabs" /></h1>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => {
@@ -2098,6 +2098,7 @@ export default function PortalChatsPage() {
             {/* Topic tabs — always visible when a thread is selected and we're in messages view */}
             {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && (
               <div className="px-3 py-1.5 border-b bg-white flex items-center gap-1.5 overflow-x-auto shrink-0">
+                <HelpDot helpKey="chat.topics" className="shrink-0" />
                 <button
                   onClick={() => setAdminActiveTopic(null)}
                   className={cn(
