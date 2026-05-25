@@ -18,6 +18,7 @@ import { useMemo } from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles, ListTodo, GitBranch, ArrowRight, Loader2 } from 'lucide-react'
+import { HelpDot } from '@/components/help/help-dot'
 
 interface WhatsNewNote { id: string; text: string; topic: string | null; handled_at: string | null }
 interface TodoCard { id: string; label: string | null; action_type: string }
@@ -79,7 +80,10 @@ export function EntityActivitySummary({
   return (
     <div className="bg-white rounded-lg border p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Activity &amp; to-dos</h3>
+        <h3 className="flex items-center gap-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Activity &amp; to-dos
+          <HelpDot helpKey="widget.activity" />
+        </h3>
         <Link href={threadHref} className="flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900">
           Open in chat <ArrowRight className="h-3 w-3" />
         </Link>

@@ -193,7 +193,10 @@ export function ActionBoard() {
   return (
     <div className="bg-white rounded-lg border p-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">To Do — from chats</h3>
+        <h3 className="flex items-center gap-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          To Do — from chats
+          <HelpDot helpKey="board.overview" />
+        </h3>
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-full">{total}</span>
           <button
