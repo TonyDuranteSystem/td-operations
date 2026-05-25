@@ -19,6 +19,7 @@ import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dial
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
+import { HelpDot } from '@/components/help/help-dot'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
   validateMetadata as validateTopicMetadata,
@@ -2088,6 +2089,9 @@ export default function PortalChatsPage() {
                   <ClipboardList className="h-3.5 w-3.5" />
                   To Do
                 </button>
+                <div className="flex items-center px-2 shrink-0">
+                  <HelpDot helpKey="chat.tabs" />
+                </div>
               </div>
             )}
 

@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus, CalendarClock, Check, Moon } from 'lucide-react'
 import { createManualCard } from '@/components/dashboard/action-board-actions'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
+import { HelpDot } from '@/components/help/help-dot'
 
 const API = '/api/crm/admin-actions/message-actions'
 
@@ -164,6 +165,7 @@ export function ThreadTodoPanel({
         <span className="flex items-center gap-1.5 text-xs font-medium text-violet-700">
           <span className="h-2 w-2 rounded-full bg-violet-500" />
           To-Do ({cards.length})
+          <HelpDot helpKey="todo.panel" />
         </span>
         <button
           onClick={() => setAdding((v) => !v)}

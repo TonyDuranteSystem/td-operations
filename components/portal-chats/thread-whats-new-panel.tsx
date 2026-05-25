@@ -18,6 +18,7 @@ import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'luci
 import { formatDistanceToNow } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
+import { HelpDot } from '@/components/help/help-dot'
 import type { Task } from '@/lib/types'
 
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
@@ -122,6 +123,7 @@ export function ThreadWhatsNewPanel({
       <div className="px-4 py-2 bg-amber-50/60 border-b border-amber-100 flex items-center gap-1.5 shrink-0">
         <Sparkles className="h-3.5 w-3.5 text-amber-500" />
         <span className="text-xs font-medium text-amber-700">What&apos;s New — things this client did</span>
+        <HelpDot helpKey="whatsnew.feed" />
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-2">
