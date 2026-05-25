@@ -690,7 +690,9 @@ export default function PortalChatsPage() {
         body: JSON.stringify({
           message_id: messageId,
           contact_id: selectedContactId || null,
-          account_id: selectedAccountId || null,
+          // Contact-scoped threads still belong to a company (single-owner LLC);
+          // attach it so the card surfaces on the company's Account page too.
+          account_id: selectedAccountId || selectedCompanyId || null,
           action_type: actionType,
         }),
       })
@@ -719,7 +721,9 @@ export default function PortalChatsPage() {
         body: JSON.stringify({
           message_id: messageId,
           contact_id: selectedContactId || null,
-          account_id: selectedAccountId || null,
+          // Contact-scoped threads still belong to a company (single-owner LLC);
+          // attach it so the To-Do surfaces on the company's Account page too.
+          account_id: selectedAccountId || selectedCompanyId || null,
           action_type: 'action_needed',
           label: label.slice(0, 200) || null,
         }),
