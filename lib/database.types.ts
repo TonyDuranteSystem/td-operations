@@ -6357,6 +6357,7 @@ export type Database = {
           priority: string
           remind_at: string | null
           resolved_at: string | null
+          snoozed_until: string | null
           source_ref: string | null
           updated_at: string | null
         }
@@ -6373,6 +6374,7 @@ export type Database = {
           priority?: string
           remind_at?: string | null
           resolved_at?: string | null
+          snoozed_until?: string | null
           source_ref?: string | null
           updated_at?: string | null
         }
@@ -6389,6 +6391,7 @@ export type Database = {
           priority?: string
           remind_at?: string | null
           resolved_at?: string | null
+          snoozed_until?: string | null
           source_ref?: string | null
           updated_at?: string | null
         }
