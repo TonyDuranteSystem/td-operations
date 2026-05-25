@@ -345,9 +345,12 @@ export function ActionBoard() {
                             </button>
                           )}
                         </div>
-                        <div className="flex gap-1 mt-1">
-                          <label className="flex-1 flex items-center gap-1 text-[10px] text-zinc-400" title="Set a reminder date (colours the card, does not hide it)">
+                        {/* Stacked so the native date inputs never overflow the
+                            narrow card. Each row: icon + short label + full-width input. */}
+                        <div className="mt-1 space-y-1">
+                          <label className="flex items-center gap-1 text-[10px] text-zinc-400" title="Set a reminder date (colours the card, does not hide it)">
                             <CalendarClock className="h-3 w-3 shrink-0" />
+                            <span className="shrink-0 w-11">Remind</span>
                             <input
                               type="date"
                               aria-label="Reminder date"
@@ -356,8 +359,9 @@ export function ActionBoard() {
                               className="min-w-0 flex-1 text-[11px] border rounded px-1.5 py-1 bg-white text-zinc-500"
                             />
                           </label>
-                          <label className="flex-1 flex items-center gap-1 text-[10px] text-zinc-400" title="Snooze: hide this card until the chosen date">
+                          <label className="flex items-center gap-1 text-[10px] text-zinc-400" title="Snooze: hide this card until the chosen date">
                             <Moon className="h-3 w-3 shrink-0" />
+                            <span className="shrink-0 w-11">Snooze</span>
                             <input
                               type="date"
                               aria-label="Snooze until"
