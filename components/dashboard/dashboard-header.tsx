@@ -2,6 +2,7 @@
 
 import { GlobalSearch } from '@/components/shared/global-search'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
+import { HelpToggle } from '@/components/help/help-toggle'
 
 export function DashboardHeader() {
   return (
@@ -9,6 +10,7 @@ export function DashboardHeader() {
       <div className="flex-1 max-w-2xl">
         <GlobalSearch searchEndpoint="/api/search" mode="crm" placeholder="Search accounts, contacts, tasks, leads..." />
       </div>
+      <HelpToggle />
       <DashboardPushToggle refreshOnMount />
     </header>
   )

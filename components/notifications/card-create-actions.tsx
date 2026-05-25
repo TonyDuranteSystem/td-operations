@@ -29,6 +29,7 @@ import { toast } from 'sonner'
 import { Briefcase, FileText, X, Loader2 } from 'lucide-react'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
+import { HelpDot } from '@/components/help/help-dot'
 
 interface SvcOption { id: string; name: string; pipeline: string | null }
 
@@ -58,6 +59,7 @@ export function CardCreateActions({
         >
           <Briefcase className="h-3 w-3" /> Service
         </button>
+        <HelpDot helpKey="card.service" />
         <button
           onClick={() => setInvOpen(true)}
           className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 border rounded px-1.5 py-0.5"
@@ -65,6 +67,7 @@ export function CardCreateActions({
         >
           <FileText className="h-3 w-3" /> Invoice
         </button>
+        <HelpDot helpKey="card.invoice" />
       </div>
 
       {svcOpen && (

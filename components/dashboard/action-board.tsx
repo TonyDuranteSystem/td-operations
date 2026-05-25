@@ -20,6 +20,7 @@ import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User,
 import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
+import { HelpDot } from '@/components/help/help-dot'
 
 interface Column {
   slug: string
@@ -202,6 +203,7 @@ export function ActionBoard() {
           >
             <Plus className="h-3 w-3" /> New card
           </button>
+          <HelpDot helpKey="board.new_card" />
           <button
             onClick={() => setEditingColumns(true)}
             className="text-zinc-400 hover:text-zinc-700"
@@ -210,6 +212,7 @@ export function ActionBoard() {
           >
             <Settings2 className="h-3.5 w-3.5" />
           </button>
+          <HelpDot helpKey="board.settings" />
         </div>
       </div>
       <ManageColumnsDialog open={editingColumns} onClose={() => setEditingColumns(false)} onChanged={load} />
