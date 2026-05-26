@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-r093_verifier.py — independent-model R093 enforcement.
+r093_verifier.py — independent-model R093 enforcement (v2: session-wide evidence).
 
 WHY THIS EXISTS
 ---------------
 Every prior R093 mechanism was the SAME Claude reminding itself to be careful
-(assumption-check.sh static reminder, the injected behavior contract). A model
+(assumption-check.sh static reminder + injected behavior contract). A model
 under pressure to be helpful skims its own reminders. They do not work — proven
 by repeated violations (e.g. the Chiara Fazzini chat: $30,000 stated in the
 client's messages, $35,000 in an internal draft; Claude silently presented
@@ -13,27 +13,39 @@ $35,000 as fact without flagging the conflict).
 
 This hook takes verification OUT of the hands of the Claude that is trying to be
 helpful. On Stop, it launches a SEPARATE, independent Claude whose only job is to
-diff the answer against the raw tool outputs from this turn and report any claim
-that the evidence does not support, or any conflict the answer failed to flag.
-An auditor with no incentive to be helpful does not take the helpful-answer
-shortcut. If it finds problems, the turn is forced to continue and correct.
+diff the answer against the grounded evidence available this session and report
+any external-state claim the evidence does not support, or any conflict the
+answer failed to flag. If it finds problems, the turn is forced to continue and
+correct.
 
-MECHANICS (all verified against the live platform, not assumed)
----------------------------------------------------------------
+v2 CHANGES (closing the two v1 gaps)
+------------------------------------
+- Gap 1 (under-checking): v1 only ran when THIS turn had tool outputs, so claims
+  made without a fresh lookup were never audited. v2 uses session-wide evidence,
+  so a turn that summarizes earlier lookups is still audited.
+- Gap 2 (false alarms): v1 only saw THIS turn's tool outputs, so a true claim
+  resting on an earlier lookup or on the conversation got flagged "unsupported".
+  v2 feeds tiered evidence — this turn's tool outputs, earlier tool outputs this
+  session, and what the USER stated — and sharpens scope so the auditor polices
+  ONLY concrete external-state facts and ignores meta-claims about our own work,
+  recommendations, and reasoning. The assistant's own earlier words are NEVER
+  evidence (only real tool results and user statements are ground truth).
+
+MECHANICS (verified against the live platform, not assumed)
+-----------------------------------------------------------
 - Stop hook continuation: print {"decision":"block","reason":...}; the recursive
-  Stop event then carries stop_hook_active=true, which we use to break the loop.
+  Stop event carries stop_hook_active=true, which breaks the loop.
 - Auditor call: `claude -p` headless. --setting-sources user skips THIS project's
-  hooks (no git-pull SessionStart, no recursion) and --strict-mcp-config with an
-  empty config skips all MCP servers (fast). Auth comes from the keychain/OAuth
-  the interactive session already holds (NOT --bare, which would force an API key
-  that isn't set here).
-- Transcript: tool_use blocks live on type="assistant" lines; tool_result blocks
-  live on type="user" lines (content is a list).
+  hooks (no git-pull SessionStart, no recursion); --strict-mcp-config with an
+  empty config skips all MCP servers. Auth comes from the keychain/OAuth the
+  interactive session already holds (NOT --bare, which forces an API key).
+- Transcript: tool_use blocks on type="assistant" lines; tool_result blocks on
+  type="user" lines (content is a list).
 
 FAIL-OPEN: any parse error, missing claude, timeout, or unparseable auditor
-output exits 0 (no block). A broken safety net must never block legitimate work.
+output exits 0. A broken safety net must never block legitimate work.
 
-KILL SWITCH: set R093_VERIFIER_OFF=1 to disable.
+KILL SWITCH: R093_VERIFIER_OFF=1 disables.
 MODEL: R093_AUDITOR_MODEL (default "sonnet").
 """
 
@@ -43,8 +55,9 @@ import re
 import subprocess
 import sys
 
-EVIDENCE_CAP = 16000     # chars of tool-output evidence sent to the auditor
-ANSWER_CAP = 8000        # chars of the assistant answer sent to the auditor
+THIS_TURN_CAP = 14000    # chars of this turn's tool-output evidence
+PRIOR_CAP = 8000         # chars of earlier-this-session tool-output evidence
+USER_CAP = 4000          # chars of user-stated context
 MIN_ANSWER_LEN = 120     # skip trivial answers
 AUDITOR_TIMEOUT = 80     # seconds for the headless auditor call
 
@@ -55,10 +68,15 @@ def fail_open(msg=None):
     sys.exit(0)
 
 
+def cap(text, n):
+    if len(text) <= n:
+        return text
+    return text[: n * 2 // 3] + "\n...[truncated]...\n" + text[-n // 3:]
+
+
 def main():
-    # Never run inside the auditor's own sub-session.
     if os.environ.get("R093_AUDITOR"):
-        fail_open()
+        fail_open()  # never run inside the auditor's own sub-session
     if os.environ.get("R093_VERIFIER_OFF"):
         fail_open()
 
@@ -67,9 +85,8 @@ def main():
     except Exception as e:
         fail_open(f"stdin parse: {e}")
 
-    # Break the continuation loop: if we already blocked once this turn, let it end.
     if hook.get("stop_hook_active") in (True, "true", "True"):
-        fail_open()
+        fail_open()  # break the continuation loop
 
     transcript_path = hook.get("transcript_path") or ""
     if not transcript_path or not os.path.isfile(transcript_path):
@@ -91,8 +108,6 @@ def main():
         fail_open(f"transcript read: {e}")
 
     def is_human_prompt(o):
-        # A real human turn boundary: a user message carrying human text,
-        # NOT a tool_result delivery and NOT a meta/system line.
         if o.get("type") != "user":
             return False
         if o.get("isMeta") or o.get("isCompactSummary"):
@@ -111,84 +126,134 @@ def main():
             return has_text and not has_tool_result
         return False
 
+    def human_text(o):
+        msg = o.get("message", {})
+        c = msg.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n".join(
+                p.get("text", "")
+                for p in c
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        return ""
+
+    def tool_result_text(p):
+        tc = p.get("content")
+        if isinstance(tc, str):
+            return tc
+        if isinstance(tc, list):
+            return "\n".join(
+                q.get("text", "")
+                for q in tc
+                if isinstance(q, dict) and q.get("type") == "text"
+            )
+        return ""
+
     last_human = -1
     for i, o in enumerate(lines):
         if is_human_prompt(o):
             last_human = i
-    turn = lines[last_human + 1:] if last_human >= 0 else lines
 
-    evidence_parts = []
-    tool_names = []
-    answer = ""
-    for o in turn:
+    this_turn_results = []   # tool outputs produced THIS turn
+    prior_results = []       # tool outputs from earlier in the session
+    user_texts = []          # everything the user has stated (authoritative)
+    answer = ""              # the assistant's final text this turn
+
+    for i, o in enumerate(lines):
+        if is_human_prompt(o):
+            t = human_text(o).strip()
+            if t:
+                user_texts.append(t)
+            continue
         msg = o.get("message")
         c = msg.get("content") if isinstance(msg, dict) else None
         if not isinstance(c, list):
             continue
-        if o.get("type") == "assistant":
+        typ = o.get("type")
+        if typ == "assistant":
             for p in c:
                 if not isinstance(p, dict):
                     continue
-                if p.get("type") == "tool_use":
-                    tool_names.append(p.get("name", "?"))
-                elif p.get("type") == "text":
+                if p.get("type") == "text" and i > last_human:
                     t = p.get("text", "")
                     if t.strip():
-                        answer = t  # keep the last substantive assistant text
-        elif o.get("type") == "user":
+                        answer = t  # keep last substantive assistant text this turn
+        elif typ == "user":
             for p in c:
                 if isinstance(p, dict) and p.get("type") == "tool_result":
-                    tc = p.get("content")
-                    if isinstance(tc, str):
-                        evidence_parts.append(tc)
-                    elif isinstance(tc, list):
-                        for q in tc:
-                            if isinstance(q, dict) and q.get("type") == "text":
-                                evidence_parts.append(q.get("text", ""))
+                    txt = tool_result_text(p)
+                    if not txt:
+                        continue
+                    if i > last_human:
+                        this_turn_results.append(txt)
+                    else:
+                        prior_results.append(txt)
 
-    # ---- gate: only audit substantive, evidence-backed synthesis turns ----
-    if not evidence_parts:
-        fail_open()  # no tool outputs this turn — nothing to diff against
+    # ---- gate ------------------------------------------------------------
+    # Need SOME grounded evidence in the session to diff against, and a
+    # substantive answer. Pure chit-chat with no lookups anywhere is skipped.
+    if not this_turn_results and not prior_results:
+        fail_open()
     if len(answer.strip()) < MIN_ANSWER_LEN:
-        fail_open()  # trivial answer
+        fail_open()
 
-    evidence = "\n\n----\n\n".join(evidence_parts)
-    if len(evidence) > EVIDENCE_CAP:
-        head = evidence[: EVIDENCE_CAP * 2 // 3]
-        tail = evidence[-EVIDENCE_CAP // 3:]
-        evidence = head + "\n\n...[evidence truncated]...\n\n" + tail
-    if len(answer) > ANSWER_CAP:
-        answer = answer[:ANSWER_CAP] + "\n...[answer truncated]..."
+    this_turn = (
+        cap("\n\n----\n\n".join(this_turn_results), THIS_TURN_CAP)
+        if this_turn_results
+        else "(no tool calls this turn)"
+    )
+    prior = (
+        cap("\n\n----\n\n".join(prior_results[-30:]), PRIOR_CAP)
+        if prior_results
+        else "(none)"
+    )
+    users = (
+        cap("\n\n----\n\n".join(user_texts[-15:]), USER_CAP)
+        if user_texts
+        else "(none)"
+    )
 
     # ---- build the auditor call ------------------------------------------
     system = (
-        "You are a strict, independent fact-checker. You are auditing another AI "
-        "assistant's reply against the RAW TOOL OUTPUTS it had access to this turn. "
-        "You have exactly one job: catch claims the evidence does not support. You "
-        "do not care whether the reply is helpful, well-written, or complete. You "
-        "only verify that every concrete factual claim in the ANSWER is directly "
-        "supported by the EVIDENCE, and that wherever the EVIDENCE contains "
-        "conflicting values for the same fact, the ANSWER explicitly flagged the "
-        "conflict instead of silently choosing one value. Output STRICT JSON only."
+        "You are a strict, independent fact-checker auditing another AI "
+        "assistant's reply against the grounded evidence it had access to this "
+        "session. You have exactly one job: catch claims about EXTERNAL STATE "
+        "that the evidence does not support. You do not care whether the reply "
+        "is helpful, well-written, or complete. EVIDENCE comes in tiers; only "
+        "real tool outputs and user statements are ground truth — the "
+        "assistant's own earlier words are NOT evidence and must never be "
+        "treated as support. Output STRICT JSON only."
     )
     user = (
-        "EVIDENCE — verbatim tool outputs available to the assistant this turn:\n"
-        "<evidence>\n" + evidence + "\n</evidence>\n\n"
-        "ANSWER — the assistant's reply to the user:\n"
-        "<answer>\n" + answer + "\n</answer>\n\n"
-        "TASK: List every CONCRETE factual claim in ANSWER — specific amounts, "
-        "dates, names, IDs, counts, statuses, table/column names, or yes/no facts "
-        "— that is either:\n"
-        "  (a) NOT directly supported by EVIDENCE, or\n"
-        "  (b) where EVIDENCE contains a DIFFERENT/conflicting value for the same "
-        "fact that ANSWER did not explicitly flag.\n"
-        "Do NOT flag opinions, recommendations, plans, or reasonable summaries — "
-        "only verifiable factual claims. Be precise and conservative; only flag "
-        "what you can point to in the evidence.\n\n"
-        'Output STRICT JSON ONLY, no prose:\n'
-        '{"violations":[{"claim":"<the claim as stated in ANSWER>",'
-        '"issue":"unsupported|conflict",'
-        '"evidence":"<what EVIDENCE actually says, or the word absent>"}]}\n'
+        "EVIDENCE — grounded source material, in tiers:\n\n"
+        "[THIS TURN'S TOOL OUTPUTS]\n" + this_turn + "\n\n"
+        "[EARLIER TOOL OUTPUTS THIS SESSION]\n" + prior + "\n\n"
+        "[WHAT THE USER HAS STATED]\n" + users + "\n\n"
+        "ANSWER — the assistant's latest reply:\n<answer>\n" + cap(answer, 8000)
+        + "\n</answer>\n\n"
+        "TASK: Audit ONLY concrete claims about EXTERNAL STATE — client/account/"
+        "contact/payment/document facts, database values, what a file/table/"
+        "column/function contains or does, system configuration, and specific "
+        "dates/amounts/IDs/statuses that should come from tool outputs.\n\n"
+        "Flag a claim when:\n"
+        "  (a) it CONTRADICTS the EVIDENCE, or\n"
+        "  (b) the EVIDENCE contains a different/conflicting value for the same "
+        "fact that the ANSWER did not explicitly flag, or\n"
+        "  (c) it is a specific external-state fact with NO support anywhere in "
+        "EVIDENCE (an ungrounded assertion).\n\n"
+        "NEVER flag (these are not violations): recommendations, plans, next "
+        "steps, opinions, reasoning, fair summaries or paraphrases of the "
+        "evidence, restatements of what the user said, general world knowledge, "
+        "or META statements about this work session itself — what was built, "
+        "tested, committed, pushed, how the tooling behaves, or what happened "
+        "earlier in the conversation.\n\n"
+        "Be precise and conservative; only flag what you can point to. Output "
+        "STRICT JSON ONLY, no prose:\n"
+        '{"violations":[{"claim":"<claim as stated in ANSWER>",'
+        '"issue":"contradiction|conflict|ungrounded",'
+        '"evidence":"<what EVIDENCE says, or the word absent>"}]}\n'
         'If there are no violations, output exactly {"violations":[]}.'
     )
 
@@ -214,14 +279,12 @@ def main():
     if not out:
         fail_open("auditor empty output")
 
-    # Extract the JSON object from the auditor's reply (it may wrap prose).
     m = re.search(r'\{.*"violations".*\}', out, re.DOTALL)
     if not m:
         fail_open("no json in auditor output")
     try:
         parsed = json.loads(m.group(0))
     except Exception:
-        # last resort: try the largest brace span
         try:
             parsed = json.loads(out[out.index("{"): out.rindex("}") + 1])
         except Exception as e:
@@ -244,15 +307,17 @@ def main():
         )
     reason = (
         "🔴 R093 INDEPENDENT VERIFIER — an independent model audited your reply "
-        "against the actual tool outputs from this turn and found claims the "
-        "evidence does not support (or conflicts you did not flag):\n\n"
+        "against the grounded evidence this session (this turn's tool outputs, "
+        "your earlier lookups, and what the user stated) and found external-state "
+        "claims the evidence does not support (or conflicts you did not flag):\n\n"
         + "\n".join(bullets)
-        + "\n\nYou MUST now go back to the ACTUAL tool outputs above, reconcile "
-        "each flagged claim against what the evidence literally says, and CORRECT "
-        "your reply. Where two sources disagree, present BOTH values and flag the "
-        "conflict explicitly — never silently pick one. Do not simply restate your "
-        "previous answer; fix the specific claims listed above and tell the user "
-        "what changed."
+        + "\n\nGo back to the ACTUAL evidence, reconcile each flagged claim against "
+        "what it literally says, and CORRECT your reply. Where two sources "
+        "disagree, present BOTH values and flag the conflict — never silently "
+        "pick one. For an 'ungrounded' flag, either cite the real source of the "
+        "fact or look it up before asserting it. Do not simply restate your "
+        "previous answer; fix the specific claims above and tell the user what "
+        "changed."
     )
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(0)
