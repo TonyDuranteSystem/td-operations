@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
 import { invoiceLabels, type InvoiceLang } from '@/lib/portal/invoice-labels'
 import { sanitizePdfLine } from '@/lib/pdf/sanitize'
+import { wrapPdfText } from '@/lib/pdf/wrap-text'
 import { resolveMailingAddress } from '@/lib/addresses'
 
 /**
@@ -193,19 +194,27 @@ export async function GET(
   page.drawText(L.amount, { x: 480, y, size: 8, font: helveticaBold, color: gray })
 
   // Table rows (descriptions are NEVER translated)
+  // Description wraps onto multiple lines within its column (x 55→295, ~240pt)
+  // instead of being hard-truncated; numeric columns align to the row's first line.
   y -= 22
+  const descMaxWidth = 240
+  const descLineHeight = 12
   for (const item of (items ?? [])) {
-    const desc = sanitizePdfLine(item.description.length > 50 ? item.description.slice(0, 50) + '...' : item.description)
-    page.drawText(desc, { x: 55, y, size: 9, font: helvetica, color: black })
-    page.drawText(String(item.quantity), { x: 305, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 340, y, size: 9, font: helvetica, color: black })
+    const rowTopY = y
+    const descLines = wrapPdfText(sanitizePdfLine(item.description), helvetica, 9, descMaxWidth, { maxLines: 6 })
+    page.drawText(String(item.quantity), { x: 305, y: rowTopY, size: 9, font: helvetica, color: black })
+    page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 340, y: rowTopY, size: 9, font: helvetica, color: black })
     if (hasTax) {
       const taxPct = Number(item.tax_rate ?? 0) * 100
-      page.drawText(taxPct > 0 ? `${taxPct}%` : '—', { x: 415, y, size: 9, font: helvetica, color: gray })
+      page.drawText(taxPct > 0 ? `${taxPct}%` : '—', { x: 415, y: rowTopY, size: 9, font: helvetica, color: gray })
     }
     const lineTotal = Number(item.amount ?? 0) + Number(item.tax_amount ?? 0)
-    page.drawText(`${csym}${lineTotal.toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
-    y -= 18
+    page.drawText(`${csym}${lineTotal.toFixed(2)}`, { x: 475, y: rowTopY, size: 9, font: helveticaBold, color: black })
+    for (const dline of (descLines.length ? descLines : [''])) {
+      page.drawText(dline, { x: 55, y, size: 9, font: helvetica, color: black })
+      y -= descLineHeight
+    }
+    y -= 6
     page.drawLine({ start: { x: 50, y: y + 6 }, end: { x: 545, y: y + 6 }, thickness: 0.3, color: lightGray })
   }
 
@@ -227,8 +236,8 @@ export async function GET(
     page.drawText(`${csym}${taxTotalVal.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
   }
 
-  y -= 20
-  page.drawLine({ start: { x: 395, y: y + 8 }, end: { x: 545, y: y + 8 }, thickness: 1, color: blue })
+  y -= 26
+  page.drawLine({ start: { x: 395, y: y + 16 }, end: { x: 545, y: y + 16 }, thickness: 1, color: blue })
   page.drawText(L.total, { x: 400, y, size: 11, font: helveticaBold, color: blue })
   page.drawText(`${csym}${(invoice.total ?? 0).toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: blue })
 
@@ -239,8 +248,8 @@ export async function GET(
     y -= 18
     page.drawText(L.amountPaid, { x: 400, y, size: 9, font: helvetica, color: rgb(0.2, 0.7, 0.2) })
     page.drawText(`-${csym}${amountPaid.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.2, 0.7, 0.2) })
-    y -= 18
-    page.drawLine({ start: { x: 395, y: y + 8 }, end: { x: 545, y: y + 8 }, thickness: 1, color: rgb(0.9, 0.4, 0.1) })
+    y -= 24
+    page.drawLine({ start: { x: 395, y: y + 16 }, end: { x: 545, y: y + 16 }, thickness: 1, color: rgb(0.9, 0.4, 0.1) })
     page.drawText(L.balanceDue, { x: 400, y, size: 11, font: helveticaBold, color: rgb(0.9, 0.4, 0.1) })
     page.drawText(`${csym}${amountDue.toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: rgb(0.9, 0.4, 0.1) })
   }
