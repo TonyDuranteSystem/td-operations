@@ -1,21 +1,15 @@
 #!/bin/bash
 # assumption-check.sh
-# Stop hook: Reminds Claude to verify claims have citations.
-# This runs after every response to enforce the zero-assumptions policy.
-
-# Always output the reminder — the prompt hook will evaluate
-cat <<'CHECK'
-⚠️ ASSUMPTION CHECK — Review your last response:
-1. Did you make any technical claim about how the system works?
-2. Did you cite file+line, table+column, or tool output for EACH claim?
-3. Did you say "the system does X" without reading the code first?
-4. Did you assume a tool/feature/table exists without verifying?
-5. Did you explain WHY something failed without reading the error source?
-
-If ANY answer is YES without a citation → you MUST correct yourself NOW.
-Say: "I stated X without verifying. Let me check the code." Then verify.
-
-ZERO ASSUMPTIONS. Cite or correct.
-CHECK
-
+# DEPRECATED (2026-05-26): This was a static reminder printed on every Stop
+# regardless of what Claude actually wrote. Repeating the same advisory text
+# every turn desensitized the model — it learned to skim and ignore it, which
+# is exactly why R093 violations persisted (precedent: the Chiara Fazzini
+# $30k/$35k conflict that shipped unflagged).
+#
+# Replaced by r093-verifier.sh, which launches an INDEPENDENT auditor model
+# to diff the actual answer against the actual tool outputs and force a
+# correction only when there is a real, evidence-backed violation. Friction is
+# now applied precisely where a violation occurred, not as constant noise.
+#
+# Kept as a registered no-op so the settings.json hook entry stays valid.
 exit 0

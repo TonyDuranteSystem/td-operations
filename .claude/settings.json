@@ -75,6 +75,11 @@
             "type": "command",
             "command": "bash .claude/hooks/assumption-check.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/r093-verifier.sh",
+            "timeout": 90
           }
         ]
       }
