@@ -36,7 +36,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { dbWrite } from "@/lib/db"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import {
   advanceServiceDelivery,
   type AdvanceStageParams,
@@ -49,6 +49,9 @@ import {
 } from "@/lib/operations/service-types"
 import { getEntryByServiceType } from "@/lib/services"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
+import { updateTasksBulk } from "@/lib/operations/task"
+import { updateAccount } from "@/lib/operations/account"
+import { logAction } from "@/lib/mcp/action-log"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -768,5 +771,344 @@ export async function repairContactId(
     account_id: params.account_id,
     contact_id: contactId,
     fixed: broken.length,
+  }
+}
+
+// ─── deactivateSD / reactivateSD ───────────────────────
+
+/**
+ * Service types whose renewal is driven by an account-level date AND a nightly
+ * cron that auto-creates the SD when the date is within 30 days and no active
+ * SD exists (app/api/cron/ra-renewal-check + annual-report-check). For these,
+ * cancelling the SD alone is NOT permanent on a `Client` account — the cron
+ * re-creates it. Clearing the account date (clear_renewal_date) is what stops
+ * it. Maps service_type → the accounts column the cron reads.
+ */
+const RENEWAL_DATE_COLUMN: Record<string, "ra_renewal_date" | "annual_report_due_date"> = {
+  "State RA Renewal": "ra_renewal_date",
+  "State Annual Report": "annual_report_due_date",
+}
+
+/** Task statuses considered "open" — closed on deactivate. */
+const OPEN_TASK_STATUSES = ["To Do", "In Progress", "Waiting"] as const
+
+function isRenewalServiceType(serviceType: string): boolean {
+  return serviceType in RENEWAL_DATE_COLUMN
+}
+
+export interface DeactivateSDParams {
+  delivery_id: string
+  actor?: string
+  /** Free-text reason, appended to SD notes + logged. */
+  reason?: string
+  /**
+   * When true AND the service is a renewal type (State RA Renewal / State
+   * Annual Report) with an account_id, also clear that account's renewal date
+   * so the nightly cron won't re-create the SD. No-op for non-renewal types.
+   */
+  clear_renewal_date?: boolean
+  /** Optimistic-lock sentinel — observed SD.updated_at when the page rendered. */
+  expected_updated_at?: string
+}
+
+export interface DeactivateSDResult {
+  success: boolean
+  outcome: "deactivated" | "already_terminal" | "stale" | "not_found" | "error"
+  delivery_id: string
+  service_type?: string
+  tasks_cancelled?: number
+  renewal_date_cleared?: boolean
+  error?: string
+}
+
+/**
+ * Deactivate (cancel) a service delivery.
+ *
+ * Sets status='cancelled', stamps end_date, cancels the service's open tasks,
+ * and — when asked for a renewal service type — clears the account-level
+ * renewal date so the nightly cron stops managing it. Cancelled SDs leave the
+ * account "Active" list and the client portal automatically (portal queries
+ * filter status IN active|completed).
+ *
+ * Clean no-op if the SD is already cancelled/completed.
+ */
+export async function deactivateSD(
+  params: DeactivateSDParams,
+): Promise<DeactivateSDResult> {
+  const actor = params.actor || "system"
+
+  const { data: sd, error: sdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("id, service_type, service_name, status, account_id, contact_id, updated_at, notes")
+    .eq("id", params.delivery_id)
+    .maybeSingle()
+
+  if (sdErr) {
+    return { success: false, outcome: "error", delivery_id: params.delivery_id, error: sdErr.message }
+  }
+  if (!sd) {
+    return { success: false, outcome: "not_found", delivery_id: params.delivery_id, error: "Service delivery not found" }
+  }
+  if (params.expected_updated_at && sd.updated_at !== params.expected_updated_at) {
+    return {
+      success: false,
+      outcome: "stale",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: "This service has been updated since you opened the page. Refresh and try again.",
+    }
+  }
+  if (sd.status === "cancelled" || sd.status === "completed") {
+    return {
+      success: false,
+      outcome: "already_terminal",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: `Service is already ${sd.status} — nothing to deactivate.`,
+    }
+  }
+
+  const today = new Date().toISOString().split("T")[0]
+  const noteLine = `${today} — Service deactivated${params.reason ? `: ${params.reason}` : ""}`
+  const newNotes = sd.notes ? `${sd.notes}\n${noteLine}` : noteLine
+
+  // SD status write — guarded by expected_updated_at (TOCTOU) when supplied,
+  // else by the non-terminal status we just read.
+  let statusQuery = supabaseAdmin
+    .from("service_deliveries")
+    .update({
+      status: "cancelled",
+      end_date: today,
+      notes: newNotes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", sd.id)
+  statusQuery = params.expected_updated_at
+    ? statusQuery.eq("updated_at", params.expected_updated_at)
+    : statusQuery.eq("status", sd.status)
+  const updated = await dbWrite(statusQuery.select("id").maybeSingle(), "service_deliveries.update.deactivate")
+  if (!updated) {
+    return {
+      success: false,
+      outcome: "stale",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: "This service was modified concurrently. Refresh and try again.",
+    }
+  }
+
+  // Cancel the service's open tasks so no orphan work remains on the board.
+  let tasksCancelled = 0
+  const taskResult = await updateTasksBulk({
+    delivery_id: sd.id,
+    status_in: [...OPEN_TASK_STATUSES],
+    patch: { status: "Cancelled" },
+    actor,
+    summary: `Tasks cancelled — service ${sd.service_type} deactivated`,
+  })
+  if (taskResult.success && taskResult.outcome === "updated") {
+    tasksCancelled = taskResult.count ?? 0
+  }
+
+  // Renewal types on an account: optionally clear the account date so the
+  // nightly cron won't re-create the SD.
+  let renewalDateCleared = false
+  if (params.clear_renewal_date && sd.account_id && isRenewalServiceType(sd.service_type)) {
+    const column = RENEWAL_DATE_COLUMN[sd.service_type]
+    const { data: acct } = await supabaseAdmin
+      .from("accounts")
+      .select(column)
+      .eq("id", sd.account_id)
+      .maybeSingle()
+    const previousValue = (acct as Record<string, unknown> | null)?.[column] ?? null
+    if (previousValue !== null) {
+      const patch =
+        column === "ra_renewal_date"
+          ? { ra_renewal_date: null }
+          : { annual_report_due_date: null }
+      const acctResult = await updateAccount({
+        id: sd.account_id,
+        patch,
+        actor,
+        summary: `Cleared ${column} — ${sd.service_type} deactivated`,
+        details: { cleared_column: column, previous_value: previousValue, reason: params.reason ?? null },
+      })
+      if (acctResult.success) renewalDateCleared = true
+    }
+  }
+
+  logAction({
+    actor,
+    action_type: "update",
+    table_name: "service_deliveries",
+    record_id: sd.id,
+    account_id: sd.account_id ?? undefined,
+    contact_id: sd.contact_id ?? undefined,
+    summary: `Service deactivated: ${sd.service_type}`,
+    details: {
+      reason: params.reason ?? null,
+      tasks_cancelled: tasksCancelled,
+      renewal_date_cleared: renewalDateCleared,
+    },
+  })
+
+  return {
+    success: true,
+    outcome: "deactivated",
+    delivery_id: sd.id,
+    service_type: sd.service_type,
+    tasks_cancelled: tasksCancelled,
+    renewal_date_cleared: renewalDateCleared,
+  }
+}
+
+export interface ReactivateSDParams {
+  delivery_id: string
+  actor?: string
+  /** Optimistic-lock sentinel — observed SD.updated_at when the page rendered. */
+  expected_updated_at?: string
+}
+
+export interface ReactivateSDResult {
+  success: boolean
+  outcome: "reactivated" | "not_cancelled" | "stale" | "not_found" | "error"
+  delivery_id: string
+  service_type?: string
+  task_created?: boolean
+  /**
+   * True when the reactivated service is a renewal type whose account renewal
+   * date is currently empty — the UI/tool should warn that the date must be
+   * set on the account for the renewal to be managed again. We intentionally
+   * do NOT auto-restore the date.
+   */
+  renewal_date_empty?: boolean
+  error?: string
+}
+
+/**
+ * Reactivate a cancelled service delivery (cancelled → active).
+ *
+ * Keeps the current stage so it resumes where it left off, clears end_date,
+ * and creates one fresh tracked task (deactivate cancelled the old ones, so an
+ * active SD would otherwise have nothing tracking it). Only acts on a
+ * `cancelled` SD — a clean no-op otherwise (completed services are left
+ * untouched; re-doing a finished service is a different intent).
+ */
+export async function reactivateSD(
+  params: ReactivateSDParams,
+): Promise<ReactivateSDResult> {
+  const actor = params.actor || "system"
+
+  const { data: sd, error: sdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("id, service_type, service_name, status, account_id, contact_id, updated_at")
+    .eq("id", params.delivery_id)
+    .maybeSingle()
+
+  if (sdErr) {
+    return { success: false, outcome: "error", delivery_id: params.delivery_id, error: sdErr.message }
+  }
+  if (!sd) {
+    return { success: false, outcome: "not_found", delivery_id: params.delivery_id, error: "Service delivery not found" }
+  }
+  if (params.expected_updated_at && sd.updated_at !== params.expected_updated_at) {
+    return {
+      success: false,
+      outcome: "stale",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: "This service has been updated since you opened the page. Refresh and try again.",
+    }
+  }
+  if (sd.status !== "cancelled") {
+    return {
+      success: false,
+      outcome: "not_cancelled",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: `Only cancelled services can be reactivated (current status: ${sd.status}).`,
+    }
+  }
+
+  let statusQuery = supabaseAdmin
+    .from("service_deliveries")
+    .update({ status: "active", end_date: null, updated_at: new Date().toISOString() })
+    .eq("id", sd.id)
+    .eq("status", "cancelled")
+  if (params.expected_updated_at) {
+    statusQuery = statusQuery.eq("updated_at", params.expected_updated_at)
+  }
+  const updated = await dbWrite(statusQuery.select("id").maybeSingle(), "service_deliveries.update.reactivate")
+  if (!updated) {
+    return {
+      success: false,
+      outcome: "stale",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: "This service was modified concurrently. Refresh and try again.",
+    }
+  }
+
+  // Fresh tracked task so the reactivated SD isn't left with nothing tracking
+  // it. Plain task (no workflow) — mirrors the universal-task fallback in
+  // createSD. Fire-and-forget: task failure does NOT undo the reactivation.
+  let taskCreated = false
+  try {
+    // eslint-disable-next-line no-restricted-syntax -- plain tracked-task for reactivated SD, mirrors createSD universal-task fallback
+    const { error: taskErr } = await dbWriteSafe(
+      supabaseAdmin.from("tasks").insert({
+        task_title: `${sd.service_type} — ${sd.service_name || sd.service_type}`,
+        description: `Service reactivated. Resume the lifecycle using the action buttons.`,
+        assigned_to: defaultTaskAssignee(),
+        priority: "Normal",
+        status: "To Do",
+        account_id: sd.account_id ?? undefined,
+        contact_id: sd.contact_id ?? undefined,
+        delivery_id: sd.id,
+        created_by: "System",
+        // tasks.attachments is NOT NULL with no DB default — always set it.
+        attachments: [],
+      }),
+      "tasks.insert.reactivate-sd",
+    )
+    if (!taskErr) taskCreated = true
+  } catch (err) {
+    console.warn(
+      `[reactivateSD] fresh-task creation failed (non-fatal) for SD ${sd.id} (${sd.service_type}):`,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+
+  // Renewal types: flag when the account date is empty so the caller can warn.
+  let renewalDateEmpty = false
+  if (sd.account_id && isRenewalServiceType(sd.service_type)) {
+    const column = RENEWAL_DATE_COLUMN[sd.service_type]
+    const { data: acct } = await supabaseAdmin
+      .from("accounts")
+      .select(column)
+      .eq("id", sd.account_id)
+      .maybeSingle()
+    const value = (acct as Record<string, unknown> | null)?.[column] ?? null
+    if (value === null) renewalDateEmpty = true
+  }
+
+  logAction({
+    actor,
+    action_type: "update",
+    table_name: "service_deliveries",
+    record_id: sd.id,
+    account_id: sd.account_id ?? undefined,
+    contact_id: sd.contact_id ?? undefined,
+    summary: `Service reactivated: ${sd.service_type}`,
+    details: { task_created: taskCreated, renewal_date_empty: renewalDateEmpty },
+  })
+
+  return {
+    success: true,
+    outcome: "reactivated",
+    delivery_id: sd.id,
+    service_type: sd.service_type,
+    task_created: taskCreated,
+    renewal_date_empty: renewalDateEmpty,
   }
 }

@@ -7,7 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-import { createSD } from "@/lib/operations/service-delivery"
+import { createSD, deactivateSD, reactivateSD } from "@/lib/operations/service-delivery"
 
 export function registerOperationsTools(server: McpServer) {
 
@@ -1318,5 +1318,76 @@ export function registerOperationsTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
     }
+  )
+
+  // ═══════════════════════════════════════
+  // service_deactivate
+  // ═══════════════════════════════════════
+  server.tool(
+    "service_deactivate",
+    "Deactivate (cancel) a service delivery. Sets status to 'cancelled' — it leaves the account's active list and the client portal, and the service's open tasks are cancelled. For renewal services (State RA Renewal / State Annual Report) on a Client account, set clear_renewal_date=true to ALSO clear the account's renewal date so the nightly cron won't re-create the service (cancelling the service alone is not permanent on Client accounts). Clean no-op if the service is already cancelled/completed.",
+    {
+      delivery_id: z.string().uuid().describe("service_deliveries UUID to deactivate"),
+      clear_renewal_date: z
+        .boolean()
+        .optional()
+        .describe(
+          "For State RA Renewal / State Annual Report on a Client account: also clear the account's renewal date (ra_renewal_date / annual_report_due_date) so the nightly cron stops re-creating the service. No effect for other service types.",
+        ),
+      reason: z.string().optional().describe("Reason for deactivation — appended to SD notes + action log"),
+    },
+    async ({ delivery_id, clear_renewal_date, reason }) => {
+      try {
+        const res = await deactivateSD({
+          delivery_id,
+          clear_renewal_date,
+          reason,
+          actor: "claude.ai",
+        })
+        if (!res.success) {
+          return { content: [{ type: "text" as const, text: `⚠️ ${res.error ?? "Failed to deactivate"} (outcome: ${res.outcome})` }] }
+        }
+        const parts: string[] = []
+        if (res.tasks_cancelled) parts.push(`${res.tasks_cancelled} task(s) cancelled`)
+        if (res.renewal_date_cleared) parts.push("renewal date cleared")
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✅ Service deactivated: ${res.service_type}${parts.length ? ` (${parts.join(", ")})` : ""}`,
+            },
+          ],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    },
+  )
+
+  // ═══════════════════════════════════════
+  // service_reactivate
+  // ═══════════════════════════════════════
+  server.tool(
+    "service_reactivate",
+    "Reactivate a cancelled service delivery (cancelled → active). Keeps its current stage so it resumes where it left off and creates one fresh tracked task. Only works on a 'cancelled' service (no-op on active/completed). For renewal services, if the account's renewal date is empty the response warns that it must be set on the account for the renewal to be managed again (the date is NOT auto-restored).",
+    {
+      delivery_id: z.string().uuid().describe("service_deliveries UUID to reactivate (must be currently cancelled)"),
+    },
+    async ({ delivery_id }) => {
+      try {
+        const res = await reactivateSD({ delivery_id, actor: "claude.ai" })
+        if (!res.success) {
+          return { content: [{ type: "text" as const, text: `⚠️ ${res.error ?? "Failed to reactivate"} (outcome: ${res.outcome})` }] }
+        }
+        const warn = res.renewal_date_empty
+          ? " ⚠️ Renewal date is empty — set it on the account for this renewal to be managed again."
+          : ""
+        return {
+          content: [{ type: "text" as const, text: `✅ Service reactivated: ${res.service_type}${warn}` }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    },
   )
 }

@@ -316,19 +316,30 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   // SDs for the pipeline stepper section — carries fields the stepper needs
   // (id, stage_order, updated_at) that the legacy `services` mapping strips.
-  const stepperDeliveries = (servicesResult.data ?? [])
-    .filter(sd => sd.status !== 'cancelled')
-    .map(sd => ({
-      id: sd.id,
-      service_type: sd.service_type ?? '',
-      service_name: sd.service_name ?? sd.service_type ?? 'Service',
-      stage: sd.stage ?? null,
-      stage_order: sd.stage_order ?? null,
-      status: sd.status ?? 'active',
-      updated_at: sd.updated_at ?? new Date().toISOString(),
-      account_id: sd.account_id,
-      contact_id: sd.contact_id ?? null,
-    }))
+  // The main servicesResult query excludes cancelled SDs (so journey / SS-4 /
+  // active counts stay unaffected); fetch cancelled ones separately so the
+  // Services tab's "Completed / Cancelled" section can show + reactivate them.
+  const { data: cancelledSDsData } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name, service_type, stage, stage_order, status, updated_at, account_id, contact_id')
+    .eq('account_id', params.id)
+    .eq('status', 'cancelled')
+    .order('updated_at', { ascending: false })
+
+  const stepperDeliveries = [
+    ...(servicesResult.data ?? []).filter(sd => sd.status !== 'cancelled'),
+    ...(cancelledSDsData ?? []),
+  ].map(sd => ({
+    id: sd.id,
+    service_type: sd.service_type ?? '',
+    service_name: sd.service_name ?? sd.service_type ?? 'Service',
+    stage: sd.stage ?? null,
+    stage_order: sd.stage_order ?? null,
+    status: sd.status ?? 'active',
+    updated_at: sd.updated_at ?? new Date().toISOString(),
+    account_id: sd.account_id,
+    contact_id: sd.contact_id ?? null,
+  }))
 
   // DBA service deliveries (full set, including cancelled — surfaces history
   // even after a DBA is closed). Service type catalog uses literal 'DBA' for

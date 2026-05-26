@@ -25,6 +25,7 @@ import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/ge
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { type ServiceDeliveryForStepper } from './service-deliveries-section'
 import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
+import { DeactivateServiceButton, ReactivateServiceButton } from './service-status-actions'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
@@ -862,7 +863,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
       )}
       {activeTab === 'services' && (
-        <ServiziTab services={services} today={today} accountId={account.id} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} />
+        <ServiziTab services={services} today={today} accountId={account.id} accountType={account.account_type ?? null} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} />
       )}
       {activeTab === 'payments' && (
         <PagamentiTab payments={payments} today={today} />
@@ -2226,6 +2227,7 @@ function ServiziTab({
   services,
   today,
   accountId,
+  accountType,
   stepperDeliveries,
   stagesByServiceType,
   payments,
@@ -2233,6 +2235,7 @@ function ServiziTab({
   services: Service[]
   today: string
   accountId: string
+  accountType: string | null
   stepperDeliveries: ServiceDeliveryForStepper[]
   stagesByServiceType: Record<string, PipelineStage[]>
   payments: Payment[]
@@ -2287,9 +2290,18 @@ function ServiziTab({
                       <span className="text-xs text-zinc-500 ml-2">{sd.service_type}</span>
                     )}
                   </div>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shrink-0 capitalize">
-                    {sd.status}
-                  </span>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 capitalize">
+                      {sd.status}
+                    </span>
+                    <DeactivateServiceButton
+                      deliveryId={sd.id}
+                      serviceType={sd.service_type}
+                      serviceName={sd.service_name || sd.service_type}
+                      updatedAt={sd.updated_at}
+                      accountType={accountType}
+                    />
+                  </div>
                 </div>
 
                 {/* Stage stepper — fully driven by pipeline_stages from DB */}
@@ -2356,6 +2368,15 @@ function ServiziTab({
                     <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-100 capitalize shrink-0">{sd.status}</span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">{sd.service_type}</p>
+                  {sd.status === 'cancelled' && (
+                    <div className="mt-2 pt-2 border-t border-zinc-100 flex justify-end">
+                      <ReactivateServiceButton
+                        deliveryId={sd.id}
+                        serviceName={sd.service_name || sd.service_type}
+                        updatedAt={sd.updated_at}
+                      />
+                    </div>
+                  )}
                 </div>
               )
             })}
