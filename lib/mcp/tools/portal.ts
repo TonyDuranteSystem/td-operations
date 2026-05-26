@@ -2031,15 +2031,16 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
         // Admin sender ID (Antonio's auth user ID)
         const senderId = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 
-        // Resolve contact_id: if only account_id was provided, look up the primary
-        // contact so the message is visible in the client's contact-scoped thread.
+        // Resolve contact_id: if only account_id was provided, look up any linked
+        // contact so the message appears in the client's contact-scoped thread.
+        // Do NOT filter by is_primary — only 1 record has it set across the entire DB.
         let resolvedContactId = contact_id || null
         if (!resolvedContactId && account_id) {
           const { data: primary } = await supabaseAdmin
             .from("account_contacts")
             .select("contact_id")
             .eq("account_id", account_id)
-            .eq("is_primary", true)
+            .limit(1)
             .maybeSingle()
           resolvedContactId = primary?.contact_id || null
         }

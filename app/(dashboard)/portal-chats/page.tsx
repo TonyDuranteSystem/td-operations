@@ -164,6 +164,10 @@ export default function PortalChatsPage() {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(
     urlParams.get('account') ? null : urlParams.get('contact'),
   )
+  // Contact_id associated with the currently selected thread — set for BOTH account-
+  // and contact-scoped threads so the realtime subscription can listen on BOTH
+  // account_id AND contact_id simultaneously, catching all message storage patterns.
+  const [selectedThreadContactId, setSelectedThreadContactId] = useState<string | null>(null)
   // `?message=<id>` deep-links to a specific message — used by Notification Center
   // To-Do cards created from a message (the ⋯ → "To Do" action). Once messages for
   // the scoped thread load, we switch to the message's topic, scroll to it, and
@@ -464,57 +468,60 @@ export default function PortalChatsPage() {
   }, {})
 
   // Realtime subscription — selected thread messages. Subscribes to portal_messages
-  // INSERT events filtered by account_id or contact_id and appends them to the React
-  // Query cache instantly (WhatsApp/Telegram-like feel). Refetch interval above acts
-  // as a reconciliation fallback if the socket drops.
+  // INSERT/UPDATE events on BOTH account_id AND contact_id so no message is missed
+  // regardless of which column was set at write time (MCP tool, dashboard, client portal).
+  // Dedup guard (prev.some(m => m.id === newMessage.id)) prevents double-render when
+  // a message matches both filters simultaneously.
   useEffect(() => {
     const threadId = selectedAccountId || selectedContactId
     if (!threadId) return
-    const filterColumn = selectedAccountId ? 'account_id' : 'contact_id'
+    const primaryColumn = selectedAccountId ? 'account_id' : 'contact_id'
     const supabase = createSupabaseBrowserClient()
-    const channel = supabase
+
+    const handleInsert = (payload: { new: unknown }) => {
+      const newMessage = payload.new as ChatMessage
+      queryClient.setQueryData<ChatMessage[]>(
+        ['portal-chat-messages', threadId],
+        (prev) => {
+          if (!prev) return [newMessage]
+          if (prev.some(m => m.id === newMessage.id)) return prev
+          return [...prev, newMessage]
+        }
+      )
+    }
+
+    const handleUpdate = (payload: { new: unknown }) => {
+      const updated = payload.new as ChatMessage
+      queryClient.setQueryData<ChatMessage[]>(
+        ['portal-chat-messages', threadId],
+        (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
+      )
+    }
+
+    let channel = supabase
       .channel(`admin-portal-chat-${threadId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'portal_messages',
-          filter: `${filterColumn}=eq.${threadId}`,
-        },
-        (payload) => {
-          const newMessage = payload.new as ChatMessage
-          queryClient.setQueryData<ChatMessage[]>(
-            ['portal-chat-messages', threadId],
-            (prev) => {
-              if (!prev) return [newMessage]
-              if (prev.some(m => m.id === newMessage.id)) return prev
-              return [...prev, newMessage]
-            }
-          )
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'portal_messages',
-          filter: `${filterColumn}=eq.${threadId}`,
-        },
-        (payload) => {
-          const updated = payload.new as ChatMessage
-          queryClient.setQueryData<ChatMessage[]>(
-            ['portal-chat-messages', threadId],
-            (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
-          )
-        }
-      )
-      .subscribe()
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `${primaryColumn}=eq.${threadId}` }, handleInsert)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${primaryColumn}=eq.${threadId}` }, handleUpdate)
+
+    // Secondary subscription: when viewing an account thread, also listen on contact_id
+    // so "person"-tagged client messages (account_id=null) are caught immediately.
+    // When viewing a contact thread, add account_id subscription if a company is known,
+    // catching legacy messages stored with only account_id.
+    if (selectedAccountId && selectedThreadContactId) {
+      channel = channel
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `contact_id=eq.${selectedThreadContactId}` }, handleInsert)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `contact_id=eq.${selectedThreadContactId}` }, handleUpdate)
+    } else if (selectedContactId && selectedCompanyId) {
+      channel = channel
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${selectedCompanyId}` }, handleInsert)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${selectedCompanyId}` }, handleUpdate)
+    }
+
+    channel.subscribe()
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [selectedAccountId, selectedContactId, queryClient])
+  }, [selectedAccountId, selectedContactId, selectedThreadContactId, selectedCompanyId, queryClient])
 
   // Realtime subscription — global portal_messages INSERT → invalidate thread list
   // so the sidebar sees new last-message previews and unread badges immediately.
@@ -1518,6 +1525,7 @@ export default function PortalChatsPage() {
                     setSelectedName({ company: thread.contact_name || thread.company_name, contact: members.map(m => m.name).join(' · ') })
                     setSelectedAccountId(thread.account_id)
                     setSelectedContactId(null)
+                    setSelectedThreadContactId(thread.contact_id)
                     setSelectedThreadMembers(members)
                     setSelectedThreadCompanies([])
                     setSelectedCompanyId(null)
@@ -1526,6 +1534,7 @@ export default function PortalChatsPage() {
                     setSelectedName({ company: thread.contact_name || thread.company_name, contact: companies.map(c => c.name).join(' · ') || undefined })
                     setSelectedAccountId(null)
                     setSelectedContactId(thread.contact_id)
+                    setSelectedThreadContactId(thread.contact_id)
                     setSelectedThreadMembers([])
                     setSelectedThreadCompanies(companies)
                     setSelectedCompanyId(companies[0]?.id ?? null)

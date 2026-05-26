@@ -190,11 +190,14 @@ export async function POST(request: NextRequest) {
   // message appears in the client's contact-scoped thread (fixes invisible admin messages).
   let resolvedContactId = bodyContactId || getClientContactId(user)
   if (!resolvedContactId && account_id && !isClientUser) {
+    // Do NOT filter by is_primary — only 1 record has it set across the entire DB.
+    // Any linked contact is the correct target for SMLLC (one contact) and an
+    // acceptable fallback for MMLLC (dashboard sends always pass contact_id explicitly).
     const { data: primary } = await supabaseAdmin
       .from('account_contacts')
       .select('contact_id')
       .eq('account_id', account_id)
-      .eq('is_primary', true)
+      .limit(1)
       .maybeSingle()
     resolvedContactId = primary?.contact_id || null
   }

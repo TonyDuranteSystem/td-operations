@@ -97,7 +97,7 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ accountId, contactId, userId, locale = 'en', accounts = [] }: { accountId?: string; contactId: string; userId: string; locale?: string; accounts?: { id: string; company_name: string }[] }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(null, contactId)
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(accountId || null, contactId)
   // PR 2 Step 6 — sender_context picker. Defaults to "company" when an
   // account is currently viewed, else "person". Hidden entirely when the
   // contact has no accounts (formation-gap clients pre-materialization).
