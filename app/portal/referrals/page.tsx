@@ -6,6 +6,8 @@ import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { ReferralPage } from '@/components/portal/referral-page'
+import { APP_BASE_URL } from '@/lib/config'
+import { ensureReferralCode } from '@/lib/referral-utils'
 
 export default async function PortalReferralsPage() {
   const supabase = createClient()
@@ -17,15 +19,9 @@ export default async function PortalReferralsPage() {
 
   const locale = getLocale(user)
 
-  // Get contact's referral code
-  const { data: contact } = await supabaseAdmin
-    .from('contacts')
-    .select('referral_code, full_name')
-    .eq('id', contactId)
-    .single()
-
-  const referralCode = contact?.referral_code || null
-  const referralLink = referralCode ? `https://tonydurante.us/r/${referralCode}` : null
+  // Get (or generate on-demand) the contact's referral code
+  const referralCode = await ensureReferralCode(contactId, supabaseAdmin)
+  const referralLink = referralCode ? `${APP_BASE_URL}/r/${referralCode}` : null
 
   // Get this contact's referrals + payouts in parallel
   const { data: referrals } = await supabaseAdmin

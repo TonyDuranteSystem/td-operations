@@ -3,6 +3,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import type { Json } from '@/lib/database.types'
+import { createPendingReferral } from '@/lib/operations/referral'
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -13,6 +14,8 @@ interface ParsedIntake {
   call_date: string | null
   reason: string | null
   referrer_name: string | null
+  referrer_contact_id?: string | null
+  referral_code?: string | null
   event_uri: string | null
   event_type_name: string | null
 }
@@ -107,6 +110,25 @@ export async function createLeadFromIntake(
         .from('call_summaries')
         .update({ lead_id: newLead.id })
         .eq('id', circleback_call_id)
+    }
+
+    // Referral attribution: if this booking came through a referral link, create a
+    // pending referral linking the referring client to this new lead. Fail-safe —
+    // never blocks lead creation (self-referral / dedup handled in the helper).
+    if (parsed.referrer_contact_id) {
+      try {
+        await createPendingReferral(
+          {
+            referrerContactId: parsed.referrer_contact_id,
+            referredLeadId: newLead.id,
+            referredName: parsed.name,
+            referredEmail: parsed.email,
+          },
+          supabaseAdmin
+        )
+      } catch {
+        /* attribution is additive — never block lead creation */
+      }
     }
 
     // Update webhook event status

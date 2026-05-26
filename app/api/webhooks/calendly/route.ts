@@ -128,6 +128,24 @@ function extractInviteeFields(payload: Record<string, unknown>) {
 
   const eventUri = (payload.payload as Record<string, unknown>)?.event as string | undefined
 
+  // Referral code travels via the landing page's Calendly link. Calendly returns
+  // UTM params in `tracking`; the `a1` prefill lands in questions_and_answers.
+  // Check both defensively (real field path confirmed by a live test booking).
+  const tracking = (payload.payload as Record<string, unknown>)?.tracking as
+    | Record<string, unknown>
+    | undefined
+  let referralCode: string | null =
+    (tracking?.utm_campaign as string) || (tracking?.utm_content as string) || null
+  if (!referralCode && qAndA?.length) {
+    // Fallback: an answer that looks like a referral code (STEM-YYYY)
+    for (const qa of qAndA) {
+      if (/^[A-Z0-9]+-\d{4}(-\d+)?$/.test((qa.answer || "").trim())) {
+        referralCode = qa.answer.trim()
+        break
+      }
+    }
+  }
+
   return {
     email,
     name,
@@ -135,6 +153,7 @@ function extractInviteeFields(payload: Record<string, unknown>) {
     callDate,
     reason,
     referrerName,
+    referralCode,
     eventUri: eventUri || null,
     eventTypeName: (scheduledEvent?.name as string) || null,
   }
@@ -189,6 +208,28 @@ export async function POST(req: NextRequest) {
     // Default: 'staging' (intake review). Set CALENDLY_INTAKE_MODE=auto_create to rollback.
     const intakeMode = process.env.CALENDLY_INTAKE_MODE || "staging"
 
+    // Resolve a referral code (from the referral landing page → Calendly link)
+    // to the referring client. Fail-safe: never block staging on this.
+    let referrerContactId: string | null = null
+    let referrerName: string | null = fields.referrerName
+    let referralCode: string | null = null
+    if (fields.referralCode) {
+      try {
+        const { data: referrer } = await db
+          .from("contacts")
+          .select("id, full_name")
+          .ilike("referral_code", fields.referralCode)
+          .maybeSingle()
+        if (referrer) {
+          referrerContactId = referrer.id
+          referrerName = referrer.full_name || fields.referrerName
+          referralCode = fields.referralCode
+        }
+      } catch {
+        /* swallow — attribution is additive */
+      }
+    }
+
     if (intakeMode !== "auto_create") {
       // ─── INTAKE STAGING MODE (new default) ────────────────
       const enrichedPayload = {
@@ -199,7 +240,9 @@ export async function POST(req: NextRequest) {
           phone: fields.phone,
           call_date: fields.callDate,
           reason: fields.reason,
-          referrer_name: fields.referrerName,
+          referrer_name: referrerName,
+          referrer_contact_id: referrerContactId,
+          referral_code: referralCode,
           event_uri: fields.eventUri,
           event_type_name: fields.eventTypeName,
         },
