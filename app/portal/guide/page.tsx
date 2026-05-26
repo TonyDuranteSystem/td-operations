@@ -4,7 +4,7 @@ import {
   MessageCircle, Package, LayoutDashboard, Building2, CalendarDays,
   FileText, PenLine, ScrollText, Users, Receipt, Bookmark, Building,
   CreditCard, User, ImageIcon, Landmark, Link2, Lock,
-  Gift, ChevronDown, Search, X, ArrowRight, Globe, CheckCircle2,
+  Gift, ChevronDown, Search, X, ArrowRight, Globe, CheckCircle2, Smartphone,
 } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useState, useMemo } from 'react'
@@ -411,6 +411,23 @@ const ARTICLES_EN: Article[] = [
       { text: 'Push Notifications: click "Enable notifications" in the top-right corner of the page. Once enabled, the button stays visible as "Notifications on" — click it again to disable.', sub: 'Your browser will ask for permission the first time.' },
     ],
     link: { href: '/portal/settings', label: 'Go to Settings' },
+  },
+  {
+    id: 'install-app',
+    section: 'Step 1 — Set Up Your Account',
+    icon: Smartphone,
+    iconBg: 'bg-red-50',
+    iconColor: 'text-red-600',
+    title: '1.6 — Install the App on Your Phone',
+    desc: 'Add the portal to your home screen for one-tap access',
+    keywords: ['install', 'app', 'home screen', 'mobile', 'phone', 'iphone', 'android', 'safari', 'chrome', 'add to home screen', 'pwa', 'installa', 'schermata home', 'telefono', 'cellulare'],
+    steps: [
+      { text: 'The portal works like an app — install it on your phone for faster, one-tap access from your home screen.' },
+      { text: 'On iPhone (Safari):', sub: 'Tap the Share button at the bottom of the screen → scroll down and tap "Add to Home Screen" → tap "Add".' },
+      { text: 'On Android (Chrome):', sub: 'Tap the ⋮ menu (top right) → tap "Install app" or "Add to Home screen" → confirm.' },
+      { text: 'Open the portal from the new icon on your home screen. It runs full-screen like a native app and supports push notifications.' },
+    ],
+    tip: 'Use Safari on iPhone and Chrome on Android — the install option may not appear in other browsers.',
   },
 
   // ── Step 2 — Know Your Portal ──
@@ -821,6 +838,24 @@ const ARTICLES_IT: Article[] = [
       { text: 'Notifiche Push: clicca "Enable notifications" in alto a destra nella pagina. Una volta attivate, il pulsante rimane visibile come "Notifications on" — cliccalo di nuovo per disattivare.', sub: 'Il browser chiederà il permesso la prima volta.' },
     ],
     link: { href: '/portal/settings', label: 'Vai alle Impostazioni' },
+  },
+
+  {
+    id: 'install-app',
+    section: 'Passo 1 — Configura il tuo Account',
+    icon: Smartphone,
+    iconBg: 'bg-red-50',
+    iconColor: 'text-red-600',
+    title: "1.6 — Installa l'App sul Telefono",
+    desc: 'Aggiungi il portale alla schermata Home per accedere con un tocco',
+    keywords: ['installa', 'app', 'schermata home', 'telefono', 'cellulare', 'iphone', 'android', 'safari', 'chrome', 'aggiungi alla schermata home', 'install', 'home screen', 'mobile', 'pwa'],
+    steps: [
+      { text: "Il portale funziona come un'app — installalo sul telefono per accedere più velocemente, con un tocco, dalla schermata Home." },
+      { text: 'Su iPhone (Safari):', sub: 'Tocca il pulsante Condividi in basso → scorri e tocca "Aggiungi alla schermata Home" → tocca "Aggiungi".' },
+      { text: 'Su Android (Chrome):', sub: 'Tocca il menu ⋮ (in alto a destra) → tocca "Installa app" o "Aggiungi a schermata Home" → conferma.' },
+      { text: "Apri il portale dalla nuova icona sulla schermata Home. Si apre a schermo intero come un'app nativa e supporta le notifiche push." },
+    ],
+    tip: "Usa Safari su iPhone e Chrome su Android — l'opzione di installazione potrebbe non apparire in altri browser.",
   },
 
   // ── Passo 2 — Conosci il tuo Portale ──

@@ -15,6 +15,7 @@ import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PortalSwRegister } from '@/components/portal/portal-sw-register'
 import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
+import { DashboardInstallBanner } from '@/components/portal/dashboard-install-banner'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { cookies } from 'next/headers'
@@ -142,7 +143,10 @@ export default async function PortalLayout({
               {children}
             </SuspendedGuard>
           ) : (
-            children
+            <>
+              <DashboardInstallBanner />
+              {children}
+            </>
           )}
         </main>
         <PwaInstallPrompt />
