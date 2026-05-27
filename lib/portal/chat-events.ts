@@ -38,6 +38,8 @@ export type ChatEventKind =
   | "document_uploaded"       // client uploaded a doc to their portal
   | "payment_received"        // client payment landed (any rail)
   | "ss4_signed"              // client signed SS-4 (critical — staff faxes IRS)
+  | "members_updated"         // client submitted the member-info form (multi-member LLC)
+  | "contact_updated"         // client submitted the contact-request form (add/update contact)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */

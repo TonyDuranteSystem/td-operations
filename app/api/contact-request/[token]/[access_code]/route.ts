@@ -1,7 +1,31 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { emitClientChatEvent } from "@/lib/portal/chat-events"
 
 export const dynamic = "force-dynamic"
+
+/** Surface a contact-request submission in the staff What's New feed. Fire-and-
+ *  forget — a notification failure must never fail the client's submission.
+ *  Prefers the account thread when the form is account-linked, else the contact. */
+async function notifyContactUpdated(opts: {
+  formId: string
+  accountId: string | null
+  contactId: string | null
+  message: string
+}) {
+  try {
+    await emitClientChatEvent({
+      account_id: opts.accountId,
+      contact_id: opts.accountId ? null : opts.contactId,
+      topic: "Contact",
+      message: opts.message,
+      source: { table: "contact_request_forms", id: opts.formId },
+      event_kind: "contact_updated",
+    })
+  } catch (err) {
+    console.error("[contact-request] What's New emit failed (non-fatal):", err)
+  }
+}
 
 /**
  * GET /api/contact-request/[token]/[access_code]
@@ -181,6 +205,13 @@ export async function POST(
       details: { form_id: form.id, role_slug: role },
     })
 
+    await notifyContactUpdated({
+      formId: form.id,
+      accountId: form.account_id ?? null,
+      contactId,
+      message: `The client added a new contact via the form: ${fullName} (${roleEntry.display_name}).`,
+    })
+
     return NextResponse.json({ success: true, contact_id: contactId })
   }
 
@@ -219,6 +250,13 @@ export async function POST(
     account_id: form.account_id,
     summary: `Contact updated via self-service form: ${fullName}`,
     details: { form_id: form.id },
+  })
+
+  await notifyContactUpdated({
+    formId: form.id,
+    accountId: form.account_id ?? null,
+    contactId: form.target_contact_id,
+    message: `${fullName} updated their contact details via the self-service form.`,
   })
 
   return NextResponse.json({ success: true, contact_id: form.target_contact_id })

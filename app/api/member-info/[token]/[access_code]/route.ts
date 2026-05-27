@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { emitClientChatEvent } from '@/lib/portal/chat-events'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
@@ -191,6 +192,20 @@ export async function POST(
       contacts_provisioned: memberContactIds.filter(Boolean).length,
     },
   })
+
+  // 9. Surface in the staff What's New feed (system chat-event note). Fire-and-
+  //    forget: a notification failure must never fail the client's submission.
+  try {
+    await emitClientChatEvent({
+      account_id: accountId,
+      topic: 'Members',
+      message: `The client submitted the member information form — ${members.length} member${members.length === 1 ? '' : 's'} for ${request.company_name || 'this company'}.`,
+      source: { table: 'member_info_requests', id: request.id },
+      event_kind: 'members_updated',
+    })
+  } catch (err) {
+    console.error('[member-info] What\'s New emit failed (non-fatal):', err)
+  }
 
   return NextResponse.json({ success: true, member_count: members.length })
 }

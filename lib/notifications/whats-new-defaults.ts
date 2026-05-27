@@ -19,6 +19,8 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   formation_progress: 'Verify the formation data + check the LLC name',
   onboarding_progress: 'Verify onboarding + RA change on Harbor',
   closure_progress: 'Begin the closure / dissolution steps',
+  members_updated: 'Review the updated member details and reconcile the account',
+  contact_updated: 'Review the contact details the client submitted',
 }
 
 /** Resolve the suggested next step for an event: catalog override → code default → ''. */

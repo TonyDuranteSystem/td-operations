@@ -2106,6 +2106,18 @@ export default function PortalChatsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1">
+                      {(selectedAccountId || selectedContactId) && (
+                        <button
+                          onClick={async () => {
+                            await markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId })
+                            toast.success('Marked as unread')
+                          }}
+                          className="p-2 rounded-lg text-zinc-400 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                          title="Mark this conversation as unread"
+                        >
+                          <MailOpen className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         onClick={handleRefresh}
                         disabled={isRefreshing}
