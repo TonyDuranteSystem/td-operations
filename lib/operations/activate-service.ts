@@ -21,6 +21,7 @@ import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
 import { calculateCommission } from "@/lib/referral-utils"
+import { creditReferrerForLead } from "@/lib/operations/referral"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
@@ -1176,6 +1177,48 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     }
   } catch (e) {
     steps.push({ step: "referral", status: "error", detail: `Referral step failed: ${e instanceof Error ? e.message : String(e)}` })
+  }
+
+  // ─── STEP 3.5b: Client referral credit (auto credit note on payment) ──────
+  // Calendly-link referrals are tracked in `referrals` (pending, keyed by the
+  // referred lead). Payment is now received, so convert the pending referral and
+  // auto-issue the referrer's 10% credit note. Additive + non-blocking, and
+  // independent of Step 3.5 (which handles offer.referrer_name partner/manual refs).
+  try {
+    if (leadId) {
+      let setupFeeTotal = 0
+      try {
+        const costSummary = Array.isArray(offer?.cost_summary) ? offer.cost_summary : []
+        if (costSummary.length > 0) {
+          const firstSection = costSummary[0] as { total?: string }
+          if (firstSection.total) {
+            setupFeeTotal = Number(String(firstSection.total).replace(/[€$,.\s]/g, (m) => m === "," ? "" : m === "." ? "." : "")) || 0
+            if (setupFeeTotal > 100000) setupFeeTotal = setupFeeTotal / 100
+          }
+        }
+      } catch { /* parse failed; setupFeeTotal stays 0 */ }
+
+      const creditRes = await creditReferrerForLead(
+        {
+          referredLeadId: leadId,
+          referredContactId: contactId,
+          referredAccountId: autoAccountId,
+          setupFeeTotal,
+          currency: "EUR",
+        },
+        supabase
+      )
+      const creditDetail = creditRes.issued
+        ? `Credit ${creditRes.amount} EUR issued to referrer (referral ${(creditRes.referralId ?? "").slice(0, 8)})`
+        : `No credit: ${creditRes.reason ?? "unknown"}`
+      steps.push({
+        step: "client_referral_credit",
+        status: creditRes.issued ? "created" : "skipped",
+        detail: creditDetail,
+      })
+    }
+  } catch (e) {
+    steps.push({ step: "client_referral_credit", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   // ─── STEP 3.6: Partner Payout (Phase 3B, AUTO, non-blocking) ──────

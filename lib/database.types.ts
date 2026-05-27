@@ -8863,6 +8863,41 @@ export type Database = {
         }
         Relationships: []
       }
+      referral_clicks: {
+        Row: {
+          id: string
+          referral_code: string
+          referrer_contact_id: string | null
+          user_agent: string | null
+          referer: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          referral_code: string
+          referrer_contact_id?: string | null
+          user_agent?: string | null
+          referer?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          referral_code?: string
+          referrer_contact_id?: string | null
+          user_agent?: string | null
+          referer?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "referral_clicks_referrer_contact_id_fkey"
+            columns: ["referrer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       referral_payouts: {
         Row: {
           amount: number
