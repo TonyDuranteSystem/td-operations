@@ -52,6 +52,8 @@ export async function POST(request: Request) {
       portal_user: 0,
       leads: 0,
       payments_cancelled: 0,
+      referral_payouts: 0,
+      referrals: 0,
     }
 
     // 1. Get offer tokens for this lead
@@ -127,6 +129,29 @@ export async function POST(request: Request) {
           console.warn(`Failed to delete auth user ${match.id}: ${deleteErr.message}`)
         }
       }
+    }
+
+    // 5b. Delete referral attribution pointing at this lead. referrals.referred_lead_id
+    //     is a NO ACTION FK to leads, so it would otherwise BLOCK the lead delete.
+    //     Order: referral_payouts (FK → referrals) first, then referrals.
+    const { data: leadReferrals } = await supabaseAdmin
+      .from("referrals")
+      .select("id")
+      .eq("referred_lead_id", lead_id)
+    const referralIds = (leadReferrals ?? []).map((r) => r.id)
+
+    if (referralIds.length > 0) {
+      const { count: payoutCount } = await supabaseAdmin
+        .from("referral_payouts")
+        .delete({ count: "exact" })
+        .in("referral_id", referralIds)
+      deleted.referral_payouts = payoutCount ?? 0
+
+      const { count: refCount } = await supabaseAdmin
+        .from("referrals")
+        .delete({ count: "exact" })
+        .eq("referred_lead_id", lead_id)
+      deleted.referrals = refCount ?? 0
     }
 
     // 6. Delete the lead itself
