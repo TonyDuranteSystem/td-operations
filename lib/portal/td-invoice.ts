@@ -158,6 +158,13 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const today = new Date().toISOString().split('T')[0]
   const paidDateVal = paid ? (paid_date || today) : null
 
+  // Invoice summary description. When a credit fully covers the bill, spell out
+  // the math so it never reads as a bare "$0" — service − credit = $0 due.
+  const serviceDescription = line_items[0]?.description || 'Service invoice'
+  const invoiceDescription = fullyCoveredByCredit && appliedCredit
+    ? `${serviceDescription} − credit ($${appliedCredit.appliedTotal}) = $0 due (covered by credit)`
+    : serviceDescription
+
   // 2. Generate invoice number + insert payments row, with retry on unique-violation.
   //    The generator is not race-safe on its own; the partial unique index
   //    uq_payments_invoice_number catches concurrent collisions and we retry.
@@ -180,7 +187,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         invoice_number: invoiceNumber,
         idempotency_key: idempotency_key || null,
         installment: installment || null,
-        description: items[0]?.description || 'Invoice',
+        description: invoiceDescription,
         amount: total,
         amount_paid: amountPaid,
         amount_due: amountDue,
@@ -282,7 +289,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         vendor_name: 'Tony Durante LLC',
         invoice_number: invoiceNumber,
         internal_ref: internalRef,
-        description: items[0]?.description || 'Service invoice',
+        description: invoiceDescription,
         currency,
         subtotal,
         tax_amount: taxTotal,

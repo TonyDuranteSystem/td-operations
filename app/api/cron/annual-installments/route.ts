@@ -136,18 +136,19 @@ export async function GET(req: NextRequest) {
           installment: installmentLabelEnum,
         })
 
-        // Override description on the payments row so the human-readable label
-        // matches the historical convention (createTDInvoice defaults to the
-        // first line-item description).
-        // eslint-disable-next-line no-restricted-syntax -- targeted post-create field override; createTDInvoice uses first line-item description.
-        await supabaseAdmin
-          .from("payments")
-          .update({ description })
-          .eq("id", invoice.paymentId)
-
-        // If credit fully covered the installment, createTDInvoice marked it Paid —
-        // fire the normal 2nd-installment-paid effects (lift tax gate, etc.).
+        // If credit fully covered the installment, createTDInvoice marked it Paid
+        // and set an explanatory "… − credit = $0 due" description — keep that.
+        // Otherwise normalize the description to the historical human-readable label.
         const fullyCovered = invoice.status === "Paid"
+        if (!fullyCovered) {
+          // eslint-disable-next-line no-restricted-syntax -- targeted post-create field override; createTDInvoice uses first line-item description.
+          await supabaseAdmin
+            .from("payments")
+            .update({ description })
+            .eq("id", invoice.paymentId)
+        }
+
+        // Fire the normal 2nd-installment-paid effects (lift tax gate, etc.).
         if (fullyCovered) {
           try {
             const { onSecondInstallmentPaid } = await import("@/lib/installment-handler")
