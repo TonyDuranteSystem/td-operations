@@ -25,36 +25,39 @@ function supaWithQueue(results: unknown[]) {
   } as unknown as SupabaseClient
 }
 
-const YEAR = new Date().getFullYear()
-
 describe("generateReferralCode", () => {
-  it("produces LASTNAME-YEAR when no collision", async () => {
+  it("produces first-last lowercase when no collision", async () => {
     const s = supaWithQueue([{ data: [] }])
-    expect(await generateReferralCode("Marco Rossi", s)).toBe(`ROSSI-${YEAR}`)
+    expect(await generateReferralCode("Marco Rossi", s)).toBe("marco-rossi")
+  })
+
+  it("joins middle/last names", async () => {
+    const s = supaWithQueue([{ data: [] }])
+    expect(await generateReferralCode("Maxence Van Beneden", s)).toBe("maxence-vanbeneden")
   })
 
   it("suffixes on collision", async () => {
-    const s = supaWithQueue([{ data: [{ referral_code: `ROSSI-${YEAR}` }] }])
-    expect(await generateReferralCode("Marco Rossi", s)).toBe(`ROSSI-${YEAR}-2`)
+    const s = supaWithQueue([{ data: [{ referral_code: "marco-rossi" }] }])
+    expect(await generateReferralCode("Marco Rossi", s)).toBe("marco-rossi-2")
   })
 
-  it("falls back to CLIENT when the name has no Latin letters (edge: non-Latin)", async () => {
+  it("falls back to 'client' when the name has no Latin letters (edge: non-Latin)", async () => {
     const s = supaWithQueue([{ data: [] }])
-    expect(await generateReferralCode("李", s)).toBe(`CLIENT-${YEAR}`)
+    expect(await generateReferralCode("李", s)).toBe("client")
   })
 
   it("uses the single word when name has no separate last name", async () => {
     const s = supaWithQueue([{ data: [] }])
-    expect(await generateReferralCode("Madonna", s)).toBe(`MADONNA-${YEAR}`)
+    expect(await generateReferralCode("Madonna", s)).toBe("madonna")
   })
 })
 
 describe("ensureReferralCode", () => {
   it("returns the existing code without generating", async () => {
     const s = supaWithQueue([
-      { data: { referral_code: "ROSSI-2026", full_name: "Marco Rossi" } },
+      { data: { referral_code: "marco-rossi", full_name: "Marco Rossi" } },
     ])
-    expect(await ensureReferralCode("c1", s)).toBe("ROSSI-2026")
+    expect(await ensureReferralCode("c1", s)).toBe("marco-rossi")
   })
 
   it("returns null when the contact has no usable name", async () => {
@@ -68,6 +71,6 @@ describe("ensureReferralCode", () => {
       { data: [] }, // collision check inside generateReferralCode
       { error: null }, // update
     ])
-    expect(await ensureReferralCode("c1", s)).toBe(`ROSSI-${YEAR}`)
+    expect(await ensureReferralCode("c1", s)).toBe("marco-rossi")
   })
 })

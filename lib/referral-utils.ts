@@ -20,16 +20,16 @@ export async function generateReferralCode(
   fullName: string,
   supabase: SupabaseClient
 ): Promise<string> {
-  const parts = fullName.trim().split(/\s+/)
-  const sanitize = (s: string) => (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "")
-  // Prefer last name; fall back to first name, then "CLIENT" — never produce an
-  // empty stem (single-word / non-Latin names would otherwise yield "-YYYY").
-  const stem =
-    sanitize(parts[parts.length - 1]) || sanitize(parts[0]) || "CLIENT"
-  const year = new Date().getFullYear()
-  const baseCode = `${stem}-${year}`
+  // Format: first-last, lowercase, hyphenated (e.g. "marco-rossi"). No year —
+  // uniqueness is guaranteed by the DB index + the collision suffix below.
+  const clean = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+  const first = clean(parts[0] || "")
+  const rest = parts.slice(1).map(clean).join("") // join any middle/last names
+  // Fallbacks: single-word name → just that word; unusable (non-Latin) → "client".
+  const baseCode = first && rest ? `${first}-${rest}` : first || "client"
 
-  // Check for collisions
+  // Check for collisions (case-insensitive)
   const { data } = await supabase
     .from("contacts")
     .select("referral_code")
@@ -37,12 +37,12 @@ export async function generateReferralCode(
 
   if (!data || data.length === 0) return baseCode
 
-  const existing = new Set(data.map((r) => r.referral_code?.toUpperCase()))
-  if (!existing.has(baseCode.toUpperCase())) return baseCode
+  const existing = new Set(data.map((r) => r.referral_code?.toLowerCase()))
+  if (!existing.has(baseCode.toLowerCase())) return baseCode
 
   // Find next available suffix
   let suffix = 2
-  while (existing.has(`${baseCode}-${suffix}`.toUpperCase())) {
+  while (existing.has(`${baseCode}-${suffix}`.toLowerCase())) {
     suffix++
   }
   return `${baseCode}-${suffix}`
