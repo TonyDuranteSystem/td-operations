@@ -81,7 +81,7 @@ const COLUMN_ICON: Record<string, React.ElementType> = {
   action_needed: AlertCircle,
   in_progress: Clock,
   waiting_on_client: Hourglass,
-  followed_up: Send,
+  send_followup: Send,
   wait_for_irs: Landmark,
   done: CheckCircle2,
 }
@@ -109,7 +109,7 @@ export function ActionBoard() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [savingNote, setSavingNote] = useState(false)
-  // Follow-up: send the client a portal-chat reminder, then move the card to "Followed up".
+  // Follow-up: send the client a portal-chat reminder, then move the card to "Followup Sent".
   const [followUpCard, setFollowUpCard] = useState<Card | null>(null)
   const [followUpDraft, setFollowUpDraft] = useState('')
   const [sendingFollowUp, setSendingFollowUp] = useState(false)
@@ -162,7 +162,7 @@ export function ActionBoard() {
 
   // Follow up: post a reminder into the client's portal chat (reuses the staff
   // send path → fires the same client notification + email), then move the card
-  // to the non-terminal "Followed up" column so it stays visible.
+  // to the non-terminal "Followup Sent" column so it stays visible.
   const sendFollowUp = useCallback(async () => {
     if (!followUpCard) return
     const card = followUpCard
@@ -180,7 +180,7 @@ export function ActionBoard() {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Could not send the reminder')
       }
-      await move(card.id, 'followed_up')
+      await move(card.id, 'send_followup')
       setFollowUpCard(null)
       setFollowUpDraft('')
     } catch (e) {
@@ -484,14 +484,14 @@ export function ActionBoard() {
                             </button>
                           )}
                         </div>
-                        {(card.action_type === 'waiting_on_client' || card.action_type === 'followed_up') && (
+                        {(card.action_type === 'waiting_on_client' || card.action_type === 'send_followup') && (
                           <button
                             disabled={(!card.account_id && !card.contact_id) || movingId === card.id}
                             onClick={() => { setFollowUpError(null); setFollowUpDraft(defaultFollowUpText(clientName, card.label)); setFollowUpCard(card) }}
                             className="mt-2 w-full flex items-center justify-center gap-1 text-[11px] text-violet-700 hover:text-white hover:bg-violet-600 border border-violet-200 rounded px-1.5 py-1 disabled:opacity-40"
-                            title="Send the client a portal-chat reminder and move this card to Followed up"
+                            title="Send the client a portal-chat reminder and move this card to Followup Sent"
                           >
-                            <Send className="h-3 w-3" /> {card.action_type === 'followed_up' ? 'Follow up again' : 'Follow up'}
+                            <Send className="h-3 w-3" /> {card.action_type === 'send_followup' ? 'Follow up again' : 'Follow up'}
                           </button>
                         )}
                         {/* Stacked so the native date inputs never overflow the
@@ -594,7 +594,7 @@ export function ActionBoard() {
               </h4>
             </div>
             <p className="text-[11px] text-zinc-500 mb-2">
-              Sends this as a message in the client&apos;s portal chat (they also get the usual email notification), then moves the card to “Followed up”.
+              Sends this as a message in the client&apos;s portal chat (they also get the usual email notification), then moves the card to “Followup Sent”.
             </p>
             <textarea
               value={followUpDraft}
@@ -617,7 +617,7 @@ export function ActionBoard() {
                 disabled={sendingFollowUp || !followUpDraft.trim()}
                 className="flex items-center gap-1 text-[12px] text-white bg-violet-600 hover:bg-violet-700 rounded px-3 py-1 disabled:opacity-40"
               >
-                <Send className="h-3 w-3" /> {sendingFollowUp ? 'Sending…' : 'Send & move to Followed up'}
+                <Send className="h-3 w-3" /> {sendingFollowUp ? 'Sending…' : 'Send & move to Followup Sent'}
               </button>
             </div>
           </div>
