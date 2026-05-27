@@ -243,6 +243,19 @@ export async function POST(req: NextRequest) {
     }
     const resolvedAt = terminal.has(action_type) ? new Date().toISOString() : null
 
+    // Scope the card to the MESSAGE's own account/contact (authoritative). A card
+    // from a company member then lands under the COMPANY (account_id) with the
+    // member as contact_id — so the board link opens the full company thread and
+    // the card shows on the company's summary. Falls back to the client-provided
+    // scope only if the message row can't be read.
+    const { data: msgRow } = await supabaseAdmin
+      .from("portal_messages")
+      .select("account_id, contact_id")
+      .eq("id", message_id)
+      .maybeSingle()
+    const scopeAccountId = (msgRow?.account_id as string | null | undefined) ?? account_id ?? null
+    const scopeContactId = (msgRow?.contact_id as string | null | undefined) ?? contact_id ?? null
+
     // Upsert: one action per message.
     const { data: existing } = await supabaseAdmin
       .from("message_actions")
@@ -264,6 +277,10 @@ export async function POST(req: NextRequest) {
         // hidden card, so this is the primary recovery path. See the Snoozed view
         // on the board for the secondary path.
         snoozed_until: null,
+        // Self-heal scope to the message's own account/contact (see insert below),
+        // so older contact-only cards start opening the full company thread.
+        account_id: scopeAccountId,
+        contact_id: scopeContactId,
       }
       if (label !== undefined) updateData.label = label
       if (created_by) updateData.created_by = created_by
@@ -282,8 +299,8 @@ export async function POST(req: NextRequest) {
       .from("message_actions")
       .insert({
         message_id,
-        contact_id: contact_id || null,
-        account_id: account_id || null,
+        contact_id: scopeContactId,
+        account_id: scopeAccountId,
         action_type,
         label: label || null,
         created_by: created_by || null,
