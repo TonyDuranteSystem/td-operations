@@ -218,6 +218,7 @@ export function registerCrmTools(server: McpServer) {
       let q = supabaseAdmin
         .from('contacts')
         .select('*, account_contacts(account_id, role, accounts(id, company_name, status, entity_type, state_of_formation))')
+        .is('merged_into', null) // hide contacts merged into another
         .order('full_name')
         .limit(Math.min(limit || 25, 100))
 

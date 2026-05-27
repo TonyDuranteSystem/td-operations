@@ -9,6 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findContactByEmail } from "@/lib/contacts/find-contact-by-email"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { formatCountyAndState } from "@/lib/addresses"
@@ -113,7 +114,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
                   if (m.member_type === "company") {
                     let repContactId = m.contact_id
                     if (!repContactId && m.representative_email) {
-                      const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+                      const repC = await findContactByEmail(m.representative_email)
                       repContactId = repC?.id ?? null
                     }
                     const repInfo = m.representative_name ? ` (rep: ${m.representative_name})` : ""
@@ -143,7 +144,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
               const signer = signers[0]
               if (signer.member_type === "company") {
                 if (!signer.contact_id && signer.representative_email) {
-                  const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", signer.representative_email).maybeSingle()
+                  const repC = await findContactByEmail(signer.representative_email)
                   contactId = repC?.id ?? signer.contact_id
                 } else {
                   contactId = signer.contact_id
@@ -155,7 +156,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
               // Single member or SMLLC: use first row
               const m = membersRows[0]
               if (m.member_type === "company" && m.representative_email) {
-                const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+                const repC = await findContactByEmail(m.representative_email)
                 contactId = repC?.id ?? m.contact_id
               } else {
                 contactId = m.contact_id

@@ -21,6 +21,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findContactByEmail } from "@/lib/contacts/find-contact-by-email"
 import { uploadBinaryToDrive } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
@@ -449,10 +450,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
           if (repEmail) {
             let repContactId: string | null = null
-            const { data: existingRep } = await supabaseAdmin
-              .from('contacts').select('id').eq('email', repEmail).limit(1)
-            if (existingRep?.length) {
-              repContactId = existingRep[0].id
+            const existingRep = await findContactByEmail(repEmail)
+            if (existingRep) {
+              repContactId = existingRep.id
             } else {
               // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
               const { data: newRep } = await supabaseAdmin.from('contacts').insert({
@@ -482,10 +482,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
           let membContactId: string | null = null
           if (memberEmail) {
-            const { data: existingC } = await supabaseAdmin
-              .from('contacts').select('id').eq('email', memberEmail).limit(1)
-            if (existingC?.length) {
-              membContactId = existingC[0].id
+            const existingC = await findContactByEmail(memberEmail)
+            if (existingC) {
+              membContactId = existingC.id
             } else {
               // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
               const { data: newC } = await supabaseAdmin.from('contacts').insert({

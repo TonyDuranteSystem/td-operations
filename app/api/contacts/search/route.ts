@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await supabase
     .from('contacts')
     .select('id, full_name, email, phone')
+    .is('merged_into', null) // hide contacts that were merged into another
     .or(`full_name.ilike.${pattern},email.ilike.${pattern}`)
     .order('full_name')
     .limit(15)

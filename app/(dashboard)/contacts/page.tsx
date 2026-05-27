@@ -17,6 +17,7 @@ export default async function ContactsPage({
   let dbQuery = supabase
     .from('contacts')
     .select('id, full_name, email, phone, language, citizenship, portal_tier, status, itin_number, passport_on_file, created_at', { count: 'exact' })
+    .is('merged_into', null) // hide contacts merged into another
     .order('full_name', { ascending: true })
 
   if (statusFilter && statusFilter !== 'all') {
