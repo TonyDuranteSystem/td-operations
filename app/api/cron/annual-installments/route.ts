@@ -26,6 +26,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { logCron } from "@/lib/cron-log"
 import { defaultInstallmentAmount } from "@/lib/billing/installment-defaults"
+import { computeCreditApplication, consumeCredits } from "@/lib/operations/credit-netting"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -119,18 +120,37 @@ export async function GET(req: NextRequest) {
       const installmentLabelEnum = "Installment 2 (Jun)"
 
       try {
+        // Net any outstanding credit notes (referral or manual) on the account,
+        // same currency, oldest-first, capped at the installment amount.
+        const creditApp = await computeCreditApplication(
+          { accountId: acct.id, amount, currency: "USD" },
+          supabaseAdmin
+        )
+        const netAmount = Math.max(Math.round((amount - creditApp.appliedTotal) * 100) / 100, 0)
+        const fullyCovered = netAmount <= 0
+
+        const lineItems = [{
+          description: `LLC Annual Management — ${installmentLabel} ${year}`,
+          unit_price: amount,
+          quantity: 1,
+        }]
+        if (creditApp.appliedTotal > 0) {
+          lineItems.push({
+            description: `Credit applied`,
+            unit_price: -creditApp.appliedTotal,
+            quantity: 1,
+          })
+        }
+
         const invoice = await createTDInvoice({
           account_id: acct.id,
-          line_items: [{
-            description: `LLC Annual Management — ${installmentLabel} ${year}`,
-            unit_price: amount,
-            quantity: 1,
-          }],
+          line_items: lineItems,
           currency: "USD",
           due_date: dueDate,
           message: `Payment for ${installmentLabel} ${year} — LLC Annual Management fee.\nPlease remit payment by wire transfer to the bank details below, or via card using the link provided separately.`,
           idempotency_key: idempotencyKey,
           installment: installmentLabelEnum,
+          mark_as_paid: fullyCovered, // credit fully covers it → nothing owed
         })
 
         // Override description on the payments row so the human-readable label
@@ -142,10 +162,27 @@ export async function GET(req: NextRequest) {
           .update({ description })
           .eq("id", invoice.paymentId)
 
+        // Consume the applied credits (decrement remaining; idempotent per invoice).
+        if (creditApp.appliedTotal > 0) {
+          await consumeCredits(creditApp, invoice.paymentId, supabaseAdmin)
+        }
+
+        // If credit fully covered the installment, it's settled — fire the normal
+        // 2nd-installment-paid effects (lift tax gate, etc.).
+        if (fullyCovered) {
+          try {
+            const { onSecondInstallmentPaid } = await import("@/lib/installment-handler")
+            await onSecondInstallmentPaid(acct.id, year)
+          } catch { /* non-blocking — team email/task summary still reports the invoice */ }
+        }
+
+        const creditNote = creditApp.appliedTotal > 0
+          ? ` (credit −$${creditApp.appliedTotal}${fullyCovered ? ", fully covered — marked Paid" : ""})`
+          : ""
         results.push({
           company: acct.company_name,
           action: "created",
-          detail: `${invoice.invoiceNumber} — $${amount} USD`,
+          detail: `${invoice.invoiceNumber} — $${netAmount} USD${creditNote}`,
           paymentId: invoice.paymentId,
         })
       } catch (e) {

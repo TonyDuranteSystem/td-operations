@@ -7883,6 +7883,7 @@ export type Database = {
           contact_id: string | null
           created_at: string | null
           credit_for_payment_id: string | null
+          credit_remaining: number | null
           deal_id: string | null
           delay_approved_until: string | null
           description: string | null
@@ -7942,6 +7943,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string | null
           credit_for_payment_id?: string | null
+          credit_remaining?: number | null
           deal_id?: string | null
           delay_approved_until?: string | null
           description?: string | null
@@ -8001,6 +8003,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string | null
           credit_for_payment_id?: string | null
+          credit_remaining?: number | null
           deal_id?: string | null
           delay_approved_until?: string | null
           description?: string | null

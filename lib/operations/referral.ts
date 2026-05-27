@@ -175,7 +175,10 @@ export async function creditReferrerForLead(
 
   // Tag it as a credit and finalize the referral.
   // eslint-disable-next-line no-restricted-syntax -- credit-note status tag on the payments row created via createTDInvoice (sanctioned write path); mirrors app/(dashboard)/payments/invoice-actions.ts createCreditNote.
-  await supabase.from("payments").update({ invoice_status: "Credit" }).eq("id", result.paymentId)
+  await supabase
+    .from("payments")
+    .update({ invoice_status: "Credit", credit_remaining: commissionAmount })
+    .eq("id", result.paymentId)
   await supabase
     .from("referrals")
     .update({ status: "credited", credited_amount: commissionAmount })
