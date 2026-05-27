@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock, Moon, Check, Pencil, X } from 'lucide-react'
+import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock, Moon, Check, Pencil, X, Send } from 'lucide-react'
 import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
@@ -81,8 +81,15 @@ const COLUMN_ICON: Record<string, React.ElementType> = {
   action_needed: AlertCircle,
   in_progress: Clock,
   waiting_on_client: Hourglass,
+  followed_up: Send,
   wait_for_irs: Landmark,
   done: CheckCircle2,
+}
+
+/** Default reminder text shown in the Follow-up editor. Staff edit it before sending. */
+function defaultFollowUpText(clientName: string, label: string | null): string {
+  const re = label && label.trim() ? `\n\nRe: ${label.trim()}` : ''
+  return `Hi ${clientName},\n\nA friendly reminder that we're still waiting on the information we requested. When you have a moment, please complete it in your portal — let us know if you have any questions.${re}\n\nThank you,\nTony Durante Team`
 }
 
 const API = '/api/crm/admin-actions/message-actions'
@@ -102,6 +109,11 @@ export function ActionBoard() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [savingNote, setSavingNote] = useState(false)
+  // Follow-up: send the client a portal-chat reminder, then move the card to "Followed up".
+  const [followUpCard, setFollowUpCard] = useState<Card | null>(null)
+  const [followUpDraft, setFollowUpDraft] = useState('')
+  const [sendingFollowUp, setSendingFollowUp] = useState(false)
+  const [followUpError, setFollowUpError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -147,6 +159,36 @@ export function ActionBoard() {
     },
     [load],
   )
+
+  // Follow up: post a reminder into the client's portal chat (reuses the staff
+  // send path → fires the same client notification + email), then move the card
+  // to the non-terminal "Followed up" column so it stays visible.
+  const sendFollowUp = useCallback(async () => {
+    if (!followUpCard) return
+    const card = followUpCard
+    const message = followUpDraft.trim()
+    if (!message) { setFollowUpError('Write a message first'); return }
+    setSendingFollowUp(true)
+    setFollowUpError(null)
+    try {
+      const res = await fetch('/api/portal/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: card.account_id, contact_id: card.contact_id, message }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not send the reminder')
+      }
+      await move(card.id, 'followed_up')
+      setFollowUpCard(null)
+      setFollowUpDraft('')
+    } catch (e) {
+      setFollowUpError(e instanceof Error && e.message ? e.message : 'Could not send the reminder')
+    } finally {
+      setSendingFollowUp(false)
+    }
+  }, [followUpCard, followUpDraft, move])
 
   // Set reminder date, priority, and/or snooze on a card (no column move).
   // snoozed_until in the future hides the card from the board until that time.
@@ -442,6 +484,16 @@ export function ActionBoard() {
                             </button>
                           )}
                         </div>
+                        {(card.action_type === 'waiting_on_client' || card.action_type === 'followed_up') && (
+                          <button
+                            disabled={(!card.account_id && !card.contact_id) || movingId === card.id}
+                            onClick={() => { setFollowUpError(null); setFollowUpDraft(defaultFollowUpText(clientName, card.label)); setFollowUpCard(card) }}
+                            className="mt-2 w-full flex items-center justify-center gap-1 text-[11px] text-violet-700 hover:text-white hover:bg-violet-600 border border-violet-200 rounded px-1.5 py-1 disabled:opacity-40"
+                            title="Send the client a portal-chat reminder and move this card to Followed up"
+                          >
+                            <Send className="h-3 w-3" /> {card.action_type === 'followed_up' ? 'Follow up again' : 'Follow up'}
+                          </button>
+                        )}
                         {/* Stacked so the native date inputs never overflow the
                             narrow card. Each row: icon + short label + full-width input. */}
                         <div className="mt-1 space-y-1">
@@ -528,6 +580,46 @@ export function ActionBoard() {
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {followUpCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !sendingFollowUp && setFollowUpCard(null)}>
+          <div className="w-full max-w-md rounded-lg bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Send className="h-4 w-4 text-violet-600" />
+              <h4 className="text-sm font-semibold text-zinc-800">
+                Follow up — {followUpCard.accounts?.company_name || followUpCard.contacts?.full_name || 'client'}
+              </h4>
+            </div>
+            <p className="text-[11px] text-zinc-500 mb-2">
+              Sends this as a message in the client&apos;s portal chat (they also get the usual email notification), then moves the card to “Followed up”.
+            </p>
+            <textarea
+              value={followUpDraft}
+              onChange={(e) => setFollowUpDraft(e.target.value)}
+              rows={7}
+              autoFocus
+              className="w-full text-xs border rounded px-2 py-1.5 resize-none"
+            />
+            {followUpError && <p className="text-[11px] text-red-600 mt-1">{followUpError}</p>}
+            <div className="flex justify-end gap-2 mt-3">
+              <button
+                onClick={() => setFollowUpCard(null)}
+                disabled={sendingFollowUp}
+                className="text-[12px] text-zinc-600 border rounded px-3 py-1 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendFollowUp}
+                disabled={sendingFollowUp || !followUpDraft.trim()}
+                className="flex items-center gap-1 text-[12px] text-white bg-violet-600 hover:bg-violet-700 rounded px-3 py-1 disabled:opacity-40"
+              >
+                <Send className="h-3 w-3" /> {sendingFollowUp ? 'Sending…' : 'Send & move to Followed up'}
+              </button>
+            </div>
           </div>
         </div>
       )}
