@@ -13,6 +13,12 @@ export function RefCookie({ code }: { code: string }) {
   useEffect(() => {
     const expires = new Date(Date.now() + 90 * 864e5).toUTCString()
     document.cookie = `td_ref=${encodeURIComponent(code)}; path=/; expires=${expires}; samesite=lax`
+    // Log the click via a request endpoint (reliable write context).
+    fetch('/api/referral/track', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    }).catch(() => {})
   }, [code])
   return null
 }

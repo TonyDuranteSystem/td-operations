@@ -6,8 +6,6 @@ import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { ReferralPage } from '@/components/portal/referral-page'
-import { APP_BASE_URL } from '@/lib/config'
-import { ensureReferralCode } from '@/lib/referral-utils'
 
 export default async function PortalReferralsPage() {
   const supabase = createClient()
@@ -19,9 +17,9 @@ export default async function PortalReferralsPage() {
 
   const locale = getLocale(user)
 
-  // Get (or generate on-demand) the contact's referral code
-  const referralCode = await ensureReferralCode(contactId, supabaseAdmin)
-  const referralLink = referralCode ? `${APP_BASE_URL}/r/${referralCode}` : null
+  // The referral link is fetched client-side from /api/portal/referral-code,
+  // which generates the code on demand in a reliable request context (a write
+  // during this server render would not persist on Vercel).
 
   // Get this contact's referrals + payouts in parallel
   const { data: referrals } = await supabaseAdmin
@@ -104,7 +102,6 @@ export default async function PortalReferralsPage() {
       </div>
 
       <ReferralPage
-        referralLink={referralLink}
         referrals={referralRows}
         payouts={payoutRows}
         locale={locale}

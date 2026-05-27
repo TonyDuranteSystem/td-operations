@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic"
 
 import Image from "next/image"
-import { headers } from "next/headers"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { RefCookie } from "@/components/referral/ref-cookie"
 
@@ -46,36 +45,20 @@ export default async function ReferralLandingPage({
   const lang = sp.lang === "it" ? "it" : "en"
   const c = COPY[lang]
 
-  // Resolve referrer (preview override via ?name= for design review)
+  // Resolve referrer (preview override via ?name= for design review).
+  // The click is logged + cookie set client-side via <RefCookie> (a reliable
+  // write context — a write during this render would not persist on Vercel).
   let referrerFirst: string | null = sp.name ?? null
-  let referrerContactId: string | null = null
   let validCode = false
   if (!referrerFirst) {
     const { data: contact } = await supabaseAdmin
       .from("contacts")
-      .select("id, full_name, referral_code")
+      .select("full_name, referral_code")
       .ilike("referral_code", code)
       .maybeSingle()
     if (contact) {
       validCode = true
-      referrerContactId = contact.id
       referrerFirst = firstName(contact.full_name)
-    }
-  }
-
-  // Log the click for real codes only (skip ?name= preview and unknown codes).
-  // Fail-safe: logging must never break the page.
-  if (validCode) {
-    try {
-      const h = await headers()
-      await supabaseAdmin.from("referral_clicks").insert({
-        referral_code: code,
-        referrer_contact_id: referrerContactId,
-        user_agent: h.get("user-agent"),
-        referer: h.get("referer"),
-      })
-    } catch {
-      /* swallow — analytics logging is best-effort */
     }
   }
 
