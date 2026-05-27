@@ -420,7 +420,7 @@ export function ActionBoard() {
                           </div>
                         ) : (
                           <div className="group/note mt-1 flex items-start gap-1">
-                            <p className="flex-1 text-xs text-zinc-600">
+                            <p className="flex-1 min-w-0 break-words text-xs text-zinc-600">
                               {card.label || <span className="italic text-zinc-300">No note — click to add</span>}
                             </p>
                             <button
