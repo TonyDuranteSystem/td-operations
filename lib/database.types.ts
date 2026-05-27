@@ -3381,6 +3381,39 @@ export type Database = {
           },
         ]
       }
+      contact_merge_log: {
+        Row: {
+          created_at: string
+          id: string
+          loser_id: string
+          merged_by: string | null
+          reassignment: Json
+          reverted_at: string | null
+          snapshot: Json
+          winner_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          loser_id: string
+          merged_by?: string | null
+          reassignment?: Json
+          reverted_at?: string | null
+          snapshot?: Json
+          winner_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          loser_id?: string
+          merged_by?: string | null
+          reassignment?: Json
+          reverted_at?: string | null
+          snapshot?: Json
+          winner_id?: string
+        }
+        Relationships: []
+      }
       contact_request_forms: {
         Row: {
           access_code: string
@@ -3494,6 +3527,7 @@ export type Database = {
           address_state: string | null
           address_zip: string | null
           airtable_id: string | null
+          alt_emails: string[]
           citizenship: string | null
           created_at: string | null
           date_of_birth: string | null
@@ -3516,6 +3550,7 @@ export type Database = {
           language: string | null
           last_name: string | null
           lead_id: string | null
+          merged_into: string | null
           notes: string | null
           passport_expiry_date: string | null
           passport_number: string | null
@@ -3545,6 +3580,7 @@ export type Database = {
           address_state?: string | null
           address_zip?: string | null
           airtable_id?: string | null
+          alt_emails?: string[]
           citizenship?: string | null
           created_at?: string | null
           date_of_birth?: string | null
@@ -3567,6 +3603,7 @@ export type Database = {
           language?: string | null
           last_name?: string | null
           lead_id?: string | null
+          merged_into?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3596,6 +3633,7 @@ export type Database = {
           address_state?: string | null
           address_zip?: string | null
           airtable_id?: string | null
+          alt_emails?: string[]
           citizenship?: string | null
           created_at?: string | null
           date_of_birth?: string | null
@@ -3618,6 +3656,7 @@ export type Database = {
           language?: string | null
           last_name?: string | null
           lead_id?: string | null
+          merged_into?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3647,6 +3686,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "leads"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contacts_merged_into_fkey"
+            columns: ["merged_into"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contacts_merged_into_fkey"
+            columns: ["merged_into"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
           {
             foreignKeyName: "contacts_primary_company_id_fkey"
@@ -8868,28 +8921,28 @@ export type Database = {
       }
       referral_clicks: {
         Row: {
+          created_at: string
           id: string
+          referer: string | null
           referral_code: string
           referrer_contact_id: string | null
           user_agent: string | null
-          referer: string | null
-          created_at: string
         }
         Insert: {
+          created_at?: string
           id?: string
+          referer?: string | null
           referral_code: string
           referrer_contact_id?: string | null
           user_agent?: string | null
-          referer?: string | null
-          created_at?: string
         }
         Update: {
+          created_at?: string
           id?: string
+          referer?: string | null
           referral_code?: string
           referrer_contact_id?: string | null
           user_agent?: string | null
-          referer?: string | null
-          created_at?: string
         }
         Relationships: [
           {
@@ -8898,6 +8951,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "contacts"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "referral_clicks_referrer_contact_id_fkey"
+            columns: ["referrer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
         ]
       }
@@ -11750,6 +11810,10 @@ export type Database = {
           status: string
           user_id: string
         }[]
+      }
+      merge_contacts: {
+        Args: { p_loser: string; p_merged_by?: string; p_winner: string }
+        Returns: Json
       }
       onboarding_phase1: {
         Args: {
