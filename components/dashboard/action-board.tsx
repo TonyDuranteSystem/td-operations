@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock, Moon, Check } from 'lucide-react'
+import { AlertCircle, Clock, Hourglass, Landmark, CheckCircle2, Building2, User, Settings2, Plus, CalendarClock, Moon, Check, Pencil, X } from 'lucide-react'
 import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
@@ -95,15 +95,24 @@ export function ActionBoard() {
   const [editingColumns, setEditingColumns] = useState(false)
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const [newCardOpen, setNewCardOpen] = useState(false)
+  // Snoozed cards are hidden from the columns; this view makes them recoverable.
+  const [snoozedCards, setSnoozedCards] = useState<Card[]>([])
+  const [showSnoozed, setShowSnoozed] = useState(false)
+  // Inline note (label) editing on a card.
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const [colRes, cardRes] = await Promise.all([
+      const [colRes, cardRes, snoozeRes] = await Promise.all([
         fetch(`${API}?columns=true`).then((r) => r.json()),
         fetch(`${API}?open=true`).then((r) => r.json()),
+        fetch(`${API}?snoozed=true`).then((r) => r.json()),
       ])
       if (Array.isArray(colRes.columns)) setColumns(colRes.columns)
       if (Array.isArray(cardRes.actions)) setCards(cardRes.actions)
+      if (Array.isArray(snoozeRes.actions)) setSnoozedCards(snoozeRes.actions)
     } catch {
       // Non-fatal: leave current state; next poll retries.
     } finally {
@@ -175,6 +184,31 @@ export function ActionBoard() {
     [updateCard],
   )
 
+  // Edit a card's note (label) inline. PATCH accepts label; reload reconciles.
+  const saveNote = useCallback(
+    async (id: string) => {
+      const next = noteDraft.trim()
+      setSavingNote(true)
+      setCards((prev) => prev.map((c) => (c.id === id ? { ...c, label: next || null } : c)))
+      try {
+        const res = await fetch(API, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, label: next }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || 'Could not save the note')
+        }
+      } finally {
+        setSavingNote(false)
+        setEditingNoteId(null)
+        await load()
+      }
+    },
+    [noteDraft, load],
+  )
+
   const todayStr = new Date().toISOString().slice(0, 10)
   const terminalSlug = columns.find((c) => c.terminal)?.slug ?? null
 
@@ -199,6 +233,15 @@ export function ActionBoard() {
         </h3>
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-full">{total}</span>
+          {snoozedCards.length > 0 && (
+            <button
+              onClick={() => setShowSnoozed((v) => !v)}
+              className={`flex items-center gap-1 text-[11px] font-medium border rounded px-2 py-0.5 ${showSnoozed ? 'bg-violet-100 text-violet-700 border-violet-200' : 'text-zinc-600 hover:text-zinc-900'}`}
+              title="Show snoozed cards"
+            >
+              <Moon className="h-3 w-3" /> Snoozed ({snoozedCards.length})
+            </button>
+          )}
           <button
             onClick={() => setNewCardOpen(true)}
             className="flex items-center gap-1 text-[11px] font-medium text-zinc-600 hover:text-zinc-900 border rounded px-2 py-0.5"
@@ -304,8 +347,50 @@ export function ActionBoard() {
                               </span>
                             )}
                           </div>
-                          {card.label && <p className="text-xs text-zinc-600 mt-1">{card.label}</p>}
                         </Link>
+                        {/* Editable note. Kept OUTSIDE the Link so editing never
+                            navigates away. Pencil → textarea → Save (PATCH label). */}
+                        {editingNoteId === card.id ? (
+                          <div className="mt-1">
+                            <textarea
+                              value={noteDraft}
+                              onChange={(e) => setNoteDraft(e.target.value)}
+                              rows={2}
+                              autoFocus
+                              placeholder="Add a note…"
+                              className="w-full text-xs border rounded px-1.5 py-1 resize-none"
+                            />
+                            <div className="flex gap-1 mt-1">
+                              <button
+                                onClick={() => saveNote(card.id)}
+                                disabled={savingNote}
+                                className="flex items-center gap-0.5 text-[11px] text-white bg-violet-600 rounded px-2 py-0.5 disabled:opacity-40"
+                              >
+                                <Check className="h-3 w-3" /> {savingNote ? 'Saving…' : 'Save'}
+                              </button>
+                              <button
+                                onClick={() => setEditingNoteId(null)}
+                                className="flex items-center gap-0.5 text-[11px] text-zinc-500 border rounded px-2 py-0.5"
+                              >
+                                <X className="h-3 w-3" /> Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="group/note mt-1 flex items-start gap-1">
+                            <p className="flex-1 text-xs text-zinc-600">
+                              {card.label || <span className="italic text-zinc-300">No note — click to add</span>}
+                            </p>
+                            <button
+                              onClick={() => { setEditingNoteId(card.id); setNoteDraft(card.label || '') }}
+                              className="shrink-0 text-zinc-300 hover:text-violet-600"
+                              title="Edit note"
+                              aria-label="Edit note"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
                         <div className="flex items-center justify-between mt-2 gap-1">
                           {card.remind_at ? (
                             <span className={`flex items-center gap-1 text-[10px] ${rem.overdue ? 'text-red-600 font-medium' : rem.dueToday ? 'text-amber-600' : 'text-zinc-500'}`}>
@@ -401,6 +486,49 @@ export function ActionBoard() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {showSnoozed && snoozedCards.length > 0 && (
+        <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50/40 p-3">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Moon className="h-3.5 w-3.5 text-violet-500" />
+            <span className="text-xs font-semibold text-violet-700">Snoozed — hidden until their date</span>
+            <span className="text-[10px] text-zinc-400 ml-auto">{snoozedCards.length}</span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {snoozedCards.map((card) => {
+              const clientName = card.accounts?.company_name || card.contacts?.full_name || 'Unknown'
+              const until = card.snoozed_until
+                ? new Date(card.snoozed_until).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                : ''
+              return (
+                <div key={card.id} className="rounded-md bg-white border p-2.5 shadow-sm">
+                  <div className="flex items-center gap-1.5">
+                    {card.account_id ? (
+                      <Building2 className="h-3 w-3 text-zinc-400 shrink-0" />
+                    ) : (
+                      <User className="h-3 w-3 text-zinc-400 shrink-0" />
+                    )}
+                    <span className="text-sm font-medium text-zinc-900 truncate">{clientName}</span>
+                  </div>
+                  {card.label && <p className="text-xs text-zinc-600 mt-1 line-clamp-2">{card.label}</p>}
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="flex items-center gap-1 text-[10px] text-violet-600">
+                      <Moon className="h-3 w-3" /> Until {until}
+                    </span>
+                    <button
+                      onClick={() => updateCard(card.id, { snoozed_until: null })}
+                      className="text-[11px] text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-1.5 py-0.5"
+                      title="Bring this card back to the board now"
+                    >
+                      Un-snooze
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>

@@ -198,6 +198,9 @@ export default function PortalChatsPage() {
   // Extra accounts found by search that aren't in existing threads
   const [searchExtraAccounts, setSearchExtraAccounts] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
+  // "To Do" quick action opens this small dialog (pre-filled with the message
+  // text) so staff can write/trim the note before the card is created.
+  const [todoNote, setTodoNote] = useState<{ messageId: string; note: string } | null>(null)
   const [saveTemplate, setSaveTemplate] = useState<{ messageText: string; title: string } | null>(null)
   const [saveTemplateLoading, setSaveTemplateLoading] = useState(false)
   const [saveTemplatePrompt, setSaveTemplatePrompt] = useState<string | null>(null)
@@ -2492,7 +2495,7 @@ export default function PortalChatsPage() {
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-violet-700 hover:bg-violet-50 cursor-pointer outline-none"
-                            onSelect={() => addTodoMutation.mutate({ messageId: msg.id, label: msg.message })}
+                            onSelect={() => setTodoNote({ messageId: msg.id, note: msg.message })}
                           >
                             <ClipboardList className="h-3.5 w-3.5 text-violet-500" /> To Do
                           </DropdownMenu.Item>
@@ -3336,6 +3339,46 @@ export default function PortalChatsPage() {
           queryClient.invalidateQueries({ queryKey: ['open-message-actions'] })
         }}
       />
+
+      {/* To-Do note dialog — opened by the per-message "To Do" action. Pre-filled
+          with the message text; staff can edit/trim before creating the card. */}
+      {todoNote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setTodoNote(null)}>
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b">
+              <ClipboardList className="h-4 w-4 text-violet-500" />
+              <h3 className="text-sm font-semibold text-zinc-800">Add a To-Do</h3>
+              <button onClick={() => setTodoNote(null)} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-2">
+              <label className="block text-xs font-medium text-zinc-500">Note</label>
+              <textarea
+                value={todoNote.note}
+                onChange={(e) => setTodoNote(prev => prev ? { ...prev, note: e.target.value } : prev)}
+                rows={4}
+                autoFocus
+                placeholder="What needs doing for this client?"
+                className="w-full text-sm border rounded px-2 py-1.5 resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t">
+              <button onClick={() => setTodoNote(null)} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
+              <button
+                disabled={!todoNote.note.trim() || addTodoMutation.isPending}
+                onClick={() => {
+                  const { messageId, note } = todoNote
+                  addTodoMutation.mutate({ messageId, label: note }, { onSuccess: () => setTodoNote(null) })
+                }}
+                className="flex items-center gap-1 text-sm font-medium bg-violet-600 text-white rounded px-3 py-1.5 disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5" /> {addTodoMutation.isPending ? 'Adding…' : 'Add to board'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* AI Assistant side panel */}
       {aiPanelOpen && (selectedAccountId || selectedContactId || selectedThreadId) && (

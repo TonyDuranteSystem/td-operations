@@ -82,6 +82,7 @@ export async function GET(req: NextRequest) {
     const accountId = req.nextUrl.searchParams.get("account_id")
     const messageId = req.nextUrl.searchParams.get("message_id")
     const openOnly = req.nextUrl.searchParams.get("open") === "true"
+    const snoozedOnly = req.nextUrl.searchParams.get("snoozed") === "true"
     const wantColumns = req.nextUrl.searchParams.get("columns") === "true"
     const wantCounts = req.nextUrl.searchParams.get("counts") === "true"
 
@@ -174,6 +175,32 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ actions: enriched })
     }
 
+    // Snoozed feed: open cards currently hidden by a future snoozed_until. Powers
+    // the board's "Snoozed" view so a snoozed card is recoverable (un-snooze via
+    // PATCH snoozed_until=null) instead of vanishing with no way back.
+    if (snoozedOnly) {
+      const contactId = req.nextUrl.searchParams.get("contact_id")
+      let snoozeQ = db
+        .from("message_actions")
+        .select(`
+          id, action_type, label, assigned_to, source_ref, remind_at, priority, snoozed_until, created_at, updated_at,
+          message_id, account_id, contact_id,
+          portal_messages(message),
+          accounts(company_name),
+          contacts(full_name)
+        `)
+        .is("resolved_at", null)
+        .not("snoozed_until", "is", null)
+        .gt("snoozed_until", new Date().toISOString())
+      if (accountId) snoozeQ = snoozeQ.eq("account_id", accountId)
+      else if (contactId) snoozeQ = snoozeQ.eq("contact_id", contactId)
+      const { data: snoozed, error: err } = await snoozeQ
+        .order("snoozed_until", { ascending: true })
+        .limit(200)
+      if (err) throw err
+      return NextResponse.json({ actions: snoozed })
+    }
+
     let query = supabaseAdmin
       .from("message_actions")
       .select(
@@ -229,6 +256,14 @@ export async function POST(req: NextRequest) {
         action_type,
         updated_at: new Date().toISOString(),
         resolved_at: resolvedAt,
+        // Re-tagging / re-adding a To-Do from the message menu is an explicit
+        // "make this active now" — so clear any snooze. Without this, re-adding a
+        // To-Do on a snoozed card silently succeeds but the card stays hidden
+        // (the open-card readers filter out snoozed cards), which looks like
+        // "nothing happened". Also the only un-snooze control lived on the now-
+        // hidden card, so this is the primary recovery path. See the Snoozed view
+        // on the board for the secondary path.
+        snoozed_until: null,
       }
       if (label !== undefined) updateData.label = label
       if (created_by) updateData.created_by = created_by
