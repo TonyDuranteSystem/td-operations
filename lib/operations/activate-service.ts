@@ -1204,7 +1204,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           referredContactId: contactId,
           referredAccountId: autoAccountId,
           setupFeeTotal,
-          currency: "EUR",
+          currency: "USD", // reward always USD so it nets against USD installments (Antonio 2026-05-27)
         },
         supabase
       )

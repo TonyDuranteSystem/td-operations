@@ -102,7 +102,10 @@ export async function creditReferrerForLead(
   supabase: SupabaseClient
 ): Promise<CreditReferrerResult> {
   const { referredLeadId, referredContactId, referredAccountId } = params
-  const currency = params.currency || "EUR"
+  // Referral reward is ALWAYS USD so it nets against the referrer's USD installments
+  // (setup fees are EUR, installments USD — KB Currency Rule). The 10% figure is
+  // taken directly as USD (no FX conversion), per Antonio 2026-05-27.
+  const currency = params.currency || "USD"
 
   // Only act on a pending CLIENT referral for this referred lead.
   const { data: ref } = await supabase
