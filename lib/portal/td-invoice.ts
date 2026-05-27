@@ -13,6 +13,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
 import { generateInvoiceNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
+import { computeCreditApplication, consumeCredits } from '@/lib/operations/credit-netting'
 
 // ─── Types ──────────────────────────────────────────
 
@@ -53,6 +54,12 @@ export interface TDInvoiceInput {
    * Leave undefined for one-off invoices that don't fit the enum.
    */
   installment?: string
+  /**
+   * Opt OUT of automatic credit-note netting. By default a real (positive,
+   * unpaid) bill auto-applies the account's outstanding credit notes. Set true
+   * when creating a credit note itself or any invoice that must not net.
+   */
+  skip_credit_netting?: boolean
 }
 
 export interface TDInvoiceResult {
@@ -81,6 +88,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     bank_preference,
     idempotency_key,
     installment,
+    skip_credit_netting = false,
   } = input
 
   if (!account_id && !contact_id) {
@@ -109,18 +117,46 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       tax_amount: taxAmount,
     }
   })
+  // 1b. Auto-apply outstanding credit notes to real, unpaid bills. Skipped for
+  // credit notes themselves (gross <= 0 — a credit can't net into itself),
+  // already-paid records, accountless invoices, and explicit opt-outs. Any prior
+  // credit on the account, same currency, oldest-first, capped at the bill;
+  // leftover carries forward.
+  const grossTotal =
+    items.reduce((s, i) => s + i.amount, 0) + items.reduce((s, i) => s + i.tax_amount, 0)
+  let appliedCredit: Awaited<ReturnType<typeof computeCreditApplication>> | null = null
+  if (grossTotal > 0 && !mark_as_paid && account_id && !skip_credit_netting) {
+    appliedCredit = await computeCreditApplication(
+      { accountId: account_id, amount: grossTotal, currency },
+      supabaseAdmin,
+    )
+    if (appliedCredit.appliedTotal > 0) {
+      items.push({
+        description: 'Credit applied',
+        unit_price: -appliedCredit.appliedTotal,
+        quantity: 1,
+        amount: -appliedCredit.appliedTotal,
+        tax_rate: 0,
+        tax_amount: 0,
+      })
+    }
+  }
+
   const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
   const taxTotal = items.reduce((sum, i) => sum + i.tax_amount, 0)
   const total = subtotal + taxTotal
 
+  // A bill fully covered by credit is settled (nothing owed) → mark Paid.
+  const fullyCoveredByCredit = !!appliedCredit && appliedCredit.appliedTotal > 0 && total <= 0
+  const paid = mark_as_paid || fullyCoveredByCredit
   const amountPaid = mark_as_paid ? total : 0
-  const amountDue = Math.max(total - amountPaid, 0)
+  const amountDue = paid ? 0 : Math.max(total, 0)
 
-  const paymentStatus = mark_as_paid ? 'Paid' : 'Pending'
-  const invoiceStatus = mark_as_paid ? 'Paid' : 'Draft'
+  const paymentStatus = paid ? 'Paid' : 'Pending'
+  const invoiceStatus = paid ? 'Paid' : 'Draft'
 
   const today = new Date().toISOString().split('T')[0]
-  const paidDateVal = mark_as_paid ? (paid_date || today) : null
+  const paidDateVal = paid ? (paid_date || today) : null
 
   // 2. Generate invoice number + insert payments row, with retry on unique-violation.
   //    The generator is not race-safe on its own; the partial unique index
@@ -196,6 +232,13 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     throw new Error(
       `createTDInvoice: exhausted ${MAX_INSERT_RETRIES} retries on invoice_number generation; last error: ${lastError?.message || 'unknown'}`,
     )
+  }
+
+  // 2b. Consume any credits applied above (decrement remaining; idempotent per
+  //     invoice). Only reached for a genuinely new row — the idempotency path
+  //     returns earlier, so credits are never consumed twice.
+  if (appliedCredit && appliedCredit.appliedTotal > 0) {
+    await consumeCredits(appliedCredit, paymentId, supabaseAdmin)
   }
 
   // 3. Create payment_items

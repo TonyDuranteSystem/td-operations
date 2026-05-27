@@ -171,6 +171,7 @@ export async function creditReferrerForLead(
     mark_as_paid: true,
     paid_date: today,
     idempotency_key: `referral-credit:${referral.id}`,
+    skip_credit_netting: true, // this IS a credit note — must not net into itself
   })
 
   // Tag it as a credit and finalize the referral.

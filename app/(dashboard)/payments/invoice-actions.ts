@@ -317,6 +317,7 @@ export async function createCreditNote(
       mark_as_paid: true,
       paid_date: noteData.issue_date,
       idempotency_key: idempotencyKey,
+      skip_credit_netting: true, // this IS a credit note — must not net into itself
     })
 
     // Override credit-note-specific fields (createTDInvoice doesn't know about
