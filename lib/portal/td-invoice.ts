@@ -290,7 +290,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         issue_date: today,
         due_date: due_date || null,
         paid_date: paidDateVal,
-        status: mark_as_paid ? 'Paid' : 'Pending',
+        status: paid ? 'Paid' : 'Pending', // 'paid' includes credit-fully-covered, so a $0 covered invoice shows Paid in the portal
         source: 'td_invoice',
         td_payment_id: paymentId,
         notes: notes || null,
