@@ -15,7 +15,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'lucide-react'
-import { formatDistanceToNow } from 'date-fns'
+import { formatDistanceToNow, format } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
@@ -48,13 +48,16 @@ export function ThreadWhatsNewPanel({
 }) {
   const qc = useQueryClient()
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  // How many notes to show. "Load older" raises it; the full history lives in the
+  // DB and is never purged, so older items remain reachable on demand.
+  const [limit, setLimit] = useState(100)
   const scopeKey = accountId ?? contactId
   const param = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : null
 
   const { data: notes, isLoading } = useQuery<ApiNote[]>({
-    queryKey: ['thread-whats-new', scopeKey],
+    queryKey: ['thread-whats-new', scopeKey, limit],
     queryFn: () =>
-      fetch(`${WHATS_NEW_API}?notes=true&${param}`)
+      fetch(`${WHATS_NEW_API}?notes=true&${param}&limit=${limit}`)
         .then((r) => r.json())
         .then((d: { notes?: ApiNote[] }) => d.notes || []),
     enabled: !!param,
@@ -136,7 +139,8 @@ export function ThreadWhatsNewPanel({
             <p className="text-xs text-zinc-400">Client actions (payments, signatures, submissions) show up here.</p>
           </div>
         ) : (
-          notes.map((note) => {
+          <>
+          {notes.map((note) => {
             const handled = !!note.handled_at
             const busy = togglingId === note.id
             // Workflow notes carry the workflow task's own actions + SLA inline.
@@ -152,7 +156,8 @@ export function ThreadWhatsNewPanel({
                     )}
                     <p className="text-sm text-zinc-800">{note.text}</p>
                     <p className="text-[10px] text-zinc-400 mt-1">
-                      {formatDistanceToNow(new Date(note.created_at), { addSuffix: true })}
+                      {format(new Date(note.created_at), 'MMM d, yyyy · h:mm a')}
+                      {' · '}{formatDistanceToNow(new Date(note.created_at), { addSuffix: true })}
                       {handled && note.handled_by ? ` · handled by ${note.handled_by}` : ''}
                     </p>
                   </div>
@@ -212,7 +217,16 @@ export function ThreadWhatsNewPanel({
                 )}
               </div>
             )
-          })
+          })}
+          {notes.length >= limit && (
+            <button
+              onClick={() => setLimit((l) => l + 100)}
+              className="w-full text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-1.5 bg-white"
+            >
+              Load older
+            </button>
+          )}
+          </>
         )}
       </div>
     </div>

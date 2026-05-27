@@ -162,6 +162,10 @@ export async function GET(req: NextRequest) {
       if (!accountId && !contactId) {
         return NextResponse.json({ error: "account_id or contact_id required" }, { status: 400 })
       }
+      // Display limit for the feed. The full history is retained in the DB and
+      // never auto-purged; "Load older" raises this to page back through it.
+      const limitParam = parseInt(sp.get("limit") ?? "100", 10)
+      const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 2000) : 100
       let q = db
         .from("portal_messages")
         .select("id, account_id, contact_id, message, topic, created_at, handled_at, handled_by")
@@ -169,7 +173,7 @@ export async function GET(req: NextRequest) {
         .ilike("message", "%<!-- chat-event:%")
         .is("deleted_at", null)
         .order("created_at", { ascending: false })
-        .limit(100)
+        .limit(limit)
       if (accountId) q = q.eq("account_id", accountId)
       else q = q.eq("contact_id", contactId as string)
       const { data, error } = await q
