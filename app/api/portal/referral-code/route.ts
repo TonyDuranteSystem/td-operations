@@ -22,7 +22,7 @@ export async function GET() {
 
   try {
     const code = await ensureReferralCode(contactId, supabaseAdmin)
-    const link = code ? `${APP_BASE_URL}/r/${code}` : null
+    const link = code ? `${APP_BASE_URL}/invitation/${code}` : null
     return NextResponse.json({ code: code ?? null, link })
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to ensure referral code"
