@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
+import { findContactByEmail } from "@/lib/contacts/find-contact-by-email"
 
 export const dynamic = "force-dynamic"
 
@@ -150,13 +151,8 @@ export async function POST(
       return NextResponse.json({ error: "Invalid role." }, { status: 400 })
     }
 
-    // Find or create contact by email
-    const { data: existingContact } = await supabaseAdmin
-      .from("contacts")
-      .select("id")
-      .eq("email", email)
-      .limit(1)
-      .maybeSingle()
+    // Find or create contact by email (matches primary + also-known-as, skips merged)
+    const existingContact = await findContactByEmail(email)
 
     let contactId: string
 

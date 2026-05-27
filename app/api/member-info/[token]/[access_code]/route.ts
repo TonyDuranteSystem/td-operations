@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { emitClientChatEvent } from '@/lib/portal/chat-events'
+import { findContactByEmail } from '@/lib/contacts/find-contact-by-email'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
@@ -241,13 +242,8 @@ async function provisionMemberContacts({
     }
 
     try {
-      // Find or create contact by email
-      const { data: existingContact } = await supabaseAdmin
-        .from('contacts')
-        .select('id')
-        .eq('email', personEmail)
-        .limit(1)
-        .maybeSingle()
+      // Find or create contact by email (matches primary + also-known-as, skips merged)
+      const existingContact = await findContactByEmail(personEmail)
 
       let contactId: string
 
