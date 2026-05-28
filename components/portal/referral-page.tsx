@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Copy, Check, Share2, Gift } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, type Locale } from '@/lib/portal/i18n'
@@ -28,7 +28,6 @@ interface PayoutRow {
 }
 
 interface Props {
-  referralLink: string | null
   referrals: ReferralRow[]
   payouts: PayoutRow[]
   locale: Locale
@@ -42,8 +41,22 @@ const statusConfig: Record<string, { label_en: string; label_it: string; color: 
   cancelled: { label_en: 'Cancelled', label_it: 'Annullato', color: 'bg-red-100 text-red-800' },
 }
 
-export function ReferralPage({ referralLink, referrals, payouts, locale }: Props) {
+export function ReferralPage({ referrals, payouts, locale }: Props) {
   const [copied, setCopied] = useState(false)
+  const [referralLink, setReferralLink] = useState<string | null>(null)
+  const [linkLoading, setLinkLoading] = useState(true)
+
+  // Fetch (and generate on demand) the referral link from a request endpoint —
+  // a reliable write context, unlike a server-render side effect.
+  useEffect(() => {
+    let active = true
+    fetch('/api/portal/referral-code')
+      .then((r) => (r.ok ? r.json() : { link: null }))
+      .then((d) => { if (active) setReferralLink(d.link ?? null) })
+      .catch(() => { if (active) setReferralLink(null) })
+      .finally(() => { if (active) setLinkLoading(false) })
+    return () => { active = false }
+  }, [])
 
   const copyLink = () => {
     if (!referralLink) return
@@ -55,7 +68,19 @@ export function ReferralPage({ referralLink, referrals, payouts, locale }: Props
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Referral Link Card */}
-      {referralLink ? (
+      {linkLoading ? (
+        <div className="bg-gradient-to-r from-violet-50 to-indigo-50 rounded-xl border border-violet-200 p-5 sm:p-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center shrink-0">
+              <Share2 className="h-5 w-5 text-violet-600" />
+            </div>
+            <div className="flex-1">
+              <div className="h-4 w-32 bg-violet-100 rounded animate-pulse" />
+              <div className="h-9 w-full bg-white/60 border rounded-lg mt-3 animate-pulse" />
+            </div>
+          </div>
+        </div>
+      ) : referralLink ? (
         <div className="bg-gradient-to-r from-violet-50 to-indigo-50 rounded-xl border border-violet-200 p-5 sm:p-6">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center shrink-0">

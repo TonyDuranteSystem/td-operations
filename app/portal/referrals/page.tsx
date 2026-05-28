@@ -17,15 +17,9 @@ export default async function PortalReferralsPage() {
 
   const locale = getLocale(user)
 
-  // Get contact's referral code
-  const { data: contact } = await supabaseAdmin
-    .from('contacts')
-    .select('referral_code, full_name')
-    .eq('id', contactId)
-    .single()
-
-  const referralCode = contact?.referral_code || null
-  const referralLink = referralCode ? `https://tonydurante.us/r/${referralCode}` : null
+  // The referral link is fetched client-side from /api/portal/referral-code,
+  // which generates the code on demand in a reliable request context (a write
+  // during this server render would not persist on Vercel).
 
   // Get this contact's referrals + payouts in parallel
   const { data: referrals } = await supabaseAdmin
@@ -108,7 +102,6 @@ export default async function PortalReferralsPage() {
       </div>
 
       <ReferralPage
-        referralLink={referralLink}
         referrals={referralRows}
         payouts={payoutRows}
         locale={locale}

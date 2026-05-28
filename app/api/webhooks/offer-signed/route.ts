@@ -12,6 +12,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
+import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
 
 export async function POST(req: NextRequest) {
   try {
@@ -348,6 +349,26 @@ export async function POST(req: NextRequest) {
         amount: totalAmount,
       },
     })
+
+    // ─── STAFF NOTIFICATION: surface the signing in portal-chats "What's New" ───
+    // Contact-scoped: the new company does not exist yet (no account until the
+    // Articles arrive), so there is no company thread to attach to — the contact
+    // is the permanent center. Idempotent on the offer id (a webhook retry never
+    // double-posts). Non-fatal: a notification failure must not break activation.
+    try {
+      const sigCurrency = (() => { const raw = summaryArr[0]?.total || ""; return raw.includes("€") || raw.toUpperCase().includes("EUR") ? "EUR" : "USD" })()
+      await emitOfferSignedEvent({
+        offer_id: offer.id,
+        contact_id: contactId,
+        account_id: offer.account_id || null,
+        client_name: offer.client_name,
+        amount: totalAmount || null,
+        currency: sigCurrency,
+        payment_method: paymentMethod,
+      })
+    } catch (notifyErr) {
+      console.warn("[offer-signed] What's New emit failed (non-fatal):", notifyErr instanceof Error ? notifyErr.message : String(notifyErr))
+    }
 
     // ─── AUTO-UPLOAD SIGNED PDF TO DRIVE ───
     let driveUploadResult = "skipped"

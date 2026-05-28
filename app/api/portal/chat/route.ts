@@ -33,6 +33,11 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const accountId = searchParams.get('account_id')
   const contactIdParam = searchParams.get('contact_id')
+  // scope=personal (with contact_id): the per-entity "Personal" thread —
+  // ONLY the contact's no-company messages (account_id IS NULL). Used by the
+  // divided portal chat when no company is selected. Without it, contact_id
+  // returns the unified thread (still used by the CRM admin viewer).
+  const scope = searchParams.get('scope')
   const before = searchParams.get('before')
   const limit = Math.min(Number(searchParams.get('limit') ?? '50'), 100)
 
@@ -79,7 +84,10 @@ export async function GET(request: NextRequest) {
   // We also include messages saved with contact_id=NULL but account_id matching
   // one of the contact's linked accounts — covers replies sent via the CRM
   // dashboard or MCP tool that historically omitted contact_id.
-  if (contactIdParam) {
+  if (contactIdParam && scope === 'personal') {
+    // Personal thread: only this contact's no-company messages.
+    query = query.eq('contact_id', contactIdParam).is('account_id', null)
+  } else if (contactIdParam) {
     // For client users, account IDs were already resolved above.
     // For admin users, look them up now from account_contacts.
     let threadAccountIds = clientAccountIds

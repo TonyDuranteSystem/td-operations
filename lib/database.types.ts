@@ -3381,6 +3381,39 @@ export type Database = {
           },
         ]
       }
+      contact_merge_log: {
+        Row: {
+          created_at: string
+          id: string
+          loser_id: string
+          merged_by: string | null
+          reassignment: Json
+          reverted_at: string | null
+          snapshot: Json
+          winner_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          loser_id: string
+          merged_by?: string | null
+          reassignment?: Json
+          reverted_at?: string | null
+          snapshot?: Json
+          winner_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          loser_id?: string
+          merged_by?: string | null
+          reassignment?: Json
+          reverted_at?: string | null
+          snapshot?: Json
+          winner_id?: string
+        }
+        Relationships: []
+      }
       contact_request_forms: {
         Row: {
           access_code: string
@@ -3494,6 +3527,7 @@ export type Database = {
           address_state: string | null
           address_zip: string | null
           airtable_id: string | null
+          alt_emails: string[]
           citizenship: string | null
           created_at: string | null
           date_of_birth: string | null
@@ -3516,6 +3550,7 @@ export type Database = {
           language: string | null
           last_name: string | null
           lead_id: string | null
+          merged_into: string | null
           notes: string | null
           passport_expiry_date: string | null
           passport_number: string | null
@@ -3545,6 +3580,7 @@ export type Database = {
           address_state?: string | null
           address_zip?: string | null
           airtable_id?: string | null
+          alt_emails?: string[]
           citizenship?: string | null
           created_at?: string | null
           date_of_birth?: string | null
@@ -3567,6 +3603,7 @@ export type Database = {
           language?: string | null
           last_name?: string | null
           lead_id?: string | null
+          merged_into?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3596,6 +3633,7 @@ export type Database = {
           address_state?: string | null
           address_zip?: string | null
           airtable_id?: string | null
+          alt_emails?: string[]
           citizenship?: string | null
           created_at?: string | null
           date_of_birth?: string | null
@@ -3618,6 +3656,7 @@ export type Database = {
           language?: string | null
           last_name?: string | null
           lead_id?: string | null
+          merged_into?: string | null
           notes?: string | null
           passport_expiry_date?: string | null
           passport_number?: string | null
@@ -3647,6 +3686,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "leads"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contacts_merged_into_fkey"
+            columns: ["merged_into"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contacts_merged_into_fkey"
+            columns: ["merged_into"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
           {
             foreignKeyName: "contacts_primary_company_id_fkey"
@@ -7883,6 +7936,7 @@ export type Database = {
           contact_id: string | null
           created_at: string | null
           credit_for_payment_id: string | null
+          credit_remaining: number | null
           deal_id: string | null
           delay_approved_until: string | null
           description: string | null
@@ -7942,6 +7996,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string | null
           credit_for_payment_id?: string | null
+          credit_remaining?: number | null
           deal_id?: string | null
           delay_approved_until?: string | null
           description?: string | null
@@ -8001,6 +8056,7 @@ export type Database = {
           contact_id?: string | null
           created_at?: string | null
           credit_for_payment_id?: string | null
+          credit_remaining?: number | null
           deal_id?: string | null
           delay_approved_until?: string | null
           description?: string | null
@@ -8393,6 +8449,73 @@ export type Database = {
         }
         Relationships: []
       }
+      portal_chat_pinned_threads: {
+        Row: {
+          account_id: string | null
+          contact_id: string | null
+          id: string
+          pinned_at: string
+          pinned_by: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          pinned_at?: string
+          pinned_by?: string | null
+        }
+        Update: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          pinned_at?: string
+          pinned_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       portal_issues: {
         Row: {
           account_id: string | null
@@ -8500,6 +8623,9 @@ export type Database = {
           id: string
           message: string
           original_message: string | null
+          pinned_at: string | null
+          pinned_by: string | null
+          pinned_by_type: string | null
           read_at: string | null
           reply_to_id: string | null
           sender_context: string | null
@@ -8522,6 +8648,9 @@ export type Database = {
           id?: string
           message: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
+          pinned_by_type?: string | null
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -8544,6 +8673,9 @@ export type Database = {
           id?: string
           message?: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
+          pinned_by_type?: string | null
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -8862,6 +8994,48 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: []
+      }
+      referral_clicks: {
+        Row: {
+          created_at: string
+          id: string
+          referer: string | null
+          referral_code: string
+          referrer_contact_id: string | null
+          user_agent: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          referer?: string | null
+          referral_code: string
+          referrer_contact_id?: string | null
+          user_agent?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          referer?: string | null
+          referral_code?: string
+          referrer_contact_id?: string | null
+          user_agent?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "referral_clicks_referrer_contact_id_fkey"
+            columns: ["referrer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "referral_clicks_referrer_contact_id_fkey"
+            columns: ["referrer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
       }
       referral_payouts: {
         Row: {
@@ -11712,6 +11886,10 @@ export type Database = {
           status: string
           user_id: string
         }[]
+      }
+      merge_contacts: {
+        Args: { p_loser: string; p_merged_by?: string; p_winner: string }
+        Returns: Json
       }
       onboarding_phase1: {
         Args: {

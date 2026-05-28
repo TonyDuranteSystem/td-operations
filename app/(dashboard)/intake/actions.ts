@@ -3,18 +3,28 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import type { Json } from '@/lib/database.types'
+import { createPendingReferral } from '@/lib/operations/referral'
 
 // ─── Types ──────────────────────────────────────────────────
 
 interface ParsedIntake {
   name: string
+  first_name?: string | null
+  last_name?: string | null
   email: string
   phone: string | null
+  language?: string | null
   call_date: string | null
+  call_time?: string | null
+  timezone?: string | null
   reason: string | null
   referrer_name: string | null
+  referrer_contact_id?: string | null
+  referral_code?: string | null
   event_uri: string | null
   event_type_name: string | null
+  meeting_url?: string | null
+  qa?: Array<{ question: string; answer: string }>
 }
 
 interface IntakePayload {
@@ -81,7 +91,10 @@ export async function createLeadFromIntake(
       status: 'Call Scheduled',
       notes: parsed.reason || 'Booked via Calendly',
     }
+    if (parsed.first_name) leadRecord.first_name = parsed.first_name
+    if (parsed.last_name) leadRecord.last_name = parsed.last_name
     if (parsed.phone) leadRecord.phone = parsed.phone
+    if (parsed.language) leadRecord.language = parsed.language
     if (parsed.call_date) leadRecord.call_date = parsed.call_date
     if (parsed.reason) leadRecord.reason = parsed.reason
     if (parsed.referrer_name) leadRecord.referrer_name = parsed.referrer_name
@@ -107,6 +120,25 @@ export async function createLeadFromIntake(
         .from('call_summaries')
         .update({ lead_id: newLead.id })
         .eq('id', circleback_call_id)
+    }
+
+    // Referral attribution: if this booking came through a referral link, create a
+    // pending referral linking the referring client to this new lead. Fail-safe —
+    // never blocks lead creation (self-referral / dedup handled in the helper).
+    if (parsed.referrer_contact_id) {
+      try {
+        await createPendingReferral(
+          {
+            referrerContactId: parsed.referrer_contact_id,
+            referredLeadId: newLead.id,
+            referredName: parsed.name,
+            referredEmail: parsed.email,
+          },
+          supabaseAdmin
+        )
+      } catch {
+        /* attribution is additive — never block lead creation */
+      }
     }
 
     // Update webhook event status

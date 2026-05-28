@@ -40,6 +40,7 @@ export type ChatEventKind =
   | "ss4_signed"              // client signed SS-4 (critical — staff faxes IRS)
   | "members_updated"         // client submitted the member-info form (multi-member LLC)
   | "contact_updated"         // client submitted the contact-request form (add/update contact)
+  | "offer_signed"            // client signed the offer/contract (awaiting payment)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -260,5 +261,42 @@ export async function emitSs4SignedEvent(params: {
     message,
     source: { table: "ss4_applications", id: params.ss4_id },
     event_kind: "ss4_signed",
+  })
+}
+
+/**
+ * Emit an "offer/contract signed" event when a client signs their offer.
+ * Scoped to the CONTACT (the new company does not exist yet at sign time — and
+ * never will until the SoS issues Articles — so there is no account thread to
+ * attach to; the contact is the permanent center). For an existing client
+ * signing a standalone service on an existing account, pass that account_id.
+ *
+ * Idempotent on the offer id — a webhook retry never double-posts. Non-fatal.
+ */
+export async function emitOfferSignedEvent(params: {
+  offer_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  client_name: string
+  amount?: number | null
+  currency?: string | null
+  payment_method?: string | null
+}): Promise<EmitResult> {
+  const amountFmt =
+    params.amount != null && params.amount > 0
+      ? `${params.currency === "EUR" ? "€" : "$"}${params.amount}`
+      : ""
+  const method =
+    params.payment_method && params.payment_method !== "unknown"
+      ? ` via ${params.payment_method.replace(/_/g, " ")}`
+      : ""
+  const message = `Client signed the contract${amountFmt ? " — " + amountFmt : ""}${method}. Awaiting payment.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Contract",
+    message,
+    source: { table: "offers", id: params.offer_id },
+    event_kind: "offer_signed",
   })
 }

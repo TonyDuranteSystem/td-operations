@@ -7,20 +7,32 @@ import { Search, ChevronRight, ChevronLeft, Phone, Mail } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 import { LeadRowActions } from '@/components/leads/lead-row-actions'
+import { deriveLeadDisplayStatus } from '@/lib/leads/display-status'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
   'Contacted': 'bg-amber-100 text-amber-700',
   'Qualified': 'bg-indigo-100 text-indigo-700',
+  'Offer Sent': 'bg-orange-100 text-orange-700',
+  'Negotiating': 'bg-pink-100 text-pink-700',
   'Converted': 'bg-emerald-100 text-emerald-700',
   'Lost': 'bg-zinc-100 text-zinc-500',
+  'Suspended': 'bg-yellow-100 text-yellow-700',
 }
 
 const OFFER_COLORS: Record<string, string> = {
+  // Capitalized = legacy denormalized leads.offer_status snapshot.
   'Sent': 'bg-blue-100 text-blue-700',
   'Viewed': 'bg-amber-100 text-amber-700',
   'Accepted': 'bg-emerald-100 text-emerald-700',
   'Rejected': 'bg-red-100 text-red-700',
+  // Lowercase = live offers.status (authoritative).
+  'draft': 'bg-zinc-100 text-zinc-600',
+  'sent': 'bg-blue-100 text-blue-700',
+  'viewed': 'bg-amber-100 text-amber-700',
+  'signed': 'bg-indigo-100 text-indigo-700',
+  'completed': 'bg-emerald-100 text-emerald-700',
+  'expired': 'bg-red-100 text-red-600',
 }
 
 interface LeadsTableProps {
@@ -173,21 +185,30 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
                   {item.source ?? '—'}
                 </div>
 
-                {/* Status */}
+                {/* Status — derived so a signed-but-unpaid lead reads "Signed — awaiting
+                    payment" (matches the lead detail page), instead of the raw funnel value. */}
                 <div className="hidden md:block">
-                  {item.status && (
-                    <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', STATUS_COLORS[item.status] ?? 'bg-zinc-100')}>
-                      {item.status}
-                    </span>
-                  )}
+                  {item.status && (() => {
+                    const d = deriveLeadDisplayStatus({
+                      leadStatus: item.status,
+                      offerStatus: item.current_offer_status,
+                      activationStatus: null,
+                      paymentConfirmedAt: null,
+                    })
+                    return (
+                      <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', d.derived ? 'bg-indigo-100 text-indigo-700' : (STATUS_COLORS[d.label] ?? 'bg-zinc-100'))}>
+                        {d.label}
+                      </span>
+                    )
+                  })()}
                 </div>
 
-                {/* Offer */}
+                {/* Offer — live offers.status (authoritative), not the stale denormalized snapshot. */}
                 <div className="hidden md:block">
-                  {item.offer_status ? (
+                  {item.current_offer_status ? (
                     <div>
-                      <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', OFFER_COLORS[item.offer_status] ?? 'bg-zinc-100')}>
-                        {item.offer_status}
+                      <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', OFFER_COLORS[item.current_offer_status] ?? 'bg-zinc-100')}>
+                        {item.current_offer_status}
                       </span>
                       {item.offer_year1_amount && (
                         <p className="text-xs text-muted-foreground mt-0.5">

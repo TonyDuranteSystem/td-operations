@@ -317,6 +317,7 @@ export async function createCreditNote(
       mark_as_paid: true,
       paid_date: noteData.issue_date,
       idempotency_key: idempotencyKey,
+      skip_credit_netting: true, // this IS a credit note — must not net into itself
     })
 
     // Override credit-note-specific fields (createTDInvoice doesn't know about
@@ -328,6 +329,7 @@ export async function createCreditNote(
       .update({
         description: noteData.description,
         invoice_status: 'Credit',
+        credit_remaining: Math.abs(total), // available to net against future invoices
         credit_for_payment_id: noteData.credit_for_payment_id || null,
         referral_partner_id: noteData.referral_partner_id || null,
       })

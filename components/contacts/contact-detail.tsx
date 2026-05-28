@@ -2303,6 +2303,45 @@ function PortalTab({
     }
   }
 
+  const handleCleanupLogins = async () => {
+    setLoading('cleanup_logins')
+    try {
+      // Preview first (dry run) so the operator sees exactly which logins go.
+      const preview = await fetch('/api/crm/admin-actions/cleanup-portal-logins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contact.id, dry_run: true }),
+      })
+      const pdata = await preview.json()
+      if (!preview.ok) { toast.error(pdata.error ?? 'Preview failed'); return }
+      const toDelete: { email: string | null }[] = pdata.would_delete ?? []
+      if (toDelete.length === 0) { toast.success(pdata.message ?? 'No duplicate logins to clean.'); return }
+      const ok = confirm(
+        `Delete ${toDelete.length} duplicate portal login(s)?\n\n` +
+        `Keep:   ${pdata.keep?.email ?? '(none)'}\n` +
+        `Delete: ${toDelete.map(d => d.email).join(', ')}\n\n` +
+        'This permanently removes the stray login(s). The kept login is untouched.',
+      )
+      if (!ok) return
+      const res = await fetch('/api/crm/admin-actions/cleanup-portal-logins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contact.id, dry_run: false }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        toast.success(data.message)
+        setTimeout(() => window.location.reload(), 1200)
+      } else {
+        toast.error(data.error ?? 'Cleanup failed')
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
   return (
     <div className="max-w-lg space-y-6">
       {/* Portal Status */}
@@ -2421,6 +2460,19 @@ function PortalTab({
           >
             {loading === 'reconcile_tier' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Reconcile Portal Tier
+          </button>
+
+          {/* Clean up duplicate portal logins — keeps the login matching the
+              contact's primary email, removes strays (orphans). Previews before
+              deleting; no-op when there's only the canonical login. */}
+          <button
+            onClick={handleCleanupLogins}
+            disabled={loading === 'cleanup_logins'}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors mt-3"
+            title="Remove duplicate/orphan portal logins for this contact, keeping the one matching the primary email"
+          >
+            {loading === 'cleanup_logins' ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+            Clean Up Duplicate Logins
           </button>
         </div>
 

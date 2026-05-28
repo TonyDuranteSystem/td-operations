@@ -113,6 +113,73 @@ export async function getFormationContext(contactId: string) {
   }
 }
 
+export interface InProgressFormation {
+  /** Synthetic switcher id — namespaced so it never collides with a real account id. */
+  id: string
+  /** The underlying Company Formation service-delivery id. */
+  sdId: string
+  /** Display name: chosen LLC name when the wizard picked one, else a generic label. */
+  label: string
+  /** Portal stage used for tier-gating when this entity is selected. */
+  stage: 'formation'
+}
+
+/**
+ * In-progress formations for a contact — companies that have been paid for and
+ * are being formed, but do NOT yet exist as an account (no Articles of
+ * Organization yet, per Antonio's model — no placeholder account). These are
+ * surfaced as switchable pseudo-entities in the portal so an existing client
+ * (who already owns an active company) can switch to view a new company being
+ * formed, each with its own status.
+ *
+ * Source of truth: the `Company Formation` service-delivery. Materialization
+ * (`formation-materialize.ts`) sets `service_deliveries.account_id` when the
+ * company becomes real, so `account_id IS NULL` is the clean "not yet a company"
+ * signal AND the de-dup against materialized companies. Read-only.
+ *
+ * Known gap (documented): the brief pre-payment window (signed offer, no SD yet)
+ * is not included — the formation SD is created at activation. That window is
+ * short; the offer-based path can be added later if needed.
+ */
+export async function getInProgressFormations(contactId: string): Promise<InProgressFormation[]> {
+  const { data: sds } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name')
+    .eq('contact_id', contactId)
+    .eq('service_type', 'Company Formation')
+    .is('account_id', null)
+    .eq('status', 'active')
+
+  if (!sds || sds.length === 0) return []
+
+  // Chosen LLC name from the formation wizard, when submitted. Applied only when
+  // there is exactly one in-progress formation (the name→SD mapping is otherwise
+  // ambiguous); multiple in-progress formations fall back to the SD label.
+  let chosenName = ''
+  if (sds.length === 1) {
+    const { data: wp } = await supabaseAdmin
+      .from('wizard_progress')
+      .select('data')
+      .eq('contact_id', contactId)
+      .eq('wizard_type', 'formation')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const wd = (wp?.data ?? {}) as Record<string, unknown>
+    chosenName = String(wd.chosen_name_final || wd.chosen_name || '').trim()
+  }
+
+  return sds.map(sd => ({
+    id: `formation:${sd.id}`,
+    sdId: sd.id,
+    label:
+      (sds.length === 1 && chosenName) ||
+      (sd.service_name ? sd.service_name.replace(/^Company Formation - /, '') : '') ||
+      'New company (in formation)',
+    stage: 'formation' as const,
+  }))
+}
+
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')

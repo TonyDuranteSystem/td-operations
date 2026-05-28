@@ -31,7 +31,7 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
-import type { PortalNavVisibility } from '@/lib/portal/queries'
+import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
 
 interface PortalSidebarProps {
@@ -46,6 +46,10 @@ interface PortalSidebarProps {
   accountType?: string | null
   contactId?: string
   portalRole?: string | null
+  /** Companies being formed that have no account yet — selectable in the switcher. */
+  inProgress?: InProgressFormation[]
+  /** Set when an in-progress formation is the current selection. */
+  selectedFormationId?: string
 }
 
 // Nav items organized into collapsible groups
@@ -152,7 +156,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -235,7 +239,9 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   // Locale-aware section labels — used by the Personal / Companies headers.
   const personalLabel = SECTION_LABELS['nav.section.personal']?.[locale] ?? SECTION_LABELS['nav.section.personal']?.en ?? 'Personal'
-  const companiesLabel = (accounts.length > 1
+  const totalEntities = accounts.length + inProgress.length
+  const isMultiEntity = totalEntities > 1
+  const companiesLabel = (totalEntities > 1
     ? SECTION_LABELS['nav.section.companies']
     : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
   const loggedInAsLabel = locale === 'it' ? 'Accesso come' : 'Logged in as'
@@ -304,7 +310,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // For single-LLC clients, show the company name as the section header.
   // For multi-LLC clients, the CompanySwitcher provides the selector.
   const selectedCompanyName = accounts.find(a => a.id === selectedAccountId)?.company_name ?? null
-  const isMultiLLC = accounts.length > 1
 
   const renderNavItem = (item: NavItem) => {
     const badge = item.href === '/portal/chat' && liveUnreadCount > 0 ? liveUnreadCount : 0
@@ -446,16 +451,18 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           {/* Companies section — nested under Personal per Antonio's model. */}
           {/* For single-LLC clients, the company name is the section header. */}
           {/* For multi-LLC clients, the CompanySwitcher dropdown picks which company. */}
-          {showCompaniesSection && visibleCompanyItems.length > 0 && (
+          {showCompaniesSection && (isMultiEntity || visibleCompanyItems.length > 0) && (
             <div className="pt-4">
               <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                 {companiesLabel}
               </div>
-              {isMultiLLC ? (
+              {isMultiEntity ? (
                 <div className="px-0 py-1">
                   <CompanySwitcher
                     accounts={accounts}
                     selectedAccountId={selectedAccountId}
+                    inProgress={inProgress}
+                    selectedFormationId={selectedFormationId}
                     userName={fullName || user.email?.split('@')[0]}
                   />
                 </div>
@@ -465,9 +472,11 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
                   <span className="truncate">{selectedCompanyName}</span>
                 </div>
               ) : null}
-              <div className="space-y-0.5 mt-1">
-                {visibleCompanyItems.map(renderNavItem)}
-              </div>
+              {visibleCompanyItems.length > 0 && (
+                <div className="space-y-0.5 mt-1">
+                  {visibleCompanyItems.map(renderNavItem)}
+                </div>
+              )}
             </div>
           )}
 

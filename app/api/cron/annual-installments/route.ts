@@ -119,6 +119,9 @@ export async function GET(req: NextRequest) {
       const installmentLabelEnum = "Installment 2 (Jun)"
 
       try {
+        // createTDInvoice auto-applies any outstanding credit notes (referral or
+        // manual) on the account — same currency, oldest-first, capped at the bill,
+        // leftover carried forward — so we just pass the full installment line.
         const invoice = await createTDInvoice({
           account_id: acct.id,
           line_items: [{
@@ -133,19 +136,33 @@ export async function GET(req: NextRequest) {
           installment: installmentLabelEnum,
         })
 
-        // Override description on the payments row so the human-readable label
-        // matches the historical convention (createTDInvoice defaults to the
-        // first line-item description).
-        // eslint-disable-next-line no-restricted-syntax -- targeted post-create field override; createTDInvoice uses first line-item description.
-        await supabaseAdmin
-          .from("payments")
-          .update({ description })
-          .eq("id", invoice.paymentId)
+        // If credit fully covered the installment, createTDInvoice marked it Paid
+        // and set an explanatory "… − credit = $0 due" description — keep that.
+        // Otherwise normalize the description to the historical human-readable label.
+        const fullyCovered = invoice.status === "Paid"
+        if (!fullyCovered) {
+          // eslint-disable-next-line no-restricted-syntax -- targeted post-create field override; createTDInvoice uses first line-item description.
+          await supabaseAdmin
+            .from("payments")
+            .update({ description })
+            .eq("id", invoice.paymentId)
+        }
 
+        // Fire the normal 2nd-installment-paid effects (lift tax gate, etc.).
+        if (fullyCovered) {
+          try {
+            const { onSecondInstallmentPaid } = await import("@/lib/installment-handler")
+            await onSecondInstallmentPaid(acct.id, year)
+          } catch { /* non-blocking — team email/task summary still reports the invoice */ }
+        }
+
+        const creditNote = invoice.total < amount
+          ? ` (credit applied${fullyCovered ? " — fully covered, marked Paid" : ""})`
+          : ""
         results.push({
           company: acct.company_name,
           action: "created",
-          detail: `${invoice.invoiceNumber} — $${amount} USD`,
+          detail: `${invoice.invoiceNumber} — $${invoice.total} USD${creditNote}`,
           paymentId: invoice.paymentId,
         })
       } catch (e) {

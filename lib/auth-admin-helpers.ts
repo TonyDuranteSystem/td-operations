@@ -122,3 +122,16 @@ export async function listAllAuthUsers(): Promise<User[]> {
   }
   return all
 }
+
+/**
+ * All auth logins whose `app_metadata.contact_id` matches the given contact.
+ * Used by the portal-login cleanup (a contact should have exactly one login).
+ * Scans all users (paginated) — fine at current scale; same MAX_PAGES guard.
+ */
+export async function findAuthUsersByContactId(contactId: string): Promise<User[]> {
+  if (!contactId) return []
+  const all = await listAllAuthUsers()
+  return all.filter(
+    (u) => (u.app_metadata as { contact_id?: string } | undefined)?.contact_id === contactId,
+  )
+}

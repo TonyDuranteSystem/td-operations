@@ -3,7 +3,8 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations } from '@/lib/portal/queries'
+import { resolveSelectedEntity } from '@/lib/portal/select-entity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
@@ -53,22 +54,34 @@ export default async function PortalLayout({
     return <><SandboxBanner />{children}</>
   }
 
-  // Get contact_id and accounts
+  // Get contact_id, accounts, and in-progress formations (per-entity portal:
+  // a client can hold real companies AND a company being formed that has no
+  // account yet — both are selectable, each with its own stage).
   const contactId = getClientContactId(user)
   let accounts = contactId ? await getPortalAccounts(contactId) : []
+  const inProgress = contactId ? await getInProgressFormations(contactId) : []
 
   // If admin without contact_id, show empty portal (debugging mode)
   if (!isClient(user) && accounts.length === 0) {
     accounts = []
   }
 
-  // Determine selected account (from cookie or default to first)
-  const cookieStore = cookies()
-  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id
-    ?? accounts[0]?.id
-    ?? ''
-  const selectedAccount = accounts.find(a => a.id === selectedAccountId)
+  // Resolve the selected entity from the two selection cookies. portal_account_id
+  // stays account-id-only; portal_formation (set only by the company switcher)
+  // selects an in-progress formation. The contact-level tier is now only the
+  // fallback when the contact has neither an account nor an in-progress formation.
+  const cookieStore = await cookies()
+  const cookieAccountId = cookieStore.get('portal_account_id')?.value
+  const cookieFormation = cookieStore.get('portal_formation')?.value
+  const [contactTier, portalRole] = contactId
+    ? await Promise.all([getPortalTierByContact(contactId), getPortalRoleByContact(contactId)])
+    : [(user.app_metadata?.portal_tier as string) || 'lead', null]
+  const selected = resolveSelectedEntity({
+    accounts, inProgress, accountCookie: cookieAccountId, formationCookie: cookieFormation, fallbackTier: contactTier,
+  })
+  const selectedAccountId = selected.kind === 'account' ? selected.accountId : ''
+  const selectedAccount = selected.kind === 'account' ? selected.account : undefined
+  const portalTier = selected.tier
   const isSuspended = selectedAccount?.status === 'Suspended'
 
   // Show onboarding wizard on first login
@@ -77,10 +90,6 @@ export default async function PortalLayout({
   const showOnboarding = false // Disabled until tier-specific tour is built
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
-  // Portal tier + role: always from contacts table (source of truth)
-  const [portalTier, portalRole] = contactId
-    ? await Promise.all([getPortalTierByContact(contactId), getPortalRoleByContact(contactId)])
-    : [(user.app_metadata?.portal_tier as string) || 'lead', null]
 
   // Account-level data: only if an account is selected
   // Phase C (ITIN Chain Fix 2026-05-11): pass contactId so the ITIN-at-Client-
@@ -127,6 +136,8 @@ export default async function PortalLayout({
             contactId={contactId || undefined}
             portalRole={portalRole}
             hasWizardPending={hasWizardPending}
+            inProgress={inProgress}
+            selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />

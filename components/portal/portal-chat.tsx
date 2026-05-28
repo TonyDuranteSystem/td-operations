@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, Building2 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
@@ -97,20 +97,26 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ accountId, contactId, userId, locale = 'en', accounts = [] }: { accountId?: string; contactId: string; userId: string; locale?: string; accounts?: { id: string; company_name: string }[] }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(accountId || null, contactId)
-  // PR 2 Step 6 — sender_context picker. Defaults to "company" when an
-  // account is currently viewed, else "person". Hidden entirely when the
-  // contact has no accounts (formation-gap clients pre-materialization).
-  // Per Antonio's design decision 2026-05-05: binary picker (Person /
-  // current company), not a list of all the contact's companies.
-  const [tagScope, setTagScope] = useState<'person' | 'company'>(accountId ? 'company' : 'person')
+  // Per-entity chat (Slice C1): the thread is divided by the selected entity,
+  // so the message scope is the viewed thread — a company (account id) or null =
+  // the contact's "Personal" thread (no-company messages). No per-message picker
+  // (it belonged to the old unified thread, PR 2 Step 6).
+  //
+  // threadAccountId is the chat-LOCAL scope. It defaults to the globally-selected
+  // company (the accountId prop) and re-syncs when that changes, but the in-chat
+  // thread picker (multi-company clients) can switch it to another company or to
+  // Personal WITHOUT touching the rest of the portal (nav/tier/dashboard).
+  const [threadAccountId, setThreadAccountId] = useState<string | null>(accountId || null)
+  useEffect(() => { setThreadAccountId(accountId || null) }, [accountId])
+
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(threadAccountId, contactId)
+  const senderContext: 'person' | 'company' = threadAccountId ? 'company' : 'person'
   const [activeTopic, setActiveTopic] = useState<string | null>(null)
   const [creatingTopic, setCreatingTopic] = useState(false)
   const [newTopicInput, setNewTopicInput] = useState('')
-  const currentCompanyName = accounts.find(a => a.id === accountId)?.company_name ?? null
   const accountNameById = new Map(accounts.map(a => [a.id, a.company_name]))
   const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
-  const draftKey = `chat_draft_${accountId || contactId}`
+  const draftKey = `chat_draft_${threadAccountId || contactId}`
   const [input, setInput] = useState(() => {
     if (typeof window === 'undefined') return ''
     const draft = localStorage.getItem(draftKey)
@@ -125,6 +131,28 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [pinHighlightId, setPinHighlightId] = useState<string | null>(null)
+
+  // Pin/unpin a message (client side). Realtime reconciles both chats; refresh() is a fallback.
+  const togglePin = async (id: string, pinned: boolean) => {
+    try {
+      const res = await fetch(`/api/portal/chat/message/${id}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned }),
+      })
+      if (res.ok) refresh()
+    } catch {
+      /* realtime will reconcile */
+    }
+  }
+  const scrollToPinned = (id: string) => {
+    const el = document.getElementById(`pc-msg-${id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setPinHighlightId(id)
+    window.setTimeout(() => setPinHighlightId(null), 2800)
+  }
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -213,7 +241,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           const uploaded = await Promise.all(filesToSend.map(async (pf) => {
             const formData = new FormData()
             formData.append('file', pf.file)
-            formData.append('account_id', accountId || '')
+            formData.append('account_id', threadAccountId || '')
             formData.append('contact_id', contactId)
             const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
             if (!res.ok) {
@@ -222,12 +250,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             }
             return await res.json() as ChatAttachment
           }))
-          await sendMessage(msg || '', uploaded, replyId, tagScope, accountId ?? null, activeTopic)
+          await sendMessage(msg || '', uploaded, replyId, senderContext, threadAccountId, activeTopic)
         } finally {
           setUploading(false)
         }
       } else {
-        await sendMessage(msg, undefined, replyId, tagScope, accountId ?? null, activeTopic)
+        await sendMessage(msg, undefined, replyId, senderContext, threadAccountId, activeTopic)
       }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
@@ -343,6 +371,40 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
         </div>
       )}
+      {/* Thread selector (multi-company clients only) — divides chat per company,
+          plus a "Personal" thread for no-company messages. Chat-local: switches
+          the viewed thread without touching the rest of the portal. */}
+      {accounts.length >= 2 && (
+        <div className="px-3 pt-2 pb-1.5 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
+          {accounts.map(a => (
+            <button
+              key={a.id}
+              onClick={() => setThreadAccountId(a.id)}
+              title={a.company_name}
+              className={cn(
+                'shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border font-medium transition-colors',
+                threadAccountId === a.id
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+              )}
+            >
+              <Building2 className="h-3 w-3 shrink-0" />
+              <span className="max-w-[140px] truncate">{a.company_name}</span>
+            </button>
+          ))}
+          <button
+            onClick={() => setThreadAccountId(null)}
+            className={cn(
+              'shrink-0 px-2.5 py-1 text-[11px] rounded-full border font-medium transition-colors',
+              threadAccountId === null
+                ? 'bg-zinc-900 text-white border-zinc-900'
+                : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+            )}
+          >
+            {personalLabel}
+          </button>
+        </div>
+      )}
       {/* Topic tabs — always visible. General = untagged messages. Named tabs = thread per topic. */}
       <div className="px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
         <button
@@ -454,6 +516,40 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
               </button>
             </div>
           )}
+          {(() => {
+            const pinned = (messages ?? []).filter(m => m.pinned_at && !m.deleted_at)
+            if (pinned.length === 0) return null
+            return (
+              <div className="sticky top-0 z-10 bg-amber-50/90 backdrop-blur border border-amber-100 rounded-lg px-2.5 py-1.5 mb-2">
+                <div className="flex items-center gap-1 mb-1">
+                  <Pin className="h-3 w-3 text-amber-600" />
+                  <span className="text-[11px] font-medium text-amber-700">
+                    {locale === 'it' ? 'Fissati' : 'Pinned'} ({pinned.length})
+                  </span>
+                </div>
+                <div className="space-y-0.5 max-h-28 overflow-y-auto">
+                  {pinned.map(pm => (
+                    <div key={pm.id} className="flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-amber-100/60">
+                      <button
+                        onClick={() => scrollToPinned(pm.id)}
+                        className="flex items-start gap-1.5 text-xs text-zinc-700 flex-1 min-w-0 text-left"
+                      >
+                        <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
+                        <span className="truncate flex-1">{pm.message || (locale === 'it' ? '[Allegato]' : '[Attachment]')}</span>
+                      </button>
+                      <button
+                        onClick={() => togglePin(pm.id, false)}
+                        className="shrink-0 text-zinc-400 hover:text-red-600"
+                        title={locale === 'it' ? 'Rimuovi' : 'Unpin'}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
           {filteredMessages.map((msg) => {
             const messageDate = formatMessageDate(msg.created_at)
             const showDateHeader = messageDate !== lastDate
@@ -462,7 +558,11 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             const replyMsg = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
 
             return (
-              <div key={msg.id} className="group">
+              <div
+                key={msg.id}
+                id={`pc-msg-${msg.id}`}
+                className={cn('group scroll-mt-4', pinHighlightId === msg.id && 'rounded-lg ring-2 ring-amber-400')}
+              >
                 {showDateHeader && (
                   <div className="flex items-center justify-center my-4">
                     <span className="text-[10px] text-zinc-400 bg-zinc-100 px-3 py-1 rounded-full">
@@ -473,13 +573,22 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                 <div className={cn('flex mb-1 items-end gap-1', isOwn ? 'justify-end' : 'justify-start')}>
                   {/* Reply button — left side for own messages */}
                   {isOwn && (
-                    <button
-                      onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                      title="Reply"
-                    >
-                      <Reply className="h-3.5 w-3.5" />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => togglePin(msg.id, !msg.pinned_at)}
+                        className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
+                        title={msg.pinned_at ? (locale === 'it' ? 'Rimuovi' : 'Unpin') : (locale === 'it' ? 'Fissa' : 'Pin')}
+                      >
+                        <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
+                      </button>
+                      <button
+                        onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                        title="Reply"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                      </button>
+                    </>
                   )}
                   <div className={cn(
                     'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
@@ -608,13 +717,22 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                   </div>
                   {/* Reply button — right side for other's messages */}
                   {!isOwn && (
-                    <button
-                      onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                      title="Reply"
-                    >
-                      <Reply className="h-3.5 w-3.5" />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                        title="Reply"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => togglePin(msg.id, !msg.pinned_at)}
+                        className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
+                        title={msg.pinned_at ? (locale === 'it' ? 'Rimuovi' : 'Unpin') : (locale === 'it' ? 'Fissa' : 'Pin')}
+                      >
+                        <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -705,44 +823,6 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             )}
           </div>
           <p className="text-[10px] text-zinc-400 mt-1">{pendingFiles.length}/{MAX_ATTACHMENTS} files</p>
-        </div>
-      )}
-
-      {/* Sender context picker (PR 2 Step 6) — Person / current Company.
-          Hidden when the contact has no accounts (formation-gap clients
-          pre-materialization always send as Person). */}
-      {accounts.length > 0 && currentCompanyName && (
-        <div className="px-3 sm:px-4 pt-2 pb-1 flex items-center gap-2 border-t bg-zinc-50/40">
-          <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium">
-            {locale === 'it' ? 'Invia come' : 'Send as'}
-          </span>
-          <div className="flex gap-1 bg-white border rounded-full p-0.5">
-            <button
-              type="button"
-              onClick={() => setTagScope('person')}
-              className={cn(
-                'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
-                tagScope === 'person'
-                  ? 'bg-zinc-900 text-white'
-                  : 'text-zinc-600 hover:bg-zinc-100'
-              )}
-            >
-              {personalLabel}
-            </button>
-            <button
-              type="button"
-              onClick={() => setTagScope('company')}
-              className={cn(
-                'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[180px] truncate',
-                tagScope === 'company'
-                  ? 'bg-blue-600 text-white'
-                  : 'text-zinc-600 hover:bg-zinc-100'
-              )}
-              title={currentCompanyName}
-            >
-              {currentCompanyName}
-            </button>
-          </div>
         </div>
       )}
 

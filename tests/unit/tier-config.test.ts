@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isTierFeatureVisible, getDashboardVariant, isPartnerPortal } from '@/lib/portal/tier-config'
+import { isTierFeatureVisible, getDashboardVariant, isPartnerPortal, maxTier } from '@/lib/portal/tier-config'
 
 describe('isTierFeatureVisible', () => {
   // Lead tier — most restricted
@@ -140,6 +140,36 @@ describe('isPartnerPortal', () => {
 
   it('returns false for undefined', () => {
     expect(isPartnerPortal(undefined)).toBe(false)
+  })
+})
+
+describe('maxTier — no-downgrade guard for offer/portal no-account writes', () => {
+  it('keeps the higher tier when offer requests a lower one (active client + new lead offer)', () => {
+    expect(maxTier('lead', 'active')).toBe('active')
+    expect(maxTier('lead', 'onboarding')).toBe('onboarding')
+    expect(maxTier('lead', 'formation')).toBe('formation')
+  })
+
+  it('returns the requested tier when it is higher than current standing', () => {
+    expect(maxTier('active', 'lead')).toBe('active')
+    expect(maxTier('onboarding', 'formation')).toBe('onboarding')
+  })
+
+  it('is order-independent (commutative) and idempotent on equal tiers', () => {
+    expect(maxTier('formation', 'active')).toBe(maxTier('active', 'formation'))
+    expect(maxTier('active', 'active')).toBe('active')
+    expect(maxTier('lead', 'lead')).toBe('lead')
+  })
+
+  it('never downgrades across every ordered pair', () => {
+    const order = ['lead', 'formation', 'onboarding', 'active'] as const
+    for (let i = 0; i < order.length; i++) {
+      for (let j = 0; j < order.length; j++) {
+        const result = maxTier(order[i], order[j])
+        const resultRank = order.indexOf(result)
+        expect(resultRank).toBe(Math.max(i, j))
+      }
+    }
   })
 })
 

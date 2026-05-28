@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -84,6 +84,31 @@ export default async function PortalDashboardPage() {
   const selectedAccountId = accounts.length > 0
     ? (accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id)
     : ''
+
+  // Per-entity: an explicitly selected in-progress formation (set by the company
+  // switcher) renders its contact-scoped formation dashboard regardless of any
+  // account the client also owns. Additive — only fires when portal_formation is
+  // set AND matches a current in-progress formation; otherwise the existing
+  // account/lead/onboarding logic below runs unchanged.
+  const cookieFormation = (await cookieStore).get('portal_formation')?.value
+  if (contactId && cookieFormation) {
+    const inProgress = await getInProgressFormations(contactId)
+    if (inProgress.some(f => f.id === cookieFormation)) {
+      const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
+      const ctx = await getFormationContext(contactId)
+      return (
+        <FormationDashboard
+          firstName={firstName}
+          locale={locale}
+          account={null}
+          wizardData={ctx.wizard}
+          ss4Data={ctx.ss4}
+          oaData={ctx.oa}
+          leaseData={ctx.lease}
+        />
+      )
+    }
+  }
 
   // Check tier
   const portalTier = selectedAccountId

@@ -67,6 +67,7 @@ function getClientName(inv: InvoiceRecord): string {
 export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
   const [search, setSearch] = useState('')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
+  const [dialogMode, setDialogMode] = useState<'invoice' | 'credit'>('invoice')
   const newInvRouter = useRouter()
   const [statusFilter, setStatusFilter] = useState<string>('All')
   const [sortField, setSortField] = useState<SortField>('issue_date')
@@ -177,11 +178,18 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
           </span>
         )}
         <button
-          onClick={() => setShowNewInvoice(true)}
+          onClick={() => { setDialogMode('invoice'); setShowNewInvoice(true) }}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
         >
           <Plus className="w-3.5 h-3.5" />
           New Invoice
+        </button>
+        <button
+          onClick={() => { setDialogMode('credit'); setShowNewInvoice(true) }}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 transition-colors"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          New Credit Note
         </button>
       </div>
 
@@ -319,9 +327,10 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
         Showing {filtered.length} of {invoices.length} invoices
       </div>
 
-      {/* New Invoice Dialog */}
+      {/* New Invoice / Credit Note Dialog */}
       <InvoiceDialog
         open={showNewInvoice}
+        mode={dialogMode}
         onClose={() => {
           setShowNewInvoice(false)
           newInvRouter.refresh()

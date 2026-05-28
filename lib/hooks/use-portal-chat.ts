@@ -7,12 +7,14 @@ import type { PortalMessage, ChatAttachment } from '@/lib/types'
 /**
  * Real-time chat hook using Supabase Realtime.
  *
- * PR 2 Step 6 (2026-05-05): one tagged thread per contact. The hook now
- * always threads by contact_id (regardless of accountId), so switching the
- * company switcher in the sidebar does NOT split the thread. accountId is
- * still accepted because:
- *   - Send-side: callers pass it through to tag a message as "company".
- *   - Mark-as-read: the read endpoint accepts both for back-compat.
+ * Per-entity chat (2026-05-28, Slice C1 — reverses PR 2 Step 6 intentionally):
+ * the thread is DIVIDED by the selected workspace entity, so a multi-company
+ * client switching companies in the sidebar sees only that company's chat, and
+ * members of one company never see another company's thread.
+ *   - accountId set → company thread: query/realtime/mark-read by account_id.
+ *   - accountId null → "Personal" thread: only the contact's no-company
+ *     messages (contact_id + scope=personal). Covers contact-only / lead /
+ *     ITIN clients with no account.
  */
 export function usePortalChat(accountId: string | null, contactId: string) {
   const [messages, setMessages] = useState<PortalMessage[]>([])
@@ -22,10 +24,11 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  // Always thread by contact_id (unified per-contact thread).
-  const queryParam = `contact_id=${contactId}`
-  const filterColumn = 'contact_id'
-  const filterValue = contactId
+  // Query scope follows the selected entity. queryParam is a stable string
+  // derived from accountId/contactId (safe as a hook dependency).
+  const queryParam = accountId
+    ? `account_id=${accountId}`
+    : `contact_id=${contactId}&scope=personal`
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
@@ -41,7 +44,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
         fetch('/api/portal/chat/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contact_id: contactId }),
+          body: JSON.stringify(accountId ? { account_id: accountId } : { contact_id: contactId }),
         }).catch(() => {})
       }
     } catch {
@@ -49,7 +52,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     } finally {
       setLoading(false)
     }
-  }, [contactId, queryParam])
+  }, [queryParam, accountId, contactId])
 
   useEffect(() => {
     load()
@@ -104,8 +107,10 @@ export function usePortalChat(accountId: string | null, contactId: string) {
       // excludes them on load; this drops any that arrive live. NOT all system
       // messages: the out-of-office auto-reply is system WITHOUT a marker and IS
       // meant for the client. See sysdoc notification-center-workflow-integration-plan.
-      const nm = newMessage as { sender_type?: string; message?: string }
+      const nm = newMessage as { sender_type?: string; message?: string; account_id?: string | null }
       if (nm.sender_type === 'system' && /<!--\s*chat-event:/.test(nm.message ?? '')) return
+      // Personal thread: drop company-scoped messages that match the contact filter.
+      if (!accountId && nm.account_id) return
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
@@ -123,20 +128,14 @@ export function usePortalChat(accountId: string | null, contactId: string) {
       setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
     }
 
-    // Primary subscription: messages tagged with this contact.
-    let channel = supabase
-      .channel(`portal-chat-${filterValue}`)
+    // Subscribe to the selected entity's scope: account_id for a company
+    // thread, contact_id for the personal thread.
+    const filterColumn = accountId ? 'account_id' : 'contact_id'
+    const filterValue = accountId ?? contactId
+    const channel = supabase
+      .channel(`portal-chat-${filterColumn}-${filterValue}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `${filterColumn}=eq.${filterValue}` }, handleInsert)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${filterColumn}=eq.${filterValue}` }, handleUpdate)
-
-    // Secondary subscription: admin messages saved with contact_id=NULL but account_id set.
-    // This covers replies from the CRM dashboard and MCP tool that historically omitted contact_id.
-    // ID-based dedup in handleInsert prevents duplicates for messages that match both filters.
-    if (accountId) {
-      channel = channel
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${accountId}` }, handleInsert)
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${accountId}` }, handleUpdate)
-    }
 
     channel.subscribe()
     channelRef.current = channel
@@ -144,7 +143,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [filterColumn, filterValue, accountId])
+  }, [accountId, contactId])
 
   // Send message. Optional senderContext + tagAccountId let the caller
   // override the picker's tag scope (PR 2 Step 6). Default: senderContext

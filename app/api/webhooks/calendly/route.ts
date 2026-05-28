@@ -3,13 +3,15 @@
  *
  * Receives invitee.created events when someone books a call.
  *
- * INTAKE MODE (default):
- *   Stages the booking in webhook_events with enriched parsed data
- *   and review_status='pending_review'. Staff reviews via CRM Intake page.
+ * AUTO-CREATE MODE (default):
+ *   A booking immediately becomes a lead in the CRM (existing leads are updated,
+ *   not duplicated) and referral attribution is created when the booking came
+ *   through a referral link.
  *
- * LEGACY MODE (CALENDLY_INTAKE_MODE=auto_create):
- *   Auto-creates or updates a lead in the CRM (original behavior).
- *   Set this env var on Vercel to roll back instantly, no redeploy needed.
+ * STAGING MODE (CALENDLY_INTAKE_MODE=staging):
+ *   Stages the booking in webhook_events with enriched parsed data and
+ *   review_status='pending_review'. Staff reviews via CRM Intake page.
+ *   Set this env var on Vercel to switch back instantly, no redeploy needed.
  *
  * Setup:
  *   1. Go to calendly.com → Integrations → Webhooks
@@ -20,6 +22,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
+import { extractInviteeFields, buildLeadNotes } from "@/lib/calendly/parse-invitee"
+import { createPendingReferral } from "@/lib/operations/referral"
 
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
@@ -94,51 +98,9 @@ async function verifyCalendlySignature(
 }
 
 // ─── Shared: extract invitee fields ─────────────────────────
-
-function extractInviteeFields(payload: Record<string, unknown>) {
-  const invitee = (payload.payload as Record<string, unknown>)?.invitee as Record<string, unknown> | undefined
-  if (!invitee?.email) return null
-
-  const email = (invitee.email as string).toLowerCase().trim()
-  const name = (invitee.name as string) || email.split("@")[0]
-  const phone = (invitee.phone_number as string) || null
-
-  let callDate: string | null = null
-  const scheduledEvent = (payload.payload as Record<string, unknown>)?.scheduled_event as Record<string, unknown> | undefined
-  if (scheduledEvent?.start_time) {
-    callDate = (scheduledEvent.start_time as string).split("T")[0]
-  }
-
-  const qAndA = invitee.questions_and_answers as Array<{ question: string; answer: string }> | undefined
-  let reason: string | null = null
-  let referrerName: string | null = null
-  if (qAndA?.length) {
-    for (const qa of qAndA) {
-      const q = qa.question.toLowerCase()
-      if (q.includes("hear about") || q.includes("referral") || q.includes("come ci hai")) {
-        referrerName = qa.answer || null
-      } else if (q.includes("reason") || q.includes("motivo") || q.includes("help") || q.includes("interest")) {
-        reason = qa.answer || null
-      }
-    }
-    if (!reason && qAndA.length > 0 && !referrerName) {
-      reason = qAndA[0].answer || null
-    }
-  }
-
-  const eventUri = (payload.payload as Record<string, unknown>)?.event as string | undefined
-
-  return {
-    email,
-    name,
-    phone,
-    callDate,
-    reason,
-    referrerName,
-    eventUri: eventUri || null,
-    eventTypeName: (scheduledEvent?.name as string) || null,
-  }
-}
+// Parser lives in lib/calendly/parse-invitee.ts so it is unit-testable
+// (Next.js route files may only export GET/POST/etc.). See that file for the
+// payload-shape notes (real Calendly v2 vs legacy nested invitee).
 
 // ─── Main Handler ───────────────────────────────────────────
 
@@ -186,8 +148,32 @@ export async function POST(req: NextRequest) {
       .limit(1)
 
     // ─── Mode selection ─────────────────────────────────────
-    // Default: 'staging' (intake review). Set CALENDLY_INTAKE_MODE=auto_create to rollback.
-    const intakeMode = process.env.CALENDLY_INTAKE_MODE || "staging"
+    // Default: 'auto_create' — a booking immediately becomes a lead (+ referral
+    // attribution). Set CALENDLY_INTAKE_MODE=staging to route bookings to the
+    // Intake review page instead (the older one-click-to-create flow).
+    const intakeMode = process.env.CALENDLY_INTAKE_MODE || "auto_create"
+
+    // Resolve a referral code (from the referral landing page → Calendly link)
+    // to the referring client. Fail-safe: never block staging on this.
+    let referrerContactId: string | null = null
+    let referrerName: string | null = fields.referrerName
+    let referralCode: string | null = null
+    if (fields.referralCode) {
+      try {
+        const { data: referrer } = await db
+          .from("contacts")
+          .select("id, full_name")
+          .ilike("referral_code", fields.referralCode)
+          .maybeSingle()
+        if (referrer) {
+          referrerContactId = referrer.id
+          referrerName = referrer.full_name || fields.referrerName
+          referralCode = fields.referralCode
+        }
+      } catch {
+        /* swallow — attribution is additive */
+      }
+    }
 
     if (intakeMode !== "auto_create") {
       // ─── INTAKE STAGING MODE (new default) ────────────────
@@ -195,13 +181,22 @@ export async function POST(req: NextRequest) {
         raw: payload,
         parsed: {
           name: fields.name,
+          first_name: fields.firstName,
+          last_name: fields.lastName,
           email: fields.email,
           phone: fields.phone,
+          language: fields.language,
           call_date: fields.callDate,
+          call_time: fields.callTime,
+          timezone: fields.timezone,
           reason: fields.reason,
-          referrer_name: fields.referrerName,
+          referrer_name: referrerName,
+          referrer_contact_id: referrerContactId,
+          referral_code: referralCode,
           event_uri: fields.eventUri,
           event_type_name: fields.eventTypeName,
+          meeting_url: fields.meetingUrl,
+          qa: fields.qa,
         },
         matches: {
           existing_lead_id: existingLeads?.[0]?.id || null,
@@ -235,15 +230,22 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ─── LEGACY AUTO-CREATE MODE ────────────────────────────
+    // ─── AUTO-CREATE MODE ───────────────────────────────────
     // Activated by: CALENDLY_INTAKE_MODE=auto_create
-    // Preserves exact original behavior for rollback safety.
+    // A booking immediately becomes a lead (no Intake review step). Existing leads
+    // are updated, not duplicated. Referral attribution is created here too (it is
+    // otherwise only created in the Intake "Create Lead" step).
 
+    // review_status='auto_created' keeps this row OUT of the Intake review page
+    // (which only lists 'pending_review'/'auto_linked' and the processed set) —
+    // auto-created bookings already became leads and need no review. Without this,
+    // the column default 'pending_review' would clutter the Intake pending list.
     await db.from("webhook_events").insert({
       source: "calendly",
       event_type: payload.event || "unknown",
       external_id: payload.payload?.uri || "unknown",
       payload,
+      review_status: "auto_created",
     })
 
     if (existingLeads && existingLeads.length > 0) {
@@ -269,15 +271,18 @@ export async function POST(req: NextRequest) {
     const leadRecord: Record<string, unknown> = {
       full_name: fields.name,
       email: fields.email,
-      source: "Calendly",
+      source: referrerContactId ? "Referral" : "Calendly",
       channel: "Calendly",
       status: "Call Scheduled",
-      notes: fields.eventUri ? `Calendly event: ${fields.eventUri}` : "Booked via Calendly",
+      notes: buildLeadNotes(fields),
     }
+    if (fields.firstName) leadRecord.first_name = fields.firstName
+    if (fields.lastName) leadRecord.last_name = fields.lastName
     if (fields.phone) leadRecord.phone = fields.phone
+    if (fields.language) leadRecord.language = fields.language
     if (fields.callDate) leadRecord.call_date = fields.callDate
     if (fields.reason) leadRecord.reason = fields.reason
-    if (fields.referrerName) leadRecord.referrer_name = fields.referrerName
+    if (referrerName) leadRecord.referrer_name = referrerName
 
     const { data: newLead, error: insertErr } = await db
       .from("leads")
@@ -290,8 +295,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
     }
 
-    console.warn(`[calendly-webhook] [legacy] Created new lead ${newLead.id} — ${fields.name} (${fields.email})`)
-    return NextResponse.json({ lead_id: newLead.id, action: "created" })
+    // Referral attribution: link the referring client to this auto-created lead.
+    // Fail-safe — never block lead creation (self-referral / dedup handled in helper).
+    if (referrerContactId) {
+      try {
+        await createPendingReferral(
+          {
+            referrerContactId,
+            referredLeadId: newLead.id,
+            referredName: fields.name,
+            referredEmail: fields.email,
+          },
+          db
+        )
+      } catch {
+        /* attribution is additive — never block lead creation */
+      }
+    }
+
+    console.warn(`[calendly-webhook] Created new lead ${newLead.id} — ${fields.name} (${fields.email})`)
+    return NextResponse.json({
+      lead_id: newLead.id,
+      action: "created",
+      referrer_contact_id: referrerContactId,
+    })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[calendly-webhook] Error:", msg)
