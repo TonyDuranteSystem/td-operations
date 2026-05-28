@@ -31,6 +31,7 @@ interface PaymentMethod {
 interface InvoiceDetail {
   id: string
   account_id: string
+  customer_id: string | null
   invoice_number: string
   status: string
   currency: string
@@ -129,7 +130,9 @@ export default function InvoiceDetailPage() {
 
   const handleSend = async () => {
     if (!invoice?.customer?.email) {
-      toast.error('Customer has no email address')
+      toast.error(locale === 'it'
+        ? 'Aggiungi un indirizzo email al cliente per inviare la fattura.'
+        : 'Please add an email to this customer to send the invoice.')
       return
     }
     setSending(true)
@@ -299,7 +302,10 @@ export default function InvoiceDetailPage() {
             {t('invoices.pdf')}
           </button>
 
-          {invoice.status === 'Draft' && invoice.customer?.email && (
+          {/* Send is always shown for a Draft. If the customer has no email,
+              handleSend shows a clear message telling the client to add one
+              (instead of hiding the button and leaving them confused). */}
+          {invoice.status === 'Draft' && (
             <button
               onClick={handleSend}
               disabled={sending}
