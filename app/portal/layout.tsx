@@ -136,6 +136,8 @@ export default async function PortalLayout({
             contactId={contactId || undefined}
             portalRole={portalRole}
             hasWizardPending={hasWizardPending}
+            inProgress={inProgress}
+            selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
