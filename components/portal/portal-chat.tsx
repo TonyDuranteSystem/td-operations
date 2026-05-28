@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, Building2 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
@@ -97,18 +97,26 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ accountId, contactId, userId, locale = 'en', accounts = [] }: { accountId?: string; contactId: string; userId: string; locale?: string; accounts?: { id: string; company_name: string }[] }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(accountId || null, contactId)
   // Per-entity chat (Slice C1): the thread is divided by the selected entity,
-  // so the message scope is the viewed thread — a company when one is selected,
-  // else the contact's personal thread. No per-message picker (it belonged to
-  // the old unified thread, PR 2 Step 6).
-  const senderContext: 'person' | 'company' = accountId ? 'company' : 'person'
+  // so the message scope is the viewed thread — a company (account id) or null =
+  // the contact's "Personal" thread (no-company messages). No per-message picker
+  // (it belonged to the old unified thread, PR 2 Step 6).
+  //
+  // threadAccountId is the chat-LOCAL scope. It defaults to the globally-selected
+  // company (the accountId prop) and re-syncs when that changes, but the in-chat
+  // thread picker (multi-company clients) can switch it to another company or to
+  // Personal WITHOUT touching the rest of the portal (nav/tier/dashboard).
+  const [threadAccountId, setThreadAccountId] = useState<string | null>(accountId || null)
+  useEffect(() => { setThreadAccountId(accountId || null) }, [accountId])
+
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(threadAccountId, contactId)
+  const senderContext: 'person' | 'company' = threadAccountId ? 'company' : 'person'
   const [activeTopic, setActiveTopic] = useState<string | null>(null)
   const [creatingTopic, setCreatingTopic] = useState(false)
   const [newTopicInput, setNewTopicInput] = useState('')
   const accountNameById = new Map(accounts.map(a => [a.id, a.company_name]))
   const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
-  const draftKey = `chat_draft_${accountId || contactId}`
+  const draftKey = `chat_draft_${threadAccountId || contactId}`
   const [input, setInput] = useState(() => {
     if (typeof window === 'undefined') return ''
     const draft = localStorage.getItem(draftKey)
@@ -233,7 +241,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           const uploaded = await Promise.all(filesToSend.map(async (pf) => {
             const formData = new FormData()
             formData.append('file', pf.file)
-            formData.append('account_id', accountId || '')
+            formData.append('account_id', threadAccountId || '')
             formData.append('contact_id', contactId)
             const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
             if (!res.ok) {
@@ -242,12 +250,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             }
             return await res.json() as ChatAttachment
           }))
-          await sendMessage(msg || '', uploaded, replyId, senderContext, accountId ?? null, activeTopic)
+          await sendMessage(msg || '', uploaded, replyId, senderContext, threadAccountId, activeTopic)
         } finally {
           setUploading(false)
         }
       } else {
-        await sendMessage(msg, undefined, replyId, senderContext, accountId ?? null, activeTopic)
+        await sendMessage(msg, undefined, replyId, senderContext, threadAccountId, activeTopic)
       }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
@@ -361,6 +369,40 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
           <Paperclip className="h-10 w-10 text-blue-400 mb-2" />
           <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
+        </div>
+      )}
+      {/* Thread selector (multi-company clients only) — divides chat per company,
+          plus a "Personal" thread for no-company messages. Chat-local: switches
+          the viewed thread without touching the rest of the portal. */}
+      {accounts.length >= 2 && (
+        <div className="px-3 pt-2 pb-1.5 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
+          {accounts.map(a => (
+            <button
+              key={a.id}
+              onClick={() => setThreadAccountId(a.id)}
+              title={a.company_name}
+              className={cn(
+                'shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border font-medium transition-colors',
+                threadAccountId === a.id
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+              )}
+            >
+              <Building2 className="h-3 w-3 shrink-0" />
+              <span className="max-w-[140px] truncate">{a.company_name}</span>
+            </button>
+          ))}
+          <button
+            onClick={() => setThreadAccountId(null)}
+            className={cn(
+              'shrink-0 px-2.5 py-1 text-[11px] rounded-full border font-medium transition-colors',
+              threadAccountId === null
+                ? 'bg-zinc-900 text-white border-zinc-900'
+                : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+            )}
+          >
+            {personalLabel}
+          </button>
         </div>
       )}
       {/* Topic tabs — always visible. General = untagged messages. Named tabs = thread per topic. */}
