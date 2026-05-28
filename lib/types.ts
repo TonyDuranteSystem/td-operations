@@ -287,6 +287,9 @@ export interface LeadListItem {
   referrer_name: string | null
   call_date: string | null
   offer_status: string | null
+  /** Live current-offer status from the offers table (lowercase: sent/viewed/signed/completed).
+   *  Authoritative — unlike the denormalized offer_status snapshot which can be stale. */
+  current_offer_status: string | null
   offer_year1_amount: number | null
   offer_year1_currency: string | null
   created_at: string

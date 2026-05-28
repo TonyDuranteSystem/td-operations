@@ -24,7 +24,7 @@ export default async function LeadsPage({
 
   let dbQuery = supabase
     .from('leads')
-    .select('id, full_name, email, phone, status, source, channel, language, referrer_name, call_date, offer_status, offer_year1_amount, offer_year1_currency, created_at', { count: 'exact' })
+    .select('id, full_name, email, phone, status, source, channel, language, referrer_name, call_date, offer_status, offer_year1_amount, offer_year1_currency, created_at, offers(status, superseded_by, created_at)', { count: 'exact' })
     .order('created_at', { ascending: false })
 
   if (!isKanban) {
@@ -47,22 +47,34 @@ export default async function LeadsPage({
   const { data: leads, count: totalCount } = await dbQuery
   const totalPages = Math.ceil((totalCount ?? 0) / PAGE_SIZE)
 
-  const items: LeadListItem[] = (leads ?? []).map(l => ({
-    id: l.id,
-    full_name: l.full_name,
-    email: l.email,
-    phone: l.phone,
-    status: l.status,
-    source: l.source,
-    channel: l.channel,
-    language: l.language,
-    referrer_name: l.referrer_name,
-    call_date: l.call_date,
-    offer_status: l.offer_status,
-    offer_year1_amount: l.offer_year1_amount,
-    offer_year1_currency: l.offer_year1_currency,
-    created_at: l.created_at,
-  }))
+  const items: LeadListItem[] = (leads ?? []).map(l => {
+    // Live current-offer status from the offers table (authoritative). Pick the
+    // non-superseded offer, else the most recent — same rule as the lead detail page.
+    const offersArr = (Array.isArray((l as { offers?: unknown }).offers)
+      ? (l as { offers: Array<{ status: string | null; superseded_by: string | null; created_at: string | null }> }).offers
+      : [])
+    const currentOffer =
+      offersArr.find(o => o.status !== 'superseded') ??
+      [...offersArr].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))[0] ??
+      null
+    return {
+      id: l.id,
+      full_name: l.full_name,
+      email: l.email,
+      phone: l.phone,
+      status: l.status,
+      source: l.source,
+      channel: l.channel,
+      language: l.language,
+      referrer_name: l.referrer_name,
+      call_date: l.call_date,
+      offer_status: l.offer_status,
+      current_offer_status: currentOffer?.status ?? null,
+      offer_year1_amount: l.offer_year1_amount,
+      offer_year1_currency: l.offer_year1_currency,
+      created_at: l.created_at,
+    }
+  })
 
   const stats = {
     total: totalCount ?? 0,
