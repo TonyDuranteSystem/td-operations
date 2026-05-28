@@ -1,4 +1,3 @@
-import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
@@ -121,11 +120,10 @@ export default async function DashboardLayout({
 
   return (
     <Providers>
-      <SandboxBanner />
       <SwRegister />
       <RealtimeNotifications />
       <DashboardPullToRefresh />
-      <div data-sandbox={isSandbox ? 'true' : undefined} className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>
+      <div data-sandbox={isSandbox ? 'true' : undefined} className="flex h-screen">
         <Sidebar
           user={user}
           isAdmin={admin}
