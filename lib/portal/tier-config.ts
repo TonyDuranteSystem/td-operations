@@ -27,6 +27,16 @@ export const TIER_ORDER: Record<PortalTier, number> = {
   active: 3,
 }
 
+/**
+ * Return the higher of two portal tiers by TIER_ORDER. Used by the offer/portal
+ * no-account write paths to GUARD against downgrading an existing client: an
+ * offer publishes at 'lead', but a client who already holds a higher-tier
+ * company must never be lowered. Pure + total over the 4 valid tiers.
+ */
+export function maxTier(a: PortalTier, b: PortalTier): PortalTier {
+  return TIER_ORDER[a] >= TIER_ORDER[b] ? a : b
+}
+
 // Which nav item keys are allowed at each tier
 // Each tier INCLUDES all features from previous tiers
 //

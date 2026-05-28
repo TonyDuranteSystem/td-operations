@@ -14,9 +14,9 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { PORTAL_BASE_URL } from '@/lib/config'
-import { type PortalTier } from './tier-config'
+import { type PortalTier, maxTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
-import { syncTier } from '@/lib/operations/sync-tier'
+import { syncTier, computeContactTier } from '@/lib/operations/sync-tier'
 
 /**
  * Map a contract type to the portal tier a paying client should land on.
@@ -197,15 +197,24 @@ async function createFromEmail(
         })
       }
     } else {
-      // No account — write directly (syncTier requires accountId)
+      // No account — write directly (syncTier requires accountId). GUARD: never
+      // lower an existing client's standing. An offer publishes at tier 'lead'
+      // with no account; for an existing client (e.g. they already own another
+      // active company) that must NOT downgrade them — the contact is the
+      // permanent center. Compare against their REAL standing across all
+      // accounts (computeContactTier), not the stored column (which may be
+      // stale/NULL), and write the higher of the two.
+      let effectiveTier: PortalTier = tier
       if (resolvedContactId) {
+        const computed = await computeContactTier(resolvedContactId)
+        if (computed) effectiveTier = maxTier(tier, computed)
         // eslint-disable-next-line no-restricted-syntax -- no-account special case: syncTier needs accountId; write contact directly
-        await supabaseAdmin.from('contacts').update({ portal_tier: tier }).eq('id', resolvedContactId)
+        await supabaseAdmin.from('contacts').update({ portal_tier: effectiveTier }).eq('id', resolvedContactId)
       }
       await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
         app_metadata: {
           ...existingUser.app_metadata,
-          portal_tier: tier,
+          portal_tier: effectiveTier,
           ...(resolvedContactId ? { contact_id: resolvedContactId } : {}),
         },
       })
@@ -272,9 +281,12 @@ async function createFromEmail(
       })
       .eq('id', accountId)
   } else if (portalContactId) {
-    // No account — write contact directly (syncTier requires accountId)
+    // No account — write contact directly (syncTier requires accountId). GUARD:
+    // never lower an existing client's standing (see existing-user branch above).
+    const computed = await computeContactTier(portalContactId)
+    const effectiveTier: PortalTier = computed ? maxTier(tier, computed) : tier
     // eslint-disable-next-line no-restricted-syntax -- no-account special case: syncTier needs accountId; write contact directly
-    await supabaseAdmin.from('contacts').update({ portal_tier: tier }).eq('id', portalContactId)
+    await supabaseAdmin.from('contacts').update({ portal_tier: effectiveTier }).eq('id', portalContactId)
   }
 
   return {

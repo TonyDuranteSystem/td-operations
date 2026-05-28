@@ -8,7 +8,6 @@ interface LeadLifecycleBarProps {
   signedAt: string | null
   activationStatus: string | null
   paymentConfirmedAt: string | null
-  convertedToContactId: string | null
 }
 
 interface Stage {
@@ -27,7 +26,6 @@ function computeStages(props: LeadLifecycleBarProps): Stage[] {
     signedAt,
     activationStatus,
     paymentConfirmedAt,
-    convertedToContactId,
   } = props
 
   const isLost = leadStatus === 'Lost'
@@ -38,7 +36,12 @@ function computeStages(props: LeadLifecycleBarProps): Stage[] {
   const offerViewed = offerSent && (!!offerViewedAt || offerStatus === 'viewed' || offerStatus === 'signed' || offerStatus === 'completed')
   const offerSigned = !!signedAt || offerStatus === 'signed' || offerStatus === 'completed'
   const paid = !!paymentConfirmedAt || activationStatus === 'activated' || activationStatus === 'payment_confirmed'
-  const activated = activationStatus === 'activated' || !!convertedToContactId
+  // "Active" = payment confirmed + service activated. Post-R094 the lead is
+  // linked to a contact at SIGN time, so convertedToContactId is NO LONGER a
+  // valid "activated" signal (it would light Active for signed-but-unpaid leads).
+  // leads.status flips to 'Converted' only after payment, so it is the correct
+  // post-payment signal and also covers historical leads with no activation row.
+  const activated = activationStatus === 'activated' || leadStatus === 'Converted'
 
   const stages: Stage[] = [
     { key: 'lead', label: 'Lead', completed: true, current: false },

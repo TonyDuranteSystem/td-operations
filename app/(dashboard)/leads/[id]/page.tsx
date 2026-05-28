@@ -17,6 +17,7 @@ import { CallSummaryCard } from './components/call-summary-card'
 import { EditableField } from './components/editable-field'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
+import { deriveLeadDisplayStatus } from '@/lib/leads/display-status'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -145,6 +146,14 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const selectedServices: string[] = Array.isArray(offer?.selected_services) ? offer.selected_services : []
   const bundledPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
+  // Reconciled headline status (derive-only; never mutates leads.status — R094).
+  const displayStatus = deriveLeadDisplayStatus({
+    leadStatus: lead.status,
+    offerStatus: offer?.status ?? null,
+    activationStatus: activation?.status ?? null,
+    paymentConfirmedAt: activation?.payment_confirmed_at ?? null,
+  })
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl">
       {/* Header */}
@@ -154,8 +163,8 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">{lead.full_name}</h1>
             {lead.status && (
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
-                {lead.status}
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${displayStatus.derived ? 'bg-indigo-100 text-indigo-700' : (STATUS_COLORS[displayStatus.label] ?? 'bg-zinc-100')}`}>
+                {displayStatus.label}
               </span>
             )}
           </div>
@@ -180,7 +189,6 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
         }
         activationStatus={activation?.status ?? null}
         paymentConfirmedAt={activation?.payment_confirmed_at ?? null}
-        convertedToContactId={lead.converted_to_contact_id}
       />
 
       {/* Admin Actions */}
@@ -333,6 +341,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                     { value: 'Suspended', label: 'Suspended' },
                   ]}
                 />
+                {displayStatus.derived && (
+                  <span className="text-[10px] text-indigo-600 block mt-0.5">
+                    {displayStatus.label} (funnel status stays until payment)
+                  </span>
+                )}
               </dd>
             </div>
           </dl>
