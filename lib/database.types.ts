@@ -8449,6 +8449,73 @@ export type Database = {
         }
         Relationships: []
       }
+      portal_chat_pinned_threads: {
+        Row: {
+          account_id: string | null
+          contact_id: string | null
+          id: string
+          pinned_at: string
+          pinned_by: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          pinned_at?: string
+          pinned_by?: string | null
+        }
+        Update: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          pinned_at?: string
+          pinned_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_pinned_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       portal_issues: {
         Row: {
           account_id: string | null
@@ -8556,6 +8623,9 @@ export type Database = {
           id: string
           message: string
           original_message: string | null
+          pinned_at: string | null
+          pinned_by: string | null
+          pinned_by_type: string | null
           read_at: string | null
           reply_to_id: string | null
           sender_context: string | null
@@ -8578,6 +8648,9 @@ export type Database = {
           id?: string
           message: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
+          pinned_by_type?: string | null
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -8600,6 +8673,9 @@ export type Database = {
           id?: string
           message?: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
+          pinned_by_type?: string | null
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
