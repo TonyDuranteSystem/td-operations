@@ -644,6 +644,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
                 {(account as unknown as Record<string, unknown>).portal_tier as string}
               </span>
             )}
+            {/* Flexible Formation (2026-05-28): "Formed — EIN pending" is a real,
+                positive lifecycle state — Articles of Organization received but
+                the EIN hasn't arrived yet. Formation completes at EIN. Shown so
+                staff don't read the EIN-pending period as an error. */}
+            {accountPortalTier === 'formation' && account.formation_date && !account.ein_number && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                <BadgeCheck className="h-3 w-3" />
+                Formed — EIN pending
+              </span>
+            )}
             <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <PortalTransitionButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <ComposeEmailButton

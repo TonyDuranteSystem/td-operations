@@ -66,6 +66,17 @@ export function FormationDashboard({
   const waitingForState = wizardSubmitted && !stateConfirmed
   const waitingForEIN = ss4Faxed && !einReceived
 
+  // Derived lifecycle status (Flexible Formation, 2026-05-28): formation ENDS
+  // at EIN received. "Formed" = Articles of Organization received (state
+  // confirmed) — a real, positive state shown as "Formed — EIN pending" until
+  // the EIN arrives, NOT an error/"waiting" state. Derived from existing facts,
+  // no new field.
+  const lifecycleStatus: 'forming' | 'formed_ein_pending' | 'active' = einReceived
+    ? 'active'
+    : stateConfirmed
+      ? 'formed_ein_pending'
+      : 'forming'
+
   function formatDate(d: string | null): string {
     if (!d) return '—'
     try {
@@ -80,9 +91,31 @@ export function FormationDashboard({
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
       {/* Welcome header */}
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 rounded-2xl p-6 sm:p-8 text-white">
-        <h1 className="text-2xl sm:text-3xl font-bold mb-2">
-          {tr.welcome}, {firstName}! 👋
-        </h1>
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <h1 className="text-2xl sm:text-3xl font-bold">
+            {tr.welcome}, {firstName}! 👋
+          </h1>
+          {/* Lifecycle status badge — "Formed — EIN pending" is a positive state,
+              not an error. */}
+          <span
+            className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+              lifecycleStatus === 'formed_ein_pending'
+                ? 'bg-emerald-400/20 text-emerald-50 ring-1 ring-inset ring-emerald-300/40'
+                : 'bg-white/15 text-indigo-50 ring-1 ring-inset ring-white/25'
+            }`}
+          >
+            {lifecycleStatus === 'formed_ein_pending' ? (
+              <CheckCircle className="h-3.5 w-3.5" />
+            ) : (
+              <Clock className="h-3.5 w-3.5" />
+            )}
+            {lifecycleStatus === 'formed_ein_pending'
+              ? tr.statusFormedEinPending
+              : lifecycleStatus === 'active'
+                ? tr.statusActive
+                : tr.statusForming}
+          </span>
+        </div>
         <p className="text-indigo-100 text-sm sm:text-base">{tr.subtitle}</p>
       </div>
 
@@ -354,6 +387,9 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
 const EN = {
   welcome: 'Welcome',
   subtitle: 'We\'re forming your LLC. Here\'s where things stand.',
+  statusForming: 'Formation in progress',
+  statusFormedEinPending: 'Formed — EIN pending',
+  statusActive: 'Active',
   progressTitle: 'Formation Progress',
   m1Label: 'Payment Confirmed',
   m1Desc: 'Your formation order is active',
@@ -401,6 +437,9 @@ const EN = {
 const IT = {
   welcome: 'Benvenuto',
   subtitle: 'Stiamo costituendo la tua LLC. Ecco a che punto siamo.',
+  statusForming: 'Costituzione in corso',
+  statusFormedEinPending: 'Costituita — EIN in attesa',
+  statusActive: 'Attiva',
   progressTitle: 'Avanzamento Costituzione',
   m1Label: 'Pagamento Confermato',
   m1Desc: 'Il tuo ordine di costituzione è attivo',
