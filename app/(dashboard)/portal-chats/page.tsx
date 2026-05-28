@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
+import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
@@ -81,6 +82,8 @@ interface ChatThread {
   last_message: string
   last_message_at: string
   unread_count: number
+  /** Manually pinned conversation (staff, shared). Pins sort above everything. */
+  is_pinned?: boolean
   /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
   active_services: { service_type: string; stage: string | null }[]
 }
@@ -111,6 +114,8 @@ interface ChatMessage {
   deleted_at?: string | null
   deleted_by?: string | null
   edited_at?: string | null
+  pinned_at?: string | null
+  pinned_by_type?: 'client' | 'staff' | null
 }
 
 interface MessageAction {
@@ -774,6 +779,58 @@ export default function PortalChatsPage() {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to delete message')
     },
   })
+
+  const pinMessageMutation = useMutation({
+    mutationFn: async ({ messageId, pinned }: { messageId: string; pinned: boolean }) => {
+      const res = await fetch(`/api/portal/chat/message/${messageId}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not update pin — please try again.')
+      }
+      return res.json()
+    },
+    onSuccess: (_d, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      toast.success(vars.pinned ? 'Message pinned' : 'Message unpinned')
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to update pin')
+    },
+  })
+
+  const pinThreadMutation = useMutation({
+    mutationFn: async ({ account_id, contact_id, pinned }: { account_id: string | null; contact_id: string | null; pinned: boolean }) => {
+      const res = await fetch('/api/portal/chat/pin-thread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id, contact_id, pinned }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not update pin — please try again.')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to pin conversation')
+    },
+  })
+
+  // Scroll a message into view + flash-highlight it (used by the Pinned strip).
+  const scrollToMessage = (messageId: string) => {
+    const el = document.getElementById(`pc-msg-${messageId}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setHighlightedMessageId(messageId)
+    window.setTimeout(() => setHighlightedMessageId(null), 2800)
+  }
 
   const editMessage = async (messageId: string, newText: string) => {
     setEditSaving(true)
@@ -1503,12 +1560,7 @@ export default function PortalChatsPage() {
               <p className="text-sm text-zinc-400">No portal conversations yet</p>
             </div>
           ) : (
-            [...threads].sort((a, b) => {
-              const aUnread = a.unread_count > 0 ? 1 : 0
-              const bUnread = b.unread_count > 0 ? 1 : 0
-              if (aUnread !== bUnread) return bUnread - aUnread
-              return (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
-            }).filter(t => {
+            sortPortalThreads(threads, whatsNewCounts).filter(t => {
               if (!chatSearch.trim()) return true
               const q = chatSearch.toLowerCase()
               return (t.contact_name || t.company_name).toLowerCase().includes(q) || (t.companies?.some(c => c.name.toLowerCase().includes(q)) ?? false)
@@ -1593,6 +1645,22 @@ export default function PortalChatsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                    {/* Pin conversation (staff, shared) — pinned threads sort above everything */}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={e => {
+                        e.stopPropagation()
+                        pinThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, pinned: !thread.is_pinned })
+                      }}
+                      title={thread.is_pinned ? 'Unpin conversation' : 'Pin conversation to top'}
+                      className={cn(
+                        'shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200',
+                        thread.is_pinned ? 'text-amber-600' : 'text-zinc-300 hover:text-zinc-500'
+                      )}
+                    >
+                      <Pin className={cn('h-3.5 w-3.5', thread.is_pinned && 'fill-amber-500')} />
+                    </span>
                     {/* What's New dot: PURPLE pill = UNHANDLED incoming notes for
                         this client. Clears as you tick them handled / open a card;
                         gone at zero. Replaces the legacy orange task dot below. */}
@@ -2388,6 +2456,40 @@ export default function PortalChatsPage() {
             ) : (
             <>
 
+            {/* Pinned messages strip — shared with the client; click to jump. No limit. */}
+            {(() => {
+              const pinned = (messages ?? []).filter(m => m.pinned_at && !m.deleted_at)
+              if (pinned.length === 0) return null
+              return (
+                <div className="shrink-0 border-b border-amber-100 bg-amber-50/70 px-3 py-1.5">
+                  <div className="flex items-center gap-1 mb-1">
+                    <Pin className="h-3 w-3 text-amber-600" />
+                    <span className="text-[11px] font-medium text-amber-700">Pinned ({pinned.length})</span>
+                  </div>
+                  <div className="space-y-0.5 max-h-28 overflow-y-auto">
+                    {pinned.map(pm => (
+                      <div key={pm.id} className="group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-amber-100/60">
+                        <button
+                          onClick={() => scrollToMessage(pm.id)}
+                          className="flex items-start gap-1.5 text-xs text-zinc-700 flex-1 min-w-0 text-left"
+                          title="Jump to message"
+                        >
+                          <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
+                          <span className="truncate flex-1">{pm.message || '[Attachment]'}</span>
+                        </button>
+                        <button
+                          onClick={() => pinMessageMutation.mutate({ messageId: pm.id, pinned: false })}
+                          className="shrink-0 text-[10px] text-zinc-400 hover:text-red-600 opacity-0 group-hover:opacity-100"
+                          title="Unpin"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
             {/* Messages */}
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
               {messagesLoading ? (
@@ -2626,6 +2728,12 @@ export default function PortalChatsPage() {
                             )
                           })()}
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => pinMessageMutation.mutate({ messageId: msg.id, pinned: !msg.pinned_at })}
+                          >
+                            <Pin className="h-3.5 w-3.5 text-zinc-400" /> {msg.pinned_at ? 'Unpin message' : 'Pin message'}
+                          </DropdownMenu.Item>
                           {isAdmin && (
                             <DropdownMenu.Item
                               className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"

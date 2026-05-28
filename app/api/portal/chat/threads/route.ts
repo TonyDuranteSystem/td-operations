@@ -122,6 +122,19 @@ export async function GET() {
     }
 
 
+    // Manually pinned conversations (staff, shared). Small table — fetch all.
+    // New table — not in generated types until prod promotion; cast per codebase pattern.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: pinnedRows } = await (supabaseAdmin as any)
+      .from('portal_chat_pinned_threads')
+      .select('account_id, contact_id') as { data: { account_id: string | null; contact_id: string | null }[] | null }
+    const pinnedAccounts = new Set(
+      (pinnedRows ?? []).map(r => r.account_id).filter((x): x is string => !!x)
+    )
+    const pinnedContacts = new Set(
+      (pinnedRows ?? []).map(r => r.contact_id).filter((x): x is string => !!x)
+    )
+
     const threads = rawThreads.map(r => ({
       account_id: r.account_id ?? null,
       contact_id: r.contact_id ?? null,
@@ -132,6 +145,8 @@ export async function GET() {
       last_message: r.last_message ?? '',
       last_message_at: r.last_message_at ?? '',
       unread_count: Number(r.unread_count ?? 0),
+      is_pinned: (!!r.account_id && pinnedAccounts.has(r.account_id)) ||
+        (!!r.contact_id && pinnedContacts.has(r.contact_id)),
       active_services: resolveActiveServices(r),
     }))
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
@@ -125,6 +125,28 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [pinHighlightId, setPinHighlightId] = useState<string | null>(null)
+
+  // Pin/unpin a message (client side). Realtime reconciles both chats; refresh() is a fallback.
+  const togglePin = async (id: string, pinned: boolean) => {
+    try {
+      const res = await fetch(`/api/portal/chat/message/${id}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned }),
+      })
+      if (res.ok) refresh()
+    } catch {
+      /* realtime will reconcile */
+    }
+  }
+  const scrollToPinned = (id: string) => {
+    const el = document.getElementById(`pc-msg-${id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setPinHighlightId(id)
+    window.setTimeout(() => setPinHighlightId(null), 2800)
+  }
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -454,6 +476,40 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
               </button>
             </div>
           )}
+          {(() => {
+            const pinned = (messages ?? []).filter(m => m.pinned_at && !m.deleted_at)
+            if (pinned.length === 0) return null
+            return (
+              <div className="sticky top-0 z-10 bg-amber-50/90 backdrop-blur border border-amber-100 rounded-lg px-2.5 py-1.5 mb-2">
+                <div className="flex items-center gap-1 mb-1">
+                  <Pin className="h-3 w-3 text-amber-600" />
+                  <span className="text-[11px] font-medium text-amber-700">
+                    {locale === 'it' ? 'Fissati' : 'Pinned'} ({pinned.length})
+                  </span>
+                </div>
+                <div className="space-y-0.5 max-h-28 overflow-y-auto">
+                  {pinned.map(pm => (
+                    <div key={pm.id} className="flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-amber-100/60">
+                      <button
+                        onClick={() => scrollToPinned(pm.id)}
+                        className="flex items-start gap-1.5 text-xs text-zinc-700 flex-1 min-w-0 text-left"
+                      >
+                        <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
+                        <span className="truncate flex-1">{pm.message || (locale === 'it' ? '[Allegato]' : '[Attachment]')}</span>
+                      </button>
+                      <button
+                        onClick={() => togglePin(pm.id, false)}
+                        className="shrink-0 text-zinc-400 hover:text-red-600"
+                        title={locale === 'it' ? 'Rimuovi' : 'Unpin'}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
           {filteredMessages.map((msg) => {
             const messageDate = formatMessageDate(msg.created_at)
             const showDateHeader = messageDate !== lastDate
@@ -462,7 +518,11 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             const replyMsg = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
 
             return (
-              <div key={msg.id} className="group">
+              <div
+                key={msg.id}
+                id={`pc-msg-${msg.id}`}
+                className={cn('group scroll-mt-4', pinHighlightId === msg.id && 'rounded-lg ring-2 ring-amber-400')}
+              >
                 {showDateHeader && (
                   <div className="flex items-center justify-center my-4">
                     <span className="text-[10px] text-zinc-400 bg-zinc-100 px-3 py-1 rounded-full">
@@ -473,13 +533,22 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                 <div className={cn('flex mb-1 items-end gap-1', isOwn ? 'justify-end' : 'justify-start')}>
                   {/* Reply button — left side for own messages */}
                   {isOwn && (
-                    <button
-                      onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                      title="Reply"
-                    >
-                      <Reply className="h-3.5 w-3.5" />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => togglePin(msg.id, !msg.pinned_at)}
+                        className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
+                        title={msg.pinned_at ? (locale === 'it' ? 'Rimuovi' : 'Unpin') : (locale === 'it' ? 'Fissa' : 'Pin')}
+                      >
+                        <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
+                      </button>
+                      <button
+                        onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                        title="Reply"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                      </button>
+                    </>
                   )}
                   <div className={cn(
                     'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
@@ -608,13 +677,22 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                   </div>
                   {/* Reply button — right side for other's messages */}
                   {!isOwn && (
-                    <button
-                      onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                      title="Reply"
-                    >
-                      <Reply className="h-3.5 w-3.5" />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                        title="Reply"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => togglePin(msg.id, !msg.pinned_at)}
+                        className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.pinned_at ? 'text-amber-500' : 'text-zinc-300 hover:text-zinc-600')}
+                        title={msg.pinned_at ? (locale === 'it' ? 'Rimuovi' : 'Unpin') : (locale === 'it' ? 'Fissa' : 'Pin')}
+                      >
+                        <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

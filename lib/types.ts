@@ -485,6 +485,9 @@ export interface PortalMessage {
   deleted_by?: string | null
   edited_at?: string | null
   original_message?: string | null
+  pinned_at?: string | null
+  pinned_by?: string | null
+  pinned_by_type?: 'client' | 'staff' | null
 }
 
 export interface PortalNotification {
