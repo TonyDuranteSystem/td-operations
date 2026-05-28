@@ -123,6 +123,33 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
     if (draft) { localStorage.removeItem(draftKey); return draft }
     return ''
   })
+  // Per-thread drafts: when the viewed thread changes (chip switch or global
+  // company switch), stash the unsent text under the thread we're LEAVING and
+  // load the thread we're ENTERING. This guarantees a half-typed message can
+  // never post to the wrong company/Personal.
+  const inputValueRef = useRef(input)
+  inputValueRef.current = input
+  const prevThreadRef = useRef<string | null>(threadAccountId)
+  useEffect(() => {
+    if (prevThreadRef.current === threadAccountId) return
+    const leavingKey = `chat_draft_${prevThreadRef.current || contactId}`
+    const txt = inputValueRef.current
+    if (txt.trim()) localStorage.setItem(leavingKey, txt)
+    else localStorage.removeItem(leavingKey)
+    const enteringKey = `chat_draft_${threadAccountId || contactId}`
+    const entering = localStorage.getItem(enteringKey) || ''
+    if (entering) localStorage.removeItem(enteringKey)
+    setInput(entering)
+    prevThreadRef.current = threadAccountId
+  }, [threadAccountId, contactId])
+  // One-time multi-company help explainer (dismiss requires confirming you
+  // understand). Default hidden to avoid a flash before localStorage is read.
+  const [helpDismissed, setHelpDismissed] = useState(true)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setHelpDismissed(localStorage.getItem('chat_multico_help_dismissed_v1') === 'yes')
+    }
+  }, [])
   const [uploading, setUploading] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
@@ -221,6 +248,19 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
     setIsRefreshing(true)
     await refresh()
     setIsRefreshing(false)
+  }
+
+  // Dismissing the multi-company help requires an explicit "I understood" confirm,
+  // so the client takes responsibility for the (important) per-company isolation.
+  const handleDismissHelp = () => {
+    const ok = window.confirm(
+      locale === 'it'
+        ? 'Hai capito come funziona? Ogni azienda ha la propria chat separata, più una chat Personale — i messaggi vengono inviati alla chat che stai visualizzando in quel momento. È importante per non mischiare i messaggi tra le aziende o con la chat Personale. Vuoi nascondere questo messaggio?'
+        : 'Did you understand how it works? Each company has its own separate chat, plus a Personal chat — messages are sent to the chat you are currently viewing. This is important so messages never get mixed up between companies or with Personal. Do you want to dismiss this message?'
+    )
+    if (!ok) return
+    localStorage.setItem('chat_multico_help_dismissed_v1', 'yes')
+    setHelpDismissed(true)
   }
 
   const handleSend = async () => {
@@ -369,6 +409,28 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
           <Paperclip className="h-10 w-10 text-blue-400 mb-2" />
           <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
+        </div>
+      )}
+      {/* One-time multi-company help. Important: explains that each company has
+          its own chat + a Personal one, and messages go to the viewed thread.
+          Dismiss requires confirming understanding (handleDismissHelp). */}
+      {accounts.length >= 2 && !helpDismissed && (
+        <div className="m-3 mb-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-900">
+          <p className="font-semibold mb-0.5">
+            {locale === 'it' ? 'Hai più aziende qui' : 'You have more than one company here'}
+          </p>
+          <p className="leading-snug">
+            {locale === 'it'
+              ? 'Ogni azienda ha la propria chat separata, più una chat Personale. Usa i pulsanti qui sotto per cambiare: i messaggi vengono inviati alla chat che stai visualizzando. È importante per non mischiare i messaggi tra le aziende o con la chat Personale.'
+              : 'Each company has its own separate chat, plus a Personal chat. Use the buttons below to switch — messages are sent to the chat you are currently viewing. This matters so messages are never mixed up between companies or with Personal.'}
+          </p>
+          <button
+            type="button"
+            onClick={handleDismissHelp}
+            className="mt-2 inline-flex items-center rounded-full border border-amber-300 bg-white px-3 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 transition-colors"
+          >
+            {locale === 'it' ? 'Ho capito — nascondi' : 'I understand — dismiss'}
+          </button>
         </div>
       )}
       {/* Thread selector (multi-company clients only) — divides chat per company,
@@ -826,6 +888,20 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         </div>
       )}
 
+      {/* "Sending to" label (multi-company only) — permanent, reads the SAME
+          threadAccountId that tags the message, so it can never claim a wrong
+          target. The durable safeguard against mixing up threads. */}
+      {accounts.length >= 2 && (
+        <div className="px-3 sm:px-4 pt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
+          <span>{locale === 'it' ? 'Invio a:' : 'Sending to:'}</span>
+          <span className={cn(
+            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold',
+            threadAccountId ? 'bg-blue-100 text-blue-700' : 'bg-zinc-200 text-zinc-700'
+          )}>
+            {threadAccountId ? (accountNameById.get(threadAccountId) || (locale === 'it' ? 'Azienda' : 'Company')) : personalLabel}
+          </span>
+        </div>
+      )}
       {/* Input — WhatsApp-style pill + action button */}
       <div className={cn('border-t p-2 sm:p-3', (replyTo || pendingFiles.length > 0) && 'border-t-0')}>
         <div className="flex items-end gap-2">
