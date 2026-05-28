@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, Building2 } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, Building2, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
@@ -411,23 +411,25 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
         </div>
       )}
-      {/* One-time multi-company help. Important: explains that each company has
-          its own chat + a Personal one, and messages go to the viewed thread.
-          Dismiss requires confirming understanding (handleDismissHelp). */}
+      {/* One-time multi-company help — deliberately LOUD (red) so clients read it
+          before sending. Explains each company has its own chat + a Personal one,
+          and messages go to the viewed thread. Dismiss requires confirming
+          understanding (handleDismissHelp). */}
       {accounts.length >= 2 && !helpDismissed && (
-        <div className="m-3 mb-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-900">
-          <p className="font-semibold mb-0.5">
-            {locale === 'it' ? 'Hai più aziende qui' : 'You have more than one company here'}
+        <div className="m-3 mb-0 rounded-lg border-2 border-red-400 bg-red-50 px-3 py-3 text-[13px] text-red-900">
+          <p className="flex items-center gap-1.5 font-extrabold uppercase tracking-wide text-red-600 text-[13px] mb-1.5">
+            <AlertTriangle className="h-5 w-5 shrink-0" />
+            {locale === 'it' ? 'Leggi prima di inviare un messaggio' : 'Read before sending a message'}
           </p>
           <p className="leading-snug">
             {locale === 'it'
-              ? 'Ogni azienda ha la propria chat separata, più una chat Personale. Usa i pulsanti qui sotto per cambiare: i messaggi vengono inviati alla chat che stai visualizzando. È importante per non mischiare i messaggi tra le aziende o con la chat Personale.'
-              : 'Each company has its own separate chat, plus a Personal chat. Use the buttons below to switch — messages are sent to the chat you are currently viewing. This matters so messages are never mixed up between companies or with Personal.'}
+              ? 'Hai più di un’azienda qui. Ogni azienda ha la propria chat separata, più una chat Personale. Usa i pulsanti qui sotto per cambiare: il messaggio viene inviato alla chat che stai visualizzando in quel momento. È molto importante per non mischiare i messaggi tra le aziende o con la chat Personale.'
+              : 'You have more than one company here. Each company has its own separate chat, plus a Personal chat. Use the buttons below to switch — your message is sent to the chat you are currently viewing. This is very important so messages are never mixed up between companies or with Personal.'}
           </p>
           <button
             type="button"
             onClick={handleDismissHelp}
-            className="mt-2 inline-flex items-center rounded-full border border-amber-300 bg-white px-3 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 transition-colors"
+            className="mt-2.5 inline-flex items-center rounded-full bg-red-600 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-red-700 transition-colors"
           >
             {locale === 'it' ? 'Ho capito — nascondi' : 'I understand — dismiss'}
           </button>
