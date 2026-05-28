@@ -21,6 +21,7 @@ import { ManageColumnsDialog } from './action-board-columns-dialog'
 import { NewCardDialog } from './action-board-new-card-dialog'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
+import { ExpandableText } from '@/components/shared/expandable-text'
 
 interface Column {
   slug: string
@@ -420,9 +421,11 @@ export function ActionBoard() {
                           </div>
                         ) : (
                           <div className="group/note mt-1 flex items-start gap-1">
-                            <p className="flex-1 min-w-0 break-words text-xs text-zinc-600">
-                              {card.label || <span className="italic text-zinc-300">No note — click to add</span>}
-                            </p>
+                            {card.label ? (
+                              <ExpandableText text={card.label} lines={2} className="flex-1 min-w-0" textClassName="text-xs text-zinc-600" />
+                            ) : (
+                              <p className="flex-1 min-w-0 text-xs italic text-zinc-300">No note — click to add</p>
+                            )}
                             <button
                               onClick={() => { setEditingNoteId(card.id); setNoteDraft(card.label || '') }}
                               className="shrink-0 text-zinc-300 hover:text-violet-600"
@@ -564,7 +567,7 @@ export function ActionBoard() {
                     )}
                     <span className="text-sm font-medium text-zinc-900 truncate">{clientName}</span>
                   </div>
-                  {card.label && <p className="text-xs text-zinc-600 mt-1 line-clamp-2">{card.label}</p>}
+                  {card.label && <ExpandableText text={card.label} lines={2} className="mt-1" textClassName="text-xs text-zinc-600" />}
                   <div className="flex items-center justify-between mt-2">
                     <span className="flex items-center gap-1 text-[10px] text-violet-600">
                       <Moon className="h-3 w-3" /> Until {until}
