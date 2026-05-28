@@ -40,10 +40,18 @@ interface ApiNote {
 export function ThreadWhatsNewPanel({
   accountId,
   contactId,
+  cardAccountId,
   onOpenCard,
 }: {
+  /** Notes/dot SCOPE. Must mirror the conversation-list dot: account-level thread
+   *  → its account_id; contact-level thread → null here (so notes load by contact_id).
+   *  Do NOT pass the viewed-company fallback here, or contact-only notes that feed
+   *  the dot become unreachable and the purple dot never clears. */
   accountId: string | null
   contactId: string | null
+  /** Account to attach NEW cards/money-actions to — may be the viewed company even on
+   *  a contact-level thread. Defaults to accountId when omitted. */
+  cardAccountId?: string | null
   onOpenCard: (note: { noteId: string; label: string }) => void
 }) {
   const qc = useQueryClient()
@@ -206,7 +214,7 @@ export function ThreadWhatsNewPanel({
                 {!wfTask && (
                   <div className="mt-1.5 pt-1.5 border-t">
                     <CardCreateActions
-                      accountId={accountId}
+                      accountId={cardAccountId ?? accountId}
                       contactId={contactId}
                       onDone={() => {
                         qc.invalidateQueries({ queryKey: ['thread-whats-new'] })
