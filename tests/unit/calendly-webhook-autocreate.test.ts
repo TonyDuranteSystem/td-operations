@@ -78,7 +78,13 @@ function bookingPayload(referralCode: string | null) {
       event: "https://api.calendly.com/scheduled_events/E",
       email: "booker@example.com",
       name: "Booker Person",
-      questions_and_answers: [],
+      first_name: "Booker",
+      last_name: "Person",
+      timezone: "Europe/Rome",
+      questions_and_answers: [
+        { question: "What is your phone number?", answer: "+39 02 1234 5678" },
+        { question: "Preferred language / Lingua", answer: "Italiano" },
+      ],
       tracking: referralCode ? { utm_campaign: referralCode } : {},
       scheduled_event: { start_time: "2026-06-10T15:00:00Z", name: "Free Call" },
     },
@@ -116,6 +122,11 @@ describe("calendly webhook — auto_create with referral", () => {
 
     expect(recorded.leadInsert?.source).toBe("Referral")
     expect(recorded.leadInsert?.referrer_name).toBe("Uxio Test")
+    // New bundle fields flow into the lead insert
+    expect(recorded.leadInsert?.first_name).toBe("Booker")
+    expect(recorded.leadInsert?.last_name).toBe("Person")
+    expect(recorded.leadInsert?.phone).toBe("+39 02 1234 5678")
+    expect(recorded.leadInsert?.language).toBe("Italian")
 
     expect(createPendingReferralMock).toHaveBeenCalledTimes(1)
     const [params] = createPendingReferralMock.mock.calls[0] as [Record<string, unknown>]

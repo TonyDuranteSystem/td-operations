@@ -22,7 +22,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
-import { extractInviteeFields } from "@/lib/calendly/parse-invitee"
+import { extractInviteeFields, buildLeadNotes } from "@/lib/calendly/parse-invitee"
 import { createPendingReferral } from "@/lib/operations/referral"
 
 let _supabase: SupabaseClient | null = null
@@ -181,15 +181,22 @@ export async function POST(req: NextRequest) {
         raw: payload,
         parsed: {
           name: fields.name,
+          first_name: fields.firstName,
+          last_name: fields.lastName,
           email: fields.email,
           phone: fields.phone,
+          language: fields.language,
           call_date: fields.callDate,
+          call_time: fields.callTime,
+          timezone: fields.timezone,
           reason: fields.reason,
           referrer_name: referrerName,
           referrer_contact_id: referrerContactId,
           referral_code: referralCode,
           event_uri: fields.eventUri,
           event_type_name: fields.eventTypeName,
+          meeting_url: fields.meetingUrl,
+          qa: fields.qa,
         },
         matches: {
           existing_lead_id: existingLeads?.[0]?.id || null,
@@ -262,9 +269,12 @@ export async function POST(req: NextRequest) {
       source: referrerContactId ? "Referral" : "Calendly",
       channel: "Calendly",
       status: "Call Scheduled",
-      notes: fields.eventUri ? `Calendly event: ${fields.eventUri}` : "Booked via Calendly",
+      notes: buildLeadNotes(fields),
     }
+    if (fields.firstName) leadRecord.first_name = fields.firstName
+    if (fields.lastName) leadRecord.last_name = fields.lastName
     if (fields.phone) leadRecord.phone = fields.phone
+    if (fields.language) leadRecord.language = fields.language
     if (fields.callDate) leadRecord.call_date = fields.callDate
     if (fields.reason) leadRecord.reason = fields.reason
     if (referrerName) leadRecord.referrer_name = referrerName

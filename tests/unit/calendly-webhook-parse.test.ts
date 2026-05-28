@@ -1,62 +1,136 @@
 /**
- * extractInviteeFields — Calendly webhook payload parser.
+ * extractInviteeFields + detectLanguage + buildLeadNotes — Calendly parser.
  *
  * Regression guard for the 2026-05-27 bug: real Calendly v2 webhooks place the
- * invitee fields DIRECTLY on payload.payload (email, name, questions_and_answers,
- * tracking). Our parser previously read them from payload.payload.invitee.* — a
- * wrapper that only existed in a synthetic test payload, never in real Calendly.
- * Result: every real booking was rejected with 400 "No invitee email" and never
- * stored. These cases lock in both shapes.
+ * invitee fields DIRECTLY on payload.payload; our parser previously read them
+ * from payload.payload.invitee.*. These cases lock in both shapes plus the
+ * richer field extraction (name parts, phone, language, call time, meeting URL,
+ * notes) added 2026-05-28.
  *
- * The "real" fixture below is the verbatim shape returned by Calendly's API for
- * the live booking housedurante@gmail.com (event cadb5264, invitee ef8bf05c) —
- * confirmed via GET /scheduled_events/{uri}/invitees on 2026-05-27.
+ * The "real" fixture mirrors the verbatim shape Calendly delivered for the live
+ * booking (event b478a575) on 2026-05-28.
  */
 
 import { describe, it, expect } from "vitest"
-import { extractInviteeFields } from "@/lib/calendly/parse-invitee"
+import {
+  extractInviteeFields,
+  detectLanguage,
+  buildLeadNotes,
+  type ParsedQA,
+} from "@/lib/calendly/parse-invitee"
 
-describe("extractInviteeFields — real Calendly v2 shape (fields on payload.payload)", () => {
-  const realPayload = {
+function realPayload(extraQA: Array<{ question: string; answer: string }> = []) {
+  return {
     event: "invitee.created",
     payload: {
-      uri: "https://api.calendly.com/scheduled_events/cadb5264/invitees/ef8bf05c",
-      event: "https://api.calendly.com/scheduled_events/cadb5264",
-      email: "housedurante@gmail.com",
-      name: "Antonio Noel Durante",
-      first_name: "Antonio",
-      last_name: "Noel Durante",
+      uri: "https://api.calendly.com/scheduled_events/b478a575/invitees/ce872cb7",
+      event: "https://api.calendly.com/scheduled_events/b478a575",
+      email: "Pasquale@BlueMagicLinic.com",
+      name: "Pasquale Minasi",
+      first_name: "Pasquale",
+      last_name: "Minasi",
+      timezone: "Europe/Berlin",
+      tracking: { utm_campaign: null, utm_source: null },
       questions_and_answers: [
-        { answer: "uxio-test", position: 0, question: "What is the main reason for booking this call?" },
-        { answer: "gg", position: 1, question: "How did you find out about our services? (Instagram, YouTube, Google, website, referral, other)" },
-        { answer: "+1 727-253-5199", position: 2, question: "What is your phone number?" },
+        { answer: "Interested to open a company in US", position: 0, question: "What is the main reason for booking this call?\n\nQual è il motivo..." },
+        { answer: "Referred by Guido", position: 1, question: "How did you find out about our services? (Instagram, YouTube, Google, website, referral, other)" },
+        { answer: "+39 333 437 4360", position: 2, question: "What is your phone number? Please include your country code." },
+        ...extraQA,
       ],
-      tracking: {
-        utm_campaign: "uxio-test",
-        utm_source: "referral",
-        utm_medium: "link",
-        utm_content: null,
-        utm_term: null,
+      scheduled_event: {
+        name: "Free meet&greet call",
+        start_time: "2026-06-01T17:00:00.000000Z",
+        location: { type: "zoom", join_url: "https://us06web.zoom.us/j/84833905915?pwd=abc" },
       },
-      scheduled_event: { start_time: "2026-06-03T13:30:00.000000Z", name: "Free Call" },
     },
   }
+}
 
-  it("parses email/name from the top level (no invitee wrapper)", () => {
-    const f = extractInviteeFields(realPayload)
-    expect(f).not.toBeNull()
-    expect(f!.email).toBe("housedurante@gmail.com")
-    expect(f!.name).toBe("Antonio Noel Durante")
+describe("extractInviteeFields — real Calendly v2 shape", () => {
+  it("parses email (lowercased), name, and name parts", () => {
+    const f = extractInviteeFields(realPayload())!
+    expect(f.email).toBe("pasquale@bluemagiclinic.com")
+    expect(f.name).toBe("Pasquale Minasi")
+    expect(f.firstName).toBe("Pasquale")
+    expect(f.lastName).toBe("Minasi")
   })
 
-  it("extracts the referral code from tracking.utm_campaign", () => {
-    const f = extractInviteeFields(realPayload)
-    expect(f!.referralCode).toBe("uxio-test")
+  it("extracts phone from the form answer (dedicated field empty)", () => {
+    expect(extractInviteeFields(realPayload())!.phone).toBe("+39 333 437 4360")
   })
 
-  it("derives the call date from scheduled_event.start_time", () => {
-    const f = extractInviteeFields(realPayload)
-    expect(f!.callDate).toBe("2026-06-03")
+  it("captures reason, call date+time, timezone, event type, meeting URL", () => {
+    const f = extractInviteeFields(realPayload())!
+    expect(f.reason).toBe("Interested to open a company in US")
+    expect(f.callDate).toBe("2026-06-01")
+    expect(f.callTime).toBe("2026-06-01T17:00:00.000000Z")
+    expect(f.timezone).toBe("Europe/Berlin")
+    expect(f.eventTypeName).toBe("Free meet&greet call")
+    expect(f.meetingUrl).toBe("https://us06web.zoom.us/j/84833905915?pwd=abc")
+  })
+
+  it("captures the how-they-heard answer as referrerName", () => {
+    expect(extractInviteeFields(realPayload())!.referrerName).toBe("Referred by Guido")
+  })
+
+  it("does NOT false-match phone as the referral code", () => {
+    expect(extractInviteeFields(realPayload())!.referralCode).toBeNull()
+  })
+})
+
+describe("language detection — flexible, label-independent", () => {
+  const cases: Array<[string, string | null]> = [
+    ["Italian", "Italian"],
+    ["Italiano", "Italian"],
+    ["🇮🇹 Italiano", "Italian"],
+    ["it", "Italian"],
+    ["English", "English"],
+    ["Inglese", "English"],
+    ["🇬🇧 English", "English"],
+    ["en", "English"],
+  ]
+  it.each(cases)("language question answer %s → %s", (answer, expected) => {
+    const qa: ParsedQA[] = [{ question: "Preferred language / Lingua preferita", answer }]
+    expect(detectLanguage(qa)).toBe(expected)
+  })
+
+  it("does not false-match free-text containing 'ital' (e.g. capital)", () => {
+    const qa: ParsedQA[] = [
+      { question: "What is the main reason?", answer: "I need help raising capital" },
+    ]
+    expect(detectLanguage(qa)).toBeNull()
+  })
+
+  it("falls back to a short language answer when no language question keyword", () => {
+    const qa: ParsedQA[] = [
+      { question: "Choose one", answer: "Italiano" },
+      { question: "Reason", answer: "open an LLC" },
+    ]
+    expect(detectLanguage(qa)).toBe("Italian")
+  })
+
+  it("flows language into the parsed lead when the form includes it", () => {
+    const f = extractInviteeFields(
+      realPayload([{ question: "Which language do you prefer? / Lingua", answer: "Italiano" }])
+    )!
+    expect(f.language).toBe("Italian")
+  })
+
+  it("language is null when not present", () => {
+    expect(extractInviteeFields(realPayload())!.language).toBeNull()
+  })
+})
+
+describe("buildLeadNotes", () => {
+  it("includes call type, time+timezone, meeting URL, and full Q&A", () => {
+    const f = extractInviteeFields(realPayload())!
+    const notes = buildLeadNotes(f)
+    expect(notes).toContain("Free meet&greet call")
+    expect(notes).toContain("2026-06-01T17:00:00.000000Z")
+    expect(notes).toContain("Europe/Berlin")
+    expect(notes).toContain("https://us06web.zoom.us/j/84833905915?pwd=abc")
+    expect(notes).toContain("Interested to open a company in US")
+    expect(notes).toContain("+39 333 437 4360")
   })
 })
 
@@ -79,11 +153,11 @@ describe("extractInviteeFields — legacy nested shape (payload.payload.invitee.
   }
 
   it("still parses the nested invitee shape", () => {
-    const f = extractInviteeFields(legacyPayload)
-    expect(f).not.toBeNull()
-    expect(f!.email).toBe("qa-test@example.com")
-    expect(f!.name).toBe("QA Test")
-    expect(f!.referralCode).toBe("marco-rossi")
+    const f = extractInviteeFields(legacyPayload)!
+    expect(f.email).toBe("qa-test@example.com")
+    expect(f.name).toBe("QA Test")
+    expect(f.phone).toBe("+1234567890")
+    expect(f.referralCode).toBe("marco-rossi")
   })
 })
 
