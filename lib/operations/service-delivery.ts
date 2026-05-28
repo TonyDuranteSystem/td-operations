@@ -662,6 +662,62 @@ export async function completeSD(
   })
 }
 
+// ─── markServiceComplete (complete IN PLACE, no stage advance) ──────────
+
+export interface MarkServiceCompleteParams {
+  delivery_id: string
+  actor?: string
+  reason?: string
+}
+
+export interface MarkServiceCompleteResult {
+  success: boolean
+  outcome: "completed" | "already_completed" | "not_found" | "cancelled" | "error"
+  delivery_id: string
+  error?: string
+}
+
+/**
+ * Mark a service delivery COMPLETE in place — sets status='completed' + end_date
+ * WITHOUT advancing the stage. Unlike completeSD (which advances to the final
+ * pipeline stage and therefore re-fires that stage's advance side-effects), this
+ * does NOT move the stage, so it triggers no stage-advance auto-tasks/side-effects.
+ *
+ * Used by the Flexible Formation flow (2026-05-28): formation completes at EIN
+ * received IN PLACE, instead of advancing into the (now-decoupled)
+ * "Post-Formation + Banking" stage which would auto-create banking/lease/welcome.
+ * Idempotent: a no-op if already completed.
+ */
+export async function markServiceComplete(
+  params: MarkServiceCompleteParams,
+): Promise<MarkServiceCompleteResult> {
+  const { data: sd, error: sdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("id, status, notes")
+    .eq("id", params.delivery_id)
+    .maybeSingle()
+  if (sdErr) return { success: false, outcome: "error", delivery_id: params.delivery_id, error: sdErr.message }
+  if (!sd) return { success: false, outcome: "not_found", delivery_id: params.delivery_id, error: "Service delivery not found" }
+  if (sd.status === "completed") return { success: true, outcome: "already_completed", delivery_id: params.delivery_id }
+  if (sd.status === "cancelled") return { success: false, outcome: "cancelled", delivery_id: params.delivery_id, error: "Service is cancelled" }
+
+  const today = new Date().toISOString().split("T")[0]
+  const noteLine = `${today} — Marked complete in place${params.reason ? `: ${params.reason}` : ""}${params.actor ? ` (by ${params.actor})` : ""}`
+  const newNotes = sd.notes ? `${sd.notes}\n${noteLine}` : noteLine
+
+  const { data: updated, error: updErr } = await supabaseAdmin
+    // eslint-disable-next-line no-restricted-syntax -- sanctioned in-place completion (no stage advance); TOCTOU-guarded on status
+    .from("service_deliveries")
+    .update({ status: "completed", end_date: today, notes: newNotes, updated_at: new Date().toISOString() } as never)
+    .eq("id", sd.id)
+    .eq("status", sd.status)
+    .select("id")
+    .maybeSingle()
+  if (updErr) return { success: false, outcome: "error", delivery_id: params.delivery_id, error: updErr.message }
+  if (!updated) return { success: false, outcome: "error", delivery_id: params.delivery_id, error: "Status changed concurrently — retry" }
+  return { success: true, outcome: "completed", delivery_id: params.delivery_id }
+}
+
 // ─── repairContactId (P3.3) ───────────────────────────
 
 export interface RepairContactIdParams {

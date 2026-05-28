@@ -66,11 +66,13 @@ export async function updateAccountField(
     summary: `${field} updated`, details: { [field]: coercedValue },
   })
 
-  // Inline EIN edit on a formation-tier account triggers the same workflow as
-  // the explicit "Record EIN Received" button (Banking SD + advance Formation
-  // SD + tier→active + welcome package). MMLLC member-info portal message is
-  // intentionally omitted — that side-effect should go through the dedicated
-  // dialog UI. Best-effort: failures are logged but don't break the EIN save.
+  // Inline EIN edit on a formation-tier account triggers the formation→active
+  // hand-off (complete the Formation SD in place + tier→active). Per the
+  // Flexible Formation model, formation ENDS at EIN — no banking SD, no lease,
+  // no welcome package are auto-created (banking is portal self-service, OA is
+  // self-service, lease is a separate staff action). MMLLC member-info portal
+  // message is intentionally omitted — that goes through the dedicated dialog
+  // UI. Best-effort: failures are logged but don't break the EIN save.
   if (result.success && field === 'ein_number' && typeof coercedValue === 'string' && coercedValue) {
     try {
       const { data: account } = await supabaseAdmin

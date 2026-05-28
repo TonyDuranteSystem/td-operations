@@ -1,32 +1,35 @@
 /**
  * formation.confirm_ein_received — formation_progress action.
  *
- * Records the EIN received from IRS on the account, then advances the SD
- * stage from EIN Submitted → Post-Formation + Banking.
+ * FLEXIBLE FORMATION MODEL (Antonio 2026-05-28): the EIN is the TERMINAL event
+ * of formation. Recording it (1) writes accounts.ein_number, (2) marks the
+ * Company Formation SD COMPLETE in place (no stage advance → no banking/lease/
+ * welcome side-effects), and (3) flips the tier to active. Banking is portal
+ * self-service, OA is self-service, the lease is a separate staff action —
+ * none are auto-created here.
  *
  * Reads admin's typed EIN from ctx.params.ein_number (per the action's
  * requires_input field).
  *
  * Why a service-specific handler instead of generic chain.update_account_field?
- * Two distinct writes (account.ein_number + SD stage advance) need to be
- * coordinated atomically-from-Luca's-view in one click. Splitting into two
- * actions would require Luca to click twice and risk leaving the account
- * updated but SD not advanced.
+ * Three writes (account.ein_number + SD completion + tier→active) need to be
+ * coordinated in one Luca click. Splitting them would require multiple clicks
+ * and risk leaving the account updated but the SD/tier not advanced.
  *
  * Idempotency: if account.ein_number is already set to the submitted value,
- * the helper skips the update (logs as no-op). SD advance is gated by stage
- * (advanceStage refuses if not at EIN Submitted).
+ * the EIN write is skipped (no-op). markServiceComplete no-ops if the SD is
+ * already completed, and syncTier no-ops if already active. The old exact-stage
+ * gate is GONE — EIN can be recorded based on facts, from any active stage.
  */
 
 import { updateAccount } from "@/lib/operations/account"
-import { advanceStage } from "@/lib/operations/service-delivery"
+import { markServiceComplete } from "@/lib/operations/service-delivery"
+import { syncTier } from "@/lib/operations/sync-tier"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 
 /** Re-export the central client-safe schema for the workflow editor. */
 export { formationConfirmEinReceivedParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
-
-const TARGET_STAGE = "Post-Formation + Banking"
 
 function normalizeEin(raw: string): string {
   // Strip everything except digits, then re-format as XX-XXXXXXX.
@@ -78,9 +81,10 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
       success: true,
       side_effects: [
         { kind: "account.field_preview", detail: `accounts.ein_number → ${ein}` },
-        { kind: "sd.advance.preview", detail: `EIN Submitted → ${TARGET_STAGE}` },
+        { kind: "sd.complete.preview", detail: `Company Formation → completed (formation ends at EIN)` },
+        { kind: "tier.preview", detail: `portal_tier → active` },
       ],
-      preview: { sd_stage_change: `EIN Submitted → ${TARGET_STAGE}` },
+      preview: { sd_stage_change: `Formation complete → Active` },
     }
   }
 
@@ -130,44 +134,60 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
     })
   }
 
-  // ── 2. Advance SD stage ──────────────────────────────────────────
-  const advance = await advanceStage({
+  // ── 2. Complete the Company Formation SD IN PLACE ────────────────
+  // Formation ENDS at EIN. No stage advance → no banking/lease/welcome
+  // side-effects. The old exact-stage gate is gone: markServiceComplete
+  // completes from any active status, so EIN can be recorded based on facts.
+  const done = await markServiceComplete({
     delivery_id: ctx.task.delivery_id,
-    target_stage: TARGET_STAGE,
     actor: `workflow:formation.confirm_ein_received:${ctx.actor.id}`,
-    notes: `EIN ${ein} recorded; advancing to Post-Formation + Banking`,
+    reason: `EIN ${ein} recorded — formation complete`,
   })
-  if (!advance.success) {
+  if (!done.success) {
     sideEffects.push({
-      kind: "sd.advance.failed",
-      detail: advance.error ?? "advanceStage returned success=false",
+      kind: "sd.complete.failed",
+      detail: done.error ?? "markServiceComplete returned success=false",
     })
     return {
       success: true, // EIN was written — don't fail the whole action
       side_effects: sideEffects,
-      task_meta_patch: { ein_number: ein, sd_stage_advance_error: advance.error },
-      result: { ein, sd_advanced: false },
+      task_meta_patch: { ein_number: ein, sd_complete_error: done.error },
+      result: { ein, sd_completed: false },
     }
   }
   sideEffects.push({
-    kind: "sd.stage_advanced",
-    detail: `${advance.from_stage} → ${advance.to_stage}`,
+    kind: "sd.completed",
+    detail: `Company Formation → completed (${done.outcome})`,
     ref_id: ctx.task.delivery_id,
   })
+
+  // ── 3. Flip tier to active (formation complete = company active) ──
+  const tier = await syncTier({
+    accountId: ctx.task.account_id,
+    newTier: "active",
+    reason: `EIN ${ein} received — formation complete`,
+    actor: `workflow:formation.confirm_ein_received:${ctx.actor.id}`,
+  })
+  sideEffects.push(
+    tier.success
+      ? { kind: "tier.synced", detail: `portal_tier → active`, ref_id: ctx.task.account_id }
+      : { kind: "tier.sync_failed", detail: tier.error ?? "syncTier returned success=false" },
+  )
 
   return {
     success: true,
     side_effects: sideEffects,
     task_meta_patch: {
       ein_number: ein,
-      sd_stage: advance.to_stage,
-      sd_stage_at_action: advance.to_stage,
+      sd_completed: true,
+      sd_stage: "Completed",
+      sd_stage_at_action: "Completed",
     },
     result: {
       ein,
       previous_ein: previousEin,
-      sd_advanced: true,
-      sd_stage: advance.to_stage,
+      sd_completed: true,
+      tier_synced: tier.success,
     },
   }
 }

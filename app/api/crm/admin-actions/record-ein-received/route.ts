@@ -3,10 +3,9 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 import { normalizeEIN } from '@/lib/jobs/validation'
-import { advanceStage, createSD } from '@/lib/operations/service-delivery'
+import { markServiceComplete } from '@/lib/operations/service-delivery'
 import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
-import { enqueueJob } from '@/lib/jobs/queue'
 import { buildFormUrl } from '@/lib/forms/smart-url'
 
 export async function POST(req: NextRequest) {
@@ -83,53 +82,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Failed to save EIN: ${einWriteResult.error}` }, { status: 500 })
     }
 
-    // 2b. Create Banking Fintech SD (deferred from payment per SOP v7.2 Phase 0)
-    // Guard: skip if one already exists (idempotent — old clients may have it from before the formation SD filter fix)
-    let bankingSdId: string | null = null
-    const { data: existingBankingSd } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('id')
-      .eq('account_id', account_id)
-      .eq('service_type', 'Banking Fintech')
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle()
-
-    if (!existingBankingSd) {
-      try {
-        const bankingSd = await createSD({
-          service_type: 'Banking Fintech',
-          service_name: `Banking Fintech - ${account.company_name}`,
-          account_id,
-          contact_id: formationSD.contact_id || null,
-          notes: `Auto-created on EIN received for ${account.company_name} (${normalizedEIN})`,
-        })
-        bankingSdId = bankingSd.id
-      } catch (e) {
-        console.error('[record-ein-received] Banking Fintech SD creation failed:', e)
-        // Non-fatal — EIN recording continues
-      }
-    } else {
-      bankingSdId = existingBankingSd.id
-    }
-
-    // 3. Advance Company Formation SD directly to "Post-Formation + Banking"
-    const advanceResult = await advanceStage({
+    // 3. Complete the Company Formation SD IN PLACE (Flexible Formation model:
+    // formation ENDS at EIN). No stage advance → no banking/lease/welcome
+    // side-effects. Banking is portal self-service, OA is self-service, and the
+    // lease is a separate staff action — none are auto-created here anymore.
+    const completeResult = await markServiceComplete({
       delivery_id: formationSD.id,
-      target_stage: 'Post-Formation + Banking',
       actor: 'crm-admin',
-      notes: `EIN recorded: ${normalizedEIN}`,
-    })
-
-    const sdStage = advanceResult.success ? 'Post-Formation + Banking' : (previousStage ?? 'unknown')
-
-    // 4. Enqueue welcome package job explicitly (handler deduplicates via welcome_package_status)
-    const welcomeJob = await enqueueJob({
-      job_type: 'welcome_package_prepare',
-      payload: { account_id },
-      priority: 5,
-      account_id,
-      created_by: 'crm-record-ein',
+      reason: `EIN received: ${normalizedEIN} — formation complete`,
     })
 
     // 5. Sync tier to active
@@ -233,17 +193,15 @@ export async function POST(req: NextRequest) {
       table_name: 'accounts',
       record_id: account_id,
       account_id,
-      summary: `EIN ${normalizedEIN} recorded for ${account.company_name}. Tier: ${previousTier ?? 'null'} → active. SD advanced to ${sdStage}.`,
+      summary: `EIN ${normalizedEIN} recorded for ${account.company_name}. Tier: ${previousTier ?? 'null'} → active. Formation SD completed (was: ${previousStage ?? 'unknown'}).`,
       details: {
         ein_number: normalizedEIN,
         drive_file_id: drive_file_id || null,
         formation_sd_id: formationSD.id,
-        banking_sd_id: bankingSdId,
         previous_stage: previousStage,
-        new_stage: sdStage,
         previous_tier: previousTier,
-        welcome_package_job_id: welcomeJob.id,
-        sd_advance_success: advanceResult.success,
+        formation_complete_success: completeResult.success,
+        formation_complete_outcome: completeResult.outcome,
         member_info_request_id: memberInfoRequestId,
         source: 'crm-button',
       },
@@ -257,9 +215,8 @@ export async function POST(req: NextRequest) {
         newTier: tierResult.newTier,
         success: tierResult.success,
       },
-      sd_stage: sdStage,
-      banking_sd_id: bankingSdId,
-      welcome_package_job_id: welcomeJob.id,
+      formation_complete: completeResult.success,
+      formation_complete_outcome: completeResult.outcome,
       member_info_form_url: memberInfoFormUrl,
     })
   } catch (err) {

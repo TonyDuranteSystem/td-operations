@@ -19,12 +19,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { upgradePortalTier } from "@/lib/portal/auto-create"
-import { createSD } from "@/lib/operations/service-delivery"
+import { markServiceComplete } from "@/lib/operations/service-delivery"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 import { buildFormUrl } from "@/lib/forms/smart-url"
 import type { Json } from "@/lib/database.types"
-import { enqueueJob } from "@/lib/jobs/queue"
 import {
   type AdminAddedName,
   classifyNameSource,
@@ -567,7 +566,10 @@ export async function POST(req: NextRequest) {
           .in("status", ["signed", "submitted"])
         einSideEffects.push("SS-4 status → done")
 
-        // 3. Advance Company Formation pipeline to Post-Formation + Banking
+        // 3. Complete the Company Formation SD IN PLACE — formation ENDS at EIN
+        // (Flexible Formation model). No stage advance → no banking/lease/welcome
+        // side-effects. Banking is portal self-service, OA is self-service, the
+        // lease is a separate staff action — none are auto-created here.
         const { data: formationSds } = await supabaseAdmin
           .from("service_deliveries")
           .select("id")
@@ -577,67 +579,16 @@ export async function POST(req: NextRequest) {
           .limit(1)
 
         if (formationSds && formationSds.length > 0) {
-          // Advance pipeline using shared utility
-          const { advanceFormationToStage } = await import("@/lib/pipeline-utils")
-          const advResult = await advanceFormationToStage(
-            formationSds[0].id,
-            "Post-Formation + Banking",
-            "crm-admin",
-            `EIN received: ${einFormatted}`,
-          )
-          if (advResult.advanced) {
-            einSideEffects.push("Pipeline advanced to Post-Formation + Banking")
-            einSideEffects.push(...advResult.sideEffects)
-          } else {
-            einSideEffects.push(`Pipeline advance: ${advResult.detail}`)
-          }
-        }
-
-        // 3b. Create Banking Fintech SD (deferred from payment per SOP v7.2 Phase 0)
-        // Guard: skip if one already exists on this account
-        const { data: existingBankingSdCa } = await supabaseAdmin
-          .from("service_deliveries")
-          .select("id")
-          .eq("account_id", accountId)
-          .eq("service_type", "Banking Fintech")
-          .eq("status", "active")
-          .limit(1)
-          .maybeSingle()
-
-        if (!existingBankingSdCa) {
-          try {
-            const { data: acctForBanking } = await supabaseAdmin
-              .from("accounts")
-              .select("company_name")
-              .eq("id", accountId)
-              .single()
-            await createSD({
-              service_type: "Banking Fintech",
-              service_name: `Banking Fintech - ${acctForBanking?.company_name ?? accountId}`,
-              account_id: accountId,
-              contact_id: contact_id || null,
-              notes: `Auto-created on EIN received (${einFormatted})`,
-            })
-            einSideEffects.push("Banking Fintech SD created")
-          } catch (e) {
-            einSideEffects.push(`Banking Fintech SD creation failed: ${e instanceof Error ? e.message : String(e)}`)
-          }
-        } else {
-          einSideEffects.push("Banking Fintech SD already exists — skipped")
-        }
-
-        // 3c. Enqueue welcome package job (creates OA, Lease, banking forms, review task)
-        try {
-          const wpJob = await enqueueJob({
-            job_type: 'welcome_package_prepare',
-            payload: { account_id: accountId },
-            priority: 5,
-            account_id: accountId,
-            created_by: 'crm-enter-ein',
+          const done = await markServiceComplete({
+            delivery_id: formationSds[0].id,
+            actor: "crm-admin",
+            reason: `EIN received: ${einFormatted} — formation complete`,
           })
-          einSideEffects.push(`Welcome package job enqueued: ${wpJob.id}`)
-        } catch (e) {
-          einSideEffects.push(`Welcome package job enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
+          einSideEffects.push(
+            done.success
+              ? `Company Formation SD ${done.outcome}`
+              : `Company Formation SD complete failed: ${done.error ?? "unknown"}`,
+          )
         }
 
         // 4. Sync portal tier to active across contact + account + auth
@@ -742,7 +693,7 @@ export async function POST(req: NextRequest) {
 
         result = {
           success: true,
-          detail: `EIN ${einFormatted} saved. Pipeline advancing to Post-Formation.`,
+          detail: `EIN ${einFormatted} saved. Formation complete — company active.`,
           side_effects: einSideEffects,
         }
         break
