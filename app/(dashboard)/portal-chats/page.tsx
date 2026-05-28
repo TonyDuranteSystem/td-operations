@@ -2435,8 +2435,9 @@ export default function PortalChatsPage() {
 
             {chatViewMode === 'whatsnew' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
               <ThreadWhatsNewPanel
-                accountId={selectedAccountId || selectedCompanyId}
+                accountId={selectedAccountId}
                 contactId={selectedContactId}
+                cardAccountId={selectedAccountId || selectedCompanyId}
                 onOpenCard={({ noteId, label }) => {
                   const acctId = selectedAccountId || selectedCompanyId
                   setCardPreset({
