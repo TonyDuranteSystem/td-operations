@@ -133,6 +133,9 @@ describe("calendly webhook — auto_create with referral", () => {
     expect(params.referrerContactId).toBe("referrer-contact-1")
     expect(params.referredLeadId).toBe("lead-new")
     expect(params.referredEmail).toBe("booker@example.com")
+
+    // The booking record is marked auto_created so it stays OFF the Intake review list
+    expect(recorded.webhookInsert?.review_status).toBe("auto_created")
   })
 })
 

@@ -236,11 +236,16 @@ export async function POST(req: NextRequest) {
     // are updated, not duplicated. Referral attribution is created here too (it is
     // otherwise only created in the Intake "Create Lead" step).
 
+    // review_status='auto_created' keeps this row OUT of the Intake review page
+    // (which only lists 'pending_review'/'auto_linked' and the processed set) —
+    // auto-created bookings already became leads and need no review. Without this,
+    // the column default 'pending_review' would clutter the Intake pending list.
     await db.from("webhook_events").insert({
       source: "calendly",
       event_type: payload.event || "unknown",
       external_id: payload.payload?.uri || "unknown",
       payload,
+      review_status: "auto_created",
     })
 
     if (existingLeads && existingLeads.length > 0) {
