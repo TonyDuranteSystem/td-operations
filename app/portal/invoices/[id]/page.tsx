@@ -31,6 +31,7 @@ interface PaymentMethod {
 interface InvoiceDetail {
   id: string
   account_id: string
+  customer_id: string | null
   invoice_number: string
   status: string
   currency: string
@@ -299,15 +300,30 @@ export default function InvoiceDetailPage() {
             {t('invoices.pdf')}
           </button>
 
-          {invoice.status === 'Draft' && invoice.customer?.email && (
-            <button
-              onClick={handleSend}
-              disabled={sending}
-              className="flex items-center justify-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              {t('invoices.send')}
-            </button>
+          {invoice.status === 'Draft' && (
+            invoice.customer?.email ? (
+              <button
+                onClick={handleSend}
+                disabled={sending}
+                className="flex items-center justify-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {t('invoices.send')}
+              </button>
+            ) : (
+              // No customer email → Send can't work. Show WHY + a one-tap link to
+              // add the email on the customer's page (instead of silently hiding Send).
+              <Link
+                href={invoice.customer_id ? `/portal/customers/${invoice.customer_id}` : '/portal/customers'}
+                title={locale === 'it'
+                  ? 'Aggiungi un indirizzo email a questo cliente per inviare la fattura'
+                  : 'Add an email to this customer to send the invoice'}
+                className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-amber-300 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100"
+              >
+                <Send className="h-4 w-4" />
+                {locale === 'it' ? 'Aggiungi email per inviare' : 'Add email to send'}
+              </Link>
+            )
           )}
 
           {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
