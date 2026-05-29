@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalServices, getPortalServicesByContact } from '@/lib/portal/queries'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -44,12 +45,17 @@ export default async function PortalServicesPage() {
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  if (!contactId) redirect('/portal')
-
-  const accounts = await getPortalAccounts(contactId)
-  const cookieStore = cookies()
-  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  let selectedAccountId: string | undefined
+  if (contactId) {
+    const accounts = await getPortalAccounts(contactId)
+    const cookieStore = cookies()
+    const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+    selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  } else {
+    // Teammate (Portal Team Access) — requires 'company_services'; account-scoped only.
+    selectedAccountId = (await getTeammateScopeOrNull(user, 'company_services')) ?? undefined
+    if (!selectedAccountId) redirect('/portal')
+  }
 
   const locale = getLocale(user)
   // Phase 1 ITIN rule (2026-05-11): always merge contact-level SDs so ITIN
@@ -59,7 +65,7 @@ export default async function PortalServicesPage() {
   // would otherwise appear twice.
   const [accountServices, contactServices] = await Promise.all([
     selectedAccountId ? getPortalServices(selectedAccountId) : Promise.resolve([]),
-    getPortalServicesByContact(contactId),
+    contactId ? getPortalServicesByContact(contactId) : Promise.resolve([]),
   ])
   const byId = new Map<string, typeof accountServices[number]>()
   for (const s of accountServices) byId.set(s.id, s)

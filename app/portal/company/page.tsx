@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import {
   getPortalAccounts,
   getPortalAccountDetail,
@@ -40,12 +41,16 @@ export default async function MyCompanyPage() {
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  if (!contactId) redirect('/portal')
-
-  const accounts = await getPortalAccounts(contactId)
-  const cookieStore = cookies()
-  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  let selectedAccountId: string | undefined
+  if (contactId) {
+    const accounts = await getPortalAccounts(contactId)
+    const cookieStore = cookies()
+    const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+    selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  } else {
+    // Teammate (Portal Team Access) — requires 'company_services'.
+    selectedAccountId = (await getTeammateScopeOrNull(user, 'company_services')) ?? undefined
+  }
 
   const locale = getLocale(user)
 

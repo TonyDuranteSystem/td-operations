@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalExpenses, getPortalExpensesByContact } from '@/lib/portal/queries'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { InvoiceList } from '@/components/portal/invoice-list'
@@ -27,14 +28,17 @@ export default async function PortalInvoicesPage({
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  if (!contactId) redirect('/portal')
+  // Teammate (Portal Team Access) — scoped to ONE company; requires 'invoices_billing'.
+  // Teammates see account-scoped sales/expenses only (no personal/contact expenses).
+  const teammateAccountId = contactId ? null : await getTeammateScopeOrNull(user, 'invoices_billing')
+  if (!contactId && !teammateAccountId) redirect('/portal')
 
   const params = await searchParams
 
   // Partner access: if ?accountId is provided and the user is a partner,
   // verify they manage that account via client_partners → accounts.partner_id.
   let partnerAccountId: string | undefined
-  if (params.accountId) {
+  if (params.accountId && contactId) {
     const { data: contact } = await supabaseAdmin
       .from('contacts')
       .select('portal_role')
@@ -58,12 +62,14 @@ export default async function PortalInvoicesPage({
     }
   }
 
-  const accounts = await getPortalAccounts(contactId)
+  const accounts = contactId ? await getPortalAccounts(contactId) : []
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = partnerAccountId
     ?? accounts.find(a => a.id === cookieAccountId)?.id
     ?? accounts[0]?.id
+    ?? teammateAccountId
+    ?? undefined
   // No redirect when there's no account — formation-gap clients (paid as
   // individual, no company yet, e.g. Lorenzo) need to see their personal
   // invoices via the Expenses tab.
@@ -97,7 +103,7 @@ export default async function PortalInvoicesPage({
           .limit(100)
       : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
     selectedAccountId ? getPortalExpenses(selectedAccountId) : Promise.resolve([]),
-    getPortalExpensesByContact(contactId),
+    contactId ? getPortalExpensesByContact(contactId) : Promise.resolve([]),
     selectedAccountId ? listTemplates(selectedAccountId) : Promise.resolve([]),
     selectedAccountId ? listVendors(selectedAccountId) : Promise.resolve([]),
   ])

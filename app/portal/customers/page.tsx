@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
@@ -17,12 +18,16 @@ export default async function PortalCustomersPage() {
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  if (!contactId) redirect('/portal')
-
-  const accounts = await getPortalAccounts(contactId)
-  const cookieStore = cookies()
-  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  let selectedAccountId: string | undefined
+  if (contactId) {
+    const accounts = await getPortalAccounts(contactId)
+    const cookieStore = cookies()
+    const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+    selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  } else {
+    // Teammate (Portal Team Access) — requires 'sales_customers'.
+    selectedAccountId = (await getTeammateScopeOrNull(user, 'sales_customers')) ?? undefined
+  }
   if (!selectedAccountId) redirect('/portal')
 
   const locale = getLocale(user)
