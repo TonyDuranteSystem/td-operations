@@ -20,3 +20,4 @@ docs/systems/tax-returns.md|lib/tax/,lib/mcp/tools/tax.ts,lib/mcp/tools/tax-quot
 docs/systems/portal.md|lib/portal/tier-config.ts,lib/portal/auto-create.ts,lib/portal/queries.ts,lib/portal/notifications.ts,lib/operations/sync-tier.ts,lib/mcp/tools/portal.ts,app/portal/
 docs/systems/referrals-circleback.md|lib/operations/referral.ts,lib/referral-utils.ts,lib/bank-referrals.ts,lib/portal/credit-notes.ts,lib/calendly/,lib/mcp/tools/referrals.ts,app/api/webhooks/calendly/
 docs/systems/workflow-engine.md|lib/catalog/,lib/tasks/,lib/mcp/tools/catalog.ts,app/(dashboard)/workflows/
+docs/systems/crm-core.md|lib/mcp/tools/crm.ts,lib/operations/contact.ts,lib/operations/task.ts,lib/operations/account.ts,lib/per-record-activity/,lib/sync-airtable.ts

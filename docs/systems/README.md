@@ -99,6 +99,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [portal.md](portal.md) | Client portal — 4 tiers (R102), syncTier, chat/notifications/docs, account types | ✅ written |
 | [referrals-circleback.md](referrals-circleback.md) | Referrals — 10% credit notes, partner commissions, Calendly intake | ✅ written |
 | [workflow-engine.md](workflow-engine.md) | Catalog framework + workflow engine — triggers, dispatch, snapshots, validity gate, editor | ✅ written |
+| [crm-core.md](crm-core.md) | CRM core — accounts/contacts/tasks/deals, account_contacts M:N, crm_update_record (R018) | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
 | _billing-invoicing.md_ | payments / client_invoices / client_expenses / td_expenses | ⬜ to seed |
