@@ -53,7 +53,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 ### Platform & cross-cutting
 - **Workflow / catalog engine** — Catalog-driven workflows: actions, SLA, follow-ups all in catalog_entries JSONB; visual editor.
   - Lives in: `lib/catalog/framework.ts, lib/tasks, app/workflows`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [workflow-engine.md](workflow-engine.md)
 - **CRM core** — Accounts, contacts, tasks, deals + activity log; contact identity/merge.
   - Lives in: `lib/mcp/tools/crm*, lib/per-record-activity, app/(dashboard)/accounts`
   - Rules: R018 · Deep doc: pending
