@@ -22,3 +22,4 @@ docs/systems/referrals-circleback.md|lib/operations/referral.ts,lib/referral-uti
 docs/systems/workflow-engine.md|lib/catalog/,lib/tasks/,lib/mcp/tools/catalog.ts,app/(dashboard)/workflows/
 docs/systems/crm-core.md|lib/mcp/tools/crm.ts,lib/operations/contact.ts,lib/operations/task.ts,lib/operations/account.ts,lib/per-record-activity/,lib/sync-airtable.ts
 docs/systems/hooks-guardrails.md|.claude/hooks/,.claude/settings.json,.husky/,scripts/check-system-docs-freshness.sh,scripts/dev-setup.sh,lib/supabase-admin.ts
+docs/systems/auth-oauth.md|middleware.ts,lib/auth.ts,lib/oauth.ts,app/api/oauth/,app/api/[transport]/

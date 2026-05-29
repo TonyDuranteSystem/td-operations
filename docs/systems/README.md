@@ -101,6 +101,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [workflow-engine.md](workflow-engine.md) | Catalog framework + workflow engine — triggers, dispatch, snapshots, validity gate, editor | ✅ written |
 | [crm-core.md](crm-core.md) | CRM core — accounts/contacts/tasks/deals, account_contacts M:N, crm_update_record (R018) | ✅ written |
 | [hooks-guardrails.md](hooks-guardrails.md) | Safety system — Claude hooks, pre-push gates, sandbox enforcement, R-rules | ✅ written |
+| [auth-oauth.md](auth-oauth.md) | Auth — Supabase session RBAC (middleware) + MCP Bearer/OAuth 2.1 PKCE | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
 | _billing-invoicing.md_ | payments / client_invoices / client_expenses / td_expenses | ⬜ to seed |
