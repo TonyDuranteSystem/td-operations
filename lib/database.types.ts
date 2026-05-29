@@ -134,6 +134,7 @@ export type Database = {
           payment_link: string | null
           physical_address: string | null
           portal_account: boolean | null
+          portal_admin_contact_id: string | null
           portal_auto_created: boolean | null
           portal_created_date: string | null
           portal_tier: string | null
@@ -217,6 +218,7 @@ export type Database = {
           payment_link?: string | null
           physical_address?: string | null
           portal_account?: boolean | null
+          portal_admin_contact_id?: string | null
           portal_auto_created?: boolean | null
           portal_created_date?: string | null
           portal_tier?: string | null
@@ -300,6 +302,7 @@ export type Database = {
           payment_link?: string | null
           physical_address?: string | null
           portal_account?: boolean | null
+          portal_admin_contact_id?: string | null
           portal_auto_created?: boolean | null
           portal_created_date?: string | null
           portal_tier?: string | null
@@ -348,6 +351,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "client_partners"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "accounts_portal_admin_contact_id_fkey"
+            columns: ["portal_admin_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "accounts_portal_admin_contact_id_fkey"
+            columns: ["portal_admin_contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
           {
             foreignKeyName: "accounts_registered_agent_id_fkey"
@@ -8814,6 +8831,111 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_sla_monitor"
             referencedColumns: ["account_id"]
+          },
+        ]
+      }
+      portal_team_members: {
+        Row: {
+          account_id: string
+          auth_user_id: string
+          capabilities: Json
+          created_at: string
+          created_by: string | null
+          disclaimer_accepted_at: string | null
+          disclaimer_accepted_by: string | null
+          display_name: string
+          email: string | null
+          id: string
+          status: string
+          updated_at: string
+          username: string
+        }
+        Insert: {
+          account_id: string
+          auth_user_id: string
+          capabilities?: Json
+          created_at?: string
+          created_by?: string | null
+          disclaimer_accepted_at?: string | null
+          disclaimer_accepted_by?: string | null
+          display_name: string
+          email?: string | null
+          id?: string
+          status?: string
+          updated_at?: string
+          username: string
+        }
+        Update: {
+          account_id?: string
+          auth_user_id?: string
+          capabilities?: Json
+          created_at?: string
+          created_by?: string | null
+          disclaimer_accepted_at?: string | null
+          disclaimer_accepted_by?: string | null
+          display_name?: string
+          email?: string | null
+          id?: string
+          status?: string
+          updated_at?: string
+          username?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_team_members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_disclaimer_accepted_by_fkey"
+            columns: ["disclaimer_accepted_by"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_team_members_disclaimer_accepted_by_fkey"
+            columns: ["disclaimer_accepted_by"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
         ]
       }

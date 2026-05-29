@@ -67,6 +67,9 @@ export type PortalMessagesSenderContext = "person" | "company"
 /** portal_messages.sender_type — CHECK constraint */
 export type PortalMessagesSenderType = "client" | "admin" | "system"
 
+/** portal_team_members.status — CHECK constraint */
+export type PortalTeamMembersStatus = "active" | "revoked"
+
 /** service_catalog.default_service_context — CHECK constraint */
 export type ServiceCatalogDefaultServiceContext = "individual" | "business" | "ask"
 
