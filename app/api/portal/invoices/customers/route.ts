@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -15,13 +15,9 @@ export async function GET(request: NextRequest) {
   const accountId = new URL(request.url).searchParams.get('account_id')
   if (!accountId) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
-  // Access control
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(accountId)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  // Access control — default-deny (contacts AND teammates; never skipped).
+  if (!(await canAccessAccount(user, accountId, 'invoices_billing'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   const { data } = await supabaseAdmin

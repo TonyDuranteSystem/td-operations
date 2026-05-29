@@ -1,15 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
+import type { User } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
-async function verifyAccess(user: { app_metadata?: Record<string, unknown> }, accountId: string) {
-  const contactId = user.app_metadata?.contact_id as string | undefined
-  if (contactId) {
-    const { data } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId)
-    if (!data?.some(r => r.account_id === accountId)) return false
-  }
-  return true
+// Default-deny (contacts AND teammates; never skipped). Payment links live under
+// the 'invoices_billing' capability.
+function verifyAccess(user: User, accountId: string) {
+  return canAccessAccount(user, accountId, 'invoices_billing')
 }
 
 export async function GET(request: NextRequest) {

@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
@@ -84,13 +84,9 @@ export async function POST(request: NextRequest) {
     fileBuffer = Buffer.from(await file.arrayBuffer())
   }
 
-  // Access control
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(accountId)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  // Access control — default-deny (contacts AND teammates; never skipped).
+  if (!(await canAccessAccount(user, accountId, 'documents'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   // Get account's Drive folder

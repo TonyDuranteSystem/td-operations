@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 
@@ -20,13 +20,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id and file_name required' }, { status: 400 })
   }
 
-  // Access control
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(account_id)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  // Access control — default-deny (contacts AND teammates; never skipped).
+  if (!(await canAccessAccount(user, account_id, 'documents'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   // Generate unique path

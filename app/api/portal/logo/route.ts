@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 const MAX_SIZE = 2 * 1024 * 1024 // 2MB
@@ -31,13 +31,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Use JPEG, PNG, WebP, or SVG' }, { status: 400 })
   }
 
-  // Access control
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(accountId)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  // Access control — default-deny (contacts AND teammates; never skipped).
+  if (!(await canAccessAccount(user, accountId, 'company_services'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   try {
@@ -74,6 +70,7 @@ export async function POST(request: NextRequest) {
     const logoUrl = urlData.publicUrl
 
     // Save URL to account
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing portal logo write; access now gated via canAccessAccount above
     await supabaseAdmin
       .from('accounts')
       .update({ invoice_logo_url: logoUrl })

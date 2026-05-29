@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -15,12 +15,8 @@ export async function GET(request: NextRequest) {
   const accountId = new URL(request.url).searchParams.get('account_id')
   if (!accountId) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(accountId)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  if (!(await canAccessAccount(user, accountId, 'invoices_billing'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   const { data } = await supabaseAdmin
@@ -42,12 +38,8 @@ export async function POST(request: NextRequest) {
 
   if (!account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(account_id)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  if (!(await canAccessAccount(user, account_id, 'invoices_billing'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   // Validate payment_gateway
@@ -60,6 +52,7 @@ export async function POST(request: NextRequest) {
   if (payment_gateway !== undefined) updates.payment_gateway = payment_gateway
   if (payment_link !== undefined) updates.payment_link = payment_link
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing portal payment-settings write; access now gated via canAccessAccount above
   const { error } = await supabaseAdmin
     .from('accounts')
     .update(updates)
