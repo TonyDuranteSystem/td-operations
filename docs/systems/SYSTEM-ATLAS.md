@@ -45,7 +45,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: ✅ DONE → [referrals-circleback.md](referrals-circleback.md)
 - **Documents & storage** — Drive storage, OCR, classification, doc processing.
   - Lives in: `lib/pdf, lib/mcp/tools/doc*/drive*/classify*/docai`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [documents.md](documents.md)
 - **Partners & team access** — Partner accounts, payouts, portal team members.
   - Lives in: `lib/partners, lib/mcp/tools/referral*, portal_team_send`
   - Rules: _(none specific)_ · Deep doc: draft card
