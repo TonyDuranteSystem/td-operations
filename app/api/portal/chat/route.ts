@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
@@ -40,10 +41,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
-  // Verify access
+  // Verify access. NOTE: gate on role==='client', NOT on contact-id presence —
+  // a teammate is a client with NO contact id and must never fall into the
+  // admin branch below.
+  const isClientUser = user.app_metadata?.role === 'client'
   const authContactId = getClientContactId(user)
   let clientAccountIds: string[] = []
-  if (authContactId) {
+
+  if (isClientUser && !authContactId) {
+    // Teammate (Portal Team Access): may ONLY read their own account's thread,
+    // and only if granted 'chat'.
+    const tmAccountId = await getTeammateScopeOrNull(user, 'chat')
+    if (!tmAccountId || !accountId || accountId !== tmAccountId) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+  } else if (authContactId) {
     if (accountId) {
       clientAccountIds = await getClientAccountIds(authContactId)
       if (!clientAccountIds.includes(accountId)) {
@@ -63,8 +75,9 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(limit)
 
-  // Client users never see soft-deleted messages. Admins see them so they can render tombstones.
-  if (authContactId) {
+  // Client users (contacts AND teammates) never see soft-deleted messages.
+  // Admins see them so they can render tombstones.
+  if (isClientUser) {
     query = query.is('deleted_at', null)
     // Hide ONLY internal chat-event notes — the ones carrying the
     // `<!-- chat-event: -->` marker (e.g. "Client paid…", "fax to IRS"). These are
@@ -83,7 +96,7 @@ export async function GET(request: NextRequest) {
     // For client users, account IDs were already resolved above.
     // For admin users, look them up now from account_contacts.
     let threadAccountIds = clientAccountIds
-    if (!authContactId && threadAccountIds.length === 0) {
+    if (!isClientUser && threadAccountIds.length === 0) {
       const { data: acRows } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id')
@@ -188,32 +201,42 @@ export async function POST(request: NextRequest) {
   // Resolve contact_id — always set (from body, or from auth user).
   // For admin senders with only account_id, look up the primary contact so the
   // message appears in the client's contact-scoped thread (fixes invisible admin messages).
-  let resolvedContactId = bodyContactId || getClientContactId(user)
-  if (!resolvedContactId && account_id && !isClientUser) {
-    // Do NOT filter by is_primary — only 1 record has it set across the entire DB.
-    // Any linked contact is the correct target for SMLLC (one contact) and an
-    // acceptable fallback for MMLLC (dashboard sends always pass contact_id explicitly).
-    const { data: primary } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contact_id')
-      .eq('account_id', account_id)
-      .limit(1)
-      .maybeSingle()
-    resolvedContactId = primary?.contact_id || null
-  }
+  const authContactId = getClientContactId(user)
+  let resolvedContactId: string | null
 
-  // Verify access for clients
-  if (isClientUser) {
-    const authContactId = getClientContactId(user)
-    if (authContactId && account_id) {
-      const accountIds = await getClientAccountIds(authContactId)
-      if (!accountIds.includes(account_id)) {
+  if (isClientUser && !authContactId) {
+    // Teammate (Portal Team Access): may post ONLY to their own account, ONLY
+    // with 'chat' granted, and NEVER under a body-supplied contact_id.
+    const tmAccountId = await getTeammateScopeOrNull(user, 'chat')
+    if (!tmAccountId || !account_id || account_id !== tmAccountId) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+    resolvedContactId = null
+  } else {
+    resolvedContactId = bodyContactId || authContactId
+    if (!resolvedContactId && account_id && !isClientUser) {
+      // Admin send with only account_id → target any linked contact so the
+      // message lands in the client's contact-scoped thread.
+      const { data: primary } = await supabaseAdmin
+        .from('account_contacts')
+        .select('contact_id')
+        .eq('account_id', account_id)
+        .limit(1)
+        .maybeSingle()
+      resolvedContactId = primary?.contact_id || null
+    }
+    // Verify access for client contacts
+    if (isClientUser) {
+      if (authContactId && account_id) {
+        const accountIds = await getClientAccountIds(authContactId)
+        if (!accountIds.includes(account_id)) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+        }
+      }
+      // If no account_id, contact_id must match auth user's contact
+      if (!account_id && resolvedContactId && resolvedContactId !== authContactId) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 })
       }
-    }
-    // If no account_id, contact_id must match auth user's contact
-    if (!account_id && resolvedContactId && resolvedContactId !== authContactId) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
   }
 
