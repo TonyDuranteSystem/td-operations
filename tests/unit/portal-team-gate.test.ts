@@ -4,7 +4,8 @@ import { teammateNavCapability } from '@/lib/portal/team/capabilities'
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import type { User } from '@supabase/supabase-js'
 
-const user = { id: 'u1', app_metadata: {} } as unknown as User
+const user = { id: 'u1', app_metadata: { role: 'client' } } as unknown as User
+const staffUser = { id: 'admin1', app_metadata: { role: 'admin' } } as unknown as User
 const resolver = (identity: PortalIdentity) => async () => identity
 
 describe('requirePortalCapability', () => {
@@ -47,6 +48,9 @@ describe('canAccessAccount (default-deny, fixes the if(contactId) skip-leak)', (
     expect(await canAccessAccount(user, 'a9', 'invoices_billing', t)).toBe(true)
     expect(await canAccessAccount(user, 'a9', 'documents', t)).toBe(false) // capability not granted
     expect(await canAccessAccount(user, 'a1', 'invoices_billing', t)).toBe(false) // wrong account
+  })
+  it('staff (non-client role) bypass — authenticated admins pass', async () => {
+    expect(await canAccessAccount(staffUser, 'a1', 'invoices_billing', resolver({ kind: 'none' }))).toBe(true)
   })
   it('denies null user / null account / unresolved', async () => {
     expect(await canAccessAccount(null, 'a1', 'documents')).toBe(false)

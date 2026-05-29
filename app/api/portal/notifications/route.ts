@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -22,9 +23,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
-  // Verify access
+  // Verify access. Gate on role==='client' (not contact-id presence) so a
+  // teammate (client, no contact id) cannot skip the check.
+  const isClientUser = user.app_metadata?.role === 'client'
   const authContactId = getClientContactId(user)
-  if (authContactId) {
+  if (isClientUser && !authContactId) {
+    // Teammate (Portal Team Access): only their own account, only with 'announcements'.
+    const tmAccountId = await getTeammateScopeOrNull(user, 'announcements')
+    if (!tmAccountId || !accountId || accountId !== tmAccountId) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+  } else if (authContactId) {
     if (accountId) {
       const accountIds = await getClientAccountIds(authContactId)
       if (!accountIds.includes(accountId)) {
@@ -72,9 +81,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'ids array required' }, { status: 400 })
   }
 
-  // Verify client owns all notifications before marking as read
+  // Verify the user owns all notifications before marking as read. Gate on
+  // role==='client' so a teammate (no contact id) cannot skip the check.
+  const isClientUser = user.app_metadata?.role === 'client'
   const authContactId = getClientContactId(user)
-  if (authContactId) {
+  if (isClientUser && !authContactId) {
+    // Teammate: only their account's notifications, only with 'announcements'.
+    const tmAccountId = await getTeammateScopeOrNull(user, 'announcements')
+    if (!tmAccountId) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    const { data: notifs } = await supabaseAdmin
+      .from('portal_notifications')
+      .select('id, account_id')
+      .in('id', ids)
+    if (notifs?.some(n => n.account_id !== tmAccountId)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+  } else if (authContactId) {
     const accountIds = await getClientAccountIds(authContactId)
     const { data: notifs } = await supabaseAdmin
       .from('portal_notifications')

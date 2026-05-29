@@ -66,6 +66,10 @@ export async function canAccessAccount(
   resolve: (u: User) => Promise<PortalIdentity> = resolvePortalIdentity,
 ): Promise<boolean> {
   if (!user || !accountId) return false
+  // Staff (non-client role) pass — authenticated admins. Preserves the prior
+  // `if (!contactId) // admin` behavior on portal API routes. Client/teammate
+  // access is fully enforced below.
+  if ((user.app_metadata as Record<string, unknown> | undefined)?.role !== 'client') return true
   const r = await requirePortalCapability(user, capability, resolve)
   if (!r.allowed) return false
   if (r.kind === 'contact') return r.accountIds.includes(accountId)

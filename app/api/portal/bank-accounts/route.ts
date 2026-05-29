@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
+import type { User } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -17,11 +18,10 @@ import { NextRequest, NextResponse } from 'next/server'
  * DELETE /api/portal/bank-accounts?id=xxx&account_id=xxx
  */
 
-async function verifyAccess(user: { app_metadata?: Record<string, unknown> }, accountId: string): Promise<boolean> {
-  const contactId = user.app_metadata?.contact_id as string | null
-  if (!contactId) return true // admin
-  const accountIds = await getClientAccountIds(contactId)
-  return accountIds.includes(accountId)
+// Default-deny (contacts AND teammates; staff bypass inside canAccessAccount).
+// Bank applications live under the 'bank_applications' capability.
+function verifyAccess(user: User, accountId: string): Promise<boolean> {
+  return canAccessAccount(user, accountId, 'bank_applications')
 }
 
 export async function GET(request: NextRequest) {
