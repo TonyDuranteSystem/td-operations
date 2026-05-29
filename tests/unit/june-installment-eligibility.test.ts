@@ -1,0 +1,110 @@
+import { describe, it, expect } from 'vitest'
+import { decideJuneInstallment, type JuneInstallmentInput } from '@/lib/billing/june-installment-eligibility'
+
+const base: JuneInstallmentInput = {
+  year: 2026,
+  account_type: 'Client',
+  status: 'Active',
+  is_test: false,
+  installment_2_amount: 1000,
+  onboarding_date: '2024-03-01',
+  formation_date: '2024-02-01',
+  hasFirstInstallmentThisYear: true,
+  hasSignedAgreementThisYear: false,
+  hasExistingSecondInstallment: false,
+}
+const make = (o: Partial<JuneInstallmentInput>): JuneInstallmentInput => ({ ...base, ...o })
+
+describe('decideJuneInstallment — 2026 transition', () => {
+  it('invoices an active client with a 1st installment, using the CRM amount', () => {
+    expect(decideJuneInstallment(make({ installment_2_amount: 1250 }))).toEqual({
+      action: 'invoice', amount: 1250, reason: 'eligible',
+    })
+  })
+
+  it('uses non-standard CRM amounts verbatim (e.g. 849, 925, 2000) — never a default', () => {
+    for (const amt of [849, 925, 1150, 2000, 600]) {
+      const d = decideJuneInstallment(make({ installment_2_amount: amt }))
+      expect(d.action).toBe('invoice')
+      expect(d.amount).toBe(amt)
+    }
+  })
+
+  it('invoices an Overdue-1st client (1st record exists even if unpaid)', () => {
+    expect(decideJuneInstallment(make({ hasFirstInstallmentThisYear: true })).action).toBe('invoice')
+  })
+
+  it('skip + alert when installment_2_amount is null', () => {
+    expect(decideJuneInstallment(make({ installment_2_amount: null })).action).toBe('needs_amount')
+  })
+
+  it('skip + alert when installment_2_amount is 0 (never falls back to a default)', () => {
+    const d = decideJuneInstallment(make({ installment_2_amount: 0 }))
+    expect(d.action).toBe('needs_amount')
+  })
+
+  it('marks exists when a 2nd installment already exists (any route — fixes the dup gap)', () => {
+    expect(decideJuneInstallment(make({ hasExistingSecondInstallment: true })).action).toBe('exists')
+  })
+
+  it('skips when no 1st installment and a normal (pre-Sept) older start', () => {
+    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, onboarding_date: '2025-05-01', formation_date: '2025-05-01' }))
+    expect(d.action).toBe('skip')
+  })
+
+  it('flags a Sep–Dec 2025 starter with no 1st installment (owes June, manual)', () => {
+    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, onboarding_date: '2025-09-26', formation_date: '2025-09-26' }))
+    expect(d.action).toBe('flag')
+  })
+
+  it('skips a Year-1 (2026) client with no 1st installment (setup covers first year)', () => {
+    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, onboarding_date: '2026-02-01', formation_date: '2026-02-01' }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/Year-1/)
+  })
+})
+
+describe('decideJuneInstallment — hard exclusions', () => {
+  it('skips non-Active status', () => {
+    for (const status of ['Cancelled', 'Closed', 'Offboarding', 'Suspended']) {
+      expect(decideJuneInstallment(make({ status })).action).toBe('skip')
+    }
+  })
+
+  it('skips non-Client account types', () => {
+    for (const account_type of ['One-Time', 'Partner']) {
+      expect(decideJuneInstallment(make({ account_type })).action).toBe('skip')
+    }
+  })
+
+  it('skips test accounts', () => {
+    expect(decideJuneInstallment(make({ is_test: true })).action).toBe('skip')
+  })
+
+  it('exclusions win even if otherwise eligible', () => {
+    expect(decideJuneInstallment(make({ account_type: 'One-Time', installment_2_amount: 1000 })).action).toBe('skip')
+  })
+})
+
+describe('decideJuneInstallment — 2027+ permanent regime', () => {
+  it('invoices when a signed agreement exists for the year', () => {
+    const d = decideJuneInstallment(make({ year: 2027, hasSignedAgreementThisYear: true, hasFirstInstallmentThisYear: false }))
+    expect(d).toEqual({ action: 'invoice', amount: 1000, reason: 'eligible' })
+  })
+
+  it('skips when no signed agreement (1st-installment presence is irrelevant in 2027+)', () => {
+    const d = decideJuneInstallment(make({ year: 2027, hasSignedAgreementThisYear: false, hasFirstInstallmentThisYear: true }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/no signed/)
+  })
+
+  it('still needs a CRM amount in 2027+', () => {
+    const d = decideJuneInstallment(make({ year: 2027, hasSignedAgreementThisYear: true, installment_2_amount: null }))
+    expect(d.action).toBe('needs_amount')
+  })
+
+  it('duplicate guard applies in 2027+ too', () => {
+    const d = decideJuneInstallment(make({ year: 2027, hasSignedAgreementThisYear: true, hasExistingSecondInstallment: true }))
+    expect(d.action).toBe('exists')
+  })
+})

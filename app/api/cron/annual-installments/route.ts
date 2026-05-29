@@ -2,21 +2,32 @@
  * CRON: Annual Installment Invoice Generator + Auto-Send
  *
  * Runs monthly (1st of each month). Only acts in June (2nd installment).
- * The 1st installment invoice is now created by the offer-signed webhook when
- * the client signs their annual renewal MSA (contract_type='renewal').
  *
- * June 1: 2nd Installment
- * - SMLLC: $1,000 | MMLLC: $1,250
- * - Guard: only creates invoice if the renewal MSA for the current year is signed
- *   (skips if the client hasn't signed yet — MSA signing creates 1st installment;
- *   an unsigned MSA means the client hasn't renewed and the 2nd invoice is premature)
+ * Eligibility is decided by the pure `decideJuneInstallment` helper
+ * (lib/billing/june-installment-eligibility.ts), which has two regimes:
+ *  - 2027 onward (permanent): invoice when a signed annual agreement exists for
+ *    the year (every client signs in January from 2027).
+ *  - 2026 (transition): agreements were not in use, so invoice when the client
+ *    has a 1st-installment record for the year ("paid 1st → owes 2nd"). Clients
+ *    with no 1st installment but a Sept–Dec prior-year start (post-September
+ *    rule, January skipped) are FLAGGED for manual handling, not auto-invoiced.
+ *
+ * Amount: ALWAYS the per-account CRM `installment_2_amount` — no hardcoded
+ * default. Missing/zero amount → skipped + flagged for the team to set it.
+ *
+ * Duplicate-safe: skips any account that already has a 2nd-installment invoice
+ * for the year (by any route, incl. QB-imported rows with no idempotency key).
+ *
+ * Credit notes (referral or manual) are auto-applied inside createTDInvoice;
+ * a fully-covered installment is marked Paid and fires onSecondInstallmentPaid.
+ *
+ * DRAFTS ONLY: invoices are created as invoice_status='Draft' and are NOT
+ * emailed. The team reviews each draft in the CRM and sends it. A summary task
+ * + team email report drafts created, amounts-needed, and flagged accounts.
  *
  * On payment detection (via check-wire-payments cron or Whop webhook):
  * - 1st installment paid -> create 4 recurring SDs (CMRA, RA, AR, Tax Return)
  * - 2nd installment paid -> lift tax return gate (ready to send to India)
- *
- * Auto-sends: Creates CRM invoice (with items) → generates PDF → emails client.
- * Creates a summary task for team visibility.
  *
  * Schedule: 1st of every month via Vercel Cron
  */
@@ -25,7 +36,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { logCron } from "@/lib/cron-log"
-import { defaultInstallmentAmount } from "@/lib/billing/installment-defaults"
+import { decideJuneInstallment } from "@/lib/billing/june-installment-eligibility"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -38,11 +49,19 @@ export async function GET(req: NextRequest) {
 
   const now = new Date()
   const month = now.getMonth() + 1 // 1-12
-  const year = now.getFullYear()
+  const isSandbox = process.env.SANDBOX_MODE === "1"
+  // Sandbox-only testing affordances (no effect in production):
+  //   ?force=1  run outside June
+  //   ?year=YYYY exercise a specific regime (e.g. 2027 signed-agreement path)
+  //   ?dry=1    compute + report decisions WITHOUT creating invoices or writing
+  const forceRun = isSandbox && req.nextUrl.searchParams.get("force") === "1"
+  const dryRun = isSandbox && req.nextUrl.searchParams.get("dry") === "1"
+  const yearParam = isSandbox ? Number(req.nextUrl.searchParams.get("year")) : NaN
+  const year = Number.isInteger(yearParam) && yearParam > 0 ? yearParam : now.getFullYear()
 
-  // Only run in June (2nd installment). January 1st installment is now
-  // triggered by the renewal MSA signing via offer-signed webhook.
-  if (month !== 6) {
+  // Only run in June (2nd installment). The 1st installment is created by the
+  // renewal MSA signing via the offer-signed webhook.
+  if (month !== 6 && !forceRun) {
     return NextResponse.json({ ok: true, message: `Month ${month} — annual-installments cron only runs in June. Skipping.` })
   }
 
@@ -54,7 +73,7 @@ export async function GET(req: NextRequest) {
     // Get all active Client accounts
     const { data: accounts, error } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, entity_type, account_type, installment_2_amount, status")
+      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, onboarding_date, formation_date")
       .eq("status", "Active")
       .eq("account_type", "Client")
       .or("is_test.is.null,is_test.eq.false")
@@ -66,10 +85,12 @@ export async function GET(req: NextRequest) {
 
     const results: Array<{ company: string; action: string; detail: string; paymentId?: string }> = []
 
+    const norm = (s: string | null | undefined) => (s || "").toLowerCase()
+
     for (const acct of accounts) {
-      // Guard: only create 2nd installment if the annual agreement for this year is signed.
-      // If the client hasn't signed yet, the 1st installment doesn't exist either —
-      // creating a 2nd invoice would be incorrect and confusing.
+      // ── Gather the DB facts the pure decision function needs ──
+
+      // 2027+ gate: a signed/completed annual agreement for this year.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: signedAgreement } = await (supabaseAdmin as any)
         .from("annual_agreements")
@@ -80,48 +101,75 @@ export async function GET(req: NextRequest) {
         .limit(1)
         .maybeSingle() as { data: { id: string; status: string } | null }
 
-      if (!signedAgreement) {
-        results.push({
-          company: acct.company_name,
-          action: "skipped",
-          detail: `No signed annual agreement for ${year} — skipping 2nd installment`,
-        })
+      // All this account's payments, classified in JS to avoid PostgREST quoting
+      // issues with the "Installment 1 (Jan)" enum value (comma + parens).
+      const { data: pmts } = await supabaseAdmin
+        .from("payments")
+        .select("installment, description, invoice_status, status, year")
+        .eq("account_id", acct.id)
+      const rows = (pmts || []) as Array<{ installment: string | null; description: string | null; invoice_status: string | null; status: string | null; year: number | null }>
+
+      // Has a FIRST installment for this year? (paid / overdue / waived — any
+      // non-cancelled record). 2026 transition gate: "paid 1st → owes 2nd".
+      const hasFirstInstallmentThisYear = rows.some(p =>
+        p.status !== "Cancelled" && p.invoice_status !== "Cancelled" &&
+        ((p.installment === "Installment 1 (Jan)" && p.year === year) ||
+          (norm(p.description).includes("first installment") && (p.year === year || p.year == null))))
+
+      // Already has a SECOND installment? Any route, including QB-imported rows
+      // with no idempotency key — closes the double-bill gap. Year-scoped but
+      // tolerant of the year-null QB artifacts present in 2026.
+      const hasExistingSecondInstallment = rows.some(p =>
+        p.status !== "Cancelled" && p.invoice_status !== "Cancelled" &&
+        ((p.installment === "Installment 2 (Jun)" && p.year === year) ||
+          (norm(p.description).includes("second installment") && (p.year === year || p.year == null))))
+
+      const decision = decideJuneInstallment({
+        year,
+        account_type: acct.account_type,
+        status: acct.status,
+        is_test: (acct as { is_test: boolean | null }).is_test ?? null,
+        installment_2_amount: acct.installment_2_amount,
+        onboarding_date: (acct as { onboarding_date: string | null }).onboarding_date ?? null,
+        formation_date: (acct as { formation_date: string | null }).formation_date ?? null,
+        hasFirstInstallmentThisYear,
+        hasSignedAgreementThisYear: !!signedAgreement,
+        hasExistingSecondInstallment,
+      })
+
+      // Non-invoice outcomes (skip / exists / needs_amount / flag) — record + move on.
+      if (decision.action !== "invoice") {
+        results.push({ company: acct.company_name, action: decision.action, detail: decision.reason })
         continue
       }
 
-      // Determine amount
-      const amount: number = acct.installment_2_amount || defaultInstallmentAmount(acct.entity_type)
+      const amount = decision.amount
+      if (amount == null) {
+        results.push({ company: acct.company_name, action: "error", detail: "invoice decision returned no amount" })
+        continue
+      }
 
-      // Idempotency key — prevents the same installment being invoiced twice
-      // (cron re-run, retry, concurrent fire). createTDInvoice will return the
-      // existing row if this key already exists.
-      const idempotencyKey = `annual-installment:${acct.id}:${installmentNumber}:${year}`
-
-      // Check if already invoiced (by idempotency_key) — preserves the cron's
-      // "exists" reporting separately from the auto-create-or-return semantics.
-      const { data: existingByKey } = await supabaseAdmin
-        .from("payments")
-        .select("id, invoice_number")
-        .eq("idempotency_key", idempotencyKey)
-        .limit(1)
-        .maybeSingle()
-
-      if (existingByKey) {
-        results.push({
-          company: acct.company_name,
-          action: "exists",
-          detail: `${installmentLabel} ${year} already invoiced (${existingByKey.invoice_number})`,
-        })
+      // Sandbox dry-run: report what WOULD be invoiced, write nothing.
+      if (dryRun) {
+        results.push({ company: acct.company_name, action: "created", detail: `(dry-run) would invoice $${amount} USD` })
         continue
       }
 
       const description = `${installmentLabel} ${year} — LLC Annual Management`
       const installmentLabelEnum = "Installment 2 (Jun)"
 
+      // Idempotency key — prevents the same installment being invoiced twice on a
+      // cron re-run / retry / concurrent fire. createTDInvoice returns the existing
+      // row if this key already exists. (The hasExistingSecondInstallment guard
+      // above additionally catches pre-existing invoices created outside this cron.)
+      const idempotencyKey = `annual-installment:${acct.id}:${installmentNumber}:${year}`
+
       try {
         // createTDInvoice auto-applies any outstanding credit notes (referral or
         // manual) on the account — same currency, oldest-first, capped at the bill,
         // leftover carried forward — so we just pass the full installment line.
+        // It creates the row as invoice_status='Draft'; this cron intentionally
+        // does NOT auto-send — the team reviews each draft and sends it.
         const invoice = await createTDInvoice({
           account_id: acct.id,
           line_items: [{
@@ -175,106 +223,60 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Auto-send all created invoices
-    const created = results.filter(r => r.action === "created")
-    const skipped = results.filter(r => r.action === "skipped")
-    const sendResults: Array<{ company: string; sent: boolean; error?: string }> = []
+    // ── Categorize outcomes. This cron creates DRAFTS only — it does NOT
+    //    auto-send. The team reviews each draft in the CRM and sends it. ──
+    const created = results.filter(r => r.action === "created")          // draft invoices created
+    const needsAmount = results.filter(r => r.action === "needs_amount") // has 1st installment but no CRM amount
+    const flagged = results.filter(r => r.action === "flag")            // owes June, no 1st installment — manual review
+    const existing = results.filter(r => r.action === "exists")         // 2nd installment already present
+    const skipped = results.filter(r => r.action === "skip")            // not eligible
+    const errored = results.filter(r => r.action === "error")
+    const fullyPaidByCredit = created.filter(r => /fully covered, marked Paid/.test(r.detail))
 
-    if (created.length > 0 || skipped.length > 0) {
-      // Build the internal URL for sending
-      const baseUrl = process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:3000"
-
-      for (const inv of created) {
-        if (!inv.paymentId) continue
-        try {
-          const res = await fetch(`${baseUrl}/api/invoices/${inv.paymentId}/send`, {
-            method: "POST",
-            headers: {
-              // Use cron secret for internal auth — the send route uses dashboard auth,
-              // but we need to bypass it for automated sends. Instead, call the send
-              // logic directly via a helper.
-              "Content-Type": "application/json",
-            },
-          })
-          // The send route requires dashboard auth which we don't have in cron context.
-          // Instead, use the direct send approach:
-          if (!res.ok) {
-            // Fallback: mark as Draft, team will send manually
-            sendResults.push({ company: inv.company, sent: false, error: "Auth required — queued for manual send" })
-            continue
-          }
-          sendResults.push({ company: inv.company, sent: true })
-        } catch (err) {
-          sendResults.push({ company: inv.company, sent: false, error: (err as Error).message })
-        }
-      }
-
-      // Auto-send via direct Gmail (bypass route auth)
-      const failedSends = sendResults.filter(r => !r.sent)
-      if (failedSends.length > 0) {
-        // Send invoices directly for those that failed the route call
-        try {
-          const { autoSendInvoices } = await import("@/lib/invoice-auto-send")
-          const paymentIds = created
-            .filter(c => c.paymentId && failedSends.some(f => f.company === c.company))
-            .map(c => c.paymentId!)
-          const autoResults = await autoSendInvoices(paymentIds)
-          // Update send results
-          for (const ar of autoResults) {
-            const idx = sendResults.findIndex(r => !r.sent && created.some(c => c.paymentId === ar.paymentId && c.company === r.company))
-            if (idx >= 0 && ar.success) {
-              sendResults[idx] = { company: sendResults[idx].company, sent: true }
-            }
-          }
-        } catch {
-          // Auto-send module not available yet — manual send required
-        }
-      }
-
-      // Create summary task for team visibility
-      const sentCount = sendResults.filter(r => r.sent).length
-      const failedCount = sendResults.filter(r => !r.sent).length
+    if (!dryRun && (created.length > 0 || needsAmount.length > 0 || flagged.length > 0 || errored.length > 0)) {
+      const li = (arr: typeof results) => arr.map(r => `<li>${r.company} — ${r.detail}</li>`).join("")
 
       const taskDescription = [
-        `${installmentLabel} ${year}: ${created.length} invoices created.`,
-        created.length > 0 ? `Auto-sent: ${sentCount} | Manual send needed: ${failedCount}` : "",
-        skipped.length > 0 ? `\n⚠️ Skipped — no signed renewal MSA (${skipped.length} accounts need follow-up):` : "",
-        ...skipped.map(r => `- ${r.company}`),
-        created.length > 0 ? "\nInvoices:" : "",
-        ...created.map(r => {
-          const sendStatus = sendResults.find(s => s.company === r.company)
-          return `- ${r.company}: ${r.detail} ${sendStatus?.sent ? '✓ Sent' : '⏳ Needs manual send'}`
-        }),
+        `${installmentLabel} ${year}: ${created.length} DRAFT invoices created — review + send each from the CRM (nothing was emailed to clients).`,
+        fullyPaidByCredit.length > 0 ? `${fullyPaidByCredit.length} fully covered by credit (auto-marked Paid).` : "",
+        needsAmount.length > 0 ? `\n⚠️ Set amount in CRM before invoicing (${needsAmount.length}):` : "",
+        ...needsAmount.map(r => `- ${r.company}: ${r.detail}`),
+        flagged.length > 0 ? `\n🔎 Review — owes June, no 1st installment (${flagged.length}):` : "",
+        ...flagged.map(r => `- ${r.company}: ${r.detail}`),
+        created.length > 0 ? "\nDraft invoices:" : "",
+        ...created.map(r => `- ${r.company}: ${r.detail}`),
+        errored.length > 0 ? `\n❌ Errors (${errored.length}):` : "",
+        ...errored.map(r => `- ${r.company}: ${r.detail}`),
       ].filter(Boolean).join("\n")
+
+      const needsAttention = needsAmount.length > 0 || flagged.length > 0 || errored.length > 0
 
       // eslint-disable-next-line no-restricted-syntax -- billing-cron summary task insert; pre-existing pattern
       await supabaseAdmin.from("tasks").insert({
-        task_title: `[BILLING] ${installmentLabel} ${year} — ${created.length} invoices${skipped.length > 0 ? ` | ⚠️ ${skipped.length} unsigned` : ""}`,
+        task_title: `[BILLING] ${installmentLabel} ${year} — ${created.length} drafts${needsAmount.length > 0 ? ` | ⚠️ ${needsAmount.length} need amount` : ""}${flagged.length > 0 ? ` | 🔎 ${flagged.length} review` : ""}`,
         description: taskDescription,
         assigned_to: "Luca",
-        priority: skipped.length > 0 ? "High" : "Normal",
+        priority: needsAttention ? "High" : "Normal",
         category: "Payment",
-        status: (failedCount > 0 || skipped.length > 0) ? "To Do" : "Done",
+        status: "To Do",
         due_date: `${year}-06-15`,
         created_by: "System",
       })
 
-      // Email notification to team
+      // Team summary email (no client emails are sent by this cron)
       try {
         const { gmailPost } = await import("@/lib/gmail")
         const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">
-<h2>[BILLING] ${installmentLabel} ${year}</h2>
-<p><strong>${created.length}</strong> invoices created. <strong>${sentCount}</strong> auto-sent. <strong>${failedCount}</strong> need manual send.</p>
-${skipped.length > 0 ? `<p style="color:#dc2626">⚠️ <strong>${skipped.length}</strong> accounts skipped — no signed renewal MSA (follow up required): ${skipped.map(r => r.company).join(", ")}</p>` : ""}
-${created.length > 0 ? `<h3>Invoices:</h3><ul>${created.map(r => {
-  const s = sendResults.find(sr => sr.company === r.company)
-  return `<li>${r.company} — ${r.detail} ${s?.sent ? '✅' : '⏳'}</li>`
-}).join("")}</ul>` : ""}
+<h2>[BILLING] ${installmentLabel} ${year} — DRAFTS</h2>
+<p><strong>${created.length}</strong> draft invoices created. Review and send each from the CRM — nothing was emailed to clients.</p>
+${fullyPaidByCredit.length > 0 ? `<p>${fullyPaidByCredit.length} fully covered by credit (auto-marked Paid).</p>` : ""}
+${needsAmount.length > 0 ? `<p style="color:#dc2626">⚠️ <strong>${needsAmount.length}</strong> need an amount set in the CRM:</p><ul>${li(needsAmount)}</ul>` : ""}
+${flagged.length > 0 ? `<p style="color:#b45309">🔎 <strong>${flagged.length}</strong> to review (owes June, no 1st installment):</p><ul>${li(flagged)}</ul>` : ""}
+${created.length > 0 ? `<h3>Draft invoices:</h3><ul>${li(created)}</ul>` : ""}
+${errored.length > 0 ? `<h3 style="color:#dc2626">Errors:</h3><ul>${li(errored)}</ul>` : ""}
 </div>`
 
-        const billingSubject = `[BILLING] ${installmentLabel} ${year} -- ${created.length} invoices (${sentCount} sent)`
+        const billingSubject = `[BILLING] ${installmentLabel} ${year} -- ${created.length} drafts created`
         const encodedSubject = `=?utf-8?B?${Buffer.from(billingSubject).toString("base64")}?=`
         const raw = Buffer.from(
           `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
@@ -288,26 +290,30 @@ ${created.length > 0 ? `<h3>Invoices:</h3><ul>${created.map(r => {
       } catch { /* non-blocking */ }
     }
 
-    // Log
-    await supabaseAdmin.from("action_log").insert({
-      action_type: "annual_installment_cron",
-      table_name: "payments",
-      summary: `${installmentLabel} ${year}: ${created.length} created, ${sendResults.filter(r => r.sent).length} sent, ${skipped.length} skipped`,
-      details: { installment: installmentNumber, year, results, sendResults } as unknown as Json,
-    })
+    // Log (skipped on a dry-run — it writes nothing)
+    if (!dryRun) {
+      await supabaseAdmin.from("action_log").insert({
+        action_type: "annual_installment_cron",
+        table_name: "payments",
+        summary: `${installmentLabel} ${year}: ${created.length} drafts, ${needsAmount.length} need-amount, ${flagged.length} flagged, ${existing.length} existing, ${skipped.length} skipped, ${errored.length} errors`,
+        details: { installment: installmentNumber, year, results } as unknown as Json,
+      })
+    }
 
-    logCron({ endpoint: "/api/cron/annual-installments", status: "success", duration_ms: Date.now() - startTime, details: { installment: installmentLabel, year, created: created.length, sent: sendResults.filter(r => r.sent).length, skipped: skipped.length } })
+    logCron({ endpoint: "/api/cron/annual-installments", status: "success", duration_ms: Date.now() - startTime, details: { installment: installmentLabel, year, dryRun, created: created.length, needsAmount: needsAmount.length, flagged: flagged.length, existing: existing.length, skipped: skipped.length } })
 
     return NextResponse.json({
       ok: true,
       installment: installmentLabel,
       year,
+      dryRun,
+      mode: year >= 2027 ? "permanent (signed-agreement gate)" : "transition (1st-installment gate)",
       created: created.length,
-      sent: sendResults.filter(r => r.sent).length,
-      pendingSend: sendResults.filter(r => !r.sent).length,
+      needsAmount: needsAmount.length,
+      flagged: flagged.length,
+      existing: existing.length,
       skipped: skipped.length,
-      existing: results.filter(r => r.action === "exists").length,
-      errors: results.filter(r => r.action === "error").length,
+      errors: errored.length,
     })
   } catch (err) {
     console.error("[annual-installments]", err)
