@@ -50,6 +50,8 @@ interface PortalSidebarProps {
   inProgress?: InProgressFormation[]
   /** Set when an in-progress formation is the current selection. */
   selectedFormationId?: string
+  /** True when the logged-in user is the account admin for the selected company (can manage the Team tab). */
+  canManageTeam?: boolean
 }
 
 // Nav items organized into collapsible groups
@@ -61,6 +63,7 @@ interface NavItem {
   tierOnly?: string[] // if set, only show for these tiers
   wizardDynamic?: boolean // if true, also show when hasWizardPending is true
   partnerOnly?: boolean // if true, only show for partner portal
+  teamAdminOnly?: boolean // if true, only show when canManageTeam is true (Portal Team Access)
 }
 
 // (NavGroup interface removed in PR 2 Step 7 — sections are now hard-coded
@@ -123,6 +126,7 @@ const tierTopItems: NavItem[] = [
 const companyItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
+  { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
@@ -156,7 +160,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -251,6 +255,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Standard visibility filter — same logic the previous structure used,
   // just factored so it can run against any item array.
   const isItemVisible = (item: NavItem): boolean => {
+    if (item.teamAdminOnly) return canManageTeam
     if (item.partnerOnly) return isPartner
 
     if (isPartner) {

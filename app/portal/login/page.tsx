@@ -3,22 +3,49 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { teammateLogin } from './actions'
 import Link from 'next/link'
 
 export default function PortalLoginPage() {
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+
+  const finishLogin = () => {
+    // Audit log login (fire-and-forget)
+    fetch('/api/portal/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login' }),
+    }).catch(() => {})
+    router.push('/portal')
+    router.refresh()
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setLoading(true)
 
+    const value = identifier.trim()
+
+    // Username (no '@') → teammate login via server action (resolves the hidden
+    // email server-side and signs in). Email (has '@') → normal client login.
+    if (!value.includes('@')) {
+      const res = await teammateLogin(value, password)
+      if (!res.ok) {
+        setError(res.error || 'Invalid username or password')
+        setLoading(false)
+        return
+      }
+      finishLogin()
+      return
+    }
+
     const supabase = createClient()
-    const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error: authError } = await supabase.auth.signInWithPassword({ email: value, password })
 
     if (authError) {
       setError('Invalid email or password')
@@ -34,15 +61,7 @@ export default function PortalLoginPage() {
       return
     }
 
-    // Audit log login (fire-and-forget)
-    fetch('/api/portal/audit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'login' }),
-    }).catch(() => {})
-
-    router.push('/portal')
-    router.refresh()
+    finishLogin()
   }
 
   return (
@@ -61,14 +80,15 @@ export default function PortalLoginPage() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="email" className="text-sm font-medium text-zinc-700">
-                Email
+                Email or username
               </label>
               <input
                 id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
+                type="text"
+                autoComplete="username"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="your@email.com or username"
                 required
                 autoFocus
                 className="flex h-11 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"

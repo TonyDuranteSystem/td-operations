@@ -5,6 +5,7 @@ import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations } from '@/lib/portal/queries'
 import { resolveSelectedEntity } from '@/lib/portal/select-entity'
+import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
@@ -116,6 +117,11 @@ export default async function PortalLayout({
     portalTier,
   })
 
+  // Team tab is visible only to the account admin (main person) of the selected company.
+  const canManageTeam = !!contactId && !!selectedAccountId
+    ? await isAccountAdmin(contactId, selectedAccountId)
+    : false
+
   return (
     <Providers>
       <SandboxBanner />
@@ -138,6 +144,7 @@ export default async function PortalLayout({
             hasWizardPending={hasWizardPending}
             inProgress={inProgress}
             selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}
+            canManageTeam={canManageTeam}
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
