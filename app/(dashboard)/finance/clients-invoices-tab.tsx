@@ -114,9 +114,9 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
   }
 
   return (
-    <div className="flex h-full">
-      {/* Left panel: Client list */}
-      <div className="w-80 border-r flex flex-col bg-muted/30">
+    <div className="flex flex-col lg:flex-row h-full">
+      {/* Left panel: Client list — full width + capped height on mobile, fixed sidebar on desktop */}
+      <div className="w-full lg:w-80 border-b lg:border-r flex flex-col bg-muted/30 max-h-56 lg:max-h-none shrink-0">
         <div className="p-3 border-b">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -234,7 +234,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
 
             {/* Invoice list */}
             {showSection === 'invoices' && (
-              <div className="rounded-lg border overflow-hidden">
+              <div className="rounded-lg border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/50">
@@ -317,7 +317,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
 
             {/* Credit Notes */}
             {showSection === 'credits' && (
-              <div className="rounded-lg border overflow-hidden">
+              <div className="rounded-lg border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/50">
@@ -350,7 +350,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
 
             {/* Payment History */}
             {showSection === 'payments' && (
-              <div className="rounded-lg border overflow-hidden">
+              <div className="rounded-lg border overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/50">
