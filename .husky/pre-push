@@ -103,6 +103,16 @@ if [ -n "$HOOK_ABS_PATHS" ]; then
   exit 1
 fi
 
+# R107 — System Reference Library freshness. If this push changes a DOCUMENTED
+# subsystem's code, that subsystem's docs/systems/<x>.md must be updated in the
+# same push (the doc travels with the code — this is the anti-rot mechanism).
+# Override (rare, deliberate): ALLOW_SYSTEM_DOC_SKIP=1 git push ...
+echo "📚 Checking System Reference Library freshness (R107)..."
+if [ -f scripts/check-system-docs-freshness.sh ]; then
+  sh scripts/check-system-docs-freshness.sh || exit 1
+  echo "✅ System docs in sync."
+fi
+
 echo "🔍 Running ESLint on changed files..."
 CHANGED_TS=$(git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
 if [ -n "$CHANGED_TS" ]; then

@@ -1,0 +1,14 @@
+# System Reference Library — code→doc map (drives the pre-push freshness gate, R107)
+#
+# Format (one subsystem per line):
+#   docs/systems/<doc>.md|<comma-separated code path prefixes>
+#
+# Rule enforced by scripts/check-system-docs-freshness.sh on every push:
+#   If a push changes any file under one of a subsystem's code prefixes but does
+#   NOT also update that subsystem's doc, the push is blocked. Override (rare,
+#   deliberate): ALLOW_SYSTEM_DOC_SKIP=1 git push ...
+#
+# Add a line here when you create a new docs/systems/<x>.md so it self-enforces.
+# Lines starting with # and blank lines are ignored.
+
+docs/systems/todo-board.md|components/dashboard/action-board.tsx,app/api/crm/admin-actions/message-actions/,lib/notifications/act-event.ts
