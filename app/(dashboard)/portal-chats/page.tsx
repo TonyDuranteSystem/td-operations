@@ -2480,7 +2480,7 @@ export default function PortalChatsPage() {
                         </button>
                         <button
                           onClick={() => pinMessageMutation.mutate({ messageId: pm.id, pinned: false })}
-                          className="shrink-0 text-[10px] text-zinc-400 hover:text-red-600 opacity-0 group-hover:opacity-100"
+                          className="shrink-0 text-[10px] text-zinc-400 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100"
                           title="Unpin"
                         >
                           <X className="h-3 w-3" />
