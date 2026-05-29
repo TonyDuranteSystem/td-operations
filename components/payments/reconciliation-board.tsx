@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { matchFeedToInvoice, ignoreFeed } from '@/app/(dashboard)/reconciliation/actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { invoicePartyName } from '@/lib/finance/invoice-party'
 
 interface BankFeed {
   id: string
@@ -39,7 +40,7 @@ interface BankFeed {
   } | null
 }
 
-interface OpenInvoice {
+export interface OpenInvoice {
   id: string
   invoice_number: string | null
   description: string | null
@@ -47,8 +48,10 @@ interface OpenInvoice {
   amount: number | string | null
   amount_currency: string | null
   invoice_status: string | null
-  account_id: string
+  account_id: string | null
   accounts: { company_name: string } | { company_name: string }[] | null
+  contact_id?: string | null
+  contacts?: { full_name: string | null } | { full_name: string | null }[] | null
 }
 
 interface Props {
@@ -284,7 +287,7 @@ function UnmatchedRow({
                     className="w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50"
                   >
                     <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
-                    <span className="truncate flex-1">{getCompanyName(inv.accounts) ?? '—'}</span>
+                    <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                     <span className="font-medium">{formatCurrency(invAmount, inv.amount_currency)}</span>
                     {diff < 1 ? (
                       <span className="text-emerald-600">exact</span>
@@ -314,7 +317,7 @@ function UnmatchedRow({
                       className="w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50"
                     >
                       <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
-                      <span className="truncate flex-1">{getCompanyName(inv.accounts) ?? '—'}</span>
+                      <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                       <span className="font-medium">{formatCurrency(Number(inv.total ?? inv.amount), inv.amount_currency)}</span>
                       <ArrowRight className="h-3 w-3 text-muted-foreground" />
                     </button>

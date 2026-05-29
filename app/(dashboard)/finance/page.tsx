@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
+import type { OpenInvoice } from './bank-feed-tab'
 import type { InvoiceRecord } from './all-invoices-tab'
 
 export const dynamic = 'force-dynamic'
@@ -177,14 +178,17 @@ export default async function FinancePage({
       .select('id', { count: 'exact', head: true }),
     supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, account_id, accounts:account_id(company_name)')
+      .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, account_id, accounts:account_id(company_name), contact_id, contacts:payments_contact_id_fkey(full_name)')
       .not('invoice_status', 'in', '("Voided","Cancelled","Split")')
       .order('created_at', { ascending: false }),
   ])
 
   const bankFeeds = bankFeedsRes.data ?? []
   const bankFeedTotalCount = bankFeedCountRes.count ?? bankFeeds.length
-  const bankOpenInvoices = bankOpenInvoicesRes.data ?? []
+  // Cast: the contacts:payments_contact_id_fkey(full_name) embed is correct at
+  // runtime but the generated Supabase types can't resolve the named FK
+  // (payments has two FKs to contacts), so the field types as SelectQueryError.
+  const bankOpenInvoices = (bankOpenInvoicesRes.data ?? []) as unknown as OpenInvoice[]
 
   // ── Overview: aging, cash received, avg days, audit log ──
   const now = new Date()

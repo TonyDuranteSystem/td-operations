@@ -206,6 +206,22 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                 )}
                 {bankDetails && (
                   <>
+                    {invoiceNumber && (
+                      <div className="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                        <p className="text-[11px] font-semibold text-amber-900">
+                          {isIt ? '⚠️ Obbligatorio — Causale del bonifico' : '⚠️ Required — Payment reference'}
+                        </p>
+                        <div className="mt-1 flex items-center justify-between gap-2">
+                          <span className="text-base font-mono font-bold text-amber-900">{invoiceNumber}</span>
+                          <CopyButton text={invoiceNumber} />
+                        </div>
+                        <p className="mt-1 text-[11px] leading-snug text-amber-800">
+                          {isIt
+                            ? 'Inserisci questo numero nella causale del bonifico. Senza questo riferimento non possiamo identificare il pagamento.'
+                            : 'You must include this number in your transfer reference. Without it we cannot identify your payment.'}
+                        </p>
+                      </div>
+                    )}
                     {bankDetails.beneficiary && (
                       <DetailRow label={isIt ? 'Beneficiario' : 'Beneficiary'} value={bankDetails.beneficiary} />
                     )}
@@ -221,7 +237,6 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, locale,
                     {bankDetails.type && (
                       <DetailRow label={isIt ? 'Tipo' : 'Type'} value={bankDetails.type} />
                     )}
-                    <DetailRow label={isIt ? 'Riferimento' : 'Reference'} value={invoiceNumber} />
                   </>
                 )}
               </div>

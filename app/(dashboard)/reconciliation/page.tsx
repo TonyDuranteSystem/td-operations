@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { ReconciliationBoard } from '@/components/payments/reconciliation-board'
+import { ReconciliationBoard, type OpenInvoice } from '@/components/payments/reconciliation-board'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,7 +20,7 @@ export default async function ReconciliationPage() {
       .limit(50),
     supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, description, total, amount, amount_currency, invoice_status, account_id, accounts:account_id(company_name)')
+      .select('id, invoice_number, description, total, amount, amount_currency, invoice_status, account_id, accounts:account_id(company_name), contact_id, contacts:payments_contact_id_fkey(full_name)')
       .in('invoice_status', ['Sent', 'Overdue', 'Partial'])
       .order('created_at', { ascending: false }),
   ])
@@ -37,7 +37,7 @@ export default async function ReconciliationPage() {
       <ReconciliationBoard
         unmatched={unmatchedRes.data ?? []}
         matched={matchedRes.data ?? []}
-        openInvoices={openInvoicesRes.data ?? []}
+        openInvoices={(openInvoicesRes.data ?? []) as unknown as OpenInvoice[]}
       />
     </div>
   )

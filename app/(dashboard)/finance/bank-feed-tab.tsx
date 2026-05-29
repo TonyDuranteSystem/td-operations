@@ -12,6 +12,7 @@ import {
   Search, Building2, User, Trash2, Check, RotateCw,
 } from 'lucide-react'
 import { matchBankFeedToInvoice, ignoreBankFeed, deleteDuplicateBankFeed } from './actions'
+import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 
@@ -69,8 +70,10 @@ export interface OpenInvoice {
   amount_due: number | string | null
   amount_currency: string | null
   invoice_status: string | null
-  account_id: string
+  account_id: string | null
   accounts: { company_name: string } | { company_name: string }[] | null
+  contact_id?: string | null
+  contacts?: { full_name: string | null } | { full_name: string | null }[] | null
 }
 
 interface Props {
@@ -143,6 +146,7 @@ function getCompanyName(accounts: any): string {
   if (Array.isArray(accounts)) return accounts[0]?.company_name ?? '—'
   return accounts.company_name ?? '—'
 }
+
 
 // ── Connected Banks Summary ──
 
@@ -756,9 +760,15 @@ function UnmatchedRow({
             {searchResults.length > 0 && (
               <div className="mt-1.5 space-y-1 max-h-56 overflow-y-auto">
                 {searchResults.map(r => {
+                  // Account results → invoices linked to that account. Contact
+                  // results → invoices scoped directly to that person (formation
+                  // clients pay as an individual before their LLC exists, so the
+                  // invoice carries contact_id with account_id null). Strictly
+                  // filter by the matched id so we never surface another party's
+                  // invoice.
                   const matchingInvoices = r.type === 'account'
                     ? openInvoices.filter(inv => inv.account_id === r.id)
-                    : []
+                    : openInvoices.filter(inv => inv.contact_id === r.id)
                   return (
                     <div key={`${r.type}-${r.id}`} className="border rounded-md overflow-hidden">
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40 text-xs">
@@ -779,7 +789,7 @@ function UnmatchedRow({
                           + Create invoice from this feed
                         </button>
                       </div>
-                      {r.type === 'account' && matchingInvoices.length > 0 && (
+                      {matchingInvoices.length > 0 && (
                         <div className="divide-y">
                           {matchingInvoices.map(inv => {
                             const invAmount = Number(inv.total ?? inv.amount ?? 0)
@@ -826,7 +836,7 @@ function UnmatchedRow({
                     className="w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50"
                   >
                     <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
-                    <span className="truncate flex-1">{getCompanyName(inv.accounts)}</span>
+                    <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                     {inv.invoice_status === 'Partial' && (
                       <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
                     )}
@@ -865,7 +875,7 @@ function UnmatchedRow({
                       className="w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50"
                     >
                       <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
-                      <span className="truncate flex-1">{getCompanyName(inv.accounts)}</span>
+                      <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                       <span className="font-medium">{formatCurrency(Number(inv.total ?? inv.amount), inv.amount_currency)}</span>
                       <ArrowRight className="h-3 w-3 text-muted-foreground" />
                     </button>
