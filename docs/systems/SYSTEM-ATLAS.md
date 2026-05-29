@@ -11,7 +11,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: R094 · Deep doc: draft card
 - **Offers & contracts** — Offer documents, e-signature, multi-contract bundles; signing ≠ payment.
   - Lives in: `lib/offers, lib/mcp/tools/offers*, app/offer`
-  - Rules: R094 · Deep doc: pending
+  - Rules: R094 · Deep doc: ✅ DONE → [offers.md](offers.md)
 - **Formation** — Company formation lead→EIN→active; Harbor Compliance filing; tier advances on EIN.
   - Lives in: `lib/operations/service-delivery.ts, formation-form, lib/mcp/tools/formation*`
   - Rules: R102, R106 · Deep doc: ✅ DONE → [formation.md](formation.md)
