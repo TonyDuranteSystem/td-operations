@@ -20,7 +20,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: ✅ DONE → [onboarding.md](onboarding.md)
 - **Lease & Operating Agreement** — Lease + OA generation, send, e-signature via safeSend.
   - Lives in: `lib/mcp/tools/lease*, oa*, lib/mcp/safe-send.ts, app/lease, app/oa`
-  - Rules: R037 · Deep doc: pending
+  - Rules: R037 · Deep doc: ✅ DONE → [lease-oa.md](lease-oa.md)
 
 ### Finance
 - **Banking & bank-feed** — Bank applications + transaction feed reconciliation / invoice matching.

@@ -26,3 +26,4 @@ docs/systems/auth-oauth.md|middleware.ts,lib/auth.ts,lib/oauth.ts,app/api/oauth/
 docs/systems/documents.md|lib/google-drive.ts,lib/docai.ts,lib/classifier.ts,lib/pdf/,lib/mcp/tools/doc.ts,lib/mcp/tools/classify.ts,lib/mcp/tools/drive.ts,lib/mcp/tools/storage.ts,lib/portal/auto-save-document.ts
 docs/systems/compliance-renewals.md|lib/harbor-compliance/,lib/mcp/tools/harbor-compliance.ts,lib/mcp/tools/deadlines.ts,lib/mcp/tools/calendar.ts,app/api/cron/ra-renewal-check/,app/api/cron/annual-report-check/
 docs/systems/onboarding.md|lib/mcp/tools/onboarding.ts,lib/mcp/tools/welcome-package.ts,lib/mcp/tools/member-info.ts,app/api/onboarding-form-completed/,app/api/portal/onboarding-complete/
+docs/systems/lease-oa.md|lib/mcp/tools/lease.ts,lib/mcp/tools/oa.ts,lib/types/oa-templates.ts,app/api/lease-signed/,app/api/oa-signed/

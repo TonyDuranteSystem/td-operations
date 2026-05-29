@@ -105,6 +105,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [documents.md](documents.md) | Documents & storage — Drive/Supabase storage, OCR+classify pipeline, PDF gen | ✅ written |
 | [compliance-renewals.md](compliance-renewals.md) | Compliance — Harbor Compliance, RA/annual-report renewals (cron-driven), deadlines | ✅ written |
 | [onboarding.md](onboarding.md) | Onboarding — existing-LLC clients, form→review→active (vs formation) | ✅ written |
+| [lease-oa.md](lease-oa.md) | Lease & Operating Agreement — generate, send (safeSend), track, sign | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
 | _billing-invoicing.md_ | payments / client_invoices / client_expenses / td_expenses | ⬜ to seed |
