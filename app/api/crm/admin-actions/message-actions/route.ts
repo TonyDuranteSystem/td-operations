@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { explainFailure } from "@/lib/errors/explain-failure"
 
 export const dynamic = "force-dynamic"
 
@@ -218,8 +219,13 @@ export async function GET(req: NextRequest) {
     if (error) throw error
     return NextResponse.json({ actions: data })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    // Supabase returns failures as a PLAIN object in the {data,error} tuple (not an
+    // Error instance), so the old `String(err)` produced "[object Object]" and hid the
+    // real cause. explainFailure reads the live error (Postgres code + message) and
+    // returns a readable reason; we also log the technical detail for ourselves. (R099)
+    const { message, technical } = explainFailure(err)
+    console.error("[message-actions] request failed:", technical)
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
@@ -294,8 +300,13 @@ export async function POST(req: NextRequest) {
     if (error) throw error
     return NextResponse.json({ action: data, created: true })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    // Supabase returns failures as a PLAIN object in the {data,error} tuple (not an
+    // Error instance), so the old `String(err)` produced "[object Object]" and hid the
+    // real cause. explainFailure reads the live error (Postgres code + message) and
+    // returns a readable reason; we also log the technical detail for ourselves. (R099)
+    const { message, technical } = explainFailure(err)
+    console.error("[message-actions] request failed:", technical)
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
@@ -358,7 +369,12 @@ export async function PATCH(req: NextRequest) {
     if (error) throw error
     return NextResponse.json({ action: data, moved: action_type !== undefined })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    // Supabase returns failures as a PLAIN object in the {data,error} tuple (not an
+    // Error instance), so the old `String(err)` produced "[object Object]" and hid the
+    // real cause. explainFailure reads the live error (Postgres code + message) and
+    // returns a readable reason; we also log the technical detail for ourselves. (R099)
+    const { message, technical } = explainFailure(err)
+    console.error("[message-actions] request failed:", technical)
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

@@ -66,4 +66,22 @@ describe('explainFailure', () => {
     const r = explainFailure(new Error('boom'))
     expect(r.message).toBe('boom')
   })
+
+  // Regression: the action-board "Follow up" bug. supabase-js returns a failed write
+  // as a PLAIN object (not an Error instance) in the {data,error} tuple. The route used
+  // to do String(err) on it -> "[object Object]". This is the exact shape Postgres
+  // returns when message_actions.action_type rejected a non-legacy column slug.
+  it('turns the raw PostgREST check-violation object into a readable reason (never [object Object])', () => {
+    const pgrstError = {
+      code: '23514',
+      message:
+        'new row for relation "message_actions" violates check constraint "message_actions_action_type_check"',
+      details: null,
+      hint: null,
+    }
+    const r = explainFailure(pgrstError)
+    expect(r.message).not.toMatch(/\[object Object\]/)
+    expect(r.message).toMatch(/isn’t allowed/i)
+    expect(r.technical).toMatch(/message_actions_action_type_check/)
+  })
 })

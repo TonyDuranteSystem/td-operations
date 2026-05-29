@@ -1,0 +1,24 @@
+-- Action board: drop the stale message_actions.action_type CHECK constraint (2026-05-29)
+--
+-- WHY: message_actions.action_type stores the kanban column SLUG. Valid columns are
+-- catalog-driven (catalog_entries, catalog_id='action_board_columns'), and the app
+-- validates EVERY write against the live catalog:
+--   - the message-actions route POST/PATCH calls loadColumns() and rejects any slug
+--     not active in the catalog;
+--   - emitActionNeeded() only ever writes the lowest-order column (action_needed).
+-- The old CHECK hard-coded only the 4 original slugs
+--   ('action_needed','in_progress','waiting_on_client','done')
+-- and was never updated when the board gained 'send_followup' ("Followup Sent") and
+-- 'wait_for_irs' ("Wait for the IRS"). Moving a card to either column was therefore
+-- rejected by Postgres (SQLSTATE 23514). supabase-js returns that failure as a PLAIN
+-- object in the {data,error} tuple (default, non-throwOnError mode), the route did
+-- `String(err)` on it -> "[object Object]", and the card silently stayed put while the
+-- portal-chat reminder (a separate, successful request) had already been sent.
+--
+-- DECISION: DROP the constraint rather than re-list slugs. Re-listing would re-break
+-- the board every time a column is added via the catalog, fighting the catalog-driven
+-- design. The catalog + app-level validation is the real guard; the DB CHECK was
+-- redundant. Sandbox already has no such constraint -- this aligns production with it.
+-- Dropping a CHECK never touches existing rows; it only stops future enforcement.
+ALTER TABLE message_actions
+  DROP CONSTRAINT IF EXISTS message_actions_action_type_check;
