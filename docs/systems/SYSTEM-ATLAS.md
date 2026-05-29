@@ -74,7 +74,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: ✅ DONE → [compliance-renewals.md](compliance-renewals.md)
 - **AI agent / Antonio Brain** — Internal AI assistant / proactive intelligence.
   - Lives in: `lib/ai-agent`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [ai-agent.md](ai-agent.md)
 
 ## Appendix A — MCP tools (41 active groups, ~217 tools)
 _Source of truth: uncommented `register*Tools` in `app/api/[transport]/route.ts`._
@@ -141,7 +141,7 @@ Ordered by money + client risk + change frequency:
 7. **Referrals & Circleback** — payouts; rules partly only in Antonio's head.
 8. **Workflow / catalog engine** — powers many flows; understanding it unlocks the rest.
 
-## Gaps & honesty notes
-- The deep "how it works" prose for **pending** systems is NOT yet written — only the inventory above is verified. Do not treat a one-liner as a full spec.
-- 3 grounded draft cards (leads, referrals, partners-team) were captured by an automated sweep and need a human-verified pass before they're trusted.
-- Business rules that live only in Antonio's head (e.g. some Circleback specifics) must be captured into the knowledge base during each system's deep-doc pass.
+## Status — all systems documented (2026-05-29)
+Every system listed above now has a deep doc under `docs/systems/`, each written by reading the live code (not the automated sweep — those drafts were superseded). The `leads` deep doc is the one remaining one-liner-only entry (covered by a grounded draft card); write it from code when leads is next touched.
+- Business rules that live only in Antonio's head (e.g. some Circleback specifics) still need capturing into the knowledge base — flag them as you hit them.
+- "Last verified against code" dates on each doc are the trust anchor: re-verify before acting on anything older than your change.
