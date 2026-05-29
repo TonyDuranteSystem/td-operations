@@ -17,7 +17,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: R102, R106 · Deep doc: ✅ DONE → [formation.md](formation.md)
 - **Onboarding** — Post-formation onboarding form + welcome package.
   - Lives in: `app/onboarding-form, lib/mcp/tools/onboarding*, welcome-package`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [onboarding.md](onboarding.md)
 - **Lease & Operating Agreement** — Lease + OA generation, send, e-signature via safeSend.
   - Lives in: `lib/mcp/tools/lease*, oa*, lib/mcp/safe-send.ts, app/lease, app/oa`
   - Rules: R037 · Deep doc: pending
