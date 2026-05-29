@@ -94,6 +94,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [billing-invoicing.md](billing-invoicing.md) | Billing & invoicing — the 4 money domains, invoice numbers, credit netting | ✅ written |
 | [formation.md](formation.md) | Company formation lifecycle — signed→EIN→active, the EIN hand-off, tiers | ✅ written |
 | [offers.md](offers.md) | Offers & contracts — publish→sign→pay→activate, the 3 states (R094) | ✅ written |
+| [banking-bankfeed.md](banking-bankfeed.md) | Banking applications + bank-feed auto-reconciliation (matcher, td_bank_feeds) | ✅ written |
 | _referrals-circleback.md_ | Referral program + Circleback referral rules | ⬜ next |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |

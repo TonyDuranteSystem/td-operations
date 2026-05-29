@@ -25,7 +25,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 ### Finance
 - **Banking & bank-feed** — Bank applications + transaction feed reconciliation / invoice matching.
   - Lives in: `lib/finance, lib/mcp/tools/bank-statement*, app/(dashboard)/reconciliation`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [banking-bankfeed.md](banking-bankfeed.md)
 - **Billing & invoicing** — 3 invoice domains: payments (TD receivables) · client_invoices (client sales) · client/td expenses.
   - Lives in: `lib/portal/td-invoice.ts, unified-invoice.ts, invoice-number.ts`
   - Rules: R027, R092, R098 · Deep doc: ✅ DONE → [billing-invoicing.md](billing-invoicing.md)
