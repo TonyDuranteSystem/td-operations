@@ -97,7 +97,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [banking-bankfeed.md](banking-bankfeed.md) | Banking applications + bank-feed auto-reconciliation (matcher, td_bank_feeds) | ✅ written |
 | [tax-returns.md](tax-returns.md) | Tax returns — status pipeline, accountant hand-off, tax pause + installment resume | ✅ written |
 | [portal.md](portal.md) | Client portal — 4 tiers (R102), syncTier, chat/notifications/docs, account types | ✅ written |
-| _referrals-circleback.md_ | Referral program + Circleback referral rules | ⬜ next |
+| [referrals-circleback.md](referrals-circleback.md) | Referrals — 10% credit notes, partner commissions, Calendly intake | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
 | _billing-invoicing.md_ | payments / client_invoices / client_expenses / td_expenses | ⬜ to seed |

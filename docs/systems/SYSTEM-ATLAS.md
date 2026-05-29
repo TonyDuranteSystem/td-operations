@@ -42,7 +42,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: ✅ DONE
 - **Referrals & Circleback** — Referral program + Calendly intake; 10% credit-note payouts.
   - Lives in: `lib/mcp/tools/referral*, lib/calendly, app/invitation`
-  - Rules: _(none specific)_ · Deep doc: draft card
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [referrals-circleback.md](referrals-circleback.md)
 - **Documents & storage** — Drive storage, OCR, classification, doc processing.
   - Lives in: `lib/pdf, lib/mcp/tools/doc*/drive*/classify*/docai`
   - Rules: _(none specific)_ · Deep doc: pending
