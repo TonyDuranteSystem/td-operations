@@ -36,7 +36,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 ### Portal & engagement
 - **Client portal** — Client-facing app: tiers, chat, documents, invoices, notifications.
   - Lives in: `lib/portal, app/portal, lib/operations/sync-tier.ts`
-  - Rules: R100, R102, R103 · Deep doc: pending
+  - Rules: R100, R102, R103 · Deep doc: ✅ DONE → [portal.md](portal.md)
 - **To-Do board / Notification Center** — Staff action cards from chats/events; catalog-driven kanban columns.
   - Lives in: `components/dashboard/action-board.tsx, lib/notifications, message_actions`
   - Rules: _(none specific)_ · Deep doc: ✅ DONE

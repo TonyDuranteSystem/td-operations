@@ -96,6 +96,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [offers.md](offers.md) | Offers & contracts — publish→sign→pay→activate, the 3 states (R094) | ✅ written |
 | [banking-bankfeed.md](banking-bankfeed.md) | Banking applications + bank-feed auto-reconciliation (matcher, td_bank_feeds) | ✅ written |
 | [tax-returns.md](tax-returns.md) | Tax returns — status pipeline, accountant hand-off, tax pause + installment resume | ✅ written |
+| [portal.md](portal.md) | Client portal — 4 tiers (R102), syncTier, chat/notifications/docs, account types | ✅ written |
 | _referrals-circleback.md_ | Referral program + Circleback referral rules | ⬜ next |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
