@@ -14,7 +14,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: R094 · Deep doc: pending
 - **Formation** — Company formation lead→EIN→active; Harbor Compliance filing; tier advances on EIN.
   - Lives in: `lib/operations/service-delivery.ts, formation-form, lib/mcp/tools/formation*`
-  - Rules: R102, R106 · Deep doc: pending
+  - Rules: R102, R106 · Deep doc: ✅ DONE → [formation.md](formation.md)
 - **Onboarding** — Post-formation onboarding form + welcome package.
   - Lives in: `app/onboarding-form, lib/mcp/tools/onboarding*, welcome-package`
   - Rules: _(none specific)_ · Deep doc: pending
