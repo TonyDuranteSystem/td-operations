@@ -33,8 +33,7 @@ import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
-import { teammateNavCapability } from '@/lib/portal/team/gate'
-import { hasCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
+import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
 
 interface PortalSidebarProps {
   user: { email?: string; user_metadata?: { full_name?: string } }

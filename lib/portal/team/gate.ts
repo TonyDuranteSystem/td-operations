@@ -51,33 +51,15 @@ export async function requirePortalCapability(
 }
 
 /**
- * Map a sidebar nav key → the capability that gates it for a TEAMMATE.
- *   - a TeamCapability string → shown iff that capability is granted
- *   - 'always'                → always shown to teammates (home, guide)
- *   - null                    → never shown to teammates (owner-only)
+ * For a granted page: returns the teammate's scoped account id if the user is a
+ * teammate AND the capability is granted; otherwise null. Pages use this in their
+ * "no contact id" branch to scope a teammate to their one company (or redirect).
  */
-export function teammateNavCapability(navKey: string): TeamCapability | 'always' | null {
-  switch (navKey) {
-    case 'nav.overview':
-    case 'nav.guide':
-      return 'always'
-    case 'nav.myCompany':
-      return 'company_services'
-    case 'nav.documents':
-    case 'nav.generateDocuments':
-      return 'documents'
-    case 'nav.invoices':
-    case 'nav.tdBilling':
-      return 'invoices_billing'
-    case 'nav.chat':
-      return 'chat'
-    case 'nav.myClients':
-      return 'sales_customers'
-    // Owner-only / non-delegable for teammates:
-    //   nav.team (admin only), nav.signDocuments (signing = owner only),
-    //   nav.requestService, nav.referrals, nav.profile, nav.offer, nav.wizard,
-    //   partner items.
-    default:
-      return null
-  }
+export async function getTeammateScopeOrNull(
+  user: User | null,
+  capability: TeamCapability,
+): Promise<string | null> {
+  if (!user) return null
+  const r = await requirePortalCapability(user, capability)
+  return r.allowed && r.kind === 'teammate' ? r.accountId : null
 }

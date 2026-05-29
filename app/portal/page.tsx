@@ -68,6 +68,29 @@ export default async function PortalDashboardPage() {
   const contactId = getClientContactId(user)
   const locale = getLocale(user)
 
+  // Teammate (Portal Team Access) — a simple scoped landing. Granted sections are
+  // reached via the (capability-filtered) sidebar; the overview's contact-centric
+  // data fetch does not apply to teammates.
+  if (!contactId && (user.app_metadata as Record<string, unknown>)?.kind === 'team_member') {
+    const { resolvePortalIdentity } = await import('@/lib/portal/resolve-portal-identity')
+    const { getPortalAccountById } = await import('@/lib/portal/queries')
+    const identity = await resolvePortalIdentity(user)
+    if (identity.kind !== 'teammate') redirect('/portal/login')
+    const account = await getPortalAccountById(identity.accountId)
+    const who = typeof user.user_metadata?.display_name === 'string' ? user.user_metadata.display_name : ''
+    return (
+      <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
+        <div className="bg-white rounded-xl border shadow-sm p-8">
+          <h1 className="text-xl font-semibold text-zinc-900">Welcome{who ? `, ${who}` : ''}</h1>
+          <p className="text-sm text-zinc-500 mt-2">
+            You have access to <span className="font-medium">{account?.company_name ?? 'this company'}</span>&rsquo;s portal.
+            Use the menu to open the sections you&rsquo;ve been given access to.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   // Partners have their own section — redirect immediately
   if (contactId) {
     const { getPortalRoleByContact } = await import('@/lib/portal/queries')

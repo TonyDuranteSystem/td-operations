@@ -58,3 +58,34 @@ export function hasCapability(
 ): boolean {
   return !!flags && flags[capability] === true
 }
+
+/**
+ * Map a sidebar nav key → the capability that gates it for a TEAMMATE.
+ *   - a TeamCapability string → shown iff that capability is granted
+ *   - 'always'                → always shown to teammates (home, guide)
+ *   - null                    → never shown to teammates (owner-only / non-delegable)
+ * Pure + client-safe (used by the sidebar).
+ */
+export function teammateNavCapability(navKey: string): TeamCapability | 'always' | null {
+  switch (navKey) {
+    case 'nav.overview':
+    case 'nav.guide':
+      return 'always'
+    case 'nav.myCompany':
+      return 'company_services'
+    case 'nav.documents':
+    case 'nav.generateDocuments':
+      return 'documents'
+    case 'nav.invoices':
+    case 'nav.tdBilling':
+      return 'invoices_billing'
+    case 'nav.chat':
+      return 'chat'
+    case 'nav.myClients':
+      return 'sales_customers'
+    // Owner-only / non-delegable: nav.team, nav.signDocuments, nav.requestService,
+    // nav.referrals, nav.profile, nav.offer, nav.wizard, partner items → hidden.
+    default:
+      return null
+  }
+}

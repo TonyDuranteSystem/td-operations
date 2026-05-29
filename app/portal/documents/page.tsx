@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getInvoiceArchive } from '@/lib/portal/queries'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
@@ -30,12 +31,24 @@ export default async function PortalDocumentsPage() {
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  if (!contactId) redirect('/portal')
 
-  const accounts = await getPortalAccounts(contactId)
-  const cookieStore = cookies()
-  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  let selectedAccountId: string | undefined
+  let accountIds: string[]
+  if (contactId) {
+    const accounts = await getPortalAccounts(contactId)
+    const cookieStore = cookies()
+    const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+    selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+    accountIds = accounts.map(a => a.id)
+  } else {
+    // Teammate (Portal Team Access) — scoped to ONE company; requires the
+    // 'documents' capability. Teammates see COMPANY documents only, never any
+    // member's personal docs (no contact id → the personal-doc query is skipped).
+    const tmAccountId = await getTeammateScopeOrNull(user, 'documents')
+    if (!tmAccountId) redirect('/portal')
+    selectedAccountId = tmAccountId
+    accountIds = [tmAccountId]
+  }
 
   const locale = getLocale(user)
 
@@ -66,17 +79,20 @@ export default async function PortalDocumentsPage() {
     // multi-member leak where an unassigned passport could be shown to everyone.
     companyDocs = (cdData ?? []).filter(d => d.category !== 2) as DocRow[]
 
-    // My docs: personal category (Contacts = 2) belonging to this contact only
-    const { data: mdData } = await supabaseAdmin
-      .from('documents')
-      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
-      .eq('account_id', selectedAccountId)
-      .eq('contact_id', contactId)
-      .eq('category', 2)
-      .eq('portal_visible', true)
-      .order('created_at', { ascending: false })
-      .limit(50)
-    myDocs = (mdData ?? []) as DocRow[]
+    // My docs: personal category (Contacts = 2) belonging to this contact only.
+    // Teammates have no contact id → they NEVER see anyone's personal docs.
+    if (contactId) {
+      const { data: mdData } = await supabaseAdmin
+        .from('documents')
+        .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+        .eq('account_id', selectedAccountId)
+        .eq('contact_id', contactId)
+        .eq('category', 2)
+        .eq('portal_visible', true)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      myDocs = (mdData ?? []) as DocRow[]
+    }
   } else {
     // Contact-only clients (ITIN, no LLC) — all docs are personal
     const { data } = await supabaseAdmin
@@ -89,18 +105,20 @@ export default async function PortalDocumentsPage() {
     myDocs = (data ?? []) as DocRow[]
   }
 
-  // Fetch correspondence (contact-centric: direct + all linked accounts)
-  const accountIds = accounts.map(a => a.id)
+  // Fetch correspondence (contact-centric for clients: direct + linked accounts;
+  // teammates: account-scoped only — they have no contact id).
   const orFilter = [
-    `contact_id.eq.${contactId}`,
+    contactId ? `contact_id.eq.${contactId}` : null,
     accountIds.length > 0 ? `account_id.in.(${accountIds.join(',')})` : null,
   ].filter(Boolean).join(',')
 
-  const { data: correspondence } = await supabaseAdmin
-    .from('client_correspondence')
-    .select('id, file_name, description, drive_file_url, read_at, created_at, account_id')
-    .or(orFilter)
-    .order('created_at', { ascending: false })
+  const { data: correspondence } = orFilter
+    ? await supabaseAdmin
+        .from('client_correspondence')
+        .select('id, file_name, description, drive_file_url, read_at, created_at, account_id')
+        .or(orFilter)
+        .order('created_at', { ascending: false })
+    : { data: [] as { id: string; file_name: string; description: string | null; drive_file_url: string | null; read_at: string | null; created_at: string; account_id: string | null }[] }
 
   const unreadCount = (correspondence ?? []).filter(c => !c.read_at).length
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { requirePortalCapability, teammateNavCapability } from '@/lib/portal/team/gate'
+import { requirePortalCapability } from '@/lib/portal/team/gate'
+import { teammateNavCapability } from '@/lib/portal/team/capabilities'
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import type { User } from '@supabase/supabase-js'
 
