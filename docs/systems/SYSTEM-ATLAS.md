@@ -28,7 +28,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: pending
 - **Billing & invoicing** — 3 invoice domains: payments (TD receivables) · client_invoices (client sales) · client/td expenses.
   - Lives in: `lib/portal/td-invoice.ts, unified-invoice.ts, invoice-number.ts`
-  - Rules: R027, R092, R098 · Deep doc: pending
+  - Rules: R027, R092, R098 · Deep doc: ✅ DONE → [billing-invoicing.md](billing-invoicing.md)
 - **Tax returns & filings** — Tax forms, quotes, extensions, send-to-accountant.
   - Lives in: `lib/tax, lib/mcp/tools/tax*, app/tax-form`
   - Rules: _(none specific)_ · Deep doc: pending

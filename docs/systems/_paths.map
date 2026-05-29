@@ -12,3 +12,4 @@
 # Lines starting with # and blank lines are ignored.
 
 docs/systems/todo-board.md|components/dashboard/action-board.tsx,app/api/crm/admin-actions/message-actions/,lib/notifications/act-event.ts
+docs/systems/billing-invoicing.md|lib/portal/td-invoice.ts,lib/portal/unified-invoice.ts,lib/portal/invoice-number.ts,lib/billing/,lib/operations/credit-netting.ts
