@@ -31,7 +31,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: R027, R092, R098 · Deep doc: ✅ DONE → [billing-invoicing.md](billing-invoicing.md)
 - **Tax returns & filings** — Tax forms, quotes, extensions, send-to-accountant.
   - Lives in: `lib/tax, lib/mcp/tools/tax*, app/tax-form`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [tax-returns.md](tax-returns.md)
 
 ### Portal & engagement
 - **Client portal** — Client-facing app: tiers, chat, documents, invoices, notifications.
