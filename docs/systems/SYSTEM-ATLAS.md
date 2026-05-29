@@ -62,7 +62,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: see appendix
 - **Hooks, guardrails & safety** — 18 Claude hooks + pre-push gates + sandbox enforcement + 35 R-rules.
   - Lives in: `.claude/hooks, .husky/pre-push, .claude/settings.json`
-  - Rules: R104, R105, R107 · Deep doc: see appendix
+  - Rules: R104, R105, R107 · Deep doc: ✅ DONE → [hooks-guardrails.md](hooks-guardrails.md)
 - **Auth & OAuth 2.1** — Dual auth: Bearer (Claude Code) + OAuth 2.1 (Claude.ai); staff vs client.
   - Lives in: `middleware.ts, app/api/oauth, lib/auth.ts`
   - Rules: _(none specific)_ · Deep doc: pending
