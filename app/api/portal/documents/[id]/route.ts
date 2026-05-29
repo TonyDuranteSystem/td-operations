@@ -1,7 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { downloadFileBinary } from '@/lib/google-drive'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { getClientContactId } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -36,14 +37,14 @@ export async function GET(
   // contact's accounts, OR (b) the document is contact-scoped (no account_id)
   // and the contact_id matches the requester. Contact-scoped documents exist
   // for pure contact-only ITIN clients (Phase B, 2026-05-11).
+  // Default-deny (never skipped for a null contact id, e.g. a teammate).
+  // Account-scoped docs: gated by the 'documents' capability + account match.
+  // Contact-scoped (personal) docs: ONLY the owning contact — never a teammate.
   const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    const hasAccountAccess = doc.account_id && accountIds.includes(doc.account_id)
-    const hasContactAccess = !doc.account_id && doc.contact_id === contactId
-    if (!hasAccountAccess && !hasContactAccess) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  const hasAccountAccess = doc.account_id ? await canAccessAccount(user, doc.account_id, 'documents') : false
+  const hasContactAccess = !doc.account_id && !!contactId && doc.contact_id === contactId
+  if (!hasAccountAccess && !hasContactAccess) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   // Download from Drive and stream to client

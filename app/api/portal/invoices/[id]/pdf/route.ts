@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
 import { invoiceLabels, type InvoiceLang } from '@/lib/portal/invoice-labels'
@@ -31,13 +31,9 @@ export async function GET(
 
   if (!invoice) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  // Access control
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(invoice.account_id)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  // Access control — default-deny (contacts AND teammates; never skipped).
+  if (!(await canAccessAccount(user, invoice.account_id, 'invoices_billing'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   const { data: customer } = invoice.customer_id

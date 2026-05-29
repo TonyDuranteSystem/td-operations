@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { revalidatePath } from 'next/cache'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -28,12 +28,8 @@ export async function GET(
   if (!customer) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   // Access control
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(customer.account_id)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  if (!(await canAccessAccount(user, customer.account_id, 'sales_customers'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   // Get invoices for this customer
@@ -66,12 +62,8 @@ export async function PATCH(
 
   if (!customer) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(customer.account_id)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  if (!(await canAccessAccount(user, customer.account_id, 'sales_customers'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   const updates: Record<string, unknown> = {}
@@ -120,12 +112,8 @@ export async function DELETE(
 
   if (!customer) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(customer.account_id)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
+  if (!(await canAccessAccount(user, customer.account_id, 'sales_customers'))) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   // Check for invoices — don't delete if has invoices

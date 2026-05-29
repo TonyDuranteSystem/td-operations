@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { requirePortalCapability } from '@/lib/portal/team/gate'
+import { requirePortalCapability, canAccessAccount } from '@/lib/portal/team/gate'
 import { teammateNavCapability } from '@/lib/portal/team/capabilities'
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import type { User } from '@supabase/supabase-js'
@@ -33,6 +33,25 @@ describe('requirePortalCapability', () => {
 
   it('unresolved identity is denied', async () => {
     expect(await requirePortalCapability(user, 'documents', resolver({ kind: 'none' }))).toEqual({ allowed: false, reason: 'denied' })
+  })
+})
+
+describe('canAccessAccount (default-deny, fixes the if(contactId) skip-leak)', () => {
+  it('contact: only their linked accounts', async () => {
+    const c = resolver({ kind: 'contact', contactId: 'c1', accountIds: ['a1', 'a2'] })
+    expect(await canAccessAccount(user, 'a1', 'invoices_billing', c)).toBe(true)
+    expect(await canAccessAccount(user, 'a9', 'invoices_billing', c)).toBe(false)
+  })
+  it('teammate: only their account AND only with the capability', async () => {
+    const t = resolver({ kind: 'teammate', teamMemberId: 't1', accountId: 'a9', displayName: 'M', email: null, capabilities: { invoices_billing: true } })
+    expect(await canAccessAccount(user, 'a9', 'invoices_billing', t)).toBe(true)
+    expect(await canAccessAccount(user, 'a9', 'documents', t)).toBe(false) // capability not granted
+    expect(await canAccessAccount(user, 'a1', 'invoices_billing', t)).toBe(false) // wrong account
+  })
+  it('denies null user / null account / unresolved', async () => {
+    expect(await canAccessAccount(null, 'a1', 'documents')).toBe(false)
+    expect(await canAccessAccount(user, null, 'documents', resolver({ kind: 'contact', contactId: 'c1', accountIds: ['a1'] }))).toBe(false)
+    expect(await canAccessAccount(user, 'a1', 'documents', resolver({ kind: 'none' }))).toBe(false)
   })
 })
 

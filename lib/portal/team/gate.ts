@@ -51,6 +51,29 @@ export async function requirePortalCapability(
 }
 
 /**
+ * Default-deny account access check for API routes. Returns true only when:
+ *   - contact  → the account is in the contact's linked accounts, OR
+ *   - teammate → the account matches their one account AND the capability is granted.
+ * Anything else (null identity / wrong account / missing capability) → false.
+ *
+ * Use this to REPLACE the `if (contactId) { ...check... }` pattern, which silently
+ * SKIPS the check when contactId is null (a teammate) and leaks the resource.
+ */
+export async function canAccessAccount(
+  user: User | null,
+  accountId: string | null | undefined,
+  capability: TeamCapability,
+  resolve: (u: User) => Promise<PortalIdentity> = resolvePortalIdentity,
+): Promise<boolean> {
+  if (!user || !accountId) return false
+  const r = await requirePortalCapability(user, capability, resolve)
+  if (!r.allowed) return false
+  if (r.kind === 'contact') return r.accountIds.includes(accountId)
+  if (r.kind === 'teammate') return r.accountId === accountId
+  return false
+}
+
+/**
  * For a granted page: returns the teammate's scoped account id if the user is a
  * teammate AND the capability is granted; otherwise null. Pages use this in their
  * "no contact id" branch to scope a teammate to their one company (or redirect).
