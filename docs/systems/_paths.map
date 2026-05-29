@@ -28,3 +28,4 @@ docs/systems/compliance-renewals.md|lib/harbor-compliance/,lib/mcp/tools/harbor-
 docs/systems/onboarding.md|lib/mcp/tools/onboarding.ts,lib/mcp/tools/welcome-package.ts,lib/mcp/tools/member-info.ts,app/api/onboarding-form-completed/,app/api/portal/onboarding-complete/
 docs/systems/lease-oa.md|lib/mcp/tools/lease.ts,lib/mcp/tools/oa.ts,lib/types/oa-templates.ts,app/api/lease-signed/,app/api/oa-signed/
 docs/systems/mcp-tools.md|app/api/[transport]/route.ts,lib/mcp/instructions.ts,lib/mcp/safe-send.ts,lib/mcp/reminder.ts,lib/mcp/action-log.ts
+docs/systems/partners-team.md|lib/partners/,app/(dashboard)/partners/,app/portal/partner/

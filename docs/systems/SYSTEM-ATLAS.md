@@ -48,7 +48,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: ✅ DONE → [documents.md](documents.md)
 - **Partners & team access** — Partner accounts, payouts, portal team members.
   - Lives in: `lib/partners, lib/mcp/tools/referral*, portal_team_send`
-  - Rules: _(none specific)_ · Deep doc: draft card
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [partners-team.md](partners-team.md)
 
 ### Platform & cross-cutting
 - **Workflow / catalog engine** — Catalog-driven workflows: actions, SLA, follow-ups all in catalog_entries JSONB; visual editor.
