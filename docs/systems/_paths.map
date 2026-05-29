@@ -24,3 +24,4 @@ docs/systems/crm-core.md|lib/mcp/tools/crm.ts,lib/operations/contact.ts,lib/oper
 docs/systems/hooks-guardrails.md|.claude/hooks/,.claude/settings.json,.husky/,scripts/check-system-docs-freshness.sh,scripts/dev-setup.sh,lib/supabase-admin.ts
 docs/systems/auth-oauth.md|middleware.ts,lib/auth.ts,lib/oauth.ts,app/api/oauth/,app/api/[transport]/
 docs/systems/documents.md|lib/google-drive.ts,lib/docai.ts,lib/classifier.ts,lib/pdf/,lib/mcp/tools/doc.ts,lib/mcp/tools/classify.ts,lib/mcp/tools/drive.ts,lib/mcp/tools/storage.ts,lib/portal/auto-save-document.ts
+docs/systems/compliance-renewals.md|lib/harbor-compliance/,lib/mcp/tools/harbor-compliance.ts,lib/mcp/tools/deadlines.ts,lib/mcp/tools/calendar.ts,app/api/cron/ra-renewal-check/,app/api/cron/annual-report-check/

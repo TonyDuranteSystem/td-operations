@@ -71,7 +71,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: _(none specific)_ · Deep doc: see appendix
 - **Compliance & renewals** — RA renewal, state annual reports, deadlines, calendar sync.
   - Lives in: `lib/harbor-compliance, lib/mcp/tools/hc*/deadline*/calendar*`
-  - Rules: _(none specific)_ · Deep doc: pending
+  - Rules: _(none specific)_ · Deep doc: ✅ DONE → [compliance-renewals.md](compliance-renewals.md)
 - **AI agent / Antonio Brain** — Internal AI assistant / proactive intelligence.
   - Lives in: `lib/ai-agent`
   - Rules: _(none specific)_ · Deep doc: pending
