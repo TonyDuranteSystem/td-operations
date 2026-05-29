@@ -18,6 +18,7 @@ The MCP server that exposes TD Operations to Claude (Claude Code + the Claude.ai
 - **Removing a tool:** delete the file or move it to `lib/mcp/tools/deprecated/` (as QB was, R097) — never leave dead tool files (they cause wrong counts/confusion).
 
 ## ⚠️ Two MCP connections in Claude Code (R096)
+_Source: this is an operational rule in CLAUDE.md (R096), confirmed by `.mcp.json` (defines the `td-ops-sandbox` connection). It is NOT encoded in `route.ts` — `route.ts` only implements the server's dual **auth** (Bearer + OAuth). The two connections are a Claude-Code client-config convention, not server code._
 - `mcp__td-ops-sandbox__*` → **sandbox** Supabase — use for development (building/testing/verifying sandbox).
 - `mcp__af7d85f2-*` → **production** Supabase (the DXT plugin) — use for operations (real clients).
 - **EXCEPTION:** `session_checkpoint` + `dev_task_*` always use the production connection (work tracking must persist).
