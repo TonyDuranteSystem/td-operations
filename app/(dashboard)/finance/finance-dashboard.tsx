@@ -82,14 +82,14 @@ export function FinanceDashboard({
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1">
+        {/* Tabs — horizontally scrollable on mobile so all tabs stay reachable */}
+        <div className="flex gap-1 overflow-x-auto -mx-1 px-1">
           {allTabs.filter(t => !t.adminOnly || isAdmin).map(t => (
             <button
               key={t.id}
               onClick={() => switchTab(t.id)}
               title={t.tooltip}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 whitespace-nowrap ${
                 tab === t.id
                   ? 'bg-blue-600 text-white'
                   : 'text-muted-foreground hover:bg-muted'
@@ -106,10 +106,10 @@ export function FinanceDashboard({
       <div className="flex-1 overflow-hidden">
         {tab === 'clients' && (
           <div className="h-full flex flex-col">
-            <div className="flex gap-2 px-6 pt-4">
+            <div className="flex gap-2 px-6 pt-4 overflow-x-auto">
               <button
                 onClick={() => setClientsView('all')}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors shrink-0 whitespace-nowrap ${
                   clientsView === 'all'
                     ? 'bg-blue-600 text-white'
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
@@ -119,7 +119,7 @@ export function FinanceDashboard({
               </button>
               <button
                 onClick={() => setClientsView('by-client')}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors shrink-0 whitespace-nowrap ${
                   clientsView === 'by-client'
                     ? 'bg-blue-600 text-white'
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
