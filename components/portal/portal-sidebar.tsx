@@ -33,6 +33,8 @@ import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
+import { teammateNavCapability } from '@/lib/portal/team/gate'
+import { hasCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
 
 interface PortalSidebarProps {
   user: { email?: string; user_metadata?: { full_name?: string } }
@@ -52,6 +54,10 @@ interface PortalSidebarProps {
   selectedFormationId?: string
   /** True when the logged-in user is the account admin for the selected company (can manage the Team tab). */
   canManageTeam?: boolean
+  /** True when the logged-in user is a teammate (Portal Team Access) — nav filtered by capability. */
+  isTeammate?: boolean
+  /** The teammate's granted capability flags (only meaningful when isTeammate). */
+  teammateCapabilities?: Record<string, boolean>
 }
 
 // Nav items organized into collapsible groups
@@ -160,7 +166,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -256,6 +262,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // just factored so it can run against any item array.
   const isItemVisible = (item: NavItem): boolean => {
     if (item.teamAdminOnly) return canManageTeam
+    // Teammate (Portal Team Access): nav is governed solely by granted capabilities.
+    if (isTeammate) {
+      const cap = teammateNavCapability(item.key)
+      if (cap === null) return false
+      if (cap === 'always') return true
+      return hasCapability(teammateCapabilities as Partial<Record<TeamCapability, boolean>>, cap)
+    }
     if (item.partnerOnly) return isPartner
 
     if (isPartner) {

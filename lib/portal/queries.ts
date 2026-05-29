@@ -40,6 +40,22 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
 }
 
 /**
+ * Load a single account in PortalAccount shape (Active/Suspended only).
+ * Used by the teammate-scoped portal layout (a teammate is bound to ONE account
+ * and is not a contact, so getPortalAccounts(contactId) does not apply).
+ */
+export async function getPortalAccountById(accountId: string): Promise<PortalAccount | null> {
+  if (!accountId) return null
+  const { data } = await supabaseAdmin
+    .from('accounts')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, account_type, portal_tier')
+    .eq('id', accountId)
+    .in('status', ['Active', 'Suspended'])
+    .maybeSingle()
+  return (data as PortalAccount) ?? null
+}
+
+/**
  * Finds the 'Pending Formation' account linked to a contact.
  * Used by the formation dashboard — these accounts are excluded from
  * getPortalAccounts (which only returns Active/Suspended) so we query separately.

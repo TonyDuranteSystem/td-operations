@@ -3,9 +3,10 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getPortalAccountById } from '@/lib/portal/queries'
 import { resolveSelectedEntity } from '@/lib/portal/select-entity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
@@ -53,6 +54,60 @@ export default async function PortalLayout({
   // No user — render children without shell (login/forgot-password/change-password pages handle their own UI)
   if (!user) {
     return <><SandboxBanner />{children}</>
+  }
+
+  // ── Teammate (Portal Team Access) — scoped to ONE company; nav filtered by capability ──
+  if ((user.app_metadata as Record<string, unknown>)?.kind === 'team_member') {
+    const identity = await resolvePortalIdentity(user)
+    const tmLocale = getLocale(user)
+    if (identity.kind !== 'teammate') {
+      // Revoked / not found → no access.
+      return (
+        <><SandboxBanner />
+          <div className="min-h-screen flex items-center justify-center p-8 text-center text-sm text-zinc-500">
+            Your access has been removed. Please contact the company owner.
+          </div>
+        </>
+      )
+    }
+    const tmAccount = await getPortalAccountById(identity.accountId)
+    const tmAccounts = tmAccount ? [tmAccount] : []
+    const tmSelectedAccountId = tmAccount?.id ?? ''
+    const tmTier = tmAccount?.portal_tier ?? 'active'
+    const tmSuspended = tmAccount?.status === 'Suspended'
+    const [tmActiveServices, tmNavVisibility] = tmSelectedAccountId
+      ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId, undefined)])
+      : [[] as string[], await getContactOnlyNavVisibility(undefined)]
+
+    return (
+      <Providers>
+        <SandboxBanner />
+        <PortalSwRegister locale={tmLocale} />
+        <LocaleProvider locale={tmLocale}>
+          <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
+            <PortalSidebar
+              user={user}
+              accounts={tmAccounts}
+              selectedAccountId={tmSelectedAccountId}
+              activeServices={tmActiveServices}
+              navVisibility={tmNavVisibility}
+              portalTier={tmTier}
+              accountType={tmAccount?.account_type ?? null}
+              hasWizardPending={false}
+              canManageTeam={false}
+              isTeammate={true}
+              teammateCapabilities={identity.capabilities}
+            />
+            <main className="flex-1 overflow-y-auto overscroll-y-contain">
+              <div className="h-14 lg:hidden" />
+              {tmSuspended && tmAccount ? (
+                <SuspendedGuard companyName={tmAccount.company_name}>{children}</SuspendedGuard>
+              ) : children}
+            </main>
+          </div>
+        </LocaleProvider>
+      </Providers>
+    )
   }
 
   // Get contact_id, accounts, and in-progress formations (per-entity portal:
