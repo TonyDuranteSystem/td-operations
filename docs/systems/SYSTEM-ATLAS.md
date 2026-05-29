@@ -59,7 +59,7 @@ This is the single map of the whole system: every feature, where it lives, the r
   - Rules: R018 · Deep doc: ✅ DONE → [crm-core.md](crm-core.md)
 - **MCP tool server** — 41 active tool groups (~217 tools) over one transport; instructions + safe-send.
   - Lives in: `app/api/[transport]/route.ts, lib/mcp`
-  - Rules: _(none specific)_ · Deep doc: see appendix
+  - Rules: R096 · Deep doc: ✅ DONE → [mcp-tools.md](mcp-tools.md)
 - **Hooks, guardrails & safety** — 18 Claude hooks + pre-push gates + sandbox enforcement + 35 R-rules.
   - Lives in: `.claude/hooks, .husky/pre-push, .claude/settings.json`
   - Rules: R104, R105, R107 · Deep doc: ✅ DONE → [hooks-guardrails.md](hooks-guardrails.md)
