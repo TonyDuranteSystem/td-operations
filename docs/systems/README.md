@@ -81,10 +81,15 @@ The exact queries / files to check to confirm this doc still matches reality.
 
 ---
 
+## Start here
+
+**[SYSTEM-ATLAS.md](SYSTEM-ATLAS.md)** — the master map of the whole system: every feature, where it lives, the rules that govern it, the full MCP tool / hook / guardrail / table inventory (exact counts, extracted from code), and the priority order for writing the deep docs. Read the atlas to find which system you need, then open that system's deep doc below.
+
 ## Index
 
 | Doc | Subsystem | Status |
 |---|---|---|
+| [SYSTEM-ATLAS.md](SYSTEM-ATLAS.md) | Master map of every system + tool/hook/guardrail/table inventory | ✅ generated |
 | [todo-board.md](todo-board.md) | Dashboard "TO DO — FROM CHATS" board (staff action cards) | ✅ written |
 | _referrals-circleback.md_ | Referral program + Circleback referral rules | ⬜ next |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
