@@ -19,7 +19,7 @@ vi.mock('@/lib/portal/web-push', () => ({
   sendPushToContact: vi.fn(),
 }))
 
-import { notifyClientOfAdminMessage } from '@/lib/portal/notifications'
+import { notifyClientOfAdminMessage, dedupeRecipientsByEmail } from '@/lib/portal/notifications'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailPost } from '@/lib/gmail'
 
@@ -60,23 +60,45 @@ function extractMimeTo(raw: string): string {
   return ''
 }
 
-// Builds a mock Supabase chain for single() queries (contact_id path)
-function mockSingleContact(data: unknown, error: unknown = null) {
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({ data, error }),
-    insert: vi.fn().mockResolvedValue({ data, error }),
+// A chainable + awaitable Supabase mock chain. Supports .select().eq()...,
+// chained .eq().eq(), terminal .single(), and `await chain` (thenable) — so it
+// works for the contact_id (.single()) path AND both array paths (account_contacts,
+// portal_team_members) which await the builder directly.
+function makeChain(data: unknown) {
+  const chain: Record<string, unknown> = {
+    select: vi.fn(() => chain),
+    eq: vi.fn(() => chain),
+    single: vi.fn().mockResolvedValue({ data, error: null }),
+    then: (resolve: (v: { data: unknown; error: null }) => unknown) => resolve({ data, error: null }),
   }
+  return chain
 }
 
-// Builds a mock Supabase chain for array queries (account_id path — no .single())
-function mockContactArray(rows: unknown[], error: unknown = null) {
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockResolvedValue({ data: rows, error }),
-  }
+// Dispatch the mocked supabaseAdmin.from(table) to per-table data.
+function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[] }) {
+  vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
+    if (table === 'contacts') return makeChain(opts.contact ?? null)
+    if (table === 'account_contacts') return makeChain(opts.accountContacts ?? [])
+    if (table === 'portal_team_members') return makeChain(opts.teammates ?? [])
+    return makeChain(null)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any)
 }
+
+describe('dedupeRecipientsByEmail', () => {
+  it('keeps the first occurrence and drops later duplicates (case-insensitive)', () => {
+    const out = dedupeRecipientsByEmail([
+      { email: 'a@x.com', tag: 'first' },
+      { email: 'A@X.com', tag: 'dup' },
+      { email: 'b@x.com', tag: 'keep' },
+    ])
+    expect(out.map(r => r.tag)).toEqual(['first', 'keep'])
+  })
+
+  it('returns empty for empty input', () => {
+    expect(dedupeRecipientsByEmail([])).toEqual([])
+  })
+})
 
 describe('notifyClientOfAdminMessage', () => {
   beforeEach(() => {
@@ -84,8 +106,7 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('sends one email when contact_id is provided', async () => {
-    const chain = mockSingleContact({ email: 'test@example.com', full_name: 'Mario Rossi', language: 'en' })
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    mockDb({ contact: { email: 'test@example.com', full_name: 'Mario Rossi', language: 'en' } })
 
     await notifyClientOfAdminMessage({ contact_id: 'contact-123', messagePreview: 'Hello, your invoice is ready.' })
 
@@ -95,8 +116,7 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('sends Italian subject when contact language is it', async () => {
-    const chain = mockSingleContact({ email: 'mario@example.com', full_name: 'Mario Rossi', language: 'it' })
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    mockDb({ contact: { email: 'mario@example.com', full_name: 'Mario Rossi', language: 'it' } })
 
     await notifyClientOfAdminMessage({ contact_id: 'contact-456', messagePreview: 'Ciao.' })
 
@@ -105,8 +125,7 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('does not send when contact has no email', async () => {
-    const chain = mockSingleContact({ email: null, full_name: 'No Email', language: 'en' })
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    mockDb({ contact: { email: null, full_name: 'No Email', language: 'en' } })
 
     await notifyClientOfAdminMessage({ contact_id: 'contact-789', messagePreview: 'Test' })
 
@@ -121,8 +140,7 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('truncates long message preview to 200 chars', async () => {
-    const chain = mockSingleContact({ email: 'test@example.com', full_name: 'Test User', language: 'en' })
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    mockDb({ contact: { email: 'test@example.com', full_name: 'Test User', language: 'en' } })
 
     await notifyClientOfAdminMessage({ contact_id: 'contact-trunc', messagePreview: 'A'.repeat(500) })
 
@@ -135,10 +153,7 @@ describe('notifyClientOfAdminMessage', () => {
   // ── Multi-Member LLC tests (account_id path) ────────────────────────────
 
   it('sends one email for single-contact account', async () => {
-    const chain = mockContactArray([
-      { contacts: { email: 'bence@example.com', full_name: 'Bence Koncz', language: 'en' } },
-    ])
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    mockDb({ accountContacts: [{ contacts: { email: 'bence@example.com', full_name: 'Bence Koncz', language: 'en' } }] })
 
     await notifyClientOfAdminMessage({ account_id: 'account-abc', messagePreview: 'Hello' })
 
@@ -148,11 +163,10 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('sends separate emails to ALL contacts for Multi-Member LLC', async () => {
-    const chain = mockContactArray([
+    mockDb({ accountContacts: [
       { contacts: { email: 'bence@example.com', full_name: 'Bence Koncz', language: 'en' } },
       { contacts: { email: 'donat@example.com', full_name: 'Donat Percsi', language: 'en' } },
-    ])
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    ] })
 
     await notifyClientOfAdminMessage({ account_id: 'account-mmllc', messagePreview: 'New message' })
 
@@ -163,13 +177,11 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('personalizes greeting per recipient in MMLLC', async () => {
-    const chain = mockContactArray([
+    mockDb({ accountContacts: [
       { contacts: { email: 'bence@example.com', full_name: 'Bence Koncz', language: 'en' } },
       { contacts: { email: 'donat@example.com', full_name: 'Donat Tamas Percsi', language: 'en' } },
-    ])
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    ] })
 
-    // Different account_id than other tests to avoid in-memory throttle collision
     await notifyClientOfAdminMessage({ account_id: 'account-mmllc-greet', messagePreview: 'Test' })
 
     const htmls = vi.mocked(gmailPost).mock.calls.map(c => extractMimeHtmlBody((c[1] as { raw: string }).raw))
@@ -177,18 +189,16 @@ describe('notifyClientOfAdminMessage', () => {
     const donatHtml = htmls.find(h => h.includes('Donat'))
     expect(benceHtml).toBeTruthy()
     expect(donatHtml).toBeTruthy()
-    // Each recipient gets their own greeting
     expect(benceHtml).not.toContain('Donat')
     expect(donatHtml).not.toContain('Bence')
   })
 
   it('skips contacts with null email in MMLLC, sends to the rest', async () => {
-    const chain = mockContactArray([
+    mockDb({ accountContacts: [
       { contacts: { email: 'bence@example.com', full_name: 'Bence Koncz', language: 'en' } },
       { contacts: null },
       { contacts: { email: null, full_name: 'No Email', language: 'en' } },
-    ])
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    ] })
 
     await notifyClientOfAdminMessage({ account_id: 'account-partial', messagePreview: 'Test' })
 
@@ -197,9 +207,8 @@ describe('notifyClientOfAdminMessage', () => {
     expect(extractMimeTo(raw)).toBe('bence@example.com')
   })
 
-  it('does nothing when account has no contacts with emails', async () => {
-    const chain = mockContactArray([])
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+  it('does nothing when account has no contacts with emails and no teammates', async () => {
+    mockDb({ accountContacts: [] })
 
     await notifyClientOfAdminMessage({ account_id: 'account-empty', messagePreview: 'Test' })
 
@@ -207,18 +216,134 @@ describe('notifyClientOfAdminMessage', () => {
   })
 
   it('sends Italian to Italian contacts and English to English in mixed MMLLC', async () => {
-    const chain = mockContactArray([
+    mockDb({ accountContacts: [
       { contacts: { email: 'en@example.com', full_name: 'English Member', language: 'en' } },
       { contacts: { email: 'it@example.com', full_name: 'Membro Italiano', language: 'it' } },
-    ])
-    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as any)
+    ] })
 
     await notifyClientOfAdminMessage({ account_id: 'account-mixed-lang', messagePreview: 'Test' })
 
     expect(gmailPost).toHaveBeenCalledTimes(2)
-    const calls = vi.mocked(gmailPost).mock.calls
-    const subjects = calls.map(c => extractMimeSubject((c[1] as { raw: string }).raw))
+    const subjects = vi.mocked(gmailPost).mock.calls.map(c => extractMimeSubject((c[1] as { raw: string }).raw))
     expect(subjects).toContain('New message from the Tony Durante team')
     expect(subjects).toContain('Nuovo messaggio dal team Tony Durante')
+  })
+
+  // ── Portal Team Access teammate notifications (account_id path) ──────────
+
+  it('also emails an active teammate with chat capability and a real email', async () => {
+    mockDb({
+      accountContacts: [{ contacts: { email: 'owner@example.com', full_name: 'Owner One', language: 'en' } }],
+      teammates: [{ email: 'teammate@example.com', display_name: 'QA Teammate', capabilities: { chat: true, documents: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-1', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledTimes(2)
+    const recipients = vi.mocked(gmailPost).mock.calls.map(c => extractMimeTo((c[1] as { raw: string }).raw))
+    expect(recipients).toContain('owner@example.com')
+    expect(recipients).toContain('teammate@example.com')
+  })
+
+  it('does NOT email a teammate without the chat capability', async () => {
+    mockDb({
+      accountContacts: [{ contacts: { email: 'owner@example.com', full_name: 'Owner', language: 'en' } }],
+      teammates: [{ email: 'docsonly@example.com', display_name: 'Docs Only', capabilities: { documents: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-2', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledOnce()
+    expect(extractMimeTo((vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }).raw)).toBe('owner@example.com')
+  })
+
+  it('does NOT email a revoked teammate even with chat capability', async () => {
+    mockDb({
+      accountContacts: [{ contacts: { email: 'owner@example.com', full_name: 'Owner', language: 'en' } }],
+      teammates: [{ email: 'revoked@example.com', display_name: 'Revoked', capabilities: { chat: true }, status: 'revoked' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-3', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledOnce()
+    expect(extractMimeTo((vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }).raw)).toBe('owner@example.com')
+  })
+
+  it('does NOT email a chat teammate with a null (owner-omitted) email', async () => {
+    mockDb({
+      accountContacts: [{ contacts: { email: 'owner@example.com', full_name: 'Owner', language: 'en' } }],
+      teammates: [{ email: null, display_name: 'No Email', capabilities: { chat: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-4', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledOnce()
+    expect(extractMimeTo((vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }).raw)).toBe('owner@example.com')
+  })
+
+  it('emails a chat teammate even when the account has no contacts', async () => {
+    mockDb({
+      accountContacts: [],
+      teammates: [{ email: 'solo.teammate@example.com', display_name: 'Solo', capabilities: { chat: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-5', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledOnce()
+    expect(extractMimeTo((vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }).raw)).toBe('solo.teammate@example.com')
+  })
+
+  it('dedupes a teammate sharing a contact email (one email, not two)', async () => {
+    mockDb({
+      accountContacts: [{ contacts: { email: 'shared@example.com', full_name: 'Shared Person', language: 'en' } }],
+      teammates: [{ email: 'Shared@example.com', display_name: 'Shared Teammate', capabilities: { chat: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-6', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledOnce()
+    expect(extractMimeTo((vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }).raw)).toBe('shared@example.com')
+  })
+
+  it("emails the teammate in the OWNER's language (Italian owner -> Italian teammate)", async () => {
+    mockDb({
+      accountContacts: [{ role: 'owner', contacts: { email: 'owner@example.com', full_name: 'Proprietario', language: 'it' } }],
+      teammates: [{ email: 'teammate@example.com', display_name: 'Collega', capabilities: { chat: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-lang-it', messagePreview: 'Reply' })
+
+    expect(gmailPost).toHaveBeenCalledTimes(2)
+    const teammateCall = vi.mocked(gmailPost).mock.calls.find(c => extractMimeTo((c[1] as { raw: string }).raw) === 'teammate@example.com')!
+    expect(teammateCall).toBeTruthy()
+    expect(extractMimeSubject((teammateCall[1] as { raw: string }).raw)).toBe('Nuovo messaggio dal team Tony Durante')
+  })
+
+  it("emails the teammate in the OWNER's language (English owner -> English teammate)", async () => {
+    mockDb({
+      accountContacts: [{ role: 'owner', contacts: { email: 'owner@example.com', full_name: 'Owner', language: 'en' } }],
+      teammates: [{ email: 'teammate@example.com', display_name: 'Mate', capabilities: { chat: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-lang-en', messagePreview: 'Reply' })
+
+    const teammateCall = vi.mocked(gmailPost).mock.calls.find(c => extractMimeTo((c[1] as { raw: string }).raw) === 'teammate@example.com')!
+    expect(teammateCall).toBeTruthy()
+    expect(extractMimeSubject((teammateCall[1] as { raw: string }).raw)).toBe('New message from the Tony Durante team')
+  })
+
+  it('teammate follows owner language even when a non-owner contact has a different language', async () => {
+    mockDb({
+      accountContacts: [
+        { role: 'member', contacts: { email: 'member@example.com', full_name: 'Membro', language: 'en' } },
+        { role: 'owner', contacts: { email: 'owner@example.com', full_name: 'Proprietario', language: 'it' } },
+      ],
+      teammates: [{ email: 'teammate@example.com', display_name: 'Collega', capabilities: { chat: true }, status: 'active' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-lang-mixed', messagePreview: 'Reply' })
+
+    const teammateCall = vi.mocked(gmailPost).mock.calls.find(c => extractMimeTo((c[1] as { raw: string }).raw) === 'teammate@example.com')!
+    expect(extractMimeSubject((teammateCall[1] as { raw: string }).raw)).toBe('Nuovo messaggio dal team Tony Durante')
   })
 })

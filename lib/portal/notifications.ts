@@ -199,10 +199,25 @@ async function _sendNotificationEmailToContact(contactId: string, title: string,
 // Throttle: 1 email per conversation per 2 hours (avoids spam when admin sends multiple messages)
 const recentClientNotifications = new Map<string, number>()
 
+/** De-duplicate notification recipients by lowercased email (first occurrence wins). */
+export function dedupeRecipientsByEmail<T extends { email: string }>(list: T[]): T[] {
+  const seen = new Set<string>()
+  return list.filter((r) => {
+    const key = r.email.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 /**
  * Send an email to the client when an admin sends a portal chat message.
  * Throttled: max 1 email per conversation per 2 hours.
  * Called by the API route and the portal_chat_send MCP tool.
+ *
+ * Recipients (account_id path): ALL account contacts PLUS active Portal Team
+ * Access teammates who have the 'chat' capability and a real email on file
+ * (teammates aren't in account_contacts, so they'd otherwise be missed).
  */
 export async function notifyClientOfAdminMessage({
   account_id,
@@ -243,15 +258,46 @@ export async function notifyClientOfAdminMessage({
   } else if (account_id) {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
-      .select('contacts(email, full_name, language)')
+      .select('role, contacts(email, full_name, language)')
       .eq('account_id', account_id)
-    recipients = (links ?? [])
+    const linkRows = links ?? []
+    const contactRecipients = linkRows
       .map(l => {
         const c = l.contacts as { email: string; full_name: string; language: string } | null
         if (!c?.email) return null
         return { email: c.email, firstName: c.full_name?.split(' ')[0] ?? null, language: c.language ?? 'en' }
       })
       .filter((r): r is Recipient => r !== null)
+
+    // Teammates have no language column — they follow the OWNER's language.
+    // Prefer the owner-role contact's language; fall back to any contact with a
+    // language set, then English (e.g. teammate-only account with no contacts).
+    const ownerLink =
+      linkRows.find(l => (l as { role?: string | null }).role === 'owner' && (l.contacts as { language?: string } | null)?.language)
+      ?? linkRows.find(l => (l.contacts as { language?: string } | null)?.language)
+    const ownerLanguage = (ownerLink?.contacts as { language?: string } | null)?.language ?? 'en'
+
+    // Portal Team Access: also notify active teammates of this account who can
+    // see chat (the email CTA links to /portal/chat, so only chat-capable
+    // teammates are relevant) and have a real email on file. Teammates are NOT
+    // in account_contacts, so they'd otherwise be missed. The placeholder email
+    // generated when an owner omits one lives only on auth.users — never on
+    // portal_team_members.email — so a non-null filter stays deliverable-safe.
+    const { data: teammates } = await supabaseAdmin
+      .from('portal_team_members')
+      .select('email, display_name, capabilities, status')
+      .eq('account_id', account_id)
+      .eq('status', 'active')
+    const teammateRecipients: Recipient[] = (teammates ?? [])
+      .filter((t) => t.status === 'active' && !!t.email && (t.capabilities as Record<string, unknown> | null)?.chat === true)
+      .map((t) => ({
+        email: t.email as string,
+        firstName: ((t.display_name as string | null) ?? '').split(' ')[0] || null,
+        language: ownerLanguage, // teammates follow the account owner's language
+      }))
+
+    // Dedupe so a teammate sharing a contact's email isn't emailed twice.
+    recipients = dedupeRecipientsByEmail([...contactRecipients, ...teammateRecipients])
   }
 
   if (recipients.length === 0) return
