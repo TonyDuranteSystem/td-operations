@@ -202,8 +202,15 @@ export function defaultReferralCreditUsd(referredSetupFeeTotal: number | null | 
 }
 
 export interface ManualReferralParams {
-  referrerContactId: string
-  referredAccountId: string
+  /** Referrer side — a contact and/or an account (at least one). If only a
+   *  contact is given, the credit lands on the contact's linked account. */
+  referrerContactId?: string | null
+  referrerAccountId?: string | null
+  /** Referred side — a contact and/or an account (at least one). */
+  referredContactId?: string | null
+  referredAccountId?: string | null
+  /** 'client' (default) or 'partner' — based on the referrer actor's type. */
+  referrerType?: string
   referredName: string
   /** USD credit amount — already resolved (auto 10% default or staff override). */
   creditAmountUsd: number
@@ -212,52 +219,60 @@ export interface ManualReferralParams {
 
 export type ManualReferralResult =
   | { created: true; referralId: string; paymentId: string; amount: number }
-  | { created: false; reason: "invalid_amount" | "no_referrer_account" | "self_referral" | "duplicate" | "error"; detail?: string }
+  | { created: false; reason: "invalid_amount" | "missing_party" | "no_referrer_account" | "self_referral" | "duplicate" | "error"; detail?: string }
 
 /**
- * Manually record a referral (staff-entered, referred party is an EXISTING client
- * account) and immediately issue the referrer's USD credit note. Unlike the organic
- * creditReferrerForLead flow (lead → setup-fee → credit), this is for back-filling
- * or admin-added referrals where the referred client already exists.
+ * Manually record a referral (staff-entered) and immediately issue the referrer's
+ * USD credit note. Either side may be a CONTACT or an ACCOUNT (any type, incl.
+ * Partner). The credit always lands on the referrer's ACCOUNT (resolved from the
+ * contact when only a contact is given). Unlike the organic creditReferrerForLead
+ * flow, this is for admin-added referrals where the parties already exist.
  *
- * Guards: positive amount; referrer must resolve to an account; no self-referral;
- * dedup per (referrer contact, referred account). Idempotent on the credit note via
- * idempotency_key `manual-referral:<referrerContactId>:<referredAccountId>`.
+ * Guards: positive amount; both parties present; referrer resolves to an account;
+ * no self-referral; dedup per (referrer, referred). Credit note is idempotent.
  */
 export async function createManualReferralCredit(
   params: ManualReferralParams,
   supabase: SupabaseClient,
 ): Promise<ManualReferralResult> {
-  const { referrerContactId, referredAccountId, referredName, creditAmountUsd, note } = params
+  const { referrerContactId, referrerAccountId, referredContactId, referredAccountId, referredName, creditAmountUsd, note } = params
+  const referrerType = params.referrerType === "partner" ? "partner" : "client"
 
   if (!(creditAmountUsd > 0)) return { created: false, reason: "invalid_amount" }
+  if (!referrerContactId && !referrerAccountId) return { created: false, reason: "missing_party", detail: "referrer" }
+  if (!referredContactId && !referredAccountId) return { created: false, reason: "missing_party", detail: "referred" }
 
-  // Resolve the referrer's account (the one to credit).
-  const { data: link } = await supabase
-    .from("account_contacts")
-    .select("account_id")
-    .eq("contact_id", referrerContactId)
-    .limit(1)
-    .maybeSingle()
-  const referrerAccountId = (link as { account_id: string } | null)?.account_id ?? null
-  if (!referrerAccountId) return { created: false, reason: "no_referrer_account" }
-  if (referrerAccountId === referredAccountId) return { created: false, reason: "self_referral" }
+  // Resolve the referrer's account to credit: explicit account, else the
+  // contact's linked account.
+  let creditAccountId = referrerAccountId ?? null
+  if (!creditAccountId && referrerContactId) {
+    const { data: link } = await supabase
+      .from("account_contacts")
+      .select("account_id")
+      .eq("contact_id", referrerContactId)
+      .limit(1)
+      .maybeSingle()
+    creditAccountId = (link as { account_id: string } | null)?.account_id ?? null
+  }
+  if (!creditAccountId) return { created: false, reason: "no_referrer_account" }
+  if (referredAccountId && creditAccountId === referredAccountId) return { created: false, reason: "self_referral" }
 
-  // Dedup: one manual referral per (referrer contact, referred account).
-  const { data: existing } = await supabase
-    .from("referrals")
-    .select("id")
-    .eq("referrer_contact_id", referrerContactId)
-    .eq("referred_account_id", referredAccountId)
-    .limit(1)
+  // Dedup: match on the strongest identifiers available on each side.
+  let dq = supabase.from("referrals").select("id")
+  dq = referrerContactId ? dq.eq("referrer_contact_id", referrerContactId) : dq.eq("referrer_account_id", creditAccountId)
+  if (referredAccountId) dq = dq.eq("referred_account_id", referredAccountId)
+  else if (referredContactId) dq = dq.eq("referred_contact_id", referredContactId)
+  const { data: existing } = await dq.limit(1)
   if (existing && (existing as unknown[]).length > 0) return { created: false, reason: "duplicate" }
 
   // Create the USD credit note (negative invoice), idempotent.
+  const refKey = referrerContactId || creditAccountId
+  const rdKey = referredAccountId || referredContactId
   const today = new Date().toISOString().split("T")[0]
   let result
   try {
     result = await createTDInvoice({
-      account_id: referrerAccountId,
+      account_id: creditAccountId,
       line_items: [
         {
           description: `Referral reward — ${REFERRAL_COMMISSION_PCT}% credit (${referredName})`,
@@ -268,7 +283,7 @@ export async function createManualReferralCredit(
       currency: "USD",
       mark_as_paid: true,
       paid_date: today,
-      idempotency_key: `manual-referral:${referrerContactId}:${referredAccountId}`,
+      idempotency_key: `manual-referral:${refKey}:${rdKey}`,
       skip_credit_netting: true, // this IS a credit note — must not net into itself
     })
   } catch (e) {
@@ -285,11 +300,12 @@ export async function createManualReferralCredit(
   const { data: ref, error: refErr } = await supabase
     .from("referrals")
     .insert({
-      referrer_contact_id: referrerContactId,
-      referrer_account_id: referrerAccountId,
-      referred_account_id: referredAccountId,
+      referrer_contact_id: referrerContactId ?? null,
+      referrer_account_id: creditAccountId,
+      referred_contact_id: referredContactId ?? null,
+      referred_account_id: referredAccountId ?? null,
       referred_name: referredName,
-      referrer_type: "client",
+      referrer_type: referrerType,
       status: "credited",
       commission_type: "credit_note",
       commission_pct: REFERRAL_COMMISSION_PCT,

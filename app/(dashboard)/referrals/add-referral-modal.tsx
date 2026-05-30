@@ -5,70 +5,94 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Plus, X, Search, Loader2 } from 'lucide-react'
 
-interface ContactHit { id: string; full_name: string; email: string | null }
-interface AccountHit { id: string; company_name: string; setup_fee_total: number; default_credit_usd: number }
+interface Actor {
+  kind: 'account' | 'contact'
+  id: string
+  name: string
+  account_type?: string | null
+  account_id?: string | null   // for contacts: their linked account
+  account_name?: string | null
+  setup_fee_total: number
+  default_credit_usd: number
+}
 
-/** "Add referral" — manually record a referral (referrer client → referred client)
- *  and issue the referrer's 10% USD credit (editable). Dashboard-only. */
+/** Search any actor (account of any type, incl. Partner, OR contact). */
+function ActorPicker({ label, value, onPick, onClear, placeholder }: {
+  label: string; value: Actor | null; placeholder: string
+  onPick: (a: Actor) => void; onClear: () => void
+}) {
+  const [q, setQ] = useState('')
+  const [hits, setHits] = useState<Actor[]>([])
+  const [loading, setLoading] = useState(false)
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function search(term: string) {
+    setQ(term)
+    if (t.current) clearTimeout(t.current)
+    if (term.trim().length < 2) { setHits([]); return }
+    t.current = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const res = await fetch(`/api/referral/manual?q=${encodeURIComponent(term)}`)
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Search failed.')
+        setHits(data.results ?? [])
+      } catch (err) { toast.error(err instanceof Error ? err.message : 'Search failed.') }
+      finally { setLoading(false) }
+    }, 250)
+  }
+
+  const badge = (a: Actor) => a.kind === 'account' ? (a.account_type || 'Account') : 'Contact'
+
+  return (
+    <div className="relative">
+      <label className="mb-1 block text-xs font-medium text-zinc-600">{label}</label>
+      {value ? (
+        <div className="flex items-center justify-between rounded-md border bg-zinc-50 px-3 py-2 text-sm">
+          <span>
+            <span className="mr-2 rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-600">{badge(value)}</span>
+            {value.name}
+            {value.kind === 'contact' && value.account_name ? <span className="text-zinc-400"> · {value.account_name}</span> : ''}
+          </span>
+          <button onClick={() => { onClear(); setQ('') }} className="text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
+        </div>
+      ) : (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-zinc-400" />
+          {loading && <Loader2 className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin text-zinc-400" />}
+          <input value={q} onChange={e => search(e.target.value)} placeholder={placeholder}
+            className="w-full rounded-md border px-8 py-2 text-sm focus:border-blue-500 focus:outline-none" />
+          {hits.length > 0 && (
+            <div className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-md border bg-white shadow-lg">
+              {hits.map(a => (
+                <button key={`${a.kind}:${a.id}`} onClick={() => { onPick(a); setHits([]) }}
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-50">
+                  <span className="mr-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500">{badge(a)}</span>
+                  {a.name}
+                  {a.kind === 'contact' && a.account_name ? <span className="text-zinc-400"> · {a.account_name}</span> : ''}
+                  {a.setup_fee_total > 0 ? <span className="text-zinc-400"> · setup ${a.setup_fee_total}</span> : ''}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** "Add referral" — record a referral (referrer → referred, each a contact OR
+ *  account of any type) and issue the referrer's 10% USD credit (editable). */
 export function AddReferralModal() {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-
-  // referrer (contact)
-  const [refQ, setRefQ] = useState('')
-  const [refHits, setRefHits] = useState<ContactHit[]>([])
-  const [referrer, setReferrer] = useState<ContactHit | null>(null)
-
-  // referred (account)
-  const [cliQ, setCliQ] = useState('')
-  const [cliHits, setCliHits] = useState<AccountHit[]>([])
-  const [referred, setReferred] = useState<AccountHit | null>(null)
-
+  const [referrer, setReferrer] = useState<Actor | null>(null)
+  const [referred, setReferred] = useState<Actor | null>(null)
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
-  const tRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const tRef2 = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  function reset() {
-    setRefQ(''); setRefHits([]); setReferrer(null)
-    setCliQ(''); setCliHits([]); setReferred(null)
-    setAmount(''); setNote('')
-  }
-
-  async function searchContacts(q: string) {
-    setRefQ(q); setReferrer(null)
-    if (tRef.current) clearTimeout(tRef.current)
-    if (q.trim().length < 2) { setRefHits([]); return }
-    tRef.current = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/contacts/search?q=${encodeURIComponent(q)}`)
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(data.error || 'Search failed.')
-        setRefHits(data.contacts ?? [])
-      } catch (err) { toast.error(err instanceof Error ? err.message : 'Contact search failed.') }
-    }, 250)
-  }
-
-  async function searchAccounts(q: string) {
-    setCliQ(q); setReferred(null)
-    if (tRef2.current) clearTimeout(tRef2.current)
-    if (q.trim().length < 2) { setCliHits([]); return }
-    tRef2.current = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/referral/manual?q=${encodeURIComponent(q)}`)
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(data.error || 'Search failed.')
-        setCliHits(data.accounts ?? [])
-      } catch (err) { toast.error(err instanceof Error ? err.message : 'Client search failed.') }
-    }, 250)
-  }
-
-  function pickReferred(a: AccountHit) {
-    setReferred(a); setCliQ(a.company_name); setCliHits([])
-    // prefill the 10% default (editable)
-    setAmount(a.default_credit_usd > 0 ? String(a.default_credit_usd) : '')
-  }
+  function reset() { setReferrer(null); setReferred(null); setAmount(''); setNote('') }
 
   async function submit() {
     if (!referrer) { toast.error('Pick a referrer.'); return }
@@ -77,20 +101,22 @@ export function AddReferralModal() {
     if (!(amt > 0)) { toast.error('Enter a credit amount greater than 0.'); return }
     setSubmitting(true)
     try {
+      const payload = {
+        referrerContactId: referrer.kind === 'contact' ? referrer.id : null,
+        referrerAccountId: referrer.kind === 'account' ? referrer.id : null,
+        referrerType: referrer.kind === 'account' && (referrer.account_type || '').toLowerCase() === 'partner' ? 'partner' : 'client',
+        referredContactId: referred.kind === 'contact' ? referred.id : null,
+        referredAccountId: referred.kind === 'account' ? referred.id : null,
+        referredName: referred.name,
+        amountUsd: amt,
+        note: note.trim() || null,
+      }
       const res = await fetch('/api/referral/manual', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          referrerContactId: referrer.id,
-          referredAccountId: referred.id,
-          referredName: referred.company_name,
-          amountUsd: amt,
-          note: note.trim() || null,
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not create the referral.')
-      toast.success(`Referral added — $${data.amount} credit issued to ${referrer.full_name}.`)
+      toast.success(`Referral added — $${data.amount} credit issued to ${referrer.name}.`)
       setOpen(false); reset(); router.refresh()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Could not create the referral.')
@@ -99,10 +125,8 @@ export function AddReferralModal() {
 
   return (
     <>
-      <button
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-      >
+      <button onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors">
         <Plus className="h-4 w-4" /> Add referral
       </button>
 
@@ -115,68 +139,19 @@ export function AddReferralModal() {
             </div>
 
             <div className="space-y-4 px-5 py-4">
-              {/* Referrer */}
-              <div className="relative">
-                <label className="mb-1 block text-xs font-medium text-zinc-600">Referrer (existing client)</label>
-                {referrer ? (
-                  <div className="flex items-center justify-between rounded-md border bg-zinc-50 px-3 py-2 text-sm">
-                    <span>{referrer.full_name}{referrer.email ? ` · ${referrer.email}` : ''}</span>
-                    <button onClick={() => { setReferrer(null); setRefQ('') }} className="text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-zinc-400" />
-                    <input value={refQ} onChange={e => searchContacts(e.target.value)} placeholder="Search referrer by name/email…"
-                      className="w-full rounded-md border px-8 py-2 text-sm focus:border-blue-500 focus:outline-none" />
-                    {refHits.length > 0 && (
-                      <div className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border bg-white shadow-lg">
-                        {refHits.map(c => (
-                          <button key={c.id} onClick={() => { setReferrer(c); setRefHits([]) }}
-                            className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-50">
-                            {c.full_name}{c.email ? <span className="text-zinc-400"> · {c.email}</span> : ''}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              <ActorPicker label="Referrer (contact, account, or partner)" value={referrer} placeholder="Search referrer…"
+                onPick={setReferrer} onClear={() => setReferrer(null)} />
 
-              {/* Referred client */}
-              <div className="relative">
-                <label className="mb-1 block text-xs font-medium text-zinc-600">Referred client (account)</label>
-                {referred ? (
-                  <div className="flex items-center justify-between rounded-md border bg-zinc-50 px-3 py-2 text-sm">
-                    <span>{referred.company_name}<span className="text-zinc-400"> · setup ${referred.setup_fee_total}</span></span>
-                    <button onClick={() => { setReferred(null); setCliQ(''); setAmount('') }} className="text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-zinc-400" />
-                    <input value={cliQ} onChange={e => searchAccounts(e.target.value)} placeholder="Search referred client by company…"
-                      className="w-full rounded-md border px-8 py-2 text-sm focus:border-blue-500 focus:outline-none" />
-                    {cliHits.length > 0 && (
-                      <div className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border bg-white shadow-lg">
-                        {cliHits.map(a => (
-                          <button key={a.id} onClick={() => pickReferred(a)}
-                            className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-50">
-                            {a.company_name}<span className="text-zinc-400"> · setup ${a.setup_fee_total} → ${a.default_credit_usd} credit</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              <ActorPicker label="Referred client (contact or account)" value={referred} placeholder="Search referred client…"
+                onPick={(a) => { setReferred(a); setAmount(a.default_credit_usd > 0 ? String(a.default_credit_usd) : '') }}
+                onClear={() => { setReferred(null); setAmount('') }} />
 
-              {/* Amount */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-zinc-600">Credit amount (USD) — 10% of setup fee, editable</label>
                 <input type="number" step="0.01" min="0" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00"
                   className="w-full rounded-md border px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
               </div>
 
-              {/* Note */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-zinc-600">Note (optional)</label>
                 <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. confirmed by phone"
