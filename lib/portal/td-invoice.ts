@@ -317,6 +317,8 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         subtotal,
         tax_amount: taxTotal,
         total,
+        amount_paid: amountPaid,
+        amount_due: amountDue,
         issue_date: today,
         due_date: due_date || null,
         paid_date: paidDateVal,

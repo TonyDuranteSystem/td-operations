@@ -15,6 +15,8 @@ interface Expense {
   description: string | null
   currency: string
   total: number
+  amount_due?: number | null
+  amount_paid?: number | null
   issue_date: string | null
   due_date: string | null
   paid_date: string | null
@@ -175,7 +177,12 @@ export function ExpenseList({
                 <span className="text-zinc-600 text-xs truncate">{exp.invoice_number || exp.internal_ref || '—'}</span>
                 <span className="text-right font-medium">
                   {exp.currency === 'EUR' ? '\u20AC' : '$'}
-                  {Number(exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {Number(exp.amount_due ?? exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {exp.amount_due != null && exp.amount_due < exp.total && (
+                    <span className="ml-1 text-[10px] font-normal text-zinc-400 line-through">
+                      {exp.currency === 'EUR' ? '\u20AC' : '$'}{Number(exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </span>
+                  )}
                 </span>
                 <span className="text-xs text-zinc-500">
                   {fmtDate(exp.issue_date)}
@@ -227,7 +234,7 @@ export function ExpenseList({
         <TdPayModal
           paymentId={payingExpense.td_payment_id}
           invoiceNumber={payingExpense.invoice_number || payingExpense.internal_ref || 'Invoice'}
-          amount={Number(payingExpense.total)}
+          amount={Number(payingExpense.amount_due ?? payingExpense.total)}
           currency={payingExpense.currency}
           locale={locale}
           onClose={() => setPayingExpense(null)}

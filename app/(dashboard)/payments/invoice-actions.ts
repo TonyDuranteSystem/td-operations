@@ -12,6 +12,7 @@ import {
   type CreateCreditNoteInput,
 } from '@/lib/schemas/invoice'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
+import { reconcileAccountCredits } from '@/lib/operations/credit-netting'
 import { createHash } from 'crypto'
 
 // Stable content hash for idempotency keys on manual CRM invoice creation.
@@ -334,6 +335,12 @@ export async function createCreditNote(
         referral_partner_id: noteData.referral_partner_id || null,
       })
       .eq('id', result.paymentId)
+
+    // Net this new credit against the account's existing unpaid invoices so the
+    // portal balance reflects it immediately (non-blocking).
+    if (noteData.account_id) {
+      try { await reconcileAccountCredits(noteData.account_id, supabase) } catch { /* non-fatal */ }
+    }
 
     revalidatePath('/payments')
     return { id: result.paymentId, invoice_number: result.invoiceNumber }

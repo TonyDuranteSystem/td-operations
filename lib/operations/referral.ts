@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { reconcileAccountCredits } from "@/lib/operations/credit-netting"
 
 export const REFERRAL_COMMISSION_PCT = 10
 
@@ -313,5 +314,12 @@ export async function createManualReferralCredit(
     .single()
 
   if (refErr || !ref) return { created: false, reason: "error", detail: refErr?.message }
+
+  // Net the fresh credit against the referrer account's existing unpaid invoices
+  // so the portal balance reflects it immediately (non-blocking).
+  if (creditAccountId) {
+    try { await reconcileAccountCredits(creditAccountId, supabase) } catch { /* non-fatal */ }
+  }
+
   return { created: true, referralId: (ref as { id: string }).id, paymentId: result.paymentId, amount: creditAmountUsd }
 }

@@ -2351,6 +2351,8 @@ export type Database = {
           due_date: string | null
           id: string
           internal_ref: string | null
+          amount_due: number | null
+          amount_paid: number | null
           invoice_number: string | null
           issue_date: string | null
           notes: string | null
@@ -2381,6 +2383,8 @@ export type Database = {
           due_date?: string | null
           id?: string
           internal_ref?: string | null
+          amount_due?: number | null
+          amount_paid?: number | null
           invoice_number?: string | null
           issue_date?: string | null
           notes?: string | null
@@ -2411,6 +2415,8 @@ export type Database = {
           due_date?: string | null
           id?: string
           internal_ref?: string | null
+          amount_due?: number | null
+          amount_paid?: number | null
           invoice_number?: string | null
           issue_date?: string | null
           notes?: string | null
