@@ -91,6 +91,7 @@ export async function GET(req: NextRequest) {
       .from("service_deliveries")
       .select("account_id")
       .eq("service_type", "Client Onboarding")
+      .neq("status", "cancelled")
     const onboardingAccountIds = new Set<string>(
       (onboardingSds || []).map(r => (r as { account_id: string | null }).account_id).filter((x): x is string => !!x)
     )
