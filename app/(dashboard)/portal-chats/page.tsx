@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
+import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
@@ -1246,15 +1247,9 @@ export default function PortalChatsPage() {
 
   const MAX_ADMIN_ATTACHMENTS = 5
   const handleAdminFileSelect = (file: File) => {
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error(`File type not allowed (${file.type || 'unknown'})`)
-      return
-    }
-    const maxMB = 10
-    if (file.size > maxMB * 1024 * 1024) {
-      const sizeMB = (file.size / 1024 / 1024).toFixed(1)
-      toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${maxMB} MB.`)
+    const validationError = validateChatAttachment(file.name, file.size, file.type)
+    if (validationError) {
+      toast.error(validationError)
       return
     }
     setPendingAdminFiles(prev => {
@@ -1298,17 +1293,12 @@ export default function PortalChatsPage() {
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
       try {
-        const uploaded = await Promise.all(pendingAdminFiles.map(async (pf) => {
-          const formData = new FormData()
-          formData.append('file', pf.file)
-          formData.append(selectedAccountId ? 'account_id' : 'contact_id', (selectedAccountId || selectedContactId)!)
-          const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}))
-            throw new Error(data.error || 'Upload failed — please try again.')
-          }
-          return await res.json() as { url: string; name: string }
-        }))
+        const uploaded = await Promise.all(pendingAdminFiles.map((pf) =>
+          uploadChatAttachment(pf.file, {
+            accountId: selectedAccountId || undefined,
+            contactId: selectedAccountId ? undefined : selectedContactId,
+          })
+        ))
         sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
@@ -2033,7 +2023,6 @@ export default function PortalChatsPage() {
               <input
                 ref={internalFileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 onChange={e => { if (e.target.files?.[0]) handleInternalFileSelect(e.target.files[0]) }}
                 className="hidden"
               />
@@ -3144,7 +3133,6 @@ export default function PortalChatsPage() {
                   <input
                     ref={adminFileRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     multiple
                     onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleAdminFileSelect(f)) }}
                     className="hidden"

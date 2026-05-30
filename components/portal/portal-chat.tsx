@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import type { ChatAttachment } from '@/lib/types'
+import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
@@ -75,9 +76,6 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-const MAX_FILE_SIZE_MB = 10
-const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
-const ALLOWED_EXT_LABEL = 'PDF, JPG, PNG, WEBP, GIF, DOC, DOCX, XLS, XLSX, TXT, CSV'
 const MAX_ATTACHMENTS = 5
 
 interface PendingFile {
@@ -232,18 +230,9 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
       if (filesToSend.length > 0) {
         setUploading(true)
         try {
-          const uploaded = await Promise.all(filesToSend.map(async (pf) => {
-            const formData = new FormData()
-            formData.append('file', pf.file)
-            formData.append('account_id', accountId || '')
-            formData.append('contact_id', contactId)
-            const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-            if (!res.ok) {
-              const data = await res.json().catch(() => ({}))
-              throw new Error(data.error || 'Upload failed — please try again.')
-            }
-            return await res.json() as ChatAttachment
-          }))
+          const uploaded = await Promise.all(filesToSend.map((pf) =>
+            uploadChatAttachment(pf.file, { accountId, contactId })
+          ))
           await sendMessage(msg || '', uploaded, replyId, tagScope, accountId ?? null, activeTopic)
         } finally {
           setUploading(false)
@@ -267,13 +256,9 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   }
 
   const handleFileSelect = (file: File) => {
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error(`File type not allowed (${file.type || 'unknown'}). Please use ${ALLOWED_EXT_LABEL}.`)
-      return
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error(`File too large: ${formatFileSize(file.size)}. Maximum allowed: ${MAX_FILE_SIZE_MB} MB.`)
+    const validationError = validateChatAttachment(file.name, file.size, file.type)
+    if (validationError) {
+      toast.error(validationError)
       return
     }
     setPendingFiles(prev => {
@@ -883,7 +868,6 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             <input
               ref={fileRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               multiple
               onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleFileSelect(f)) }}
               className="hidden"

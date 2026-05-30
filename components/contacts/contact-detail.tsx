@@ -38,6 +38,7 @@ import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
+import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 
 // ─── Constants ───
 
@@ -1616,15 +1617,9 @@ function ChatTab({
   }, [messages])
 
   const handleFileSelect = (file: File) => {
-    const MAX_MB = 10
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error(`File type not allowed. Use PDF, JPG, PNG, WEBP, GIF, DOC, DOCX, XLS, XLSX, TXT, CSV.`)
-      return
-    }
-    if (file.size > MAX_MB * 1024 * 1024) {
-      const sizeMB = (file.size / 1024 / 1024).toFixed(1)
-      toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${MAX_MB} MB.`)
+    const validationError = validateChatAttachment(file.name, file.size, file.type)
+    if (validationError) {
+      toast.error(validationError)
       return
     }
     setPendingFiles(prev => {
@@ -1649,16 +1644,9 @@ function ChatTab({
       if (filesToSend.length > 0) {
         setUploading(true)
         try {
-          uploaded = await Promise.all(filesToSend.map(async (pf) => {
-            const formData = new FormData()
-            formData.append('file', pf.file)
-            const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-            if (!res.ok) {
-              const data = await res.json().catch(() => ({}))
-              throw new Error(data.error || 'Upload failed — please try again.')
-            }
-            return await res.json() as ChatAttachment
-          }))
+          uploaded = await Promise.all(filesToSend.map((pf) =>
+            uploadChatAttachment(pf.file, { contactId })
+          ))
         } finally {
           setUploading(false)
         }
@@ -1910,7 +1898,6 @@ function ChatTab({
             <input
               ref={fileRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               multiple
               onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleFileSelect(f)) }}
               className="hidden"
