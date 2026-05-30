@@ -18,6 +18,8 @@ import { FormationDashboard } from '@/components/portal/formation-dashboard'
 import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
+import { TeamAccessAnnouncementBanner } from '@/components/portal/team-access-announcement-banner'
+import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { RenewalBanner } from '@/components/portal/renewal-banner'
 import { MemberInfoBanner } from '@/components/portal/member-info-banner'
@@ -540,6 +542,12 @@ export default async function PortalDashboardPage() {
   // environment just renders an empty "Partner Banks" section.
   const bankReferrals = await getBankReferralsForAccount(selectedAccountId)
 
+  // Team Access announcement is shown only to the account-admin (the only user
+  // who can invite teammates). Same resolver the sidebar/layout uses.
+  const canManageTeam = !!contactId && !!selectedAccountId
+    ? await isAccountAdmin(contactId, selectedAccountId)
+    : false
+
   // Fetch active portal announcements — graceful fallback if table missing
   let portalAnnouncements: PortalAnnouncement[] = []
   try {
@@ -620,6 +628,9 @@ export default async function PortalDashboardPage() {
 
       {/* Relay Wire guide announcement — dismissible per device via localStorage */}
       <GuideAnnouncementBanner locale={locale} />
+
+      {/* Team Access feature announcement — account-admins only, dismissible per device */}
+      {canManageTeam && <TeamAccessAnnouncementBanner locale={locale} />}
 
       {/* DB-backed portal announcements — managed from CRM Config → Announcements */}
       <AnnouncementBanners announcements={portalAnnouncements} locale={locale} />

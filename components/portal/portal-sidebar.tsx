@@ -173,6 +173,18 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const pathnameRef = useRef(pathname)
   const { t, locale } = useLocale()
 
+  // "NEW" badge on the Team nav item — shown to account-admins until they've seen
+  // the Team Access announcement. Shares the home banner's localStorage key so the
+  // badge and banner clear together. Read in an effect to avoid hydration mismatch.
+  const [showTeamNew, setShowTeamNew] = useState(false)
+  useEffect(() => {
+    try {
+      if (canManageTeam && !localStorage.getItem('td-team-access-announce-v1')) setShowTeamNew(true)
+    } catch {
+      // localStorage unavailable — skip badge
+    }
+  }, [canManageTeam])
+
   // Keep pathname ref in sync for use inside realtime callback
   useEffect(() => {
     pathnameRef.current = pathname
@@ -351,7 +363,15 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       <Link
         key={item.href}
         href={item.href}
-        onClick={() => setMobileOpen(false)}
+        onClick={() => {
+          setMobileOpen(false)
+          // Clear the Team "NEW" badge once the admin opens the Team page,
+          // even if they never saw the home announcement banner.
+          if (item.key === 'nav.team' && showTeamNew) {
+            try { localStorage.setItem('td-team-access-announce-v1', '1') } catch { /* no-op */ }
+            setShowTeamNew(false)
+          }
+        }}
         aria-current={isActive(item.href) ? 'page' : undefined}
         className={cn(
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
@@ -365,6 +385,11 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         {badge > 0 && (
           <span className="min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
             {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+        {item.key === 'nav.team' && showTeamNew && (
+          <span className="ml-auto h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
+            NEW
           </span>
         )}
       </Link>

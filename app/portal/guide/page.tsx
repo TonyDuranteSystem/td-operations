@@ -707,6 +707,27 @@ const ARTICLES_EN: Article[] = [
     ],
     link: { href: '/portal/referrals', label: 'Go to Referrals' },
   },
+  {
+    id: 'team-access',
+    section: 'Referrals',
+    icon: Users,
+    iconBg: 'bg-violet-50',
+    iconColor: 'text-violet-600',
+    title: 'Invite Your Team',
+    desc: 'Give your colleagues their own portal login and choose what each can see',
+    keywords: ['team', 'teammate', 'invite', 'colleague', 'staff', 'employee', 'finance team', 'access', 'permissions', 'team access', 'add member', 'invita', 'collaboratore', 'accesso', 'permessi', 'dipendente'],
+    steps: [
+      { text: 'Click "Team" in the left menu.', sub: 'Only the account owner / main contact sees this section.' },
+      { text: 'Click "Add team member".' },
+      { text: 'Enter a Display name (shown on their chat messages), a Username, and a Password.', sub: 'You hand these login details to your teammate yourself.' },
+      { text: 'Email is optional — add it only if you want this teammate to receive an email notification for new messages (and be able to reset their own password). Leave it blank for in-portal access only.' },
+      { text: 'Choose exactly what they can see by ticking the capabilities — e.g. "Invoices & Billing" and "Chat" for a finance teammate. Anything you leave unticked stays hidden from them.' },
+      { text: 'Accept the responsibility note and click "Create team member".' },
+      { text: 'Manage anytime: edit a teammate\'s access, reset their password, or remove them from the same Team page.' },
+    ],
+    link: { href: '/portal/team', label: 'Go to Team' },
+    tip: 'You stay in control: each teammate sees only what you grant, gets their own separate login, and you can change or revoke their access at any time. Because they log in under your company, you remain responsible for who you give access to.',
+  },
 ]
 
 const EN: Content = {
@@ -1134,6 +1155,27 @@ const ARTICLES_IT: Article[] = [
       { text: 'Per domande sul tuo saldo commissioni o per richiedere un pagamento, contattaci via chat.' },
     ],
     link: { href: '/portal/referrals', label: 'Vai ai Referral' },
+  },
+  {
+    id: 'team-access',
+    section: 'Referrals',
+    icon: Users,
+    iconBg: 'bg-violet-50',
+    iconColor: 'text-violet-600',
+    title: 'Invita il Tuo Team',
+    desc: 'Dai ai tuoi collaboratori un accesso personale al portale e scegli cosa ciascuno può vedere',
+    keywords: ['team', 'teammate', 'invita', 'collaboratore', 'staff', 'dipendente', 'team finanziario', 'accesso', 'permessi', 'aggiungi membro', 'invite', 'colleague', 'access', 'permissions'],
+    steps: [
+      { text: 'Clicca "Team" nel menu a sinistra.', sub: 'Solo il titolare / contatto principale dell\'account vede questa sezione.' },
+      { text: 'Clicca "Add team member".' },
+      { text: 'Inserisci un Nome visualizzato (mostrato sui suoi messaggi in chat), uno Username e una Password.', sub: 'Sei tu a consegnare queste credenziali al tuo collaboratore.' },
+      { text: 'L\'email è facoltativa — aggiungila solo se vuoi che questo collaboratore riceva una notifica via email per i nuovi messaggi (e possa reimpostare la propria password). Lasciala vuota per il solo accesso al portale.' },
+      { text: 'Scegli esattamente cosa può vedere selezionando i permessi — es. "Invoices & Billing" e "Chat" per un collaboratore amministrativo. Tutto ciò che non selezioni resta nascosto.' },
+      { text: 'Accetta la nota di responsabilità e clicca "Create team member".' },
+      { text: 'Gestisci quando vuoi: modifica i permessi, reimposta la password o rimuovi un collaboratore dalla stessa pagina Team.' },
+    ],
+    link: { href: '/portal/team', label: 'Vai a Team' },
+    tip: 'Mantieni il controllo: ogni collaboratore vede solo ciò che concedi, ha un proprio accesso separato e puoi modificare o revocare l\'accesso in qualsiasi momento. Poiché accedono sotto la tua azienda, resti responsabile di chi autorizzi.',
   },
 ]
 
