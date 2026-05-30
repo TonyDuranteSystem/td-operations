@@ -154,12 +154,21 @@ describe('decideJuneInstallment — missing-start-date tripwire', () => {
     expect(d.action).toBe('invoice')
   })
 
-  it('does NOT flag a formation client (no onboarding service) missing onboarding dates', () => {
+  it('does NOT flag a formation client (no onboarding service) with a formation date', () => {
     const d = decideJuneInstallment(make({
       hasClientOnboardingService: false, ra_switch_date: null, client_since: null,
       formation_date: '2020-01-01', hasFirstInstallmentThisYear: true,
     }))
     expect(d.action).toBe('invoice')
+  })
+
+  it('FLAGS a client with no usable date at all (no RA switch, no client since, no formation)', () => {
+    const d = decideJuneInstallment(make({
+      hasClientOnboardingService: false, ra_switch_date: null, client_since: null,
+      formation_date: null, hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('flag')
+    expect(d.reason).toMatch(/missing start date/)
   })
 
   it('tripwire fires only after the hard exclusions (cancelled onboarding client still skips)', () => {

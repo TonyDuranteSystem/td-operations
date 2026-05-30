@@ -13,11 +13,14 @@
  *   3. `formation_date` → a client WE FORMED; formation is their start.
  *   (Never use `onboarding_date` — it is messy/conflicting.)
  *
- * Missing-start-date tripwire: if the account carries a "Client Onboarding"
- * service but has NEITHER ra_switch_date NOR client_since, we genuinely cannot
- * know their start year, so we must NOT silently fall back to the (old, wrong)
- * formation date and bill them. Such an account is FLAGGED for manual review —
- * a forgotten onboarding date can never cause a wrong bill.
+ * Missing-start-date tripwire — FLAG (never bill) when EITHER:
+ *   (1) there is no usable date at all (ra_switch_date, client_since AND
+ *       formation_date all blank — genuinely un-dateable), OR
+ *   (2) the account carries a "Client Onboarding" service but has neither
+ *       ra_switch_date nor client_since (an onboarding client whose start we
+ *       cannot trust the formation date for).
+ * A normal formation client (formation_date present, no onboarding tag) is not
+ * flagged. A forgotten start date can never cause a wrong bill.
  *
  * Year-1 (became our client in the billing year) is checked FIRST and skips the
  * whole year — the setup fee covers it. This OVERRIDES any first-installment
@@ -86,11 +89,16 @@ export function decideJuneInstallment(i: JuneInstallmentInput): JuneInstallmentD
   if (i.account_type !== 'Client') return { action: 'skip', reason: `account_type ${i.account_type ?? 'null'} not Client` }
   if (i.is_test === true) return { action: 'skip', reason: 'test account' }
 
-  // ── Missing-start-date tripwire: a known onboarding client (has the Client
-  //    Onboarding service) with no onboarding date cannot be dated — flag it
-  //    rather than fall back to the wrong formation date and mis-bill.
-  if (i.hasClientOnboardingService && !i.ra_switch_date && !i.client_since) {
-    return { action: 'flag', reason: 'onboarding client missing start date (no RA switch date, no client since) — set it in the CRM before billing' }
+  // ── Missing-start-date tripwire (two conditions, both required by Antonio):
+  //    (1) NO usable date at all — RA switch, client since AND formation all
+  //        blank → genuinely un-dateable.
+  //    (2) a Client Onboarding account with no RA-switch/client-since → an
+  //        onboarding client whose start we can't trust the formation date for.
+  //    Either way: flag for manual review rather than bill off a wrong date.
+  //    A normal formation client (formation_date present, no onboarding tag) is
+  //    NOT flagged.
+  if (!i.ra_switch_date && !i.client_since && (i.hasClientOnboardingService || !i.formation_date)) {
+    return { action: 'flag', reason: 'missing start date (no RA switch date, no client since) — set it in the CRM before billing' }
   }
 
   // ── "Became our client" date (date-driven): RA switch (onboarded) → client
