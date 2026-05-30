@@ -42,6 +42,7 @@
  */
 
 import { getRenewalGuard } from './renewal-guard'
+import { isMissingStartDate } from './missing-start-date'
 
 export type JuneInstallmentAction =
   | 'invoice'
@@ -97,7 +98,7 @@ export function decideJuneInstallment(i: JuneInstallmentInput): JuneInstallmentD
   //    Either way: flag for manual review rather than bill off a wrong date.
   //    A normal formation client (formation_date present, no onboarding tag) is
   //    NOT flagged.
-  if (!i.ra_switch_date && !i.client_since && (i.hasClientOnboardingService || !i.formation_date)) {
+  if (isMissingStartDate(i)) {
     return { action: 'flag', reason: 'missing start date (no RA switch date, no client since) — set it in the CRM before billing' }
   }
 
