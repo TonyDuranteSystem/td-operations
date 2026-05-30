@@ -53,6 +53,32 @@ export async function generateInvoiceNumber(): Promise<string> {
 }
 
 /**
+ * Generate next CREDIT-NOTE number.
+ * Format: CN-NNNNNN (e.g., CN-000001). Separate sequence from INV- invoices so a
+ * credit note never reads as an invoice. Credit notes live in `payments`.
+ *
+ * Same race-safety contract as generateInvoiceNumber: not race-safe alone — the
+ * caller catches the unique-violation on `uq_payments_invoice_number` and retries.
+ */
+export async function generateCreditNoteNumber(): Promise<string> {
+  const prefix = 'CN-'
+  const strictPattern = `${prefix}______` // 6 underscores → exactly 6 chars after prefix
+  const { data } = await supabaseAdmin
+    .from('payments')
+    .select('invoice_number')
+    .like('invoice_number', strictPattern)
+    .order('invoice_number', { ascending: false })
+    .limit(1)
+
+  let maxSeq = 0
+  if (data && data.length > 0 && data[0].invoice_number) {
+    const num = parseInt(data[0].invoice_number.replace(prefix, ''), 10)
+    if (!isNaN(num) && num > maxSeq) maxSeq = num
+  }
+  return `${prefix}${String(maxSeq + 1).padStart(6, '0')}`
+}
+
+/**
  * Detect a Postgres unique-violation error scoped to a specific constraint.
  * Postgres error code 23505 is unique_violation. The constraint name appears
  * in the message or details field depending on the client path.

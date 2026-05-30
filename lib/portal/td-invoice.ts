@@ -12,7 +12,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
-import { generateInvoiceNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
+import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
 
@@ -194,8 +194,10 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   let paymentId = ''
   let lastError: { message?: string; code?: string; details?: string } | null = null
 
+  // A credit note (gross total <= 0) gets a CN- number; a real bill gets INV-.
+  const isCreditNote = grossTotal <= 0
   for (let attempt = 0; attempt < MAX_INSERT_RETRIES; attempt++) {
-    invoiceNumber = await generateInvoiceNumber()
+    invoiceNumber = isCreditNote ? await generateCreditNoteNumber() : await generateInvoiceNumber()
 
     // eslint-disable-next-line no-restricted-syntax -- createTDInvoice IS the single-entry helper for new TD invoices; retry loop needs raw Supabase error codes which dbWrite strips.
     const { data, error } = await supabaseAdmin
