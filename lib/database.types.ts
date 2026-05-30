@@ -7965,7 +7965,6 @@ export type Database = {
           id: string
           idempotency_key: string | null
           installment: string | null
-          payment_category: string | null
           invoice_date: string | null
           invoice_number: string | null
           invoice_status: string | null
@@ -7978,6 +7977,7 @@ export type Database = {
           paid_by_name: string | null
           paid_date: string | null
           pay_token: string | null
+          payment_category: string | null
           payment_method: string | null
           payment_record: string | null
           penalty_disclaimer_signed: boolean | null
@@ -8026,7 +8026,6 @@ export type Database = {
           id?: string
           idempotency_key?: string | null
           installment?: string | null
-          payment_category?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_status?: string | null
@@ -8039,6 +8038,7 @@ export type Database = {
           paid_by_name?: string | null
           paid_date?: string | null
           pay_token?: string | null
+          payment_category?: string | null
           payment_method?: string | null
           payment_record?: string | null
           penalty_disclaimer_signed?: boolean | null
@@ -8087,7 +8087,6 @@ export type Database = {
           id?: string
           idempotency_key?: string | null
           installment?: string | null
-          payment_category?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_status?: string | null
@@ -8100,6 +8099,7 @@ export type Database = {
           paid_by_name?: string | null
           paid_date?: string | null
           pay_token?: string | null
+          payment_category?: string | null
           payment_method?: string | null
           payment_record?: string | null
           penalty_disclaimer_signed?: boolean | null

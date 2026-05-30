@@ -58,6 +58,9 @@ export type MessageActionsPriority = "normal" | "high" | "urgent"
 /** payments.installment — CHECK constraint */
 export type PaymentsInstallment = "Setup Fee" | "Installment 1 (Jan)" | "Installment 2 (Jun)" | "Annual Payment" | "One-Time Service" | "Custom" | "One-Time" | "One-time" | "ITIN"
 
+/** payments.payment_category — CHECK constraint */
+export type PaymentsPaymentCategory = "setup_fee" | "installment_1" | "installment_2" | "annual_renewal" | "one_time" | "itin" | "custom" | "credit" | "other"
+
 /** portal_announcements.type — CHECK constraint */
 export type PortalAnnouncementsType = "info" | "warning" | "success"
 
