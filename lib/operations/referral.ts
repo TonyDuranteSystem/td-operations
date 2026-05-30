@@ -190,3 +190,117 @@ export async function creditReferrerForLead(
 
   return { issued: true, referralId: referral.id, amount: commissionAmount, paymentId: result.paymentId }
 }
+
+/**
+ * Default referral-reward credit for a manual add: 10% of the referred client's
+ * setup-fee total, taken DIRECTLY as USD (no FX), per the referral reward rule.
+ * Pure — unit tested. Staff may override the result before confirming.
+ */
+export function defaultReferralCreditUsd(referredSetupFeeTotal: number | null | undefined): number {
+  const base = typeof referredSetupFeeTotal === "number" && referredSetupFeeTotal > 0 ? referredSetupFeeTotal : 0
+  return Math.round((REFERRAL_COMMISSION_PCT / 100) * base * 100) / 100
+}
+
+export interface ManualReferralParams {
+  referrerContactId: string
+  referredAccountId: string
+  referredName: string
+  /** USD credit amount — already resolved (auto 10% default or staff override). */
+  creditAmountUsd: number
+  note?: string | null
+}
+
+export type ManualReferralResult =
+  | { created: true; referralId: string; paymentId: string; amount: number }
+  | { created: false; reason: "invalid_amount" | "no_referrer_account" | "self_referral" | "duplicate" | "error"; detail?: string }
+
+/**
+ * Manually record a referral (staff-entered, referred party is an EXISTING client
+ * account) and immediately issue the referrer's USD credit note. Unlike the organic
+ * creditReferrerForLead flow (lead → setup-fee → credit), this is for back-filling
+ * or admin-added referrals where the referred client already exists.
+ *
+ * Guards: positive amount; referrer must resolve to an account; no self-referral;
+ * dedup per (referrer contact, referred account). Idempotent on the credit note via
+ * idempotency_key `manual-referral:<referrerContactId>:<referredAccountId>`.
+ */
+export async function createManualReferralCredit(
+  params: ManualReferralParams,
+  supabase: SupabaseClient,
+): Promise<ManualReferralResult> {
+  const { referrerContactId, referredAccountId, referredName, creditAmountUsd, note } = params
+
+  if (!(creditAmountUsd > 0)) return { created: false, reason: "invalid_amount" }
+
+  // Resolve the referrer's account (the one to credit).
+  const { data: link } = await supabase
+    .from("account_contacts")
+    .select("account_id")
+    .eq("contact_id", referrerContactId)
+    .limit(1)
+    .maybeSingle()
+  const referrerAccountId = (link as { account_id: string } | null)?.account_id ?? null
+  if (!referrerAccountId) return { created: false, reason: "no_referrer_account" }
+  if (referrerAccountId === referredAccountId) return { created: false, reason: "self_referral" }
+
+  // Dedup: one manual referral per (referrer contact, referred account).
+  const { data: existing } = await supabase
+    .from("referrals")
+    .select("id")
+    .eq("referrer_contact_id", referrerContactId)
+    .eq("referred_account_id", referredAccountId)
+    .limit(1)
+  if (existing && (existing as unknown[]).length > 0) return { created: false, reason: "duplicate" }
+
+  // Create the USD credit note (negative invoice), idempotent.
+  const today = new Date().toISOString().split("T")[0]
+  let result
+  try {
+    result = await createTDInvoice({
+      account_id: referrerAccountId,
+      line_items: [
+        {
+          description: `Referral reward — ${REFERRAL_COMMISSION_PCT}% credit (${referredName})`,
+          unit_price: -Math.abs(creditAmountUsd),
+          quantity: 1,
+        },
+      ],
+      currency: "USD",
+      mark_as_paid: true,
+      paid_date: today,
+      idempotency_key: `manual-referral:${referrerContactId}:${referredAccountId}`,
+      skip_credit_netting: true, // this IS a credit note — must not net into itself
+    })
+  } catch (e) {
+    return { created: false, reason: "error", detail: e instanceof Error ? e.message : String(e) }
+  }
+
+  // eslint-disable-next-line no-restricted-syntax -- credit-note status tag, mirrors creditReferrerForLead sanctioned write path
+  await supabase
+    .from("payments")
+    .update({ invoice_status: "Credit", credit_remaining: creditAmountUsd })
+    .eq("id", result.paymentId)
+
+  // Record the referral as already credited.
+  const { data: ref, error: refErr } = await supabase
+    .from("referrals")
+    .insert({
+      referrer_contact_id: referrerContactId,
+      referrer_account_id: referrerAccountId,
+      referred_account_id: referredAccountId,
+      referred_name: referredName,
+      referrer_type: "client",
+      status: "credited",
+      commission_type: "credit_note",
+      commission_pct: REFERRAL_COMMISSION_PCT,
+      commission_amount: creditAmountUsd,
+      commission_currency: "USD",
+      credited_amount: creditAmountUsd,
+      notes: note || "Manually added via referrals page",
+    } as Record<string, unknown> as never)
+    .select("id")
+    .single()
+
+  if (refErr || !ref) return { created: false, reason: "error", detail: refErr?.message }
+  return { created: true, referralId: (ref as { id: string }).id, paymentId: result.paymentId, amount: creditAmountUsd }
+}

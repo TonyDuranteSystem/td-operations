@@ -5,6 +5,7 @@ import { Share2, Users, TrendingUp, Wallet, Copy, Check, ExternalLink, ChevronDo
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { ReferralRow } from './page'
+import { AddReferralModal } from './add-referral-modal'
 
 interface Props {
   referrals: ReferralRow[]
@@ -70,6 +71,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
             <p className="text-sm text-zinc-500">Track referrals, commissions, and payouts</p>
           </div>
         </div>
+        <AddReferralModal />
       </div>
 
       {/* Stats */}
