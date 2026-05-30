@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic'
 export interface ReferralRow {
   id: string
   referrer_contact_id: string | null
+  referrer_account_id: string | null
   referred_name: string
   referred_contact_id: string | null
   referred_account_id: string | null
@@ -38,11 +39,12 @@ export default async function ReferralsPage() {
   const { data: rawReferrals } = await supabaseAdmin
     .from('referrals')
     .select(`
-      id, referrer_contact_id, referred_name, referred_contact_id,
+      id, referrer_contact_id, referrer_account_id, referred_name, referred_contact_id,
       referred_account_id, referred_lead_id, offer_token, status,
       referrer_type, commission_type, commission_pct, commission_amount,
       commission_currency, credited_amount, paid_amount, notes, created_at,
       referrer:contacts!referrals_referrer_contact_id_fkey(full_name, referral_code),
+      referrer_account:accounts!referrals_referrer_account_id_fkey(company_name),
       referred_account:accounts!referrals_referred_account_id_fkey(company_name)
     `)
     .eq('is_test', false)
@@ -51,6 +53,7 @@ export default async function ReferralsPage() {
   const referrals: ReferralRow[] = (rawReferrals ?? []).map((r) => ({
     id: r.id,
     referrer_contact_id: r.referrer_contact_id,
+    referrer_account_id: r.referrer_account_id,
     referred_name: r.referred_name,
     referred_contact_id: r.referred_contact_id,
     referred_account_id: r.referred_account_id,
@@ -66,7 +69,8 @@ export default async function ReferralsPage() {
     paid_amount: r.paid_amount,
     notes: r.notes,
     created_at: r.created_at,
-    referrer_name: (r.referrer as unknown as { full_name: string } | null)?.full_name ?? null,
+    referrer_name: (r.referrer as unknown as { full_name: string } | null)?.full_name
+      ?? (r.referrer_account as unknown as { company_name: string } | null)?.company_name ?? null,
     referred_company: (r.referred_account as unknown as { company_name: string } | null)?.company_name ?? null,
     referrer_code: (r.referrer as unknown as { referral_code: string } | null)?.referral_code ?? null,
   }))
@@ -84,13 +88,14 @@ export default async function ReferralsPage() {
   // Unique referrers (partners)
   const partnerMap = new Map<string, { name: string; code: string | null; count: number; commission: number }>()
   for (const r of referrals) {
-    if (!r.referrer_contact_id) continue
-    const existing = partnerMap.get(r.referrer_contact_id)
+    const key = r.referrer_contact_id || r.referrer_account_id
+    if (!key) continue
+    const existing = partnerMap.get(key)
     if (existing) {
       existing.count++
       existing.commission += Number(r.commission_amount) || 0
     } else {
-      partnerMap.set(r.referrer_contact_id, {
+      partnerMap.set(key, {
         name: r.referrer_name || 'Unknown',
         code: r.referrer_code,
         count: 1,

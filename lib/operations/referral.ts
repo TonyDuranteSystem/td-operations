@@ -242,37 +242,32 @@ export async function createManualReferralCredit(
   if (!referrerContactId && !referrerAccountId) return { created: false, reason: "missing_party", detail: "referrer" }
   if (!referredContactId && !referredAccountId) return { created: false, reason: "missing_party", detail: "referred" }
 
-  // Resolve the referrer's account to credit: explicit account, else the
-  // contact's linked account.
-  let creditAccountId = referrerAccountId ?? null
-  if (!creditAccountId && referrerContactId) {
-    const { data: link } = await supabase
-      .from("account_contacts")
-      .select("account_id")
-      .eq("contact_id", referrerContactId)
-      .limit(1)
-      .maybeSingle()
-    creditAccountId = (link as { account_id: string } | null)?.account_id ?? null
-  }
-  if (!creditAccountId) return { created: false, reason: "no_referrer_account" }
-  if (referredAccountId && creditAccountId === referredAccountId) return { created: false, reason: "self_referral" }
+  // Credit the CHOSEN referrer entity DIRECTLY — staff explicitly pick who gets
+  // the credit: a company (account) OR an individual (contact). Both can be the
+  // active client. NO auto contact→account resolution: whoever was picked is
+  // credited and shown as the referrer.
+  const creditAccountId = referrerAccountId ?? null
+  const creditContactId = creditAccountId ? null : (referrerContactId ?? null)
+  if (!creditAccountId && !creditContactId) return { created: false, reason: "no_referrer_account" }
+  if (creditAccountId && referredAccountId && creditAccountId === referredAccountId) return { created: false, reason: "self_referral" }
 
-  // Dedup: match on the strongest identifiers available on each side.
+  // Dedup: match on the chosen referrer entity + the strongest referred id.
   let dq = supabase.from("referrals").select("id")
-  dq = referrerContactId ? dq.eq("referrer_contact_id", referrerContactId) : dq.eq("referrer_account_id", creditAccountId)
+  dq = creditAccountId ? dq.eq("referrer_account_id", creditAccountId) : dq.eq("referrer_contact_id", creditContactId as string)
   if (referredAccountId) dq = dq.eq("referred_account_id", referredAccountId)
   else if (referredContactId) dq = dq.eq("referred_contact_id", referredContactId)
   const { data: existing } = await dq.limit(1)
   if (existing && (existing as unknown[]).length > 0) return { created: false, reason: "duplicate" }
 
   // Create the USD credit note (negative invoice), idempotent.
-  const refKey = referrerContactId || creditAccountId
+  const refKey = creditAccountId || creditContactId
   const rdKey = referredAccountId || referredContactId
   const today = new Date().toISOString().split("T")[0]
   let result
   try {
     result = await createTDInvoice({
-      account_id: creditAccountId,
+      account_id: creditAccountId ?? undefined,
+      contact_id: creditContactId ?? undefined,
       line_items: [
         {
           description: `Referral reward — ${REFERRAL_COMMISSION_PCT}% credit (${referredName})`,
@@ -300,7 +295,7 @@ export async function createManualReferralCredit(
   const { data: ref, error: refErr } = await supabase
     .from("referrals")
     .insert({
-      referrer_contact_id: referrerContactId ?? null,
+      referrer_contact_id: creditContactId,
       referrer_account_id: creditAccountId,
       referred_contact_id: referredContactId ?? null,
       referred_account_id: referredAccountId ?? null,

@@ -139,7 +139,7 @@ export function AddReferralModal() {
             </div>
 
             <div className="space-y-4 px-5 py-4">
-              <ActorPicker label="Referrer (contact, account, or partner)" value={referrer} placeholder="Search referrer…"
+              <ActorPicker label="Referrer — who gets the credit (contact OR account/partner)" value={referrer} placeholder="Search referrer…"
                 onPick={setReferrer} onClear={() => setReferrer(null)} />
 
               <ActorPicker label="Referred client (contact or account)" value={referred} placeholder="Search referred client…"
