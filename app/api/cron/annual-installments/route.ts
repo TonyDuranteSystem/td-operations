@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
     // Get all active Client accounts
     const { data: accounts, error } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, onboarding_date, formation_date")
+      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, client_since, formation_date")
       .eq("status", "Active")
       .eq("account_type", "Client")
       .or("is_test.is.null,is_test.eq.false")
@@ -130,7 +130,7 @@ export async function GET(req: NextRequest) {
         status: acct.status,
         is_test: (acct as { is_test: boolean | null }).is_test ?? null,
         installment_2_amount: acct.installment_2_amount,
-        onboarding_date: (acct as { onboarding_date: string | null }).onboarding_date ?? null,
+        client_since: (acct as { client_since: string | null }).client_since ?? null,
         formation_date: (acct as { formation_date: string | null }).formation_date ?? null,
         hasFirstInstallmentThisYear,
         hasSignedAgreementThisYear: !!signedAgreement,

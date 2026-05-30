@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { decideJuneInstallment, type JuneInstallmentInput } from '@/lib/billing/june-installment-eligibility'
 
+// base = a normal renewing client: became our client in 2024.
 const base: JuneInstallmentInput = {
   year: 2026,
   account_type: 'Client',
   status: 'Active',
   is_test: false,
   installment_2_amount: 1000,
-  onboarding_date: '2024-03-01',
+  client_since: '2024-03-01',
   formation_date: '2024-02-01',
   hasFirstInstallmentThisYear: true,
   hasSignedAgreementThisYear: false,
@@ -39,8 +40,7 @@ describe('decideJuneInstallment — 2026 transition', () => {
   })
 
   it('skip + alert when installment_2_amount is 0 (never falls back to a default)', () => {
-    const d = decideJuneInstallment(make({ installment_2_amount: 0 }))
-    expect(d.action).toBe('needs_amount')
+    expect(decideJuneInstallment(make({ installment_2_amount: 0 })).action).toBe('needs_amount')
   })
 
   it('marks exists when a 2nd installment already exists (any route — fixes the dup gap)', () => {
@@ -48,19 +48,43 @@ describe('decideJuneInstallment — 2026 transition', () => {
   })
 
   it('skips when no 1st installment and a normal (pre-Sept) older start', () => {
-    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, onboarding_date: '2025-05-01', formation_date: '2025-05-01' }))
+    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, client_since: '2025-05-01', formation_date: '2025-05-01' }))
     expect(d.action).toBe('skip')
   })
 
   it('flags a Sep–Dec 2025 starter with no 1st installment (owes June, manual)', () => {
-    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, onboarding_date: '2025-09-26', formation_date: '2025-09-26' }))
+    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, client_since: '2025-09-26', formation_date: '2025-09-26' }))
     expect(d.action).toBe('flag')
   })
+})
 
-  it('skips a Year-1 (2026) client with no 1st installment (setup covers first year)', () => {
-    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, onboarding_date: '2026-02-01', formation_date: '2026-02-01' }))
+describe('decideJuneInstallment — Year-1 (became our client in the billing year) is skipped FIRST', () => {
+  it('skips a formed-by-us 2026 client (no client_since → formation date is the start)', () => {
+    const d = decideJuneInstallment(make({ client_since: null, formation_date: '2026-02-13', hasFirstInstallmentThisYear: false }))
     expect(d.action).toBe('skip')
     expect(d.reason).toMatch(/Year-1/)
+  })
+
+  it('AZOR CASE: onboarded in 2026 (client_since 2026, company formed earlier) → skip even WITH a (fake) 1st installment', () => {
+    const d = decideJuneInstallment(make({ client_since: '2026-01-29', formation_date: '2025-10-09', hasFirstInstallmentThisYear: true }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/Year-1/)
+  })
+
+  it('Year-1 overrides even an already-existing 2nd installment', () => {
+    const d = decideJuneInstallment(make({ client_since: '2026-03-01', hasExistingSecondInstallment: true }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/Year-1/)
+  })
+
+  it('client_since takes precedence over formation_date: onboarded 2024 but company formed 2019 → normal renewal, invoiced', () => {
+    const d = decideJuneInstallment(make({ client_since: '2024-05-01', formation_date: '2019-01-01', hasFirstInstallmentThisYear: true }))
+    expect(d.action).toBe('invoice')
+  })
+
+  it('client_since precedence: onboarded Sep 2025 with old formation → September flag (uses client_since, not formation)', () => {
+    const d = decideJuneInstallment(make({ client_since: '2025-09-26', formation_date: '2020-01-01', hasFirstInstallmentThisYear: false }))
+    expect(d.action).toBe('flag')
   })
 })
 
@@ -88,7 +112,7 @@ describe('decideJuneInstallment — hard exclusions', () => {
 
 describe('decideJuneInstallment — 2027+ permanent regime', () => {
   it('invoices when a signed agreement exists for the year', () => {
-    const d = decideJuneInstallment(make({ year: 2027, hasSignedAgreementThisYear: true, hasFirstInstallmentThisYear: false }))
+    const d = decideJuneInstallment(make({ year: 2027, client_since: '2024-03-01', hasSignedAgreementThisYear: true, hasFirstInstallmentThisYear: false }))
     expect(d).toEqual({ action: 'invoice', amount: 1000, reason: 'eligible' })
   })
 
