@@ -8647,6 +8647,7 @@ export type Database = {
           reply_to_id: string | null
           sender_context: string | null
           sender_id: string
+          sender_name: string | null
           sender_type: string
           topic: string | null
         }
@@ -8672,6 +8673,7 @@ export type Database = {
           reply_to_id?: string | null
           sender_context?: string | null
           sender_id: string
+          sender_name?: string | null
           sender_type: string
           topic?: string | null
         }
@@ -8697,6 +8699,7 @@ export type Database = {
           reply_to_id?: string | null
           sender_context?: string | null
           sender_id?: string
+          sender_name?: string | null
           sender_type?: string
           topic?: string | null
         }
