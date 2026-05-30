@@ -54,9 +54,14 @@ describe('decideJuneInstallment — 2026 transition', () => {
     expect(d.action).toBe('skip')
   })
 
-  it('flags a Sep–Dec 2025 starter with no 1st installment (owes June, manual)', () => {
+  it('INVOICES a Sep–Dec 2025 starter with no 1st installment (skipped January, owes June — standard amount)', () => {
     const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, client_since: '2025-09-26', formation_date: '2025-09-26' }))
-    expect(d.action).toBe('flag')
+    expect(d).toEqual({ action: 'invoice', amount: 1000, reason: 'eligible' })
+  })
+
+  it('a Sep–Dec start with no 1st installment AND no amount → needs_amount (not skip)', () => {
+    const d = decideJuneInstallment(make({ hasFirstInstallmentThisYear: false, installment_2_amount: null, client_since: '2025-10-01', formation_date: '2025-10-01' }))
+    expect(d.action).toBe('needs_amount')
   })
 })
 
@@ -84,9 +89,9 @@ describe('decideJuneInstallment — Year-1 (became our client in the billing yea
     expect(d.action).toBe('invoice')
   })
 
-  it('client_since precedence: onboarded Sep 2025 with old formation → September flag (uses client_since, not formation)', () => {
+  it('client_since precedence: onboarded Sep 2025 with old formation → September cohort, INVOICED June (uses client_since, not formation)', () => {
     const d = decideJuneInstallment(make({ client_since: '2025-09-26', formation_date: '2020-01-01', hasFirstInstallmentThisYear: false }))
-    expect(d.action).toBe('flag')
+    expect(d.action).toBe('invoice')
   })
 })
 

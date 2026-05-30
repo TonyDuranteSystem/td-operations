@@ -29,10 +29,11 @@
  *
  * Two regimes after that:
  *  - 2027 onward (permanent): gate on a signed annual agreement for the year.
- *  - 2026 (transition): gate on "has a first-installment record for the year".
- *    Clients with no 1st installment but a Sep–Dec prior-year start (September
- *    rule, January skipped) owe their FIRST payment in June → FLAGGED for manual
- *    handling, not auto-invoiced.
+ *  - 2026 (transition): owes the June installment if it has a 2026 first-
+ *    installment record OR is a Sep–Dec prior-year start (September rule —
+ *    January skipped, so June IS their installment). September-cohort clients are
+ *    auto-invoiced the STANDARD June amount (no pro-rating exists in the model).
+ *    No first installment AND not a Sep–Dec start → skip.
  *
  * Amount is ALWAYS the per-account CRM `installment_2_amount` — no hardcoded
  * default; missing/zero → `needs_amount` (skip + alert).
@@ -127,14 +128,16 @@ export function decideJuneInstallment(i: JuneInstallmentInput): JuneInstallmentD
       return { action: 'skip', reason: `no signed ${i.year} annual agreement` }
     }
   } else {
-    // 2026 transition: paid/invoiced 1st → owes 2nd.
-    if (!i.hasFirstInstallmentThisYear) {
-      // Sep–Dec prior-year start: January was skipped, June is their FIRST
-      // payment. Surface for manual handling rather than auto-invoicing.
-      if (skipJanuary) {
-        return { action: 'flag', reason: 'Sep–Dec prior-year start (skipped January) — owes June, manual review' }
-      }
-      return { action: 'skip', reason: `no ${i.year} first installment` }
+    // 2026 transition regime. A client owes the June installment when EITHER:
+    //  - they have a 2026 first-installment record (normal: paid January → owes
+    //    June), OR
+    //  - they are a Sep–Dec prior-year start: January was skipped, so June IS
+    //    their installment for the cycle. There is NO pro-rating in the model —
+    //    they are billed the standard June installment, auto-invoiced like any
+    //    other client (e.g. Zhang).
+    // No first installment AND not a September-cohort start → not a 2026 biller.
+    if (!i.hasFirstInstallmentThisYear && !skipJanuary) {
+      return { action: 'skip', reason: `no ${i.year} first installment and not a Sep–Dec start` }
     }
   }
 
