@@ -106,6 +106,8 @@ type PaymentRow = {
   invoice_number: string | null
   invoice_status: string | null
   installment: string | null
+  payment_category: string | null
+  year: number | null
   period: string | null
 }
 

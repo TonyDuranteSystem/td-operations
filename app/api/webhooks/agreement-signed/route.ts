@@ -131,6 +131,8 @@ export async function POST(req: NextRequest) {
       message: `First installment ${year} — LLC Annual Management.\nPlease remit payment by wire transfer.`,
       idempotency_key: idempotencyKey,
       installment: "Installment 1 (Jan)",
+      payment_category: "installment_1",
+      year,
     })
 
     // Auto-send so "Pay Invoice" action item appears in portal immediately

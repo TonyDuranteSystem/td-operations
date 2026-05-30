@@ -7965,6 +7965,7 @@ export type Database = {
           id: string
           idempotency_key: string | null
           installment: string | null
+          payment_category: string | null
           invoice_date: string | null
           invoice_number: string | null
           invoice_status: string | null
@@ -8025,6 +8026,7 @@ export type Database = {
           id?: string
           idempotency_key?: string | null
           installment?: string | null
+          payment_category?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_status?: string | null
@@ -8085,6 +8087,7 @@ export type Database = {
           id?: string
           idempotency_key?: string | null
           installment?: string | null
+          payment_category?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_status?: string | null

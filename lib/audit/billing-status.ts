@@ -1,8 +1,9 @@
 /**
  * Billing section status computation — Phase 1 Billing Audit.
  *
- * Pure logic: no DB calls, no imports, no side effects.
- * Takes already-fetched data (from /api/clients/audit/[id]/data) and
+ * Pure logic: no DB calls, no side effects (imports only the pure, DB-free
+ * payment classifier). Takes already-fetched data (from
+ * /api/clients/audit/[id]/data) and
  * computes per-check status for the billing section of the audit panel.
  *
  * Checks (per contract year):
@@ -19,6 +20,8 @@
  *   not_yet_due  — not expected yet based on current month
  *   na           — not applicable for this account type
  */
+
+import { isFirstInstallment, isSecondInstallment } from '@/lib/billing/payment-classification'
 
 export type BillingCheckStatus = 'ok' | 'missing' | 'not_yet_due' | 'na'
 
@@ -49,6 +52,11 @@ export type BillingPaymentRow = {
   id?: string
   installment: string | null
   description: string | null
+  /** Structured billing category — the ONLY classification signal used. */
+  payment_category: string | null
+  /** Billing year — the ONLY year signal used (never parsed from description). */
+  year: number | null
+  status?: string | null
   amount: number | string | null
   amount_currency: string | null
   invoice_number: string | null
@@ -119,14 +127,10 @@ export function computeBillingStatus(
   // Any agreement row (including draft) — for context when not signed.
   const agreementAny = annualAgreements.find(a => a.agreement_year === year)
 
-  // Match installment payments by label + year in description.
-  const yearStr = String(year)
-  const inst1 = payments.find(
-    p => p.installment === 'Installment 1 (Jan)' && (p.description?.includes(yearStr) ?? false),
-  )
-  const inst2 = payments.find(
-    p => p.installment === 'Installment 2 (Jun)' && (p.description?.includes(yearStr) ?? false),
-  )
+  // Match installment payments by the structured category + year stamp — never
+  // by the installment label or the free-text description.
+  const inst1 = payments.find(p => isFirstInstallment(p, year))
+  const inst2 = payments.find(p => isSecondInstallment(p, year))
 
   const beforeJune = month < 6
 

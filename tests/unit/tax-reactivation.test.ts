@@ -2,9 +2,8 @@
  * lib/tax/reactivation.ts — unit tests
  *
  * Covers the pure logic of reactivateOnHoldTaxReturns: which SDs get
- * flipped, which get skipped, how the installment detection covers both
- * structured (payments.installment) and legacy (payments.description)
- * values, and how errors are counted.
+ * flipped, which get skipped, that the 2nd-installment detection reads ONLY the
+ * structured payment_category (never the description), and how errors are counted.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -104,8 +103,8 @@ describe("reactivateOnHoldTaxReturns", () => {
         id: "p-1",
         account_id: "acct-1",
         status: "Paid",
-        installment: "Installment 2 (Jun)",
-        description: "Second Installment 2026",
+        payment_category: "installment_2",
+        year: 2026,
         paid_date: "2026-06-15",
       },
     ]
@@ -119,7 +118,7 @@ describe("reactivateOnHoldTaxReturns", () => {
     expect(res.details[0].company_name).toBe("Alpha LLC")
   })
 
-  it("matches legacy payments via description ILIKE when installment is null", async () => {
+  it("matches a 2nd installment whose label was blank but the backfill stamped the category", async () => {
     serviceDeliveries = [
       { id: "sd-2", account_id: "acct-2", service_type: "Tax Return", status: "on_hold" },
     ]
@@ -129,7 +128,8 @@ describe("reactivateOnHoldTaxReturns", () => {
         id: "p-2",
         account_id: "acct-2",
         status: "Paid",
-        installment: null,
+        installment: null, // label was never set on this legacy row…
+        payment_category: "installment_2", // …but the backfill gave it a category
         description: "Second Installment – LLC Consulting & Management",
         paid_date: "2026-04-05",
       },
@@ -140,24 +140,26 @@ describe("reactivateOnHoldTaxReturns", () => {
     expect(updateCalls).toEqual([{ id: "sd-2", status: "active" }])
   })
 
-  it("matches '2nd installment' phrasing in description", async () => {
+  it("does NOT match a payment whose 2nd-installment hint is only in the description (description is dead)", async () => {
     serviceDeliveries = [
       { id: "sd-3", account_id: "acct-3", service_type: "Tax Return", status: "on_hold" },
     ]
-    accounts = [{ id: "acct-3", company_name: "Abbrev LLC" }]
+    accounts = [{ id: "acct-3", company_name: "Desc Only LLC" }]
     payments = [
       {
         id: "p-3",
         account_id: "acct-3",
         status: "Paid",
         installment: null,
-        description: "Payment for 2nd installment 2026",
+        payment_category: null, // no structured stamp
+        description: "Payment for 2nd installment 2026", // phrase only here — must be ignored
         paid_date: "2026-06-10",
       },
     ]
     const { reactivateOnHoldTaxReturns } = await import("@/lib/tax/reactivation")
     const res = await reactivateOnHoldTaxReturns()
-    expect(res.reactivated).toBe(1)
+    expect(res.reactivated).toBe(0)
+    expect(res.skipped).toBe(1)
   })
 
   it("skips SDs whose account has no 2nd installment payment on file", async () => {
@@ -170,8 +172,8 @@ describe("reactivateOnHoldTaxReturns", () => {
         id: "p-4",
         account_id: "acct-4",
         status: "Paid",
-        installment: "Installment 1 (Jan)", // only 1st installment
-        description: "First Installment 2026",
+        payment_category: "installment_1", // only 1st installment
+        year: 2026,
         paid_date: "2026-01-15",
       },
     ]
@@ -193,8 +195,8 @@ describe("reactivateOnHoldTaxReturns", () => {
         id: "p-5a",
         account_id: "acct-5",
         status: "Overdue",
-        installment: "Installment 2 (Jun)",
-        description: "2nd Installment",
+        payment_category: "installment_2",
+        year: 2026,
         paid_date: null,
       },
     ]
@@ -214,8 +216,8 @@ describe("reactivateOnHoldTaxReturns", () => {
       { id: "acct-6b", company_name: "Other LLC" },
     ]
     payments = [
-      { id: "p-6a", account_id: "acct-6a", status: "Paid", installment: "Installment 2 (Jun)", description: "", paid_date: "2026-06-15" },
-      { id: "p-6b", account_id: "acct-6b", status: "Paid", installment: "Installment 2 (Jun)", description: "", paid_date: "2026-06-15" },
+      { id: "p-6a", account_id: "acct-6a", status: "Paid", payment_category: "installment_2", year: 2026, paid_date: "2026-06-15" },
+      { id: "p-6b", account_id: "acct-6b", status: "Paid", payment_category: "installment_2", year: 2026, paid_date: "2026-06-15" },
     ]
     const { reactivateOnHoldTaxReturns } = await import("@/lib/tax/reactivation")
     const res = await reactivateOnHoldTaxReturns("acct-6a")
@@ -230,7 +232,7 @@ describe("reactivateOnHoldTaxReturns", () => {
     ]
     accounts = [{ id: "acct-7", company_name: "Error LLC" }]
     payments = [
-      { id: "p-7", account_id: "acct-7", status: "Paid", installment: "Installment 2 (Jun)", description: "", paid_date: "2026-06-15" },
+      { id: "p-7", account_id: "acct-7", status: "Paid", payment_category: "installment_2", year: 2026, paid_date: "2026-06-15" },
     ]
     nextUpdateError = { message: "database is asleep" }
     const { reactivateOnHoldTaxReturns } = await import("@/lib/tax/reactivation")

@@ -19,16 +19,14 @@
  *
  * Identification of a "2nd installment paid" payment:
  *   - payments.status = 'Paid'
- *   - EITHER payments.installment = 'Installment 2 (Jun)' (the canonical value
- *     set by the installment helper)
- *   - OR payments.description ILIKE '%2nd installment%'
- *   - OR payments.description ILIKE '%second installment%'
- *   The OR branches cover legacy / manually-entered payments where the
- *   structured `installment` field is null (one historical case as of
- *   2026-04-18 — "Second Installment – LLC Consulting & Management").
+ *   - payments.payment_category = 'installment_2' (the structured stamp; see
+ *     lib/billing/payment-classification.ts). The free-text description is NEVER
+ *     read — legacy/manual rows were given a category once by the backfill
+ *     migration 20260529-0500-payment-category-structured-classification.sql.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { isSecondInstallment, type ClassifiablePayment } from "@/lib/billing/payment-classification"
 
 export interface ReactivationResult {
   scanned: number
@@ -89,7 +87,7 @@ export async function reactivateOnHoldTaxReturns(
       .in("id", accountIds),
     supabaseAdmin
       .from("payments")
-      .select("id, account_id, status, installment, description, paid_date")
+      .select("id, account_id, status, payment_category, year, invoice_status, paid_date")
       .in("account_id", accountIds)
       .eq("status", "Paid")
       .limit(2000),
@@ -100,16 +98,13 @@ export async function reactivateOnHoldTaxReturns(
     if (a.id) companyByAcct.set(a.id, a.company_name ?? null)
   }
 
+  // A 2nd-installment payment is identified ONLY by the structured category —
+  // never by reading the description (lib/billing/payment-classification.ts).
+  // Not year-scoped here: any paid 2nd installment lifts the tax-return gate.
   const secondInstallmentByAcct = new Map<string, boolean>()
   for (const p of payments ?? []) {
     if (!p.account_id) continue
-    const inst = typeof p.installment === "string" ? p.installment : ""
-    const desc = typeof p.description === "string" ? p.description : ""
-    const isSecond =
-      inst === "Installment 2 (Jun)" ||
-      /2nd\s+installment/i.test(desc) ||
-      /second\s+installment/i.test(desc)
-    if (isSecond) secondInstallmentByAcct.set(p.account_id, true)
+    if (isSecondInstallment(p as ClassifiablePayment)) secondInstallmentByAcct.set(p.account_id, true)
   }
 
   for (const sd of sds) {

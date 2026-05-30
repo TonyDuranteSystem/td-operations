@@ -22,6 +22,8 @@ const DRAFT_2026: BillingAgreementRow = { agreement_year: 2026, status: 'draft' 
 const INST1_PAID: BillingPaymentRow = {
   installment: 'Installment 1 (Jan)',
   description: 'Annual billing 2026',
+  payment_category: 'installment_1',
+  year: 2026,
   amount: 1500,
   amount_currency: 'USD',
   invoice_number: 'INV-000001',
@@ -38,6 +40,8 @@ const INST1_SENT: BillingPaymentRow = {
 const INST2_PAID: BillingPaymentRow = {
   installment: 'Installment 2 (Jun)',
   description: 'Annual billing 2026',
+  payment_category: 'installment_2',
+  year: 2026,
   amount: 1000,
   amount_currency: 'USD',
   invoice_number: 'INV-000002',
@@ -194,10 +198,11 @@ describe('computeBillingStatus — installment 2 checks (month-gated)', () => {
     expect(r.checks.find(c => c.key === 'inst2_paid')!.status).toBe('na')
   })
 
-  it('inst2 payments only matched when description includes the year', () => {
+  it('inst2 payments only matched when the structured year matches (not the description)', () => {
     const wrongYear: BillingPaymentRow = {
       ...INST2_PAID,
-      description: 'Annual billing 2025',
+      year: 2025, // structured year is what counts…
+      description: 'Annual billing 2026', // …even though the description says 2026
     }
     const r = computeBillingStatus(CLIENT, [INST1_PAID, wrongYear], [SIGNED_2026], 2026, 7)
     expect(r.checks.find(c => c.key === 'inst2_invoiced')!.status).toBe('missing')

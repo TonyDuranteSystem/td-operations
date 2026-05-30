@@ -62,7 +62,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
     supabaseAdmin
       .from('payments')
-      .select('id, description, amount, amount_currency, due_date, paid_date, status, invoice_number, invoice_status, installment, period, is_test')
+      .select('id, description, amount, amount_currency, due_date, paid_date, status, invoice_number, invoice_status, installment, payment_category, year, period, is_test')
       .eq('account_id', id)
       .order('due_date', { ascending: false })
       .limit(20),

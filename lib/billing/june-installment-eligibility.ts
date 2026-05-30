@@ -6,11 +6,18 @@
  * tested; the cron supplies the DB-derived booleans.
  *
  * "Became our client" date (TD start) — the only reliable signal for Year-1 /
- * September:
- *   - `client_since` if present  → the client was ONBOARDED (existing company
- *     that came to us); that date is their start. Formation date is IGNORED.
- *   - else `formation_date`      → a client WE FORMED; formation is their start.
+ * September. Date-driven precedence (decided with Antonio 2026-05-30):
+ *   1. `ra_switch_date` → an ONBOARDED client (existing company came to us); the
+ *      date we switched their registered agent to us is their start.
+ *   2. `client_since`   → onboarding fallback when ra_switch_date is blank.
+ *   3. `formation_date` → a client WE FORMED; formation is their start.
  *   (Never use `onboarding_date` — it is messy/conflicting.)
+ *
+ * Missing-start-date tripwire: if the account carries a "Client Onboarding"
+ * service but has NEITHER ra_switch_date NOR client_since, we genuinely cannot
+ * know their start year, so we must NOT silently fall back to the (old, wrong)
+ * formation date and bill them. Such an account is FLAGGED for manual review —
+ * a forgotten onboarding date can never cause a wrong bill.
  *
  * Year-1 (became our client in the billing year) is checked FIRST and skips the
  * whole year — the setup fee covers it. This OVERRIDES any first-installment
@@ -55,11 +62,16 @@ export interface JuneInstallmentInput {
   is_test: boolean | null
   /** Per-account CRM second-installment amount. The ONLY amount source. */
   installment_2_amount: number | null
-  /** Date the client was onboarded (existing company came to us). The start
-   *  date when present; formation_date is ignored when this is set. */
+  /** Date we switched the client's registered agent to us (onboarded client).
+   *  Highest-priority start date when present. */
+  ra_switch_date: string | null
+  /** Date the client was onboarded. Onboarding fallback when ra_switch_date is null. */
   client_since: string | null
-  /** Date we formed the company. Used as the start ONLY when client_since is null. */
+  /** Date we formed the company. Used as the start when no onboarding date exists. */
   formation_date: string | null
+  /** The account carries a "Client Onboarding" service (it is an onboarded
+   *  client). Used only as the missing-start-date tripwire. */
+  hasClientOnboardingService: boolean
   /** A first-installment record exists for `year` (paid, overdue, or waived). */
   hasFirstInstallmentThisYear: boolean
   /** A signed/completed annual agreement exists for `year` (2027+ gate). */
@@ -74,9 +86,16 @@ export function decideJuneInstallment(i: JuneInstallmentInput): JuneInstallmentD
   if (i.account_type !== 'Client') return { action: 'skip', reason: `account_type ${i.account_type ?? 'null'} not Client` }
   if (i.is_test === true) return { action: 'skip', reason: 'test account' }
 
-  // ── "Became our client" date: client_since (onboarded) ELSE formation_date
-  //    (we formed them). Never onboarding_date.
-  const tdStart = i.client_since || i.formation_date
+  // ── Missing-start-date tripwire: a known onboarding client (has the Client
+  //    Onboarding service) with no onboarding date cannot be dated — flag it
+  //    rather than fall back to the wrong formation date and mis-bill.
+  if (i.hasClientOnboardingService && !i.ra_switch_date && !i.client_since) {
+    return { action: 'flag', reason: 'onboarding client missing start date (no RA switch date, no client since) — set it in the CRM before billing' }
+  }
+
+  // ── "Became our client" date (date-driven): RA switch (onboarded) → client
+  //    since (onboarding fallback) → formation date (we formed them).
+  const tdStart = i.ra_switch_date || i.client_since || i.formation_date
   const { skipAccount, skipJanuary } = getRenewalGuard(tdStart, i.year)
 
   // ── Year-1 FIRST (overrides everything): became our client in the billing

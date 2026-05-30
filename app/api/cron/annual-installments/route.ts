@@ -37,6 +37,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { logCron } from "@/lib/cron-log"
 import { decideJuneInstallment } from "@/lib/billing/june-installment-eligibility"
+import { isFirstInstallment, isSecondInstallment, type ClassifiablePayment } from "@/lib/billing/payment-classification"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -73,7 +74,7 @@ export async function GET(req: NextRequest) {
     // Get all active Client accounts
     const { data: accounts, error } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, client_since, formation_date")
+      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, ra_switch_date, client_since, formation_date")
       .eq("status", "Active")
       .eq("account_type", "Client")
       .or("is_test.is.null,is_test.eq.false")
@@ -83,9 +84,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, message: "No active Client accounts found." })
     }
 
-    const results: Array<{ company: string; action: string; detail: string; paymentId?: string }> = []
+    // Which accounts are onboarded clients? (carry a "Client Onboarding" service)
+    // Used only as the missing-start-date tripwire in the eligibility decision.
+    // Fetched once here, O(1) lookup in the loop.
+    const { data: onboardingSds } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("account_id")
+      .eq("service_type", "Client Onboarding")
+    const onboardingAccountIds = new Set<string>(
+      (onboardingSds || []).map(r => (r as { account_id: string | null }).account_id).filter((x): x is string => !!x)
+    )
 
-    const norm = (s: string | null | undefined) => (s || "").toLowerCase()
+    const results: Array<{ company: string; action: string; detail: string; paymentId?: string }> = []
 
     for (const acct of accounts) {
       // ── Gather the DB facts the pure decision function needs ──
@@ -101,28 +111,23 @@ export async function GET(req: NextRequest) {
         .limit(1)
         .maybeSingle() as { data: { id: string; status: string } | null }
 
-      // All this account's payments, classified in JS to avoid PostgREST quoting
-      // issues with the "Installment 1 (Jan)" enum value (comma + parens).
+      // All this account's payments, classified ONLY via the structured
+      // `payment_category` + `year` stamp (lib/billing/payment-classification.ts).
+      // The free-text `description` is never read for classification — the
+      // backfill migration already populated `payment_category` from it once.
       const { data: pmts } = await supabaseAdmin
         .from("payments")
-        .select("installment, description, invoice_status, status, year")
+        .select("payment_category, year, invoice_status, status")
         .eq("account_id", acct.id)
-      const rows = (pmts || []) as Array<{ installment: string | null; description: string | null; invoice_status: string | null; status: string | null; year: number | null }>
+      const rows = (pmts || []) as ClassifiablePayment[]
 
       // Has a FIRST installment for this year? (paid / overdue / waived — any
       // non-cancelled record). 2026 transition gate: "paid 1st → owes 2nd".
-      const hasFirstInstallmentThisYear = rows.some(p =>
-        p.status !== "Cancelled" && p.invoice_status !== "Cancelled" &&
-        ((p.installment === "Installment 1 (Jan)" && p.year === year) ||
-          (norm(p.description).includes("first installment") && (p.year === year || p.year == null))))
+      const hasFirstInstallmentThisYear = rows.some(p => isFirstInstallment(p, year))
 
-      // Already has a SECOND installment? Any route, including QB-imported rows
-      // with no idempotency key — closes the double-bill gap. Year-scoped but
-      // tolerant of the year-null QB artifacts present in 2026.
-      const hasExistingSecondInstallment = rows.some(p =>
-        p.status !== "Cancelled" && p.invoice_status !== "Cancelled" &&
-        ((p.installment === "Installment 2 (Jun)" && p.year === year) ||
-          (norm(p.description).includes("second installment") && (p.year === year || p.year == null))))
+      // Already has a SECOND installment for this year? Any route — closes the
+      // double-bill gap.
+      const hasExistingSecondInstallment = rows.some(p => isSecondInstallment(p, year))
 
       const decision = decideJuneInstallment({
         year,
@@ -130,11 +135,13 @@ export async function GET(req: NextRequest) {
         status: acct.status,
         is_test: (acct as { is_test: boolean | null }).is_test ?? null,
         installment_2_amount: acct.installment_2_amount,
+        ra_switch_date: (acct as { ra_switch_date: string | null }).ra_switch_date ?? null,
         client_since: (acct as { client_since: string | null }).client_since ?? null,
         formation_date: (acct as { formation_date: string | null }).formation_date ?? null,
         hasFirstInstallmentThisYear,
         hasSignedAgreementThisYear: !!signedAgreement,
         hasExistingSecondInstallment,
+        hasClientOnboardingService: onboardingAccountIds.has(acct.id),
       })
 
       // Non-invoice outcomes (skip / exists / needs_amount / flag) — record + move on.
@@ -182,6 +189,8 @@ export async function GET(req: NextRequest) {
           message: `Payment for ${installmentLabel} ${year} — LLC Annual Management fee.\nPlease remit payment by wire transfer to the bank details below, or via card using the link provided separately.`,
           idempotency_key: idempotencyKey,
           installment: installmentLabelEnum,
+          payment_category: "installment_2",
+          year,
         })
 
         // If credit fully covered the installment, createTDInvoice marked it Paid

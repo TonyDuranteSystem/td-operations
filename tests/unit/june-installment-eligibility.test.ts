@@ -8,11 +8,13 @@ const base: JuneInstallmentInput = {
   status: 'Active',
   is_test: false,
   installment_2_amount: 1000,
+  ra_switch_date: null,
   client_since: '2024-03-01',
   formation_date: '2024-02-01',
   hasFirstInstallmentThisYear: true,
   hasSignedAgreementThisYear: false,
   hasExistingSecondInstallment: false,
+  hasClientOnboardingService: false,
 }
 const make = (o: Partial<JuneInstallmentInput>): JuneInstallmentInput => ({ ...base, ...o })
 
@@ -85,6 +87,87 @@ describe('decideJuneInstallment — Year-1 (became our client in the billing yea
   it('client_since precedence: onboarded Sep 2025 with old formation → September flag (uses client_since, not formation)', () => {
     const d = decideJuneInstallment(make({ client_since: '2025-09-26', formation_date: '2020-01-01', hasFirstInstallmentThisYear: false }))
     expect(d.action).toBe('flag')
+  })
+})
+
+describe('decideJuneInstallment — date-driven start (RA switch → client since → formation)', () => {
+  it('uses ra_switch_date over client_since and formation_date (onboarded client)', () => {
+    // RA switch in 2026 = Year-1 even though client_since/formation are older.
+    const d = decideJuneInstallment(make({
+      ra_switch_date: '2026-02-10', client_since: '2024-01-01', formation_date: '2019-01-01',
+      hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/Year-1/)
+  })
+
+  it('falls back to client_since when ra_switch_date is null', () => {
+    const d = decideJuneInstallment(make({
+      ra_switch_date: null, client_since: '2026-03-01', formation_date: '2018-01-01',
+      hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/Year-1/)
+  })
+
+  it('falls back to formation_date when no onboarding date exists (formed-by-us client)', () => {
+    const d = decideJuneInstallment(make({
+      ra_switch_date: null, client_since: null, formation_date: '2026-02-13',
+      hasFirstInstallmentThisYear: false,
+    }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/Year-1/)
+  })
+
+  it('an onboarded client whose RA switch was an older year is billed normally', () => {
+    const d = decideJuneInstallment(make({
+      ra_switch_date: '2024-06-01', client_since: null, formation_date: '2015-01-01',
+      hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('invoice')
+  })
+})
+
+describe('decideJuneInstallment — missing-start-date tripwire', () => {
+  it('FLAGS a Client Onboarding account with no RA switch and no client since', () => {
+    const d = decideJuneInstallment(make({
+      hasClientOnboardingService: true, ra_switch_date: null, client_since: null,
+      formation_date: '2018-01-01', hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('flag')
+    expect(d.reason).toMatch(/missing start date/)
+  })
+
+  it('does NOT flag when the onboarding client has an RA switch date', () => {
+    const d = decideJuneInstallment(make({
+      hasClientOnboardingService: true, ra_switch_date: '2024-05-01', client_since: null,
+      formation_date: '2018-01-01', hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('invoice')
+  })
+
+  it('does NOT flag when the onboarding client has a client since date', () => {
+    const d = decideJuneInstallment(make({
+      hasClientOnboardingService: true, ra_switch_date: null, client_since: '2024-05-01',
+      formation_date: '2018-01-01', hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('invoice')
+  })
+
+  it('does NOT flag a formation client (no onboarding service) missing onboarding dates', () => {
+    const d = decideJuneInstallment(make({
+      hasClientOnboardingService: false, ra_switch_date: null, client_since: null,
+      formation_date: '2020-01-01', hasFirstInstallmentThisYear: true,
+    }))
+    expect(d.action).toBe('invoice')
+  })
+
+  it('tripwire fires only after the hard exclusions (cancelled onboarding client still skips)', () => {
+    const d = decideJuneInstallment(make({
+      status: 'Cancelled', hasClientOnboardingService: true, ra_switch_date: null, client_since: null,
+    }))
+    expect(d.action).toBe('skip')
+    expect(d.reason).toMatch(/not Active/)
   })
 })
 

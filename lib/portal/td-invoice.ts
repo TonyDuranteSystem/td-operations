@@ -14,6 +14,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
 import { generateInvoiceNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits } from '@/lib/operations/credit-netting'
+import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
 
 // ─── Types ──────────────────────────────────────────
 
@@ -55,6 +56,18 @@ export interface TDInvoiceInput {
    */
   installment?: string
   /**
+   * Structured billing category for `payments.payment_category`. When omitted it
+   * is auto-derived from `installment` (categoryFromInstallmentLabel), so callers
+   * that set `installment` get the category for free. Billing/tax/audit logic
+   * classifies via this field, never via the free-text description.
+   */
+  payment_category?: string
+  /**
+   * Billing year for `payments.year`. Stamp it on installment invoices so
+   * year-scoped classification is reliable (the cron passes the installment year).
+   */
+  year?: number
+  /**
    * Opt OUT of automatic credit-note netting. By default a real (positive,
    * unpaid) bill auto-applies the account's outstanding credit notes. Set true
    * when creating a credit note itself or any invoice that must not net.
@@ -88,8 +101,14 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     bank_preference,
     idempotency_key,
     installment,
+    payment_category,
+    year,
     skip_credit_netting = false,
   } = input
+
+  // Structured category: explicit param wins, else derive from the installment
+  // label. The free-text description is never consulted.
+  const resolvedCategory = payment_category ?? categoryFromInstallmentLabel(installment) ?? null
 
   if (!account_id && !contact_id) {
     throw new Error('createTDInvoice: at least one of account_id or contact_id required')
@@ -187,6 +206,8 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         invoice_number: invoiceNumber,
         idempotency_key: idempotency_key || null,
         installment: installment || null,
+        payment_category: resolvedCategory,
+        year: year ?? null,
         description: invoiceDescription,
         amount: total,
         amount_paid: amountPaid,
