@@ -22,10 +22,17 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  // Always thread by contact_id (unified per-contact thread).
-  const queryParam = `contact_id=${contactId}`
-  const filterColumn = 'contact_id'
-  const filterValue = contactId
+  // Thread by contact_id for normal clients (unified per-contact thread).
+  // Teammates (Portal Team Access) have NO contact_id — their messages are stored
+  // by account_id with contact_id NULL, so thread by account for them.
+  const threadByAccount = !contactId && !!accountId
+  const threadKey = threadByAccount ? 'account_id' : 'contact_id'
+  const threadId = threadByAccount ? (accountId as string) : contactId
+  const queryParam = `${threadKey}=${threadId}`
+  const filterColumn = threadKey
+  const filterValue = threadId
+  // Mark-as-read body keyed to the same thread dimension.
+  const readBody = threadByAccount ? { account_id: accountId } : { contact_id: contactId }
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
@@ -41,7 +48,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
         fetch('/api/portal/chat/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contact_id: contactId }),
+          body: JSON.stringify(readBody),
         }).catch(() => {})
       }
     } catch {
@@ -49,6 +56,8 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     } finally {
       setLoading(false)
     }
+    // readBody is derived from contactId/accountId (same inputs as queryParam).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId, queryParam])
 
   useEffect(() => {
