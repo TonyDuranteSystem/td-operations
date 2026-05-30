@@ -1,7 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
-import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
+import { getTeammateScopeOrNull, requirePortalCapability } from '@/lib/portal/team/gate'
+import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
@@ -129,7 +130,9 @@ export async function GET(request: NextRequest) {
     const { contacts: _contacts, ...rest } = msg
     return {
       ...rest,
-      sender_name: contact?.full_name || null,
+      // Contact name for client/owner messages; stored sender_name (the teammate's
+      // display name) when there's no contact; null → UI shows its generic label.
+      sender_name: pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
     }
   }).reverse()
 
@@ -203,15 +206,19 @@ export async function POST(request: NextRequest) {
   // message appears in the client's contact-scoped thread (fixes invisible admin messages).
   const authContactId = getClientContactId(user)
   let resolvedContactId: string | null
+  let teammateSenderName: string | null = null
 
   if (isClientUser && !authContactId) {
     // Teammate (Portal Team Access): may post ONLY to their own account, ONLY
-    // with 'chat' granted, and NEVER under a body-supplied contact_id.
-    const tmAccountId = await getTeammateScopeOrNull(user, 'chat')
-    if (!tmAccountId || !account_id || account_id !== tmAccountId) {
+    // with 'chat' granted, and NEVER under a body-supplied contact_id. Stamp the
+    // teammate's display name on the row so the thread shows WHICH teammate wrote
+    // (teammates have no contact, so there's otherwise no name to display).
+    const access = await requirePortalCapability(user, 'chat')
+    if (!access.allowed || access.kind !== 'teammate' || !account_id || account_id !== access.accountId) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
     resolvedContactId = null
+    teammateSenderName = access.displayName || null
   } else {
     resolvedContactId = bodyContactId || authContactId
     if (!resolvedContactId && account_id && !isClientUser) {
@@ -249,6 +256,7 @@ export async function POST(request: NextRequest) {
       contact_id: resolvedContactId || null,
       sender_type: senderType,
       sender_id: user.id,
+      ...(teammateSenderName ? { sender_name: teammateSenderName } : {}),
       sender_context,
       topic,
       message: (message || '').trim(),
@@ -265,7 +273,7 @@ export async function POST(request: NextRequest) {
   // Flatten sender_name
   const contact = data.contacts as unknown as { full_name: string } | null
   const { contacts: _contacts, ...msgData } = data
-  const responseMsg = { ...msgData, sender_name: contact?.full_name || null }
+  const responseMsg = { ...msgData, sender_name: pickChatSenderName(contact?.full_name, (msgData as { sender_name?: string | null }).sender_name) }
 
   // Notify client when admin sends a message
   if (senderType === 'admin') {

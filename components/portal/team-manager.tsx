@@ -129,8 +129,13 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
               <Field label="Username (login)"><input value={username} onChange={e => setUsername(e.target.value)} className={inputCls} placeholder="e.g. mario.rossi" /></Field>
               <Field label="Display name"><input value={displayName} onChange={e => setDisplayName(e.target.value)} className={inputCls} placeholder="Mario Rossi" /></Field>
               <Field label="Password"><input value={password} onChange={e => setPassword(e.target.value)} className={inputCls} placeholder="min 8 characters" /></Field>
-              <Field label="Email (optional)"><input value={email} onChange={e => setEmail(e.target.value)} className={inputCls} placeholder="for notifications + reset" /></Field>
+              <Field label="Email (optional)"><input value={email} onChange={e => setEmail(e.target.value)} className={inputCls} placeholder="name@company.com" /></Field>
             </div>
+
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              <span className="font-medium text-zinc-600">Display name</span> is shown on this teammate&apos;s chat messages so your team can see who&apos;s writing.{' '}
+              <span className="font-medium text-zinc-600">Email is optional</span> — add it only if you want this teammate to receive email notifications of new messages (and be able to reset their own password). Leave it blank for in-portal access only.
+            </p>
 
             <div>
               <p className="text-xs font-medium text-zinc-700 mb-1.5">What can this teammate access?</p>
