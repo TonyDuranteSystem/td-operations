@@ -171,6 +171,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                   const tp = r.referrer_type ? typeConfig[r.referrer_type] : null
                   const displayReferred = r.referred_company || r.referred_name
                   const totalPaid = (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0)
+                  const cur = r.commission_currency === 'EUR' ? '€' : '$' // referral rewards are USD; show each row's actual currency
                   const isExpanded = expandedId === r.id
 
                   return (
@@ -206,14 +207,14 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                         </td>
                         <td className="px-5 py-3 text-right">
                           {r.commission_amount
-                            ? <span className="font-medium">€{Number(r.commission_amount).toLocaleString()}</span>
+                            ? <span className="font-medium">{cur}{Number(r.commission_amount).toLocaleString()}</span>
                             : <span className="text-zinc-400">TBD</span>
                           }
                         </td>
                         <td className="px-5 py-3 text-right">
                           {totalPaid > 0
-                            ? <span className="font-medium text-emerald-600">€{totalPaid.toLocaleString()}</span>
-                            : <span className="text-zinc-400">€0</span>
+                            ? <span className="font-medium text-emerald-600">{cur}{totalPaid.toLocaleString()}</span>
+                            : <span className="text-zinc-400">{cur}0</span>
                           }
                         </td>
                         <td className="px-5 py-3 text-zinc-500">
@@ -232,13 +233,13 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                                 <div className="space-y-1.5">
                                   <DetailRow label="Type" value={r.commission_type || 'Not set'} />
                                   {r.commission_pct != null && <DetailRow label="Percentage" value={`${r.commission_pct}%`} />}
-                                  <DetailRow label="Amount" value={r.commission_amount ? `€${Number(r.commission_amount).toLocaleString()}` : 'TBD'} />
-                                  <DetailRow label="Credited" value={`€${Number(r.credited_amount || 0).toLocaleString()}`} />
-                                  <DetailRow label="Paid Out" value={`€${Number(r.paid_amount || 0).toLocaleString()}`} />
+                                  <DetailRow label="Amount" value={r.commission_amount ? `${cur}${Number(r.commission_amount).toLocaleString()}` : 'TBD'} />
+                                  <DetailRow label="Credited" value={`${cur}${Number(r.credited_amount || 0).toLocaleString()}`} />
+                                  <DetailRow label="Paid Out" value={`${cur}${Number(r.paid_amount || 0).toLocaleString()}`} />
                                   <DetailRow
                                     label="Remaining"
                                     value={r.commission_amount
-                                      ? `€${(Number(r.commission_amount) - totalPaid).toLocaleString()}`
+                                      ? `${cur}${(Number(r.commission_amount) - totalPaid).toLocaleString()}`
                                       : '—'
                                     }
                                   />
