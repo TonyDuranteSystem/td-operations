@@ -1,5 +1,7 @@
 # Client Portal
-_Last verified against code: 2026-06-01 — Claude (read tier-config.ts, sync-tier.ts, auto-create.ts, queries.ts, notifications.ts, portal/team/*, resolve-portal-identity.ts, app/portal/layout.tsx, wizard-map.ts, wizard-visibility.ts, app/portal/wizard/page.tsx)_
+_Last verified against code: 2026-06-01 — Claude (read tier-config.ts, sync-tier.ts, auto-create.ts, queries.ts, notifications.ts, portal/team/*, resolve-portal-identity.ts, app/portal/layout.tsx, wizard-map.ts, wizard-visibility.ts, app/portal/wizard/page.tsx, app/portal/page.tsx, components/portal/formation-dashboard.tsx)_
+
+> Formation-tier render path note: formation-tier clients without a materialized account go straight to `FormationDashboard` (skipping `ActionItems`). `FormationDashboard` has hard-coded CTAs for wizard/SS-4/OA/Lease, plus an optional `closureData` prop that surfaces a Closure CTA when a contact-scoped active Company Closure SD exists alongside the formation. Pattern shipped 2026-06-01 for Patrick Covelli (new NM formation + external DE LLC closure).
 
 ## What it is
 The client-facing app at **portal.tonydurante.us** where clients log in to see their services, documents, invoices, deadlines, chat with the team, and complete data-collection wizards. This is NOT the internal CRM dashboard — "portal" always means the client app.
