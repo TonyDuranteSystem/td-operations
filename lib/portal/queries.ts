@@ -831,6 +831,48 @@ export interface ActionItemsResult {
   counts: { red: number; orange: number; blue: number; total: number }
 }
 
+/**
+ * Maps a service_deliveries.service_type value to the matching wizard_type
+ * the portal wizard renders for it. Used to surface "Start ⟨Wizard⟩"
+ * action-item cards when an active SD exists but the client hasn't started
+ * the wizard yet (no wizard_progress row). Banking is intentionally omitted
+ * because /portal/wizard renders a Payset/Relay picker for it and the
+ * picker itself acts as the entry point.
+ */
+const SD_WIZARD_TYPE_BY_SERVICE_TYPE: Record<string, string> = {
+  'Company Formation': 'formation',
+  'Company Closure': 'closure',
+  'ITIN': 'itin',
+  'ITIN Renewal': 'itin',
+  'Tax Return': 'tax',
+}
+
+function wizardTypeForServiceType(serviceType: string): string | null {
+  return SD_WIZARD_TYPE_BY_SERVICE_TYPE[serviceType] ?? null
+}
+
+function labelForWizardType(wizardType: string): string {
+  switch (wizardType) {
+    case 'formation': return 'Formation'
+    case 'closure': return 'Company Closure'
+    case 'itin': return 'ITIN Application'
+    case 'tax': return 'Tax Return'
+    case 'onboarding': return 'Onboarding'
+    default: return wizardType
+  }
+}
+
+function labelForWizardTypeIt(wizardType: string): string {
+  switch (wizardType) {
+    case 'formation': return 'Costituzione'
+    case 'closure': return 'Chiusura Società'
+    case 'itin': return 'Richiesta ITIN'
+    case 'tax': return 'Dichiarazione dei Redditi'
+    case 'onboarding': return 'Onboarding'
+    default: return wizardType
+  }
+}
+
 function daysSince(dateStr: string): number {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
 }
@@ -956,9 +998,15 @@ export async function getPortalActionItems(
     .in('service_type', requiredSdTypes)
   const activeWizardSdTypes = new Set((activeWizardSds ?? []).map(s => s.service_type))
 
+  // Track wizard_types we already have an in_progress card for, so the
+  // SD-driven "Start <Wizard>" pass below doesn't double up.
+  const inProgressWizardTypes = new Set<string>()
+
   for (const w of wizardRes.data ?? []) {
     const requiredSd = WIZARD_SD_REQUIRED[w.wizard_type]
     if (requiredSd && !activeWizardSdTypes.has(requiredSd)) continue
+
+    inProgressWizardTypes.add(w.wizard_type)
 
     const age = daysSince(w.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
@@ -969,9 +1017,77 @@ export async function getPortalActionItems(
       titleIt: `Completa il modulo di ${typeLabel === 'Formation' ? 'Costituzione' : typeLabel === 'Onboarding' ? 'Onboarding' : typeLabel}`,
       description: 'Your data collection form is in progress. Please complete it.',
       descriptionIt: 'Il tuo modulo di raccolta dati è in corso. Completalo.',
-      href: '/portal/wizard',
+      href: `/portal/wizard?type=${w.wizard_type}`,
       priority,
       createdAt: w.created_at,
+    })
+  }
+
+  // ── SD-driven "Start <Wizard>" cards ──
+  // For each active wizard-eligible SD on the account (and contact-scoped
+  // flexible-type SDs like Company Closure) where the client hasn't started
+  // the wizard yet (no in_progress wizard_progress for that type, and no
+  // submitted one either), surface a card linking directly to that wizard.
+  // This is what makes Closure (or any newly-attached SD) reachable from the
+  // home page without the client needing to know the URL.
+  const FLEXIBLE_SDS_TO_CHECK = ['Company Closure']
+  const SD_TYPES_TO_SURFACE = Object.keys(SD_WIZARD_TYPE_BY_SERVICE_TYPE)
+
+  const [accountSdsRes, contactFlexibleSdsRes, submittedWizardRes] = await Promise.all([
+    supabaseAdmin
+      .from('service_deliveries')
+      .select('service_type, created_at')
+      .eq('account_id', accountId)
+      .eq('status', 'active')
+      .in('service_type', SD_TYPES_TO_SURFACE),
+    contactId
+      ? supabaseAdmin
+          .from('service_deliveries')
+          .select('service_type, created_at')
+          .eq('contact_id', contactId)
+          .is('account_id', null)
+          .eq('status', 'active')
+          .in('service_type', FLEXIBLE_SDS_TO_CHECK)
+      : Promise.resolve({ data: [] as Array<{ service_type: string; created_at: string }> }),
+    supabaseAdmin
+      .from('wizard_progress')
+      .select('wizard_type')
+      .eq('status', 'submitted')
+      .or(
+        contactId
+          ? `account_id.eq.${accountId},contact_id.eq.${contactId}`
+          : `account_id.eq.${accountId}`,
+      ),
+  ])
+
+  const submittedWizardTypes = new Set((submittedWizardRes.data ?? []).map(w => w.wizard_type))
+  const sdSurfacedWizards = new Set<string>()
+  const candidateSds: Array<{ service_type: string; created_at: string }> = [
+    ...(accountSdsRes.data ?? []),
+    ...(contactFlexibleSdsRes.data ?? []),
+  ]
+
+  for (const sd of candidateSds) {
+    const wt = wizardTypeForServiceType(sd.service_type)
+    if (!wt) continue
+    if (inProgressWizardTypes.has(wt)) continue
+    if (submittedWizardTypes.has(wt)) continue
+    if (sdSurfacedWizards.has(wt)) continue
+    sdSurfacedWizards.add(wt)
+
+    const age = daysSince(sd.created_at)
+    const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
+    const label = labelForWizardType(wt)
+    const labelIt = labelForWizardTypeIt(wt)
+    items.push({
+      type: 'form',
+      title: `Start ${label} Form`,
+      titleIt: `Inizia il modulo di ${labelIt}`,
+      description: 'Click to begin your data collection form.',
+      descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
+      href: `/portal/wizard?type=${wt}`,
+      priority,
+      createdAt: sd.created_at,
     })
   }
 
@@ -1166,7 +1282,9 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
   // No SD-required gating at contact scope: formation/onboarding wizards
   // attached to the contact don't have an account yet, so we can't check
   // service_deliveries.account_id. Trust the wizard_progress row exists.
+  const inProgressWizardTypesByContact = new Set<string>()
   for (const w of wizardRes.data ?? []) {
+    inProgressWizardTypesByContact.add(w.wizard_type)
     const age = daysSince(w.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
     const typeLabel = w.wizard_type === 'formation' ? 'Formation' : w.wizard_type === 'onboarding' ? 'Onboarding' : w.wizard_type
@@ -1176,9 +1294,55 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
       titleIt: `Completa il modulo di ${typeLabel === 'Formation' ? 'Costituzione' : typeLabel === 'Onboarding' ? 'Onboarding' : typeLabel}`,
       description: 'Your data collection form is in progress. Please complete it.',
       descriptionIt: 'Il tuo modulo di raccolta dati è in corso. Completalo.',
-      href: '/portal/wizard',
+      href: `/portal/wizard?type=${w.wizard_type}`,
       priority,
       createdAt: w.created_at,
+    })
+  }
+
+  // ── SD-driven "Start <Wizard>" cards (contact scope) ──
+  // Same pattern as the account-scope variant: surface a card per active
+  // wizard-eligible SD on the contact (account_id IS NULL) where the client
+  // hasn't started the wizard yet.
+  const SD_TYPES_TO_SURFACE_CONTACT = Object.keys(SD_WIZARD_TYPE_BY_SERVICE_TYPE)
+  const [contactSdsRes, contactSubmittedRes] = await Promise.all([
+    supabaseAdmin
+      .from('service_deliveries')
+      .select('service_type, created_at')
+      .eq('contact_id', contactId)
+      .is('account_id', null)
+      .eq('status', 'active')
+      .in('service_type', SD_TYPES_TO_SURFACE_CONTACT),
+    supabaseAdmin
+      .from('wizard_progress')
+      .select('wizard_type')
+      .eq('contact_id', contactId)
+      .eq('status', 'submitted'),
+  ])
+  const submittedWizardTypesByContact = new Set((contactSubmittedRes.data ?? []).map(w => w.wizard_type))
+  const sdSurfacedWizardsByContact = new Set<string>()
+
+  for (const sd of contactSdsRes.data ?? []) {
+    const wt = wizardTypeForServiceType(sd.service_type)
+    if (!wt) continue
+    if (inProgressWizardTypesByContact.has(wt)) continue
+    if (submittedWizardTypesByContact.has(wt)) continue
+    if (sdSurfacedWizardsByContact.has(wt)) continue
+    sdSurfacedWizardsByContact.add(wt)
+
+    const age = daysSince(sd.created_at)
+    const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
+    const label = labelForWizardType(wt)
+    const labelIt = labelForWizardTypeIt(wt)
+    items.push({
+      type: 'form',
+      title: `Start ${label} Form`,
+      titleIt: `Inizia il modulo di ${labelIt}`,
+      description: 'Click to begin your data collection form.',
+      descriptionIt: 'Clicca per iniziare il modulo di raccolta dati.',
+      href: `/portal/wizard?type=${wt}`,
+      priority,
+      createdAt: sd.created_at,
     })
   }
 

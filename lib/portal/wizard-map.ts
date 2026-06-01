@@ -95,6 +95,45 @@ export function isContactScopedWizard(type: string | undefined): boolean {
 }
 
 /**
+ * Wizard types that can run EITHER contact-scoped OR account-scoped, depending
+ * on whether the SD has an account_id.
+ *
+ * Closure (today): a contact may be closing their own managed LLC (SD has
+ * account_id set) OR an external LLC that isn't in the CRM as an account
+ * (SD has account_id null — Patrick Covelli's Delaware LLC pattern). Both
+ * must surface in the portal regardless of whether the contact also has a
+ * managed account on file.
+ *
+ * Unlike CONTACT_SCOPED_WIZARD_TYPES, flexible types do NOT change the
+ * wizard_progress lookup precedence (resolveWizardProgressScope) — those
+ * routes still prefer account_id when set, contact_id otherwise. Flexible
+ * only matters for SD-driven DISCOVERY: the wizard page and the
+ * "Complete Setup" visibility check must also query contact-scoped SDs of
+ * these types even when the contact has an accountId.
+ */
+export const FLEXIBLE_WIZARD_TYPES = ["closure"] as const
+
+export type FlexibleWizardType = (typeof FLEXIBLE_WIZARD_TYPES)[number]
+
+export function isFlexibleWizardType(type: string | undefined): boolean {
+  return FLEXIBLE_WIZARD_TYPES.includes(type as FlexibleWizardType)
+}
+
+/**
+ * Maps each flexible wizard type to the service_type values used on
+ * service_deliveries.service_type for SDs of that wizard. Used by the
+ * portal's flexible-SD lookup to filter contact-scoped service_deliveries
+ * to the types that matter.
+ */
+export const FLEXIBLE_SERVICE_TYPES_BY_WIZARD: Record<FlexibleWizardType, readonly string[]> = {
+  closure: ["Company Closure"],
+} as const
+
+export function getFlexibleServiceTypes(): string[] {
+  return Object.values(FLEXIBLE_SERVICE_TYPES_BY_WIZARD).flatMap((arr) => [...arr])
+}
+
+/**
  * wizard_type → submission table name. Null for types with no submission
  * table (must be in BANKING_INLINE_TYPES, UI_ONLY_TYPES, or the
  * wizard-submit route silently drops the submission).

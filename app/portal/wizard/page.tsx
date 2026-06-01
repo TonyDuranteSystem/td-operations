@@ -15,7 +15,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
-import { isValidWizardType, isContactScopedWizard, type WizardType } from '@/lib/portal/wizard-map'
+import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, getFlexibleServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
@@ -135,9 +135,31 @@ export default async function WizardPage({
       ? supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('account_id', accountId).in('status', ['active']).limit(10)
       : supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('contact_id', contactId).in('status', ['active']).limit(10)
 
-    const { data: sds } = await sdQuery
+    const { data: primarySds } = await sdQuery
 
-    const types = (sds || []).map(s => s.service_type)
+    // Flexible-types union: when the client has an account AND a contactId,
+    // ALSO look up contact-scoped SDs of flexible types (Closure today).
+    // Without this, a managed-account holder closing an EXTERNAL LLC (SD on
+    // contact_id only, account_id NULL) is invisible because the primary
+    // query above only sees account-scoped SDs.
+    let flexibleSds: Array<{ service_type: string; stage: string | null }> = []
+    if (accountId && contactId) {
+      const flexibleTypes = getFlexibleServiceTypes()
+      if (flexibleTypes.length > 0) {
+        const { data: flex } = await supabaseAdmin
+          .from('service_deliveries')
+          .select('service_type, stage')
+          .eq('contact_id', contactId)
+          .is('account_id', null)
+          .in('status', ['active'])
+          .in('service_type', flexibleTypes)
+          .limit(10)
+        flexibleSds = flex || []
+      }
+    }
+
+    const sds = [...(primarySds || []), ...flexibleSds]
+    const types = sds.map(s => s.service_type)
 
     // Check which wizard types have already been submitted.
     // Account-owned wizards are read by account_id. Contact-owned wizards
@@ -161,7 +183,7 @@ export default async function WizardPage({
         .eq('contact_id', contactId)
         .in('status', ['submitted'])
       for (const w of byContact || []) {
-        if (isContactScopedWizard(w.wizard_type)) submittedTypes.add(w.wizard_type)
+        if (isContactScopedWizard(w.wizard_type) || isFlexibleWizardType(w.wizard_type)) submittedTypes.add(w.wizard_type)
       }
     }
 
