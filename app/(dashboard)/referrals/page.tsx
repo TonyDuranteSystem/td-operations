@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { ReferralsDashboard } from './referrals-dashboard'
+import { dedupeActiveReferrals } from '@/lib/referral-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -75,8 +76,13 @@ export default async function ReferralsPage() {
     referrer_code: (r.referrer as unknown as { referral_code: string } | null)?.referral_code ?? null,
   }))
 
-  // Compute stats
-  const totalReferrals = referrals.length
+  // Collapse duplicate referral rows (same referrer → same referred person) and
+  // drop cancelled rows, so a single real referral is never counted twice.
+  // Stats AND the rendered table both run off this de-duplicated list.
+  const uniqueReferrals = dedupeActiveReferrals(referrals)
+
+  // Compute stats (from the de-duplicated list)
+  const totalReferrals = uniqueReferrals.length
   // Per-currency aggregates — referral rewards are USD but legacy rows may be EUR;
   // never sum across currencies into one figure.
   const addCur = (m: Record<string, number>, cur: string | null, n: number) => {
@@ -85,16 +91,16 @@ export default async function ReferralsPage() {
   }
   const pendingCommission: Record<string, number> = {}
   const totalPaidOut: Record<string, number> = {}
-  for (const r of referrals) {
+  for (const r of uniqueReferrals) {
     if (['pending', 'converted'].includes(r.status)) addCur(pendingCommission, r.commission_currency, Number(r.commission_amount) || 0)
     addCur(totalPaidOut, r.commission_currency, (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0))
   }
-  const converted = referrals.filter(r => r.status !== 'pending' && r.status !== 'cancelled').length
+  const converted = uniqueReferrals.filter(r => r.status !== 'pending' && r.status !== 'cancelled').length
   const conversionRate = totalReferrals > 0 ? Math.round((converted / totalReferrals) * 100) : 0
 
   // Unique referrers (partners)
   const partnerMap = new Map<string, { name: string; code: string | null; count: number; commissionByCur: Record<string, number> }>()
-  for (const r of referrals) {
+  for (const r of uniqueReferrals) {
     const key = r.referrer_contact_id || r.referrer_account_id
     if (!key) continue
     const existing = partnerMap.get(key)
@@ -119,7 +125,7 @@ export default async function ReferralsPage() {
   return (
     <div className="h-full">
       <ReferralsDashboard
-        referrals={referrals}
+        referrals={uniqueReferrals}
         stats={{ totalReferrals, pendingCommission, totalPaidOut, conversionRate }}
         referrers={referrers}
       />

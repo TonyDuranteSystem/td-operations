@@ -87,6 +87,64 @@ export async function ensureReferralCode(
   return code
 }
 
+/** Minimal shape needed to de-duplicate referral rows. */
+export interface DedupeReferralInput {
+  id: string
+  referrer_contact_id: string | null
+  referrer_account_id: string | null
+  referred_contact_id: string | null
+  referred_account_id: string | null
+  referred_name: string | null
+  status: string
+  created_at: string
+}
+
+// Higher rank = more progressed; the most-progressed row wins a duplicate pair.
+const REFERRAL_STATUS_RANK: Record<string, number> = {
+  paid: 5,
+  credited: 4,
+  converted: 3,
+  pending: 2,
+}
+const referralRank = (status: string): number => REFERRAL_STATUS_RANK[status] ?? 1
+
+/**
+ * De-duplicate referral rows down to one per (referrer → referred person)
+ * relationship, dropping cancelled rows entirely.
+ *
+ * Why: historic bulk imports created a "pending" row and later a SEPARATE
+ * "converted" row for the SAME pair, which double-counted the referrer in the
+ * dashboard ("2 referrals" when there was really 1). This collapses such pairs,
+ * keeping the most-progressed row (paid > credited > converted > pending), and
+ * preserves input order (callers pass newest-first). Rows missing a referrer or
+ * referred identity can't be safely compared, so they are kept as-is (keyed by id).
+ */
+export function dedupeActiveReferrals<T extends DedupeReferralInput>(rows: T[]): T[] {
+  const referrerKeyOf = (r: T) => r.referrer_contact_id || r.referrer_account_id || ""
+  const referredKeyOf = (r: T) =>
+    r.referred_contact_id || r.referred_account_id || r.referred_name || ""
+  const dupKeyOf = (r: T) => {
+    const rk = referrerKeyOf(r)
+    const dk = referredKeyOf(r)
+    return rk && dk ? `${rk}::${dk}` : `id:${r.id}`
+  }
+
+  const winners = new Map<string, T>()
+  const order: string[] = []
+  for (const r of rows) {
+    if (r.status === "cancelled") continue
+    const k = dupKeyOf(r)
+    const existing = winners.get(k)
+    if (!existing) {
+      winners.set(k, r)
+      order.push(k)
+    } else if (referralRank(r.status) > referralRank(existing.status)) {
+      winners.set(k, r)
+    }
+  }
+  return order.map((k) => winners.get(k) as T)
+}
+
 /**
  * Calculate commission amount based on type.
  * - percentage: pct/100 × setupFeeTotal
