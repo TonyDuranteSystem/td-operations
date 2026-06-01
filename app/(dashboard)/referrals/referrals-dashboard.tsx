@@ -11,8 +11,8 @@ interface Props {
   referrals: ReferralRow[]
   stats: {
     totalReferrals: number
-    pendingCommission: number
-    totalPaidOut: number
+    pendingCommission: Record<string, number>
+    totalPaidOut: Record<string, number>
     conversionRate: number
   }
   referrers: Array<{
@@ -20,7 +20,7 @@ interface Props {
     name: string
     code: string | null
     count: number
-    commission: number
+    commissionByCur: Record<string, number>
   }>
 }
 
@@ -35,6 +35,14 @@ const statusConfig: Record<string, { label: string; color: string }> = {
 const typeConfig: Record<string, { label: string; color: string }> = {
   client: { label: 'Client', color: 'bg-zinc-100 text-zinc-700' },
   partner: { label: 'Partner', color: 'bg-violet-100 text-violet-700' },
+}
+
+/** Format a per-currency amount map as e.g. "$700 · €300" (non-zero only). */
+function fmtByCur(m: Record<string, number>): string {
+  const parts = Object.entries(m)
+    .filter(([, v]) => v > 0)
+    .map(([c, v]) => `${c === 'EUR' ? '€' : '$'}${v.toLocaleString()}`)
+  return parts.length ? parts.join(' · ') : '$0'
 }
 
 export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
@@ -78,8 +86,8 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <StatCard icon={Users} label="Total Referrals" value={String(stats.totalReferrals)} />
         <StatCard icon={TrendingUp} label="Conversion Rate" value={`${stats.conversionRate}%`} />
-        <StatCard icon={Wallet} label="Pending Commission" value={`€${stats.pendingCommission.toLocaleString()}`} color="text-amber-600" />
-        <StatCard icon={Wallet} label="Total Paid Out" value={`€${stats.totalPaidOut.toLocaleString()}`} color="text-emerald-600" />
+        <StatCard icon={Wallet} label="Pending Commission" value={fmtByCur(stats.pendingCommission)} color="text-amber-600" />
+        <StatCard icon={Wallet} label="Total Paid Out" value={fmtByCur(stats.totalPaidOut)} color="text-emerald-600" />
       </div>
 
       {/* Top Referrers */}
@@ -102,7 +110,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                 </div>
                 <div className="flex items-center gap-4">
                   <span className="text-sm text-zinc-600">{r.count} referral{r.count !== 1 ? 's' : ''}</span>
-                  <span className="text-sm font-medium">€{r.commission.toLocaleString()}</span>
+                  <span className="text-sm font-medium">{fmtByCur(r.commissionByCur)}</span>
                   {r.code && (
                     <button
                       onClick={() => copyLink(r.code!)}

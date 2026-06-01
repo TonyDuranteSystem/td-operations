@@ -77,29 +77,38 @@ export default async function ReferralsPage() {
 
   // Compute stats
   const totalReferrals = referrals.length
-  const pendingCommission = referrals
-    .filter(r => ['pending', 'converted'].includes(r.status))
-    .reduce((s, r) => s + (Number(r.commission_amount) || 0), 0)
-  const totalPaidOut = referrals
-    .reduce((s, r) => s + (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0), 0)
+  // Per-currency aggregates — referral rewards are USD but legacy rows may be EUR;
+  // never sum across currencies into one figure.
+  const addCur = (m: Record<string, number>, cur: string | null, n: number) => {
+    const c = cur || 'USD'
+    m[c] = Math.round(((m[c] || 0) + n) * 100) / 100
+  }
+  const pendingCommission: Record<string, number> = {}
+  const totalPaidOut: Record<string, number> = {}
+  for (const r of referrals) {
+    if (['pending', 'converted'].includes(r.status)) addCur(pendingCommission, r.commission_currency, Number(r.commission_amount) || 0)
+    addCur(totalPaidOut, r.commission_currency, (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0))
+  }
   const converted = referrals.filter(r => r.status !== 'pending' && r.status !== 'cancelled').length
   const conversionRate = totalReferrals > 0 ? Math.round((converted / totalReferrals) * 100) : 0
 
   // Unique referrers (partners)
-  const partnerMap = new Map<string, { name: string; code: string | null; count: number; commission: number }>()
+  const partnerMap = new Map<string, { name: string; code: string | null; count: number; commissionByCur: Record<string, number> }>()
   for (const r of referrals) {
     const key = r.referrer_contact_id || r.referrer_account_id
     if (!key) continue
     const existing = partnerMap.get(key)
     if (existing) {
       existing.count++
-      existing.commission += Number(r.commission_amount) || 0
+      addCur(existing.commissionByCur, r.commission_currency, Number(r.commission_amount) || 0)
     } else {
+      const commissionByCur: Record<string, number> = {}
+      addCur(commissionByCur, r.commission_currency, Number(r.commission_amount) || 0)
       partnerMap.set(key, {
         name: r.referrer_name || 'Unknown',
         code: r.referrer_code,
         count: 1,
-        commission: Number(r.commission_amount) || 0,
+        commissionByCur,
       })
     }
   }
