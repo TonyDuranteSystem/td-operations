@@ -199,6 +199,18 @@ export default async function PortalDashboardPage() {
     // accepts account=null.
     if (authTier === 'formation' && contactId) {
       const formationAccount = await getFormationAccount(contactId)
+      // Contact-scoped Company Closure SD — surfaces a Closure CTA on the
+      // formation dashboard when the same client also has an external LLC
+      // being closed alongside the new formation. Patrick Covelli pattern.
+      const { data: closureSd } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('id')
+        .eq('contact_id', contactId)
+        .is('account_id', null)
+        .eq('service_type', 'Company Closure')
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle()
       if (formationAccount) {
         const [wizardRes, ss4Res, oaRes, leaseRes] = await Promise.all([
           supabaseAdmin
@@ -240,6 +252,7 @@ export default async function PortalDashboardPage() {
             ss4Data={ss4Res.data}
             oaData={oaRes.data}
             leaseData={leaseRes.data}
+            closureData={closureSd}
           />
         )
       }
@@ -255,6 +268,7 @@ export default async function PortalDashboardPage() {
           ss4Data={ctx.ss4}
           oaData={ctx.oa}
           leaseData={ctx.lease}
+          closureData={closureSd}
         />
       )
     }

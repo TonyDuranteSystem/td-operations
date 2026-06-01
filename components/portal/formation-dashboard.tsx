@@ -22,6 +22,11 @@ interface FormationDashboardProps {
   ss4Data: { id: string; status: string } | null
   oaData: { id: string; status: string } | null
   leaseData: { id: string; status: string } | null
+  /** Active Company Closure SD on the contact, if any. Renders a Closure CTA
+   * when the same client also has a closure bundled with their formation (a
+   * NEW LLC being formed AND an external LLC being wound down). Patrick
+   * Covelli is the canonical case. */
+  closureData?: { id: string } | null
 }
 
 export function FormationDashboard({
@@ -32,6 +37,7 @@ export function FormationDashboard({
   ss4Data,
   oaData,
   leaseData,
+  closureData,
 }: FormationDashboardProps) {
   const tr = locale === 'it' ? IT : EN
 
@@ -51,6 +57,10 @@ export function FormationDashboard({
   const needsSS4Signature = !needsWizard && ss4AwaitingSignature
   const needsOA = einReceived && !oaSigned && oaData && oaData.status !== 'signed'
   const needsLease = einReceived && !leaseSigned && leaseData && leaseData.status !== 'signed'
+  // Closure is INDEPENDENT of the formation milestone chain — it surfaces
+  // whenever an active Closure SD exists on the contact, regardless of the
+  // formation's stage.
+  const needsClosure = !!closureData
 
   // Status message for waiting states
   const waitingForState = wizardSubmitted && !stateConfirmed
@@ -138,6 +148,22 @@ export function FormationDashboard({
             <p className="text-sm text-purple-700 mt-0.5">{tr.ctaLeaseDesc}</p>
           </div>
           <ArrowRight className="h-5 w-5 text-purple-500 shrink-0 group-hover:translate-x-1 transition-transform" />
+        </Link>
+      )}
+
+      {needsClosure && (
+        <Link
+          href="/portal/wizard?type=closure"
+          className="flex items-center gap-4 p-5 bg-rose-50 border-2 border-rose-300 rounded-xl hover:bg-rose-100 transition-colors group"
+        >
+          <div className="h-12 w-12 rounded-xl bg-rose-600 flex items-center justify-center shrink-0">
+            <AlertCircle className="h-6 w-6 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-base font-semibold text-rose-900">{tr.ctaClosureTitle}</p>
+            <p className="text-sm text-rose-700 mt-0.5">{tr.ctaClosureDesc}</p>
+          </div>
+          <ArrowRight className="h-5 w-5 text-rose-500 shrink-0 group-hover:translate-x-1 transition-transform" />
         </Link>
       )}
 
@@ -353,6 +379,8 @@ const EN = {
   ctaOADesc: 'Your LLC\'s governing document is ready for your signature',
   ctaLeaseTitle: 'Sign Your Lease Agreement',
   ctaLeaseDesc: 'Your registered address lease is ready for your signature',
+  ctaClosureTitle: 'Complete Your Company Closure Details',
+  ctaClosureDesc: 'We need details about the company you\'re closing — name, EIN, and Articles of Organization',
   waitingStateTitle: 'Your LLC is being filed',
   waitingStateBody: 'We\'ve submitted your Articles of Organization to the Secretary of State. Processing time varies by state — typically 1–4 weeks. We\'ll update you as soon as we hear back.',
   waitingEINTitle: 'EIN Application Submitted to the IRS',
@@ -398,6 +426,8 @@ const IT = {
   ctaOADesc: 'Il documento costitutivo della tua LLC è pronto per la firma',
   ctaLeaseTitle: 'Firma il Tuo Contratto di Locazione',
   ctaLeaseDesc: 'Il contratto per il tuo indirizzo registrato è pronto per la firma',
+  ctaClosureTitle: 'Completa i Dati per la Chiusura della Società',
+  ctaClosureDesc: 'Ci servono i dettagli della società che stai chiudendo — nome, EIN e Atto Costitutivo',
   waitingStateTitle: 'La tua LLC è in fase di registrazione',
   waitingStateBody: 'Abbiamo depositato i tuoi Articles of Organization presso il Segretario di Stato. I tempi di elaborazione variano per Stato — di solito 1–4 settimane. Ti aggiorneremo non appena riceveremo risposta.',
   waitingEINTitle: 'Richiesta EIN Inviata all\'IRS',
