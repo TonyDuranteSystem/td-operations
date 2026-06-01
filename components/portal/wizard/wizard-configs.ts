@@ -608,7 +608,7 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
   ],
   company: [
     { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
-    { name: 'llc_ein', label: 'EIN Number (optional)', labelIt: 'Numero EIN (opzionale)', type: 'text', required: false, format: 'ein' },
+    { name: 'llc_ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein' },
     { name: 'llc_state', label: 'State of Formation', labelIt: 'Stato di Costituzione', type: 'select', required: true, options: [
       { value: 'Wyoming', label: 'Wyoming' }, { value: 'Delaware', label: 'Delaware' },
       { value: 'Florida', label: 'Florida' }, { value: 'New Mexico', label: 'New Mexico' },
@@ -625,7 +625,7 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'tax_returns_years', label: 'Which years? (e.g. 2024, 2025)', labelIt: 'Quali anni? (es. 2024, 2025)', type: 'text', required: false },
   ],
   documents: [
-    { name: 'articles_of_organization', label: 'Articles of Organization (optional)', labelIt: 'Atto Costitutivo (opzionale)', type: 'file', required: false },
+    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
     { name: 'ein_letter', label: 'EIN Letter (optional)', labelIt: 'Lettera EIN (opzionale)', type: 'file', required: false },
     { name: 'other_documents', label: 'Other Relevant Documents', labelIt: 'Altri Documenti Rilevanti', type: 'file', required: false },
     { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate. I understand the closure fee does not include outstanding state taxes or fees.', labelIt: 'Confermo che le informazioni sono corrette. Comprendo che la tariffa di chiusura non include tasse o spese statali pendenti.', type: 'checkbox', required: true },
