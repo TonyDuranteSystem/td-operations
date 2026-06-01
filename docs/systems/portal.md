@@ -1,5 +1,5 @@
 # Client Portal
-_Last verified against code: 2026-05-29 — Claude (read tier-config.ts, sync-tier.ts, auto-create.ts, queries.ts, notifications.ts, portal/team/*, resolve-portal-identity.ts, app/portal/layout.tsx)_
+_Last verified against code: 2026-06-01 — Claude (read tier-config.ts, sync-tier.ts, auto-create.ts, queries.ts, notifications.ts, portal/team/*, resolve-portal-identity.ts, app/portal/layout.tsx, wizard-map.ts, wizard-visibility.ts, app/portal/wizard/page.tsx)_
 
 ## What it is
 The client-facing app at **portal.tonydurante.us** where clients log in to see their services, documents, invoices, deadlines, chat with the team, and complete data-collection wizards. This is NOT the internal CRM dashboard — "portal" always means the client app.
@@ -63,6 +63,8 @@ An **active client's account-admin** can invite their employees ("teammates") in
 - `lib/mcp/tools/portal.ts` — `portal_create_user`, `portal_chat_*`, `portal_invoice_create/send`, `portal_messages`, `portal_team_send`, `portal_transition_*`.
 - `app/portal/*` — the pages (login/auth, dashboard, wizard, documents, billing/invoices, chat, deadlines, services, members, settings, …).
 - Wizards: `wizard-map.ts`, `wizard-scope.ts`, `wizard-visibility.ts`. Multi-company: `select-entity.ts`, `getPortalAccounts` (a contact can hold several accounts).
+  - Wizard types fall into three categories: **contact-scoped** (`formation` — lives on the contact until the LLC materializes), **account-scoped** (everything else by default — onboarding, banking, tax, company_info), and **flexible** (`closure` today — can run contact-scoped for an external LLC OR account-scoped for an existing managed LLC). Discovery (`wizard-visibility.ts`, `app/portal/wizard/page.tsx`) unions contact + account queries for flexible types so a managed-account holder can still see a contact-scoped Closure.
+  - Action items (`getPortalActionItems` / `getPortalActionItemsByContact`) surface a `Start ⟨Wizard⟩ Form` card per active wizard-eligible SD that has no `wizard_progress` row yet, deep-linked to `/portal/wizard?type=⟨wt⟩`. In-progress wizard cards also deep-link so refreshes return the client to the same wizard.
 
 ### Tables
 `accounts`/`contacts` (`portal_tier`; `accounts.portal_admin_contact_id` = team-admin pointer), `account_contacts`, `portal_messages` (`deleted_at`, `deleted_by`, pin fields), `portal_notifications`, `portal_team_members` (teammate identity + `capabilities` JSONB, RLS-on/service-role-only), portal auth users (`auth.users`), `payments`/`client_invoices`/`client_expenses`, `service_deliveries`, `deadlines`.

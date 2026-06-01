@@ -22,6 +22,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { getFlexibleServiceTypes } from "@/lib/portal/wizard-map"
 
 export const WIZARD_SERVICE_TYPES = [
   "Company Formation",
@@ -62,6 +63,27 @@ export async function computeHasWizardPending(
       .in("service_type", WIZARD_SERVICE_TYPES as unknown as string[])
       .limit(1)
     if ((data?.length ?? 0) > 0) return true
+  }
+
+  // Flexible-types fallback: a contact may be a managed-account holder AND
+  // also have a contact-scoped SD of a flexible type (Closure today — e.g.
+  // closing an external LLC that isn't a CRM account). The two account/contact
+  // branches above miss this case because the account branch only queries
+  // account-scoped SDs and the contact branch only fires when no account is
+  // selected. Check explicitly when contactId is set.
+  if (contactId) {
+    const flexibleTypes = getFlexibleServiceTypes()
+    if (flexibleTypes.length > 0) {
+      const { data: flex } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("service_type")
+        .eq("contact_id", contactId)
+        .is("account_id", null)
+        .in("status", ["active"])
+        .in("service_type", flexibleTypes)
+        .limit(1)
+      if ((flex?.length ?? 0) > 0) return true
+    }
   }
 
   if (contactId && (portalTier === "onboarding" || portalTier === "formation")) {
