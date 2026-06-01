@@ -1,5 +1,5 @@
 # Billing & Invoicing
-_Last verified against code: 2026-05-29 — Claude (read td-invoice.ts, unified-invoice.ts, invoice-number.ts)_
+_Last verified against code: 2026-06-01 — Claude (read td-invoice.ts, unified-invoice.ts, invoice-number.ts, credit-netting.ts)_
 
 ## What it is
 Everything about money on invoices. There are **four separate money "worlds"** that look similar but must never be mixed up — confusing them is the #1 source of billing bugs:
@@ -13,7 +13,8 @@ Everything about money on invoices. There are **four separate money "worlds"** t
 - **R027** — `client_invoices` is for the client's sales invoices ONLY. **TD systems NEVER write to it.** (CLAUDE.md)
 - **R092** — Invoice emails to clients must send them to the **portal Pay button** to pay. NEVER embed Stripe checkout links, wire details, or payment credentials in the email body. (CLAUDE.md)
 - **R098** — Invoice-number generation is race-safe via a DB unique index + caller retry, NOT a code retry/timestamp fallback. Never write `invoice_number` directly — always go through the helper functions. (CLAUDE.md)
-- **Credit netting** — a real (positive, unpaid) TD bill automatically applies the account's outstanding credit notes (oldest first, same currency, capped at the bill). Rule lives in code: `lib/operations/credit-netting.ts`.
+- **Credit netting** — a real (positive, unpaid) TD bill automatically applies the account's outstanding credit notes (oldest first, same currency, capped at the bill) **at invoice-creation time**. Rule lives in code: `lib/operations/credit-netting.ts`.
+- **Credit reconciliation (existing invoices, 2026-06-01)** — `reconcileAccountCredits()` applies outstanding credits to an account's ALREADY-EXISTING unpaid invoices (FIFO, same-currency): reduces `amount_due` (keeps `total`), marks Paid when covered, consumes `credit_remaining`, and mirrors the new balance to `client_expenses.amount_due/amount_paid` so the portal shows the net owed. Runs after a credit note / referral credit is created. Complements the at-creation netting above (which only fires when the invoice is first created).
 
 ## How it's built
 ### The two creator functions (single entry points)
@@ -22,6 +23,7 @@ Everything about money on invoices. There are **four separate money "worlds"** t
 
 ### Invoice numbers
 - `generateInvoiceNumber()` in `lib/portal/invoice-number.ts` — one **global** sequence `INV-NNNNNN`, computed as max+1 across **both** `payments` and `client_invoices` (strict `LIKE 'INV-______'` so legacy oddities don't poison the max). It is intentionally simple and **not race-safe by itself**.
+- `generateCreditNoteNumber()` (same file) — separate **`CN-NNNNNN`** sequence (payments-scoped) for **credit notes**, so a credit never reads as an invoice. `createTDInvoice` picks CN- automatically whenever `grossTotal <= 0` (a credit note); INV- otherwise. (Added 2026-06-01.)
 - Race safety = partial unique indexes `uq_payments_invoice_number` / `uq_client_invoices_invoice_number` + a **10-attempt retry loop** in the creator functions that regenerates on a 23505 unique-violation. `isUniqueViolation()` detects the specific constraint. **No timestamp-suffix fallback** (that produced the `INV-NNNNNN-XXXXXXXX` scars deleted after the April-12 collision incident — R098).
 
 ### Idempotency (content-level dedup)
@@ -34,8 +36,8 @@ Both creators accept an optional `idempotency_key`; if a row with that key exist
 - Currency USD/EUR; `bank_preference` auto/relay/mercury/revolut/airwallex (auto = EUR→Airwallex, USD→Relay).
 
 ### Key files
-- `lib/portal/td-invoice.ts` · `lib/portal/unified-invoice.ts` · `lib/portal/invoice-number.ts`
-- `lib/operations/credit-netting.ts` (credit apply/consume) · `lib/portal/invoice-audit.ts`
+- `lib/portal/td-invoice.ts` (now stamps `client_expenses.amount_due/amount_paid` on the mirror) · `lib/portal/unified-invoice.ts` · `lib/portal/invoice-number.ts` (`generateInvoiceNumber` + `generateCreditNoteNumber`)
+- `lib/operations/credit-netting.ts` — `computeCreditApplication`/`consumeCredits` (at-creation) + `reconcileAccountCredits`/`allocateCredits` (existing-invoice reconcile) · `lib/portal/invoice-audit.ts`
 - `lib/billing/installment-defaults.ts` · `lib/billing/renewal-guard.ts`
 - MCP tools: `portal_invoice_create`, `portal_invoice_send`. CRM: Finance pages, `/payments`, `/invoice-aging`, `/invoice-settings`.
 
