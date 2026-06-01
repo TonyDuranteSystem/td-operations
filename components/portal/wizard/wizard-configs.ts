@@ -626,7 +626,7 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
   ],
   documents: [
     { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
-    { name: 'ein_letter', label: 'EIN Letter (optional)', labelIt: 'Lettera EIN (opzionale)', type: 'file', required: false },
+    { name: 'ein_letter', label: 'EIN Letter', labelIt: 'Lettera EIN', type: 'file', required: true },
     { name: 'other_documents', label: 'Other Relevant Documents', labelIt: 'Altri Documenti Rilevanti', type: 'file', required: false },
     { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate. I understand the closure fee does not include outstanding state taxes or fees.', labelIt: 'Confermo che le informazioni sono corrette. Comprendo che la tariffa di chiusura non include tasse o spese statali pendenti.', type: 'checkbox', required: true },
   ],
