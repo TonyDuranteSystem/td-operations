@@ -50,6 +50,7 @@ import { registerCalendlyTools } from "@/lib/mcp/tools/calendly"
 import { registerDocTools } from "@/lib/mcp/tools/doc"
 import { registerStorageTools } from "@/lib/mcp/tools/storage"
 import { registerSqlTools } from "@/lib/mcp/tools/sql"
+import { registerHermesReadTools } from "@/lib/mcp/tools/hermes-read"
 import { registerMessagingTools } from "@/lib/mcp/tools/messaging"
 import { registerOfferTools } from "@/lib/mcp/tools/offers"
 import { registerSysdocTools } from "@/lib/mcp/tools/sysdocs"
@@ -107,6 +108,7 @@ const handler = createMcpHandler(
     registerDocTools(server)
     registerStorageTools(server)
     registerSqlTools(server)
+    registerHermesReadTools(server)
     registerMessagingTools(server)
     registerOfferTools(server)
     registerSysdocTools(server)
