@@ -192,13 +192,15 @@ export function registerSysdocTools(server: McpServer) {
       const REFUSAL = "Document not available to the agent."
       const logRead = async (allowed: boolean, redaction_applied: boolean, caller: string) => {
         try {
-          await supabaseAdmin.from("sysdoc_read_log").insert({ slug, allowed, caller, redaction_applied })
+          // sysdoc_read_log is new; not yet in generated DB types — cast past them (table exists in sandbox DB)
+          await (supabaseAdmin as any).from("sysdoc_read_log").insert({ slug, allowed, caller, redaction_applied })
         } catch {
           /* audit-log failure must never change the read result */
         }
       }
       try {
-        const { data, error } = await supabaseAdmin
+        // agent_readable is new; not yet in generated DB types — cast past them (column exists in sandbox DB)
+        const { data, error } = await (supabaseAdmin as any)
           .from("system_docs")
           .select("title, content, updated_at")
           .eq("slug", slug)
