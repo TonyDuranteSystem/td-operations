@@ -13,6 +13,33 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
+/**
+ * Defense-in-depth redaction for agent-facing document bodies. Replaces obvious
+ * secret-like and PII-like patterns with [REDACTED]. This is a SAFETY NET only —
+ * the primary gate is agent_readable + human body review. Docs that genuinely
+ * need redaction should be cleaned before being flagged agent_readable, not
+ * relied on this pass.
+ */
+export function redactSensitive(input: string): { text: string; redacted: boolean } {
+  const patterns: RegExp[] = [
+    /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWT
+    /sb_(?:secret|publishable)_[A-Za-z0-9]+/g,                       // Supabase keys
+    /sk-[A-Za-z0-9]{16,}/g,                                          // OpenAI-style keys
+    /\bBearer\s+[A-Za-z0-9._-]{8,}/gi,                               // bearer tokens
+    /\b\d{2}-\d{7}\b/g,                                              // EIN
+    /\b\d{3}-\d{2}-\d{4}\b/g,                                        // SSN / ITIN
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,           // email
+  ]
+  let text = input
+  let redacted = false
+  for (const re of patterns) {
+    const replaced = text.replace(re, "[REDACTED]")
+    if (replaced !== text) redacted = true
+    text = replaced
+  }
+  return { text, redacted }
+}
+
 export function registerSysdocTools(server: McpServer) {
 
   // ═══════════════════════════════════════
@@ -148,6 +175,58 @@ export function registerSysdocTools(server: McpServer) {
         }
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `❌ sysdoc_update error: ${err.message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // sysdoc_read_allowed — Filtered, agent-safe document read
+  // ═══════════════════════════════════════
+  server.tool(
+    "sysdoc_read_allowed",
+    "Read a system document body ONLY if it has been explicitly cleared for agent access (agent_readable = true). Returns a uniform 'Document not available to the agent.' for any slug that is not cleared OR does not exist — it never reveals whether a slug exists. Use sysdoc_list to discover slugs. This is the ONLY approved document-body read path for restricted agents; raw sysdoc_read is not exposed to them.",
+    {
+      slug: z.string().describe("Document slug to read (returns content only if agent_readable=true)"),
+    },
+    async ({ slug }) => {
+      const REFUSAL = "Document not available to the agent."
+      const logRead = async (allowed: boolean, redaction_applied: boolean, caller: string) => {
+        try {
+          await supabaseAdmin.from("sysdoc_read_log").insert({ slug, allowed, caller, redaction_applied })
+        } catch {
+          /* audit-log failure must never change the read result */
+        }
+      }
+      try {
+        const { data, error } = await supabaseAdmin
+          .from("system_docs")
+          .select("title, content, updated_at")
+          .eq("slug", slug)
+          .eq("agent_readable", true)
+          .maybeSingle()
+
+        if (error) throw error
+
+        // Blocked OR nonexistent → identical refusal (no existence leak)
+        if (!data) {
+          await logRead(false, false, "mcp:sysdoc_read_allowed")
+          return { content: [{ type: "text" as const, text: REFUSAL }] }
+        }
+
+        // Defense-in-depth: redact obvious secret/PII patterns even on cleared docs
+        const { text: safeBody, redacted } = redactSensitive(data.content || "")
+        await logRead(true, redacted, "mcp:sysdoc_read_allowed")
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `# ${data.title}\n_source: sysdoc:${slug}_\n_Last updated: ${data.updated_at}_\n\n${safeBody}`,
+          }],
+        }
+      } catch {
+        // Fail closed — never leak error detail or document existence
+        await logRead(false, false, "mcp:sysdoc_read_allowed:error")
+        return { content: [{ type: "text" as const, text: REFUSAL }] }
       }
     }
   )
