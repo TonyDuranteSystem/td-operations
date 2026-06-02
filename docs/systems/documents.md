@@ -1,5 +1,5 @@
 # Documents & Storage
-_Last verified against code: 2026-05-29 — Claude (read google-drive.ts, doc.ts, classify.ts, auto-save-document.ts)_
+_Last verified against code: 2026-06-02 — Claude (read google-drive.ts, doc.ts, classify.ts, auto-save-document.ts; invoice-pdf.ts line-item rendering)_
 
 ## What it is
 How files are stored, processed, classified, indexed, and generated. Three storage surfaces + a processing pipeline + PDF generation.
@@ -22,6 +22,7 @@ How files are stored, processed, classified, indexed, and generated. Three stora
 
 ## PDF generation (`lib/pdf/`)
 Form fillers and generators: `ss4-fill` (EIN), `w7-fill` (ITIN W-7), `8832-fill`, `1040nr-fill`, `tax-form-pdf`, `invoice-pdf`, `intercompany-agreement-pdf`, `itin-data-summary`; helpers `sanitize`, `unicode-fonts`, `wrap-text`.
+- **`invoice-pdf` renders negative line items with a leading minus** (e.g. a `Credit applied` line shows `-$500.00`, not `$500.00`) so a credit reads as a deduction, not a charge — matches the same fix in the invoice detail dialog (2026-06-02).
 
 ## Auto-save & portal visibility
 `lib/portal/auto-save-document.ts` inserts a `documents` row (e.g. when an offer is signed) — deduped by `drive_file_id`, `status='classified'`, and a **`portal_visible`** flag (default false) that controls whether the client sees it in the portal. `lib/portal/document-templates.ts` generates templated docs.

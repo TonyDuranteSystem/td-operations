@@ -451,8 +451,8 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
                         <tr key={i} className="border-b border-zinc-100">
                           <td className="py-1.5">{item.description}</td>
                           <td className="py-1.5 text-right text-zinc-500">{item.quantity}</td>
-                          <td className="py-1.5 text-right text-zinc-500">{formatCurrency(item.unit_price, payment?.amount_currency as string)}</td>
-                          <td className="py-1.5 text-right font-medium">{formatCurrency(item.amount, payment?.amount_currency as string)}</td>
+                          <td className="py-1.5 text-right text-zinc-500">{item.unit_price < 0 ? '-' : ''}{formatCurrency(item.unit_price, payment?.amount_currency as string)}</td>
+                          <td className={cn('py-1.5 text-right font-medium', item.amount < 0 && 'text-purple-600')}>{item.amount < 0 ? '-' : ''}{formatCurrency(item.amount, payment?.amount_currency as string)}</td>
                         </tr>
                       ))}
                     </tbody>

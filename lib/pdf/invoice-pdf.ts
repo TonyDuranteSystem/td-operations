@@ -160,8 +160,8 @@ export async function generateInvoicePdf(input: InvoicePdfInput): Promise<Uint8A
     const desc = item.description.length > 55 ? item.description.slice(0, 55) + '...' : item.description
     page.drawText(desc, { x: 55, y, size: 9, font: helvetica, color: black })
     page.drawText(String(item.quantity), { x: 345, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${Math.abs(item.unit_price).toFixed(2)}`, { x: 395, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${Math.abs(item.amount).toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
+    page.drawText(`${item.unit_price < 0 ? '-' : ''}${csym}${Math.abs(item.unit_price).toFixed(2)}`, { x: 395, y, size: 9, font: helvetica, color: black })
+    page.drawText(`${item.amount < 0 ? '-' : ''}${csym}${Math.abs(item.amount).toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
     y -= 18
     page.drawLine({ start: { x: 50, y: y + 6 }, end: { x: 545, y: y + 6 }, thickness: 0.3, color: lightGray })
   }
