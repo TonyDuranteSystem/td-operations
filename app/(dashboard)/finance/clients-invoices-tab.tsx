@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   Search, FileText, Plus, Send, Bell, Download, CheckCircle,
   ChevronRight, Clock, CreditCard, Receipt, History,
-  DollarSign, AlertTriangle, SplitSquareHorizontal, Users,
+  DollarSign, AlertTriangle, SplitSquareHorizontal, Users, RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
@@ -106,6 +106,19 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
         if (!result.success) throw new Error(result.error)
         toast.success('Invoice marked as paid')
         router.refresh()
+        return
+      }
+      if (action === 'regenerate') {
+        const { regenerateInvoice } = await import('@/app/(dashboard)/payments/invoice-actions')
+        const result = await regenerateInvoice(invoiceId)
+        if (!result.success) throw new Error(result.error)
+        const applied = (result.data?.applied_credit as number) ?? 0
+        if (applied > 0) {
+          toast.success('Invoice regenerated — applied credit now shown as a line')
+          router.refresh()
+        } else {
+          toast.info('No credit linked to this invoice — nothing to regenerate')
+        }
         return
       }
     } catch (err) {
@@ -303,6 +316,11 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                               {['Sent', 'Overdue', 'Partial'].includes(status) && (
                                 <button onClick={() => invoiceAction('markPaid', id)} title="Mark Paid" className="p-1 rounded hover:bg-blue-100 text-blue-600">
                                   <CheckCircle className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
+                                <button onClick={() => invoiceAction('regenerate', id)} title="Regenerate — show an applied credit as a line" className="p-1 rounded hover:bg-indigo-100 text-indigo-600">
+                                  <RefreshCw className="w-3.5 h-3.5" />
                                 </button>
                               )}
                             </div>

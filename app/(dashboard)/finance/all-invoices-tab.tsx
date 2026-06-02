@@ -5,10 +5,11 @@ import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3, X, Plus,
-  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment } from './actions'
+import { regenerateInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
@@ -404,6 +405,16 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
     })
   }
 
+  const handleRegenerate = () => {
+    startTransition(async () => {
+      const result = await regenerateInvoice(invoiceId)
+      if (!result.success) { toast.error(result.error ?? 'Failed to regenerate'); return }
+      const applied = (result.data?.applied_credit as number) ?? 0
+      if (applied > 0) { toast.success(`${invoiceNumber} regenerated — applied credit now shown as a line`); router.refresh() }
+      else toast.info('No credit linked to this invoice — nothing to regenerate')
+    })
+  }
+
   const handleVoid = () => setVoidDialogOpen(true)
 
   const handleVoidConfirm = async () => {
@@ -438,6 +449,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         )}
         {status !== 'Paid' && status !== 'Cancelled' && (
           <ActionButton onClick={handleVoid} label="Void / Cancel Invoice" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
+        )}
+        {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
+          <ActionButton onClick={handleRegenerate} label="Regenerate — show an applied credit as a line" icon={RefreshCw} color="text-indigo-600" hoverBg="hover:bg-indigo-100" />
         )}
         <ActionButton onClick={() => setEditing(true)} label="Edit Invoice" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
         {status === 'Paid' && (
