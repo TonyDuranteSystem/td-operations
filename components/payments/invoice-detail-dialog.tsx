@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useTransition } from 'react'
-import { X, Loader2, FileText, Send, Bell, Download, Trash2, CheckCircle2, Ban, Plus } from 'lucide-react'
+import { X, Loader2, FileText, Send, Bell, Download, Trash2, CheckCircle2, Ban, Plus, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
@@ -11,6 +11,7 @@ import {
   markInvoicePaid,
   voidInvoice,
   getInvoiceWithItems,
+  regenerateInvoice,
 } from '@/app/(dashboard)/payments/invoice-actions'
 import type { InvoiceItem } from '@/lib/schemas/invoice'
 
@@ -100,7 +101,6 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
   const isDraft = status === 'Draft'
   const isSent = status === 'Sent'
   const isOverdue = status === 'Overdue'
-  const isPaid = status === 'Paid'
   const isVoided = status === 'Voided'
   const isCredit = status === 'Credit'
   const canEdit = isDraft
@@ -109,6 +109,7 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
   const canRemind = isSent || isOverdue
   const canMarkPaid = isSent || isOverdue
   const canVoid = isDraft || isSent || isOverdue
+  const canRegenerate = isDraft || isSent || isOverdue
 
   const startEdit = () => {
     if (!payment) return
@@ -198,6 +199,28 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
         }
       } catch {
         toast.error('Failed to void invoice')
+      }
+    })
+  }
+
+  const handleRegenerate = () => {
+    startTransition(async () => {
+      try {
+        const result = await regenerateInvoice(paymentId)
+        if (result.success) {
+          const applied = (result.data?.applied_credit as number) ?? 0
+          const sym = ((payment?.amount_currency as string) ?? 'USD') === 'EUR' ? '€' : '$'
+          if (applied > 0) {
+            toast.success(`Invoice regenerated — credit of ${sym}${applied} shown as a line`)
+            onClose()
+          } else {
+            toast.info('No credit linked to this invoice — nothing to regenerate')
+          }
+        } else {
+          toast.error(result.error ?? 'Failed to regenerate')
+        }
+      } catch {
+        toast.error('Failed to regenerate invoice')
       }
     })
   }
@@ -514,6 +537,15 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
                     <button onClick={startEdit}
                       className="px-3 py-2 text-sm border rounded-md hover:bg-zinc-50 flex items-center gap-1.5">
                       Edit
+                    </button>
+                  )}
+
+                  {/* Regenerate — reflect an applied credit as a line (Draft/Sent/Overdue) */}
+                  {canRegenerate && (
+                    <button onClick={handleRegenerate} disabled={isPending}
+                      title="Rebuild this invoice so an applied credit shows as a line and the total nets to the amount owed"
+                      className="px-3 py-2 text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-md disabled:opacity-50 flex items-center gap-1.5">
+                      {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate
                     </button>
                   )}
 

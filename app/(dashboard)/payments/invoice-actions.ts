@@ -13,6 +13,12 @@ import {
 } from '@/lib/schemas/invoice'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { reconcileAccountCredits } from '@/lib/operations/credit-netting'
+import {
+  buildRegeneratedLineItems,
+  computeAppliedCredit,
+  isCreditLine,
+  sumLineAmounts,
+} from '@/lib/portal/invoice-regenerate'
 import { createHash } from 'crypto'
 
 // Stable content hash for idempotency keys on manual CRM invoice creation.
@@ -386,6 +392,113 @@ export async function deleteInvoice(
     table_name: 'payments',
     record_id: paymentId,
     summary: 'Invoice deleted',
+  })
+}
+
+// ── Regenerate Invoice (reflect applied credit as a line) ───────────
+// Generic for ANY account-scoped invoice/service. When a credit note is created
+// AFTER an invoice exists, reconcileAccountCredits lowers amount_due but leaves
+// the line items showing the full amount. Regenerate rebuilds the document so the
+// credit shows as its own "Credit applied −$X" line, netting to the amount owed —
+// without moving money or changing the invoice number. Idempotent and a no-op
+// when no credit is linked to the invoice.
+export async function regenerateInvoice(paymentId: string): Promise<ActionResult<{ invoice_number: string | null; applied_credit: number; new_total: number }>> {
+  return safeAction(async () => {
+    const supabase = createClient()
+
+    const { data: inv } = await supabase
+      .from('payments')
+      .select('id, account_id, invoice_number, invoice_status, status, amount_due, amount_paid, amount_currency')
+      .eq('id', paymentId)
+      .single()
+    if (!inv) throw new Error('Invoice not found')
+    if (!inv.account_id) throw new Error('Regenerate needs an account-scoped invoice (credits are account-scoped).')
+    if (inv.invoice_status === 'Credit') throw new Error('A credit note cannot be regenerated.')
+    if (inv.invoice_status === 'Cancelled' || inv.status === 'Cancelled') throw new Error('A cancelled invoice cannot be regenerated.')
+
+    // Current line items (ordered).
+    const { data: itemRows } = await supabase
+      .from('payment_items')
+      .select('description, quantity, unit_price, amount, sort_order')
+      .eq('payment_id', paymentId)
+      .order('sort_order', { ascending: true })
+    const items = (itemRows ?? []).map((i) => ({
+      description: i.description as string,
+      quantity: Number(i.quantity) || 1,
+      unit_price: Number(i.unit_price) || 0,
+      amount: Number(i.amount) || 0,
+    }))
+
+    // Gross = sum of the real service lines (credit lines excluded).
+    const gross = sumLineAmounts(items.filter((i) => !isCreditLine(i)))
+
+    // Credit linked to THIS invoice (reconcile stamps credit_for_payment_id).
+    const { data: linkedCredits } = await supabase
+      .from('payments')
+      .select('amount')
+      .eq('account_id', inv.account_id)
+      .eq('invoice_status', 'Credit')
+      .eq('credit_for_payment_id', paymentId)
+    const linkedCreditTotal = (linkedCredits ?? []).reduce((s, c) => s + Math.abs(Number(c.amount) || 0), 0)
+
+    const appliedCredit = computeAppliedCredit({
+      gross,
+      amountDue: Number(inv.amount_due) || 0,
+      linkedCreditTotal,
+    })
+
+    if (appliedCredit <= 0) {
+      return { invoice_number: inv.invoice_number, applied_credit: 0, new_total: gross }
+    }
+
+    // Rebuild line items: service lines + one credit line.
+    const newItems = buildRegeneratedLineItems(items, appliedCredit)
+    const newTotal = sumLineAmounts(newItems)
+    // Keep any genuine real payment; only the credit portion moves to a line.
+    const realPaid = Math.max(Math.round(((Number(inv.amount_paid) || 0) - appliedCredit) * 100) / 100, 0)
+    const newDue = Math.max(Math.round((newTotal - realPaid) * 100) / 100, 0)
+    const settled = newDue <= 0
+
+    // Replace the line items.
+    await supabase.from('payment_items').delete().eq('payment_id', paymentId)
+    await supabase.from('payment_items').insert(
+      newItems.map((it, i) => ({
+        payment_id: paymentId,
+        description: it.description,
+        quantity: it.quantity,
+        unit_price: it.unit_price,
+        amount: it.amount,
+        sort_order: i,
+      }))
+    )
+
+    // Update the invoice row: total now nets the credit; amount owed unchanged.
+    // eslint-disable-next-line no-restricted-syntax -- in-place document rebuild on an existing payments row (no new invoice, no money movement); credit was already consumed by reconcile.
+    await supabase.from('payments').update({
+      amount: newTotal,
+      subtotal: newTotal,
+      total: newTotal,
+      amount_paid: realPaid,
+      amount_due: newDue,
+      ...(settled ? { status: 'Paid', invoice_status: 'Paid' } : {}),
+    }).eq('id', paymentId)
+
+    // Mirror onto the portal-visible expense row.
+    // eslint-disable-next-line no-restricted-syntax -- client_expenses mirror balance update, consistent with reconcileAccountCredits.
+    await supabase.from('client_expenses').update({
+      total: newTotal,
+      amount_due: newDue,
+      amount_paid: realPaid,
+      ...(settled ? { status: 'Paid' } : {}),
+    }).eq('td_payment_id', paymentId)
+
+    revalidatePath('/payments')
+    return { invoice_number: inv.invoice_number, applied_credit: appliedCredit, new_total: newTotal }
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: 'Invoice regenerated to reflect applied credit',
   })
 }
 
