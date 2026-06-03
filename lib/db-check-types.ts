@@ -4,6 +4,9 @@
  * DO NOT EDIT — regenerate with: npx tsx scripts/gen-check-types.ts
  */
 
+/** _service_catalog_archive_20260601.default_service_context — CHECK constraint */
+export type ServiceCatalogArchive20260601DefaultServiceContext = "individual" | "business" | "ask"
+
 /** accounts.member_structure — CHECK constraint */
 export type AccountsMemberStructure = "single_member" | "multi_member"
 
@@ -72,9 +75,6 @@ export type PortalMessagesSenderType = "client" | "admin" | "system"
 
 /** portal_team_members.status — CHECK constraint */
 export type PortalTeamMembersStatus = "active" | "revoked"
-
-/** service_catalog.default_service_context — CHECK constraint */
-export type ServiceCatalogDefaultServiceContext = "individual" | "business" | "ask"
 
 /** task_action_log.status — CHECK constraint */
 export type TaskActionLogStatus = "pending" | "success" | "failed" | "partial"

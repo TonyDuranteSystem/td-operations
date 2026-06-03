@@ -14,6 +14,63 @@ export type Database = {
   }
   public: {
     Tables: {
+      _service_catalog_archive_20260601: {
+        Row: {
+          active: boolean | null
+          category: string
+          contract_type: string | null
+          created_at: string | null
+          default_currency: string | null
+          default_price: number | null
+          default_service_context: string | null
+          description: string | null
+          has_annual: boolean
+          id: string
+          name: string
+          pipeline: string | null
+          slug: string | null
+          sort_order: number | null
+          supports_quantity: boolean
+          updated_at: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          category?: string
+          contract_type?: string | null
+          created_at?: string | null
+          default_currency?: string | null
+          default_price?: number | null
+          default_service_context?: string | null
+          description?: string | null
+          has_annual?: boolean
+          id?: string
+          name: string
+          pipeline?: string | null
+          slug?: string | null
+          sort_order?: number | null
+          supports_quantity?: boolean
+          updated_at?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          category?: string
+          contract_type?: string | null
+          created_at?: string | null
+          default_currency?: string | null
+          default_price?: number | null
+          default_service_context?: string | null
+          description?: string | null
+          has_annual?: boolean
+          id?: string
+          name?: string
+          pipeline?: string | null
+          slug?: string | null
+          sort_order?: number | null
+          supports_quantity?: boolean
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       account_contacts: {
         Row: {
           account_id: string
@@ -1781,6 +1838,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "catalog_decision_log_catalog_entry_id_fkey"
+            columns: ["catalog_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "catalog_decision_log_catalog_id_fkey"
             columns: ["catalog_id"]
             isOneToOne: false
@@ -1934,6 +1998,13 @@ export type Database = {
             columns: ["resolved_to_entry_id"]
             isOneToOne: false
             referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "catalog_pending_review_resolved_to_entry_id_fkey"
+            columns: ["resolved_to_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
             referencedColumns: ["id"]
           },
         ]
@@ -2340,6 +2411,8 @@ export type Database = {
       client_expenses: {
         Row: {
           account_id: string | null
+          amount_due: number | null
+          amount_paid: number | null
           attachment_name: string | null
           attachment_storage_path: string | null
           attachment_url: string | null
@@ -2351,8 +2424,6 @@ export type Database = {
           due_date: string | null
           id: string
           internal_ref: string | null
-          amount_due: number | null
-          amount_paid: number | null
           invoice_number: string | null
           issue_date: string | null
           notes: string | null
@@ -2372,6 +2443,8 @@ export type Database = {
         }
         Insert: {
           account_id?: string | null
+          amount_due?: number | null
+          amount_paid?: number | null
           attachment_name?: string | null
           attachment_storage_path?: string | null
           attachment_url?: string | null
@@ -2383,8 +2456,6 @@ export type Database = {
           due_date?: string | null
           id?: string
           internal_ref?: string | null
-          amount_due?: number | null
-          amount_paid?: number | null
           invoice_number?: string | null
           issue_date?: string | null
           notes?: string | null
@@ -2404,6 +2475,8 @@ export type Database = {
         }
         Update: {
           account_id?: string | null
+          amount_due?: number | null
+          amount_paid?: number | null
           attachment_name?: string | null
           attachment_storage_path?: string | null
           attachment_url?: string | null
@@ -2415,8 +2488,6 @@ export type Database = {
           due_date?: string | null
           id?: string
           internal_ref?: string | null
-          amount_due?: number | null
-          amount_paid?: number | null
           invoice_number?: string | null
           issue_date?: string | null
           notes?: string | null
@@ -8353,6 +8424,13 @@ export type Database = {
             referencedRelation: "catalog_entries"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "pipeline_stages_service_type_entry_id_fkey"
+            columns: ["service_type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
         ]
       }
       plaid_connections: {
@@ -9428,63 +9506,6 @@ export type Database = {
           },
         ]
       }
-      service_catalog: {
-        Row: {
-          active: boolean | null
-          category: string
-          contract_type: string | null
-          created_at: string | null
-          default_currency: string | null
-          default_price: number | null
-          default_service_context: string | null
-          description: string | null
-          has_annual: boolean
-          id: string
-          name: string
-          pipeline: string | null
-          slug: string | null
-          sort_order: number | null
-          supports_quantity: boolean
-          updated_at: string | null
-        }
-        Insert: {
-          active?: boolean | null
-          category?: string
-          contract_type?: string | null
-          created_at?: string | null
-          default_currency?: string | null
-          default_price?: number | null
-          default_service_context?: string | null
-          description?: string | null
-          has_annual?: boolean
-          id?: string
-          name: string
-          pipeline?: string | null
-          slug?: string | null
-          sort_order?: number | null
-          supports_quantity?: boolean
-          updated_at?: string | null
-        }
-        Update: {
-          active?: boolean | null
-          category?: string
-          contract_type?: string | null
-          created_at?: string | null
-          default_currency?: string | null
-          default_price?: number | null
-          default_service_context?: string | null
-          description?: string | null
-          has_annual?: boolean
-          id?: string
-          name?: string
-          pipeline?: string | null
-          slug?: string | null
-          sort_order?: number | null
-          supports_quantity?: boolean
-          updated_at?: string | null
-        }
-        Relationships: []
-      }
       service_deliveries: {
         Row: {
           account_id: string | null
@@ -9634,6 +9655,13 @@ export type Database = {
             columns: ["service_type_entry_id"]
             isOneToOne: false
             referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_deliveries_service_type_entry_id_fkey"
+            columns: ["service_type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
             referencedColumns: ["id"]
           },
         ]
@@ -10074,8 +10102,39 @@ export type Database = {
           },
         ]
       }
+      sysdoc_read_log: {
+        Row: {
+          allowed: boolean | null
+          caller: string | null
+          created_at: string
+          id: string
+          redaction_applied: boolean | null
+          slug: string | null
+        }
+        Insert: {
+          allowed?: boolean | null
+          caller?: string | null
+          created_at?: string
+          id?: string
+          redaction_applied?: boolean | null
+          slug?: string | null
+        }
+        Update: {
+          allowed?: boolean | null
+          caller?: string | null
+          created_at?: string
+          id?: string
+          redaction_applied?: boolean | null
+          slug?: string | null
+        }
+        Relationships: []
+      }
       system_docs: {
         Row: {
+          agent_readable: boolean
+          agent_readable_notes: string | null
+          agent_readable_reviewed_at: string | null
+          agent_readable_reviewed_by: string | null
           content: string
           created_at: string | null
           doc_type: string | null
@@ -10085,6 +10144,10 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          agent_readable?: boolean
+          agent_readable_notes?: string | null
+          agent_readable_reviewed_at?: string | null
+          agent_readable_reviewed_by?: string | null
           content: string
           created_at?: string | null
           doc_type?: string | null
@@ -10094,6 +10157,10 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          agent_readable?: boolean
+          agent_readable_notes?: string | null
+          agent_readable_reviewed_at?: string | null
+          agent_readable_reviewed_by?: string | null
           content?: string
           created_at?: string | null
           doc_type?: string | null
@@ -11358,6 +11425,63 @@ export type Database = {
       }
     }
     Views: {
+      service_catalog: {
+        Row: {
+          active: boolean | null
+          category: string | null
+          contract_type: string | null
+          created_at: string | null
+          default_currency: string | null
+          default_price: number | null
+          default_service_context: string | null
+          description: string | null
+          has_annual: boolean | null
+          id: string | null
+          name: string | null
+          pipeline: string | null
+          slug: string | null
+          sort_order: number | null
+          supports_quantity: boolean | null
+          updated_at: string | null
+        }
+        Insert: {
+          active?: never
+          category?: never
+          contract_type?: never
+          created_at?: string | null
+          default_currency?: never
+          default_price?: never
+          default_service_context?: never
+          description?: string | null
+          has_annual?: never
+          id?: string | null
+          name?: string | null
+          pipeline?: never
+          slug?: string | null
+          sort_order?: never
+          supports_quantity?: never
+          updated_at?: string | null
+        }
+        Update: {
+          active?: never
+          category?: never
+          contract_type?: never
+          created_at?: string | null
+          default_currency?: never
+          default_price?: never
+          default_service_context?: never
+          description?: string | null
+          has_annual?: never
+          id?: string | null
+          name?: string | null
+          pipeline?: never
+          slug?: string | null
+          sort_order?: never
+          supports_quantity?: never
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       v_account_detail: {
         Row: {
           airtable_id: string | null
@@ -11936,6 +12060,7 @@ export type Database = {
         }
       }
       exec_sql: { Args: { sql_query: string }; Returns: Json }
+      exec_sql_readonly: { Args: { sql_query: string }; Returns: Json }
       get_client_account_ids: { Args: never; Returns: string[] }
       get_client_contact_id: { Args: never; Returns: string }
       get_document_type_names: {
