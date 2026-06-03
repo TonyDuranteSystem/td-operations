@@ -6,6 +6,20 @@ const nextConfig = {
     // Prevent webpack from bundling OpenTelemetry packages as vendor chunks
     // (Sentry injects OTel instrumentation which fails to chunk correctly in dev)
     serverComponentsExternalPackages: ['@opentelemetry/api', '@opentelemetry/core', '@opentelemetry/sdk-trace-base'],
+    // Ship the repo SOURCE into the MCP serverless function so the read-only
+    // codebase_read / codebase_search tools (Hermes operating-agent) can read it
+    // at runtime. Scoped to the MCP route only. Source is code, not secrets;
+    // the tools block .env/secrets/deps paths.
+    outputFileTracingIncludes: {
+      '/api/[transport]': [
+        './app/**/*.{ts,tsx,js,jsx,sql,md,css}',
+        './lib/**/*.{ts,tsx,js,jsx,sql}',
+        './components/**/*.{ts,tsx,js,jsx,css}',
+        './scripts/**/*.{ts,js,sql}',
+        './middleware.ts',
+        './next.config.js',
+      ],
+    },
   },
   eslint: {
     // Warnings in MCP tool files should not block production builds.
