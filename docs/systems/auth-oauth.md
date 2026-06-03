@@ -27,7 +27,7 @@ Two completely separate authentication systems — don't confuse them:
 - Middleware **excludes** `/api/oauth/*` and `/.well-known/*` from session auth.
 
 ## Business rules
-- **Never change `OAUTH_ISSUER` or `QB_REDIRECT_URI`** off `td-operations.vercel.app` — it would break the Claude.ai connector and QuickBooks auth (CLAUDE.md architecture note).
+- **Never change `OAUTH_ISSUER`** off `td-operations.vercel.app` — it would break the Claude.ai connector (CLAUDE.md architecture note). (`QB_REDIRECT_URI` also points here, but QuickBooks is **DEAD/decommissioned since 2026-05-23** — that reason is moot.)
 - The **public-path list in `middleware.ts` is security-sensitive** — adding a path there removes authentication from it. Change only deliberately.
 - `SANDBOX_MODE=1` must never be set in production (it would 503 real webhooks); it exists to protect sandbox.
 
@@ -44,7 +44,7 @@ Two completely separate authentication systems — don't confuse them:
 
 ## Gotchas, invariants & past bugs
 - **Two auth worlds**: a browser session (Supabase) vs an MCP token (Bearer/OAuth). A change to one does not affect the other.
-- **Don't touch the OAuth issuer / QB redirect domain** — auth breaks silently for the Claude.ai connector and QuickBooks.
+- **Don't touch the OAuth issuer domain** — auth breaks silently for the Claude.ai connector. (The QB redirect points here too, but QuickBooks is decommissioned/DEAD — no longer a reason.)
 - **The public-path allowlist is the attack surface** — anything listed there is unauthenticated. Audit additions.
 - **Admins are NOT blocked from the portal** (intentional, for debugging) — so "admin can see the client view" is expected, not a bug.
 - **MCP tool calls bypass the web sandbox guards entirely** (see `hooks-guardrails.md` / R096) — the `mcp__af7d85f2-*` connection hits production regardless of `SANDBOX_MODE`/`.env.local`.

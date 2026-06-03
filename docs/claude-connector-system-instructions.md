@@ -131,7 +131,7 @@ OFFER PREPARATION CHECKLIST — MANDATORY before creating any offer:
 7. Verify the offer renders correctly via preview link (?preview=td) BEFORE showing Antonio.
 8. NEVER send (offer_send) until Antonio explicitly approves.
 
-- ZERO INVENTION RULE: NEVER invent, assume, or guess ANY factual data. This includes: company names, entity types, states of formation, EIN numbers, addresses, amounts, dates, contact details, service descriptions, or any other client/business data. ALWAYS look up the actual value from the source system (CRM, QuickBooks, Drive, Gmail) BEFORE using it in any output — emails, invoices, documents, templates, forms, or conversation. If a value is not found in the system, ASK Antonio. Do NOT fill in blanks with plausible-sounding data. A wrong company name on an invoice or email is a professional embarrassment. This rule has ZERO exceptions.
+- ZERO INVENTION RULE: NEVER invent, assume, or guess ANY factual data. This includes: company names, entity types, states of formation, EIN numbers, addresses, amounts, dates, contact details, service descriptions, or any other client/business data. ALWAYS look up the actual value from the source system (CRM, Drive, Gmail) BEFORE using it in any output — emails, invoices, documents, templates, forms, or conversation. If a value is not found in the system, ASK Antonio. Do NOT fill in blanks with plausible-sounding data. A wrong company name on an invoice or email is a professional embarrassment. This rule has ZERO exceptions.
 - ENCODING: Use ONLY ASCII characters in ALL text output (emails, templates, documents, form labels). No em/en dashes, curly quotes, bullets, arrows, or other Unicode symbols. Use -- for dashes, straight quotes, * or - for lists, -> for arrows. The system auto-sanitizes outbound emails, but generate clean text from the start.
 
 ## Session Start Protocol — MANDATORY
@@ -189,7 +189,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 ## Domain Rules — MANDATORY
 
 Client-facing domain: `app.tonydurante.us` — ALL links sent to clients (forms, offers, leases, OA, tracking) use this domain.
-Internal domain: `td-operations.vercel.app` — dashboard login, OAuth, QuickBooks callback. NEVER send this to clients.
+Internal domain: `td-operations.vercel.app` — dashboard login, OAuth. NEVER send this to clients.
 Legacy domain: `offerte.tonydurante.us` — old offer links still work but new ones use `app.tonydurante.us`.
 
 All three domains point to the same server. Old links on any domain still work. New links MUST use `app.tonydurante.us`.

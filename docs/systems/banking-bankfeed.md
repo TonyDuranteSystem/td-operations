@@ -14,7 +14,7 @@ Most of the complexity — and bugs — live in #2.
    - `payments` invoices that are NOT terminal (`Paid`/`Voided`/`Cancelled`), and
    - `pending_activations` with `status='awaiting_payment'`.
    Confidence levels: **exact** (amount within $1/€1), **high** (within 5% + sender name contains the account/client name), **medium** (within 5% only). An **invoice-number reference found in the memo + matching amount is the strongest** match. `STOP_WORDS` strips generic business words ("LLC", "consulting", "wise"…) so names don't cross-match.
-3. **On a confident match** → marks the invoice **Paid**, fires QB sync (`syncPaymentToQB`), sets the feed `status='matched'`.
+3. **On a confident match** → marks the invoice **Paid**, sets the feed `status='matched'`. (It also calls `syncPaymentToQB`, but **QuickBooks is DEAD** — that call is an inert no-op; see "Gotchas" below.)
 4. **The orchestrator** `processBankFeedMatches()` (`lib/operations/process-bank-feed-matches.ts`) walks a batch and, when an invoice with a linked `pending_activation` is auto-paid, runs the activation chain (`runActivation`). Per-feed outcome is one of: `auto_activated`, `needs_review`, `activation_crashed`, `no_match`.
 5. **Manual review** for anything not auto-matched: the **`/reconciliation`** page (`matchFeedToInvoice`, `ignoreFeed` in `actions.ts`) + the Finance "Bank Feed" tab; admin actions `bank-feed-confirm-match`, `bank-feed-reject-match`, `bank-feed-retry-activation`.
 
@@ -41,7 +41,7 @@ Most of the complexity — and bugs — live in #2.
 - **Partial invoices** match against `amount_due` (remaining balance), not `total`.
 - **`activation_crashed`** feeds are parked in the review queue with a Retry button — the invoice was paid but the downstream activation failed; don't treat as lost.
 - **PAST BUG — Patrick Covelli (fixed 2026-05-29):** a third-party payer + a contact-scoped invoice (no company name) + no invoice reference in the memo → only the amount matched → stuck in needs-review, and the manual link UI was company-only. Fix: `invoice-party.ts` surfaces the person's name, the link UI handles contact-scoped invoices, and the portal Pay modal now shows the obligatory wire reference. Root lesson: **the invoice-number reference is the reliable matcher** — push clients to include it.
-- **QB sync still fires here** (`syncPaymentToQB`) at the library level, even though the QB *MCP tools* were removed (R097). Don't add new QB automation, but be aware this path exists.
+- **⚰️ QuickBooks is DEAD / decommissioned (kill-switch `QB_ENABLED` OFF since 2026-05-23, dev_task `eca3ce5c`).** `syncPaymentToQB` is still *called* here (and from invoice send and void in `finance/actions.ts` + `invoice-auto-send.ts`), but every function in `lib/qb-sync.ts` early-returns a no-op **before** any DB read/write or QB API call — it syncs nothing, writes nothing, logs nothing. These fire-and-forget calls are harmless leftover plumbing. **Do NOT treat QB as a live part of the system, do NOT build on it, and do NOT try to "complete" or re-enable it.** Removing the plumbing is a separate, planned cleanup — the three callers still `import lib/qb-sync.ts`, so deleting that file naively would break the build.
 
 ## How to verify current state
 - Read `lib/bank-feed-matcher.ts` (`matchAndReconcile` — confidence tiers + the JS-side status/currency filtering) and `lib/operations/process-bank-feed-matches.ts` (the 4 outcomes).

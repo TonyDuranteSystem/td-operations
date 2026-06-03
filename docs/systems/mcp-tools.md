@@ -32,7 +32,7 @@ _Source: this is an operational rule in CLAUDE.md (R096), confirmed by `.mcp.jso
 
 ## Business rules
 - **Tool-count source of truth = `route.ts` uncommented registrations** — update counts in `instructions.ts`/docs only after verifying with the grep above.
-- **R037** — send tools use `safeSend`. **R051** — subagents write results to Supabase before returning. **R096** — the routing rule above. **R097** — QB tools are removed; do not restore them.
+- **R037** — send tools use `safeSend`. **R051** — subagents write results to Supabase before returning. **R096** — the routing rule above. **R097** — QB tools are removed and **QuickBooks is decommissioned/DEAD** (kill-switch OFF since 2026-05-23); do not restore the tools, re-enable sync, or build on QB.
 - Tool *descriptions* are the documentation — keep them detailed (prerequisites, cross-references).
 
 ## How it's built — key files & tables

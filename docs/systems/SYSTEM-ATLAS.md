@@ -112,7 +112,7 @@ _In `.claude/hooks/`, wired in `.claude/settings.json`; plus `.husky/pre-push` g
 - **R093** — NO ASSUMPTIONS
 - **R094** — `leads.status='Converted'` means PAYMENT CONFIRMED (activation chain triggered), NOT offer signed
 - **R096** — MCP TOOL ROUTING — TWO CONNECTIONS, CLAUDE CHOOSES (2026-05-01)
-- **R097** — QB MCP tools REMOVED (2026-04-24, commit `8f9f18a`)
+- **R097** — QB MCP tools REMOVED (2026-04-24, commit `8f9f18a`); **QuickBooks is decommissioned/DEAD** (kill-switch OFF 2026-05-23) — `qb-sync` calls are inert no-ops, do not build on it
 - **R098** — Invoice-number generator is race-safe via DB unique constraint, NOT a retry loop in code
 - **R099** — Surface server errors on client-side `fetch` (2026-04-21, commit `b80ecef`)
 - **R100** — Client-visible content deletion MUST use soft-delete (2026-04-21, commit `49d64df`)
