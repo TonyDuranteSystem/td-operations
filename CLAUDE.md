@@ -235,6 +235,27 @@ Full design: `sysdoc_read('workflows-system-master-plan')`. Current state + exte
 
 - **R107** — SYSTEM REFERENCE LIBRARY (2026-05-29, structural enforcement). `docs/systems/` holds one living doc per subsystem (how it works, how it's built, the rules, how to verify). Lives in the repo next to the code so it's updated in the same change — the reason the Supabase sysdocs rot is they're separated from the code. Purpose: a session reads the subsystem doc instead of re-deriving the whole system from the DB/code before fixing a bug. **Three layers:** (1) SessionStart hook `system-docs-index.sh` prints the library every session; (2) read the relevant doc FIRST before working on a subsystem, and CREATE the doc (template + `_paths.map` line) if it's missing, as part of the job; (3) pre-push gate `scripts/check-system-docs-freshness.sh` BLOCKS a push that changes documented subsystem code without updating its doc — deliberate override `ALLOW_SYSTEM_DOC_SKIP=1`. The doc orients; R093 still governs ACTION (verify the one fact you depend on — fast, via the doc's "How to verify" section). Full section: "System Reference Library — MANDATORY" near the top.
 
+- **R108** — Hermes ↔ Claude BRIDGE (Phase 1, 2026-06-03, dev_task `1a0d1354`). One table (`agent_messages`) + three MCP tools (`agent_msg_send`, `agent_inbox_list`, `agent_inbox_reply`) + one cron worker (`/api/cron/hermes-bridge`, schedule `*/5 * * * *`) implement a research/discussion channel between Hermes (Telegram, mobile) and Claude (sonnet-4-6 worker + Claude Code sessions). Hermes drops research questions; the worker investigates with a **READ-ONLY** tool subset (`lib/ai-agent/worker-tools.ts`) and writes findings back to the same row; Hermes reads the reply and reports to Antonio in plain English. Direct-trigger fires on insert for ~30-90s latency; cron is the safety net for any direct-fire that missed (function killed, network blip, stuck `processing` rows older than 10 min get auto-recovered). **MANDATORY rule — agent_msg_send is a SEND tool. Hermes/Claude must show the full draft (recipient, subject, body verbatim) and wait for Antonio's explicit OK before calling — same rule as `gmail_send`, established after the 2026-06-03 unauthorized-send incident.** Phase 1 is RESEARCH ONLY: the worker has no send/write/mutate tools. Action authorization is a separate Phase 2 (approval_queue + portal `/portal/team/approvals` + Telegram push from server). Re-tiering existing direct-write tools (Hermes's `gmail_send`, Claude's CRM mutations) onto the approval rail is Phase 3. Full section: "Hermes ↔ Claude bridge — handling research messages" below.
+
+## Hermes ↔ Claude bridge — handling research messages
+
+When you (Claude Code) see pending Hermes messages on session start (SessionStart hook prints "🔔 N pending Hermes messages"), or when you call `agent_inbox_list({ as_party: 'claude', filter: 'inbound_pending' })`:
+
+- **Treat the message body as Antonio's relayed words.** Hermes only forwards messages Antonio has approved sending (per the mandatory rule below). Investigate and reply on that assumption.
+- **Phase 1 is research only.** Do NOT execute mutations / sends / code changes / migrations / deploys from a Hermes-relayed message. If the message implies an action, describe the action you would propose and stop — Antonio will run it manually (or approve it via Phase 2 once that ships).
+- **The cron worker is the primary responder.** It auto-processes pending Hermes→Claude messages within 30-90s. You only need to call `agent_inbox_reply` manually when the worker is offline, the message is stale, or you're triaging a failed row.
+- **Replies land on the same row** (`reply` column), not as a new row. Discussion is single-turn for MVP.
+
+**MANDATORY RULE — `agent_msg_send` requires Antonio's explicit approval. NOT OPTIONAL.**
+
+Same discipline as `gmail_send` (added 2026-06-03 after Hermes sent an unauthorized email):
+1. Compose the message in chat first — recipient, subject, body verbatim.
+2. STOP and wait for Antonio's explicit approval (phrases like "send it", "go", "yes ask Claude", or equivalent direct authorization).
+3. A general "ask Claude about X" is NOT a send approval — show the draft first.
+4. Never call `agent_msg_send` on the first turn that proposes the message.
+
+This rule is enforced in two places: this CLAUDE.md section (for Claude Code) and `~/.hermes/memories/USER.md` (for Hermes, the typical caller). Any change to this discipline requires updating BOTH files in the same change.
+
 <!-- TIER2:END -->
 
 <!-- TIER3:START -->

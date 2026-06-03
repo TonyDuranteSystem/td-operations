@@ -35,6 +35,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/deadline-reminders": "0 8 * * *",
   "/api/cron/wizard-reminders": "17 9 * * *",
   "/api/cron/process-jobs": "*/5 * * * *",
+  "/api/cron/hermes-bridge": "*/5 * * * *",
   "/api/cron/invoice-overdue": "0 9 * * *",
   "/api/cron/faxage-ss4-confirm": "0 */2 * * *",
   "/api/cron/portal-digest": "*/5 * * * *",

@@ -57,6 +57,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/hermes-bridge",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/invoice-overdue",
       "schedule": "0 9 * * *"
     },
