@@ -373,6 +373,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).
 - hc_*: Harbor Compliance registered agent integration (8 tools). Sync companies, submit RA change orders, download RA deliveries to Drive, track licenses, sync license expirations to deadlines table. Requires HC_CLIENT_ID/HC_CLIENT_SECRET env vars. Use hc_sync_company to link a CRM account to HC before submitting orders.
+- agent_msg_send / agent_inbox_list / agent_inbox_reply: Hermes ↔ Claude bridge (Phase 1 — research/discussion rail only). Hermes drops research requests via agent_msg_send; a 5-min cron worker (also fired directly when each message lands) invokes claude-sonnet-4-6 with READ-ONLY tools and writes findings back to the same row. Hermes reads replies via agent_inbox_list(filter='my_replies') and reports to Antonio on Telegram. **MANDATORY: agent_msg_send requires Antonio's explicit prior approval (same rule as gmail_send — show the full draft, wait for OK, never send on first turn).** Mutations / sends / code changes are NOT executed by the worker — those will live in a Phase 2 approval rail (portal queue, not yet built).
 
 ## Form Admin Preview — MANDATORY RULE
 All client forms (formation, onboarding, tax, lease, banking, member-info, and any future forms) support \`?preview=td\` query parameter:
