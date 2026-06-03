@@ -214,7 +214,7 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
             toast.success(`Invoice regenerated — credit of ${sym}${applied} shown as a line`)
             onClose()
           } else {
-            toast.info('No credit linked to this invoice — nothing to regenerate')
+            toast.info('No available credit to apply to this invoice')
           }
         } else {
           toast.error(result.error ?? 'Failed to regenerate')

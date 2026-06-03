@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   buildRegeneratedLineItems,
   computeAppliedCredit,
+  computeClickToApplyCredit,
   isCreditLine,
   sumLineAmounts,
   CREDIT_LINE_LABEL,
@@ -47,6 +48,53 @@ describe("computeAppliedCredit", () => {
   })
   it("never returns negative", () => {
     expect(computeAppliedCredit({ gross: 1000, amountDue: 1200, linkedCreditTotal: 500 })).toBe(0)
+  })
+})
+
+describe("computeClickToApplyCredit", () => {
+  it("applies available credit to a fresh invoice (Wise Strategies June case)", () => {
+    // gross 1000, no cash, no existing credit, $250 available → apply 250, owe 750
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 0, existingCredit: 0, available: 250 }))
+      .toEqual({ newApply: 250, totalCredit: 250, newTotal: 750, newDue: 750, settled: false })
+  })
+
+  it("caps applied credit at what is owed (credit larger than the invoice)", () => {
+    // $1500 available against a $1000 invoice → apply only 1000, settle, 500 stays available
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 0, existingCredit: 0, available: 1500 }))
+      .toEqual({ newApply: 1000, totalCredit: 1000, newTotal: 0, newDue: 0, settled: true })
+  })
+
+  it("is idempotent on re-click — no available credit left, existing line preserved", () => {
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 0, existingCredit: 250, available: 0 }))
+      .toEqual({ newApply: 0, totalCredit: 250, newTotal: 750, newDue: 750, settled: false })
+  })
+
+  it("respects real cash already paid (credit only fills the remaining headroom)", () => {
+    // gross 1000, 300 real cash, 250 available → headroom 700, apply 250, owe 450
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 300, existingCredit: 0, available: 250 }))
+      .toEqual({ newApply: 250, totalCredit: 250, newTotal: 750, newDue: 450, settled: false })
+  })
+
+  it("tops up an existing partial credit with more available credit", () => {
+    // gross 1000, existing credit line 200, 500 available → headroom 800, apply 500, total credit 700
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 0, existingCredit: 200, available: 500 }))
+      .toEqual({ newApply: 500, totalCredit: 700, newTotal: 300, newDue: 300, settled: false })
+  })
+
+  it("does nothing when there is no credit (existing or available)", () => {
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 0, existingCredit: 0, available: 0 }))
+      .toEqual({ newApply: 0, totalCredit: 0, newTotal: 1000, newDue: 1000, settled: false })
+  })
+
+  it("never over-applies when the invoice is already fully paid in cash", () => {
+    expect(computeClickToApplyCredit({ gross: 1000, cashPaid: 1000, existingCredit: 0, available: 250 }))
+      .toEqual({ newApply: 0, totalCredit: 0, newTotal: 1000, newDue: 0, settled: true })
+  })
+
+  it("rounds money to cents", () => {
+    const r = computeClickToApplyCredit({ gross: 1000, cashPaid: 0, existingCredit: 0, available: 333.335 })
+    expect(r.newApply).toBeCloseTo(333.34, 2)
+    expect(r.newTotal).toBeCloseTo(666.66, 2)
   })
 })
 

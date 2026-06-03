@@ -1,4 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
+import {
+  buildRegeneratedLineItems,
+  computeClickToApplyCredit,
+  isCreditLine,
+  sumLineAmounts,
+} from "@/lib/portal/invoice-regenerate"
 
 export interface CreditApplication {
   appliedTotal: number
@@ -110,13 +116,21 @@ export function allocateCredits(invoices: InvoiceNeed[], credits: CreditAvail[])
 export interface ReconcileResult { applied: number; invoicesAffected: number; allocations: CreditAllocation[] }
 
 /**
+ * ⚠️ RETAINED BUT NO LONGER AUTO-INVOKED (2026-06-03). Credit application moved to
+ * a click-to-apply model: credits sit as available credit_remaining and are applied
+ * to a SPECIFIC invoice only when staff click Regenerate (see regenerateInvoice in
+ * app/(dashboard)/payments/invoice-actions.ts). This function applied credits to the
+ * OLDEST unpaid invoice automatically, which caused a credit earned in June to
+ * silently reduce an overdue January invoice (Wise Strategies bug). DO NOT re-wire
+ * this into credit creation (createCreditNote / createManualReferralCredit). Kept
+ * only as a potential future "reconcile all" batch tool; harmless if uncalled.
+ *
  * Apply an account's outstanding credit notes to its EXISTING unpaid invoices
  * ("reduce amount owed, keep total"): drops each invoice's amount_due, marks it
  * Paid when fully covered, consumes credit_remaining, and mirrors the new balance
  * onto client_expenses so the portal shows the true amount due. Idempotent-ish:
  * only touches invoices with amount_due>0 and credits with credit_remaining>0, so
- * re-running after everything is netted is a no-op. Safe to call after any credit
- * is created. Returns what was applied.
+ * re-running after everything is netted is a no-op. Returns what was applied.
  */
 export async function reconcileAccountCredits(accountId: string, supabase: SupabaseClient): Promise<ReconcileResult> {
   // Outstanding REAL invoices (not credit notes, not cancelled), oldest first.
@@ -199,4 +213,104 @@ export async function reconcileAccountCredits(accountId: string, supabase: Supab
 
   const appliedTotal = Math.round(Array.from(byInvoice.values()).reduce((s, v) => s + v, 0) * 100) / 100
   return { applied: appliedTotal, invoicesAffected: byInvoice.size, allocations }
+}
+
+// ─── Click-to-apply: apply available credit to ONE specific invoice ──────────
+
+export interface ApplyCreditToInvoiceResult {
+  invoice_number: string | null
+  applied_credit: number // NEWLY applied this call
+  new_total: number
+}
+
+/**
+ * Click-to-apply credit application (2026-06-03). Applies the account's AVAILABLE
+ * credit to THE GIVEN invoice (the one staff clicked Regenerate on), capped at what
+ * the invoice still owes, shows it as a "Credit applied −$X" line, drops amount_due,
+ * and consumes the credit (stamping credit_for_payment_id = this invoice). amount_paid
+ * tracks REAL cash only — credit is represented purely as the line. Idempotent: a
+ * re-call with no remaining available credit re-renders the same document.
+ *
+ * Throws on invalid targets (missing, credit note, cancelled, accountless). Pure math
+ * lives in invoice-regenerate.ts; this function is the DB orchestration, shared by the
+ * regenerateInvoice server action and the sandbox integration test.
+ */
+export async function applyAvailableCreditToInvoice(
+  paymentId: string,
+  supabase: SupabaseClient,
+): Promise<ApplyCreditToInvoiceResult> {
+  const { data: inv } = await supabase
+    .from("payments")
+    .select("id, account_id, invoice_number, invoice_status, status, amount_due, amount_paid, amount_currency")
+    .eq("id", paymentId)
+    .single()
+  if (!inv) throw new Error("Invoice not found")
+  if (!inv.account_id) throw new Error("Regenerate needs an account-scoped invoice (credits are account-scoped).")
+  if (inv.invoice_status === "Credit") throw new Error("A credit note cannot be regenerated.")
+  if (inv.invoice_status === "Cancelled" || inv.status === "Cancelled") throw new Error("A cancelled invoice cannot be regenerated.")
+
+  const { data: itemRows } = await supabase
+    .from("payment_items")
+    .select("description, quantity, unit_price, amount, sort_order")
+    .eq("payment_id", paymentId)
+    .order("sort_order", { ascending: true })
+  const items = (itemRows ?? []).map((i) => ({
+    description: (i as { description: string }).description,
+    quantity: Number((i as { quantity: number | null }).quantity) || 1,
+    unit_price: Number((i as { unit_price: number | null }).unit_price) || 0,
+    amount: Number((i as { amount: number | null }).amount) || 0,
+  }))
+
+  const gross = sumLineAmounts(items.filter((i) => !isCreditLine(i)))
+  const existingCredit = Math.abs(sumLineAmounts(items.filter((i) => isCreditLine(i))))
+  const cashPaid = Math.max(Number((inv as { amount_paid: number | null }).amount_paid) || 0, 0)
+  const invoiceNumber = (inv as { invoice_number: string | null }).invoice_number
+  if (gross <= 0) return { invoice_number: invoiceNumber, applied_credit: 0, new_total: gross }
+
+  // Pull the account's AVAILABLE credit (oldest-first, same currency), capped at
+  // this invoice's remaining room. Both reads and selects which rows to consume.
+  const headroom = Math.max(Math.round((gross - cashPaid - existingCredit) * 100) / 100, 0)
+  const application = await computeCreditApplication(
+    { accountId: (inv as { account_id: string }).account_id, amount: headroom, currency: (inv as { amount_currency: string }).amount_currency },
+    supabase,
+  )
+  const calc = computeClickToApplyCredit({ gross, cashPaid, existingCredit, available: application.appliedTotal })
+
+  if (calc.totalCredit <= 0) return { invoice_number: invoiceNumber, applied_credit: 0, new_total: gross }
+
+  const newItems = buildRegeneratedLineItems(items, calc.totalCredit)
+
+  await supabase.from("payment_items").delete().eq("payment_id", paymentId)
+  await supabase.from("payment_items").insert(
+    newItems.map((it, i) => ({
+      payment_id: paymentId,
+      description: it.description,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      amount: it.amount,
+      sort_order: i,
+    })),
+  )
+
+  // eslint-disable-next-line no-restricted-syntax -- in-place document rebuild on an existing payments row (no new invoice, no money moved); credit consumed via consumeCredits below.
+  await supabase.from("payments").update({
+    amount: calc.newTotal,
+    subtotal: calc.newTotal,
+    total: calc.newTotal,
+    amount_due: calc.newDue,
+    ...(calc.settled ? { status: "Paid", invoice_status: "Paid" } : {}),
+  }).eq("id", paymentId)
+
+  // eslint-disable-next-line no-restricted-syntax -- client_expenses mirror balance update, consistent with the invoice row above.
+  await supabase.from("client_expenses").update({
+    total: calc.newTotal,
+    amount_due: calc.newDue,
+    ...(calc.settled ? { status: "Paid" } : {}),
+  }).eq("td_payment_id", paymentId)
+
+  if (application.appliedTotal > 0 && calc.newApply > 0) {
+    await consumeCredits(application, paymentId, supabase)
+  }
+
+  return { invoice_number: invoiceNumber, applied_credit: calc.newApply, new_total: calc.newTotal }
 }

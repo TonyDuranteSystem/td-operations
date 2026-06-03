@@ -411,7 +411,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
       if (!result.success) { toast.error(result.error ?? 'Failed to regenerate'); return }
       const applied = (result.data?.applied_credit as number) ?? 0
       if (applied > 0) { toast.success(`${invoiceNumber} regenerated — applied credit now shown as a line`); router.refresh() }
-      else toast.info('No credit linked to this invoice — nothing to regenerate')
+      else toast.info('No available credit to apply to this invoice')
     })
   }
 

@@ -117,7 +117,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
           toast.success('Invoice regenerated — applied credit now shown as a line')
           router.refresh()
         } else {
-          toast.info('No credit linked to this invoice — nothing to regenerate')
+          toast.info('No available credit to apply to this invoice')
         }
         return
       }

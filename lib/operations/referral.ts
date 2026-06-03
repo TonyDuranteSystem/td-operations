@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
-import { reconcileAccountCredits } from "@/lib/operations/credit-netting"
 
 export const REFERRAL_COMMISSION_PCT = 10
 
@@ -315,11 +314,10 @@ export async function createManualReferralCredit(
 
   if (refErr || !ref) return { created: false, reason: "error", detail: refErr?.message }
 
-  // Net the fresh credit against the referrer account's existing unpaid invoices
-  // so the portal balance reflects it immediately (non-blocking).
-  if (creditAccountId) {
-    try { await reconcileAccountCredits(creditAccountId, supabase) } catch { /* non-fatal */ }
-  }
-
+  // Click-to-apply (2026-06-03): the referral credit is NOT auto-applied to an
+  // existing invoice. It sits as available credit_remaining and lands on whichever
+  // invoice staff click Regenerate on (regenerateInvoice). This prevents a credit
+  // earned now from silently reducing an old/overdue invoice instead of the
+  // current one (the Wise Strategies bug).
   return { created: true, referralId: (ref as { id: string }).id, paymentId: result.paymentId, amount: creditAmountUsd }
 }

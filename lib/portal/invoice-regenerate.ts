@@ -51,6 +51,47 @@ export function computeAppliedCredit(params: {
 }
 
 /**
+ * Click-to-apply model (2026-06-03): when staff click Regenerate on an invoice,
+ * apply the account's AVAILABLE credit to THIS invoice, on top of any credit it
+ * already shows. Pure math — the caller supplies the numbers, persists the row,
+ * and consumes the credits. Credits are no longer auto-applied at creation; the
+ * invoice the user clicks is the invoice the credit lands on.
+ *
+ * - gross          = sum of the real service lines (credit lines excluded)
+ * - cashPaid       = real cash already paid on the invoice (NOT credit)
+ * - existingCredit = credit already shown on this invoice as a line (absolute)
+ * - available      = total credit_remaining available on the account (same currency)
+ *
+ * Applies no more than what is still owed (gross − cashPaid − existingCredit),
+ * never negative. Returns the NEW credit to consume now plus the resulting totals.
+ */
+export interface ClickToApplyResult {
+  newApply: number // credit to consume from available now
+  totalCredit: number // total credit line to show (existing + new)
+  newTotal: number // gross − totalCredit
+  newDue: number // max(newTotal − cashPaid, 0)
+  settled: boolean
+}
+
+export function computeClickToApplyCredit(params: {
+  gross: number
+  cashPaid: number
+  existingCredit: number
+  available: number
+}): ClickToApplyResult {
+  const gross = Math.max(Number(params.gross) || 0, 0)
+  const cashPaid = Math.max(Number(params.cashPaid) || 0, 0)
+  const existingCredit = Math.max(Number(params.existingCredit) || 0, 0)
+  const available = Math.max(Number(params.available) || 0, 0)
+  const headroom = Math.max(Math.round((gross - cashPaid - existingCredit) * 100) / 100, 0)
+  const newApply = Math.round(Math.min(available, headroom) * 100) / 100
+  const totalCredit = Math.round((existingCredit + newApply) * 100) / 100
+  const newTotal = Math.round((gross - totalCredit) * 100) / 100
+  const newDue = Math.max(Math.round((newTotal - cashPaid) * 100) / 100, 0)
+  return { newApply, totalCredit, newTotal, newDue, settled: newDue <= 0 }
+}
+
+/**
  * Rebuild the line items: drop any existing credit line(s), keep the real
  * service lines in order, and append a single "Credit applied −$X" line when
  * appliedCredit > 0. Idempotent — re-running with the same inputs yields the
