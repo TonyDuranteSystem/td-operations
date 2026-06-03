@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-05-29 — Claude (read lib/ai-agent/{providers,tools,system-prompt}.ts, ai-agent route)_
+_Last verified against code: 2026-06-03 — Claude (read lib/ai-agent/{providers,tools,system-prompt}.ts, ai-agent route; added worker-tools.ts note)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -16,6 +16,12 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 - **Write/act:** `create_task`, `update_task`, `update_contact`, `update_account_notes`, `update_service`, `advance_service_stage`, `send_email`.
 - **Gmail/Drive:** `gmail_search/read/read_thread/get_attachments`, `drive_search/list_folder/move/upload_file`, `preview_attachment`.
 - **Conversation/memory:** `log_conversation`, `save_memory`, `recall_memories` — the agent has **persistent memory** (the "Antonio Brain" — see sysdoc `antonio-brain-architecture`).
+
+## Sibling consumer — Hermes-bridge worker (`lib/ai-agent/worker-tools.ts`, 2026-06-03)
+`lib/ai-agent/` now also hosts a **second, separate** model caller for the Hermes ↔ Claude bridge. It is **not** the in-dashboard assistant:
+- `WORKER_TOOLS` = a curated **read-only** subset of `tools.ts`'s `AGENT_TOOLS` (search/get/read only — no write/send, and `run_sql_query` is intentionally excluded). `executeWorkerTool()` hard-rejects any name outside the allow-list (defense-in-depth).
+- `callWorker()` mirrors `callClaude()` but uses that subset + `WORKER_SYSTEM_PROMPT` (sonnet-4-6). It deliberately does **not** reuse `callAgent()` (which hardcodes the full `AGENT_TOOLS` + dashboard prompt).
+- It is driven by the cron worker at `app/api/cron/hermes-bridge`, not `/api/ai-agent`. Full subsystem doc: `agent-bridge.md`.
 
 ## Business rules
 - **Staff-only** — clients can never use it; non-admin staff need the `app_settings.ai_agent.enabled_for_team` toggle.

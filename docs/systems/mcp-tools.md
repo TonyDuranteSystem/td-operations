@@ -1,5 +1,5 @@
 # MCP Tool Server
-_Last verified against code: 2026-05-29 — Claude (read app/api/[transport]/route.ts, lib/mcp/*)_
+_Last verified against code: 2026-06-03 — Claude (read app/api/[transport]/route.ts, lib/mcp/*; added agent-messages group for the Hermes ↔ Claude bridge)_
 
 ## What it is
 The MCP server that exposes TD Operations to Claude (Claude Code + the Claude.ai connector) as callable tools. One endpoint, dual auth, and ~217 tools across 41 active groups. This doc is about the *server infrastructure*; each tool's behaviour is documented in its subsystem doc.
@@ -13,7 +13,8 @@ The MCP server that exposes TD Operations to Claude (Claude Code + the Claude.ai
 ## How tools are registered (and the source-of-truth rule)
 - Each tool file exports a `register<Area>Tools(server)` function; `route.ts` imports it and calls it.
 - **`route.ts` is the ONLY source of truth for which tools are active.** A tool file can exist but be inactive (commented import/call). **Never count `server.tool()` across files** — count uncommented `register*Tools` calls in `route.ts`:
-  `grep -v '//' app/api/[transport]/route.ts | grep 'register.*Tools'` → currently **41 groups (~217 tools)**.
+  `grep -v '//' app/api/[transport]/route.ts | grep 'register.*Tools'` → re-run for the live number (the "41 groups (~217 tools)" figure is from 2026-05-29 and has since grown).
+- **Hermes ↔ Claude bridge group (2026-06-03):** `registerAgentMessageTools` (`lib/mcp/tools/agent-messages.ts`) adds 3 tools — `agent_msg_send`, `agent_inbox_list`, `agent_inbox_reply` — over the inter-agent `agent_messages` table. The worker that *answers* those messages is NOT an MCP tool; it lives at `app/api/cron/hermes-bridge` (read-only sonnet). Full subsystem doc: `agent-bridge.md`. `agent_msg_send` carries a mandatory approval rule in its description.
 - **Adding a tool:** add `server.tool(...)` in the area file → add the import + `register*Tools(server)` call in `route.ts` → update `lib/mcp/instructions.ts` → mirror `docs/claude-connector-system-instructions.md`.
 - **Removing a tool:** delete the file or move it to `lib/mcp/tools/deprecated/` (as QB was, R097) — never leave dead tool files (they cause wrong counts/confusion).
 
