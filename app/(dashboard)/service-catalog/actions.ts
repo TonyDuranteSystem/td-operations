@@ -198,7 +198,8 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     let serviceSlug: string
 
     if (basics.id) {
-      const { data, error } = await supabaseAdmin
+      // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
+      const { data, error } = await (supabaseAdmin as any)
         .from("service_catalog")
         .update(row)
         .eq("id", basics.id)
@@ -218,7 +219,8 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
         .limit(1)
         .single()
       const sortOrder = (maxRow?.sort_order ?? 0) + 1
-      const { data, error } = await supabaseAdmin
+      // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
+      const { data, error } = await (supabaseAdmin as any)
         .from("service_catalog")
         .insert({ ...row, sort_order: sortOrder })
         .select("id, slug")

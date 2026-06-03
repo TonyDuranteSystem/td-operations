@@ -84,7 +84,8 @@ export async function POST(request: NextRequest) {
 
   const nextOrder = (maxRow?.sort_order ?? 0) + 1
 
-  const { data, error } = await supabaseAdmin
+  // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
+  const { data, error } = await (supabaseAdmin as any)
     .from('service_catalog')
     .insert({
       name: name.trim(),
@@ -153,7 +154,8 @@ export async function DELETE(request: NextRequest) {
   const { id } = body
   if (!id) return NextResponse.json({ error: 'ID is required' }, { status: 400 })
 
-  const { error } = await supabaseAdmin
+  // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
+  const { error } = await (supabaseAdmin as any)
     .from('service_catalog')
     .update({ active: false, updated_at: new Date().toISOString() })
     .eq('id', id)
