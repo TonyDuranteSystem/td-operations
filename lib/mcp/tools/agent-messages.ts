@@ -52,7 +52,7 @@ interface AgentMessageRow {
  *   - Explicit override:   APP_BASE_URL
  *   - Local dev fallback:  http://localhost:3000
  */
-function getInternalBaseUrl(): string {
+export function getInternalBaseUrl(): string {
   if (process.env.APP_BASE_URL && process.env.APP_BASE_URL.startsWith("http")) {
     return process.env.APP_BASE_URL.replace(/\/$/, "")
   }

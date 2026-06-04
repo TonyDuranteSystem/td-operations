@@ -1,10 +1,10 @@
 # Hermes ↔ Claude Agent Bridge
-_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 1 — approval_queue + propose_action + approval_list; nothing executes)_
+_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 2 — approval_decide + approval-executor route + kill switch; approved actions now run for real, sandbox-gated)_
 
 ## What it is
 A research/discussion channel that lets the **Hermes** Telegram bot (running on the Mac Mini, talking to Antonio on mobile) ask **Claude** (a server-side worker using `claude-sonnet-4-6`) questions and get answers back, without Antonio having to be the human relay between the two tools. Eliminates the "copy from Telegram into Claude Code, copy findings back to Telegram" workflow.
 
-This is **Phase 1 — research/discussion only.** Action authorization (Antonio approving on a portal card before Claude does anything that mutates state) is **Phase 2** (`approval_queue` + `/portal/team/approvals` + Telegram push), being built in slices — **Slice 1 (QUEUE + READ only) has shipped** (see the Phase 2 section below); nothing executes yet. Re-tiering existing write tools (`gmail_send`, CRM mutations) onto that approval rail is **Phase 3**.
+This is **Phase 1 — research/discussion only.** Action authorization (Antonio approving before Claude does anything that mutates state) is **Phase 2** (`approval_queue` + `approval_decide` + the `approval-executor` worker; `/portal/team/approvals` + Telegram push are later slices), being built in slices — **Slice 1 (QUEUE + READ) and Slice 2 (DECISION + EXECUTION, kill-switch-gated) have shipped** (see the Phase 2 sections below). Re-tiering existing write tools (`gmail_send`, CRM mutations) onto that approval rail is **Phase 3**.
 
 ## Business rules
 - **Hermes is restricted to research/discussion.** It can ask Claude things and read findings — it cannot ask Claude to send emails, modify records, push code, or run anything with side effects via this rail. (Phase 2 will move action requests to the approval rail.)
@@ -81,6 +81,34 @@ _Shipped 2026-06-04. **Nothing executes in Slice 1.** It builds the queue + read
   - The 12 action tools remain unreachable directly by the worker — `executeWorkerTool('send_email', …)` is still rejected (regression test pins this).
   - Tests: `tests/unit/approval-rail.test.ts` (allow-list, hash, validation, propose/reject/idempotency, list) + the updated `tests/unit/agent-bridge-worker-tools.test.ts` (`WORKER_TOOLS` = read subset + `propose_action`).
 
+## Phase 2 — Slice 2: decision + execution rail
+_Shipped 2026-06-04 (sandbox). **Approved actions now run for real**, gated by a kill switch. No new migration — `approval_queue` already had every column Slice 2 writes (verified against the sandbox schema)._
+
+- **Why:** Slice 1 queued proposals but executed nothing. Slice 2 closes the loop: a human approves a pending proposal and an isolated executor runs the real action, then reports the outcome back to Hermes. The risky half (running actions) is deliberately one reviewable slice.
+- **Decision tool:** `approval_decide` in `lib/mcp/tools/agent-approvals.ts`
+  - `approval_decide(id, decision: 'approve'|'reject', note?)`.
+  - **approve:** atomic `UPDATE … SET status='approved', decided_by='antonio', decided_at WHERE id=X AND status='pending'` (no-op if not pending). Then `fireExecutorTrigger(id)` — an **awaited, 3s-`AbortController`-bounded** `POST /api/cron/approval-executor?id=<uuid>` (`Authorization: Bearer ${CRON_SECRET}`). Mirrors `fireDirectTrigger` exactly (reuses the exported `getInternalBaseUrl`). **No `waitUntil`.**
+  - **reject:** atomic `UPDATE … SET status='rejected', decided_by, decided_at WHERE id=X AND status='pending'`, then `writeOutcomeCallback(id, tool, 'Proposal <tool> rejected: <note>', 'rejected')`.
+  - **MANDATORY discipline** carried in the tool description: Hermes/Claude must show Antonio the exact tool_name + params + recipient/cascade/external flags and wait for explicit OK before `approve` — same rule as `gmail_send` / `agent_msg_send`. Never auto-approve.
+  - Registered via the same `registerAgentApprovalTools(server)`; described in `lib/mcp/instructions.ts`.
+- **Executor route:** `app/api/cron/approval-executor/route.ts` — thin auth wrapper (`CRON_SECRET` Bearer, `maxDuration=300`); all logic in `lib/ai-agent/approval-executor.ts`.
+  - **Kill switch:** `APPROVAL_RAIL_ENABLED` must `=== 'true'`, else the route returns `{ok:true, disabled:true}` and runs nothing. `propose_action` keeps queuing regardless — the switch only stops execution.
+  - **Direct mode** (`?id=<uuid>`): claim + execute exactly that row.
+  - **Scan mode** (no `?id`, cron `*/5 * * * *`): (1) recover rows stuck in `executing` > 10 min back to `approved`; (2) execute up to 10 `approved` rows a direct trigger missed; (3) expire `pending` rows past `expires_at` (+callback each).
+- **Per-row execution** (`lib/ai-agent/approval-executor.ts`):
+  1. **Atomic claim:** `UPDATE … SET status='executing', claimed_at, claimed_by='approval-executor' WHERE id=X AND status='approved' RETURNING …`. 0 rows → return early (already claimed/decided). **This is the only double-execution guard.**
+  2. **params_hash re-check:** recompute `computeParamsHash(stored params)`; mismatch → `status='failed'`, `error_text='params_hash integrity mismatch'`, callback, **action never runs**.
+  3. **Execute:** `await executeTool(tool_name, params)`.
+  4. **Outcome:** success → `status='executed', result=<jsonb>, executed_at`; throw OR error-shaped result → `status='failed', error_text, executed_at`. **`executeTool` catches its own errors and returns an `{error:…}` string rather than throwing — `interpretToolResult` inspects the result so a logically-failed action is marked `failed`, not `executed`.** (Deviation from the literal "on throw → failed" plan, made deliberately so a failed send is never reported as executed.)
+  5. **Callback:** `writeOutcomeCallback` always fires on a terminal state.
+- **Outcome callback helper:** `lib/ai-agent/approval-callback.ts::writeOutcomeCallback(approvalId, toolName, summary, status)` — INSERTs an `agent_messages` row `sender='worker', recipient='hermes', status='done', reply=<summary>, context_json={approval_id, tool_name, outcome_status}`. (`agent_messages.subject`/`body` are NOT NULL, so it supplies both; `sender<>recipient` CHECK is satisfied by worker→hermes.) Used by the executor (executed/failed), `approval_decide` (rejected), and the expiry sweep (expired). Kept dependency-light (imports only `supabaseAdmin`) so the MCP tool doesn't pull the `executeTool` graph.
+- **Cron registration:** `vercel.json` + `lib/cron-coverage.ts` both carry `/api/cron/approval-executor` at `*/5 * * * *` (the completeness test pins them in sync).
+- **Slice 2 invariants:**
+  - Idempotent by atomic claim: a row is executed at most once even if direct trigger + cron race.
+  - Nothing executes unless `APPROVAL_RAIL_ENABLED='true'` AND a human approved the row.
+  - `executed` rows are never re-run (claim only matches `approved`).
+  - Tests: `tests/unit/approval-executor.test.ts` (happy path, error-shaped result, throw, atomic single-winner claim, integrity mismatch, reject, approve, expiry, crash recovery, kill switch).
+
 ## How to verify current state
 - Read `lib/mcp/tools/agent-messages.ts` (the 3 MCP tools + `fireDirectTrigger`), `lib/ai-agent/worker-tools.ts` (the allow-list + `callWorker`), `app/api/cron/hermes-bridge/route.ts` (the cron worker).
 - Confirm the cron is registered: `grep -A 2 hermes-bridge vercel.json`.
@@ -89,3 +117,4 @@ _Shipped 2026-06-04. **Nothing executes in Slice 1.** It builds the queue + read
 - Hermes-side config: `~/.hermes/config.yaml` must list `agent_msg_send` (and `agent_inbox_list`) under `mcp_servers.td_sandbox_readonly.tools.include`. The `~/.hermes/memories/USER.md` must contain the "Email/agent send discipline" rule.
 - Production sanity: `vercel cron list` in the production project should show `/api/cron/hermes-bridge` at `*/5 * * * *`.
 - Sandbox QA scenarios are listed in dev_task `1a0d1354`'s description (idempotency, race, stale recovery, failure path).
+- **Phase 2 Slice 2:** `npm run test:unit -- approval-executor` should pass. Confirm the executor cron is registered: `grep -A2 approval-executor vercel.json`. Confirm the kill switch: the executor route returns `{disabled:true}` unless `APPROVAL_RAIL_ENABLED='true'`. `approval_queue` needs no Slice 2 migration — verify its columns (`decided_by`, `claimed_at`, `executed_at`, `result`, `error_text`) and the `approval_status` enum (`executing`/`executed`/`failed`/`expired`) exist: `psql "$SUPABASE_DB_URL" -c "\d approval_queue"` against sandbox.
