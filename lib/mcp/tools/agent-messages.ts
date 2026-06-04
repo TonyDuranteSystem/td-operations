@@ -46,18 +46,31 @@ interface AgentMessageRow {
 }
 
 /**
- * Resolve the absolute base URL of the deployment so the direct-trigger fetch
- * lands on the same infrastructure (a fresh Vercel function invocation).
- *   - Vercel preview/prod: VERCEL_URL (without protocol)
- *   - Explicit override:   APP_BASE_URL
- *   - Local dev fallback:  http://localhost:3000
+ * Resolve the absolute base URL for the direct-trigger self-call so it lands on
+ * the SAME Vercel project (⇒ same Supabase DB + same CRON_SECRET) as the row we
+ * just inserted, on a public alias that runs the route.
+ *
+ * Resolution order:
+ *   1. Explicit override — `APP_BASE_URL` (full URL). For local tunnels / scripts.
+ *   2. `VERCEL_PROJECT_PRODUCTION_URL` — the current project's STABLE production
+ *      alias (the prod project's alias in prod, the sandbox project's alias in
+ *      sandbox). Vercel injects it on every deployment.
+ *   3. Local dev fallback — http://localhost:3000.
+ *
+ * ⚠️ Deliberately does NOT use `VERCEL_URL`. That is the DEPLOYMENT-SPECIFIC host
+ * (e.g. td-operations-abc123.vercel.app), which sits behind Vercel Deployment
+ * Protection and returns 401 to unauthenticated server-to-server self-calls — so
+ * the direct trigger never reached the worker route and rows stayed pending with
+ * claimed_at=null (the cron net then claimed them late as 'cron-worker'). Same bug
+ * class fixed for PDF font self-fetches in lib/pdf/unicode-fonts.ts (commits
+ * b953aaa / 386390a). Shared by fireExecutorTrigger (approval-executor) too.
  */
 export function getInternalBaseUrl(): string {
   if (process.env.APP_BASE_URL && process.env.APP_BASE_URL.startsWith("http")) {
     return process.env.APP_BASE_URL.replace(/\/$/, "")
   }
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL.replace(/\/$/, "")}`
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.replace(/\/$/, "")}`
   }
   return "http://localhost:3000"
 }
