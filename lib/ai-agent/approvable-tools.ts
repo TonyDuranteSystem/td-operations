@@ -131,13 +131,40 @@ export const APPROVABLE_TOOL_CONSTRAINTS: Readonly<Record<string, ApprovableTool
 }
 
 /**
- * Canonical params hash — SHA-256 hex of JSON.stringify(params). Used to detect
- * drift between what was approved and what would actually run at execute time.
- * NOTE: intentionally uses JSON.stringify as-is (key order preserved) — the same
- * params object produces the same hash; callers should pass the exact params.
+ * Recursively sort object keys so two structurally-equal objects with different
+ * key orders serialize identically. Arrays keep their order (semantically
+ * meaningful, and JSONB preserves array order); scalars pass through.
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>
+    return Object.keys(obj)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, k) => {
+        acc[k] = canonicalize(obj[k])
+        return acc
+      }, {})
+  }
+  return value
+}
+
+/**
+ * Canonical params hash — SHA-256 hex of the KEY-ORDER-CANONICAL JSON of params.
+ * Used to detect drift between what was approved and what would actually run at
+ * execute time.
+ *
+ * CRITICAL: the hash MUST be independent of object key order. The proposal is
+ * stored in Postgres as JSONB, which does NOT preserve insertion order (it
+ * reorders keys internally). If we hashed `JSON.stringify(params)` as-is, the
+ * propose-time hash (insertion order) would never match the execute-time hash
+ * (JSONB-returned order) for any params with ≥2 keys — silently failing the
+ * integrity check on every real action. Canonicalizing both sides fixes that.
+ * (Found via the Slice 2 sandbox E2E, 2026-06-04 — mocks preserved key order so
+ * unit tests missed it; a regression test now pins key-order independence.)
  */
 export function computeParamsHash(params: unknown): string {
-  return createHash("sha256").update(JSON.stringify(params ?? {})).digest("hex")
+  return createHash("sha256").update(JSON.stringify(canonicalize(params ?? {}))).digest("hex")
 }
 
 export interface ParamValidationResult {

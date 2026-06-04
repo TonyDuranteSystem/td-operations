@@ -124,9 +124,11 @@ describe("approvable-tools — allow-list", () => {
 })
 
 describe("approvable-tools — computeParamsHash", () => {
-  it("matches a SHA-256 of JSON.stringify(params)", () => {
+  it("matches a SHA-256 of the KEY-CANONICAL JSON of params", () => {
     const params = { to: "a@b.c", subject: "Hi", body: "Hello" }
-    const expected = createHash("sha256").update(JSON.stringify(params)).digest("hex")
+    // canonical = keys sorted: { body, subject, to }
+    const canonical = JSON.stringify({ body: "Hello", subject: "Hi", to: "a@b.c" })
+    const expected = createHash("sha256").update(canonical).digest("hex")
     expect(computeParamsHash(params)).toBe(expected)
   })
 
@@ -134,6 +136,25 @@ describe("approvable-tools — computeParamsHash", () => {
     const a = computeParamsHash({ x: 1 })
     expect(computeParamsHash({ x: 1 })).toBe(a)
     expect(computeParamsHash({ x: 2 })).not.toBe(a)
+  })
+
+  it("is INDEPENDENT of object key order (JSONB round-trip safety)", () => {
+    // Regression for the Slice 2 E2E bug: Postgres JSONB reorders keys, so the
+    // hash must not depend on insertion order or the integrity check fails on
+    // every real action.
+    const a = computeParamsHash({ task_title: "X", account_id: "a", priority: "medium" })
+    const b = computeParamsHash({ priority: "medium", account_id: "a", task_title: "X" })
+    expect(a).toBe(b)
+  })
+
+  it("is independent of key order in nested objects too", () => {
+    const a = computeParamsHash({ outer: { x: 1, y: 2 }, z: 3 })
+    const b = computeParamsHash({ z: 3, outer: { y: 2, x: 1 } })
+    expect(a).toBe(b)
+  })
+
+  it("still distinguishes arrays by element order (order is meaningful there)", () => {
+    expect(computeParamsHash({ list: [1, 2] })).not.toBe(computeParamsHash({ list: [2, 1] }))
   })
 })
 

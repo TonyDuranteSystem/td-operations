@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-04 — Claude (added approval-executor.ts + approval-callback.ts; executeTool is now the bridge approval rail's execution path, Phase 2 Slice 2)_
+_Last verified against code: 2026-06-04 — Claude (Slice 2 + hotfix: computeParamsHash is now key-order-canonical so JSONB round-trips don't break the integrity check; see agent-bridge.md)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
