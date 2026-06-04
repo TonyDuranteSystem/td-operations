@@ -743,6 +743,60 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_messages: {
+        Row: {
+          body: string
+          claimed_at: string | null
+          claimed_by: string | null
+          context_json: Json
+          created_at: string
+          error_text: string | null
+          id: string
+          idempotency_key: string | null
+          recipient: Database["public"]["Enums"]["agent_message_party"]
+          replied_at: string | null
+          reply: string | null
+          sender: Database["public"]["Enums"]["agent_message_party"]
+          status: Database["public"]["Enums"]["agent_message_status"]
+          subject: string
+          updated_at: string
+        }
+        Insert: {
+          body: string
+          claimed_at?: string | null
+          claimed_by?: string | null
+          context_json?: Json
+          created_at?: string
+          error_text?: string | null
+          id?: string
+          idempotency_key?: string | null
+          recipient: Database["public"]["Enums"]["agent_message_party"]
+          replied_at?: string | null
+          reply?: string | null
+          sender: Database["public"]["Enums"]["agent_message_party"]
+          status?: Database["public"]["Enums"]["agent_message_status"]
+          subject: string
+          updated_at?: string
+        }
+        Update: {
+          body?: string
+          claimed_at?: string | null
+          claimed_by?: string | null
+          context_json?: Json
+          created_at?: string
+          error_text?: string | null
+          id?: string
+          idempotency_key?: string | null
+          recipient?: Database["public"]["Enums"]["agent_message_party"]
+          replied_at?: string | null
+          reply?: string | null
+          sender?: Database["public"]["Enums"]["agent_message_party"]
+          status?: Database["public"]["Enums"]["agent_message_status"]
+          subject?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ai_delegations: {
         Row: {
           analysis: Json | null
@@ -12171,6 +12225,13 @@ export type Database = {
         | "Offboarding"
         | "Cancelled"
         | "Closed"
+      agent_message_party: "hermes" | "claude" | "worker"
+      agent_message_status:
+        | "pending"
+        | "processing"
+        | "done"
+        | "failed"
+        | "cancelled"
       billing_type: "Included" | "Standalone"
       company_type: "Single Member LLC" | "Multi Member LLC" | "C-Corp Elected"
       conversation_channel:
@@ -12450,6 +12511,14 @@ export const Constants = {
         "Offboarding",
         "Cancelled",
         "Closed",
+      ],
+      agent_message_party: ["hermes", "claude", "worker"],
+      agent_message_status: [
+        "pending",
+        "processing",
+        "done",
+        "failed",
+        "cancelled",
       ],
       billing_type: ["Included", "Standalone"],
       company_type: ["Single Member LLC", "Multi Member LLC", "C-Corp Elected"],
