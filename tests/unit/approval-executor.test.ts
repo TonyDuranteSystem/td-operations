@@ -246,6 +246,22 @@ describe("executeApproval — happy path", () => {
     expect(h.store.agent_messages[0].context_json.outcome_status).toBe("failed")
   })
 
+  it("executes when stored params come back in a DIFFERENT key order (JSONB round-trip)", async () => {
+    // Regression for the Slice 2 sandbox E2E bug: the proposal is stored as
+    // JSONB, which reorders object keys. The executor recomputes the hash over
+    // the reordered params — it must still match. params_hash is computed from
+    // the ORIGINAL key order; the row's params are in a DIFFERENT order.
+    const original = { task_title: "Reordered", account_id: "acc-1", priority: "medium" }
+    const hash = computeParamsHash(original)
+    const reordered = { priority: "medium", account_id: "acc-1", task_title: "Reordered" }
+    const row = seedApproval({ tool_name: "create_task", params: reordered, params_hash: hash, status: "approved" })
+    h.tool.impl = async () => JSON.stringify({ success: true, task: { id: "t-9" } })
+
+    const res = await executeApproval(row.id)
+    expect(res.status).toBe("executed") // would be 'failed/integrity' before the canonical-hash fix
+    expect(h.tool.calls).toHaveLength(1)
+  })
+
   it("marks 'failed' when executeTool throws", async () => {
     const row = seedApproval({ tool_name: "create_task", params: { task_title: "X" } })
     h.tool.impl = async () => { throw new Error("network down") }
