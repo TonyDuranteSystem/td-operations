@@ -18,12 +18,14 @@ describe("Hermes ↔ Claude bridge — fireDirectTrigger", () => {
   const originalCronSecret = process.env.CRON_SECRET
   const originalAppBaseUrl = process.env.APP_BASE_URL
   const originalVercelUrl = process.env.VERCEL_URL
+  const originalVercelProdUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
 
   beforeEach(() => {
     // Reset env per test
     delete process.env.CRON_SECRET
     delete process.env.APP_BASE_URL
     delete process.env.VERCEL_URL
+    delete process.env.VERCEL_PROJECT_PRODUCTION_URL
   })
 
   afterEach(() => {
@@ -31,6 +33,7 @@ describe("Hermes ↔ Claude bridge — fireDirectTrigger", () => {
     if (originalCronSecret !== undefined) process.env.CRON_SECRET = originalCronSecret
     if (originalAppBaseUrl !== undefined) process.env.APP_BASE_URL = originalAppBaseUrl
     if (originalVercelUrl !== undefined) process.env.VERCEL_URL = originalVercelUrl
+    if (originalVercelProdUrl !== undefined) process.env.VERCEL_PROJECT_PRODUCTION_URL = originalVercelProdUrl
   })
 
   it("posts to /api/cron/hermes-bridge with message_id, CRON_SECRET, POST method, and an abort signal", async () => {
@@ -65,9 +68,9 @@ describe("Hermes ↔ Claude bridge — fireDirectTrigger", () => {
     expect(url).toContain("message_id=with%2Fodd%26chars")
   })
 
-  it("falls back to a https URL built from VERCEL_URL when APP_BASE_URL is unset", async () => {
+  it("falls back to the project's STABLE production alias (VERCEL_PROJECT_PRODUCTION_URL) when APP_BASE_URL is unset", async () => {
     process.env.CRON_SECRET = "x"
-    process.env.VERCEL_URL = "td-operations-sandbox.vercel.app"
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "td-operations-sandbox.vercel.app"
     const fetchSpy = vi.fn().mockReturnValue(Promise.resolve(new Response(null)))
     global.fetch = fetchSpy as unknown as typeof global.fetch
 
@@ -77,7 +80,22 @@ describe("Hermes ↔ Claude bridge — fireDirectTrigger", () => {
     expect(url).toMatch(/^https:\/\/td-operations-sandbox\.vercel\.app\/api\/cron\/hermes-bridge/)
   })
 
-  it("falls back to localhost when both VERCEL_URL and APP_BASE_URL are unset (dev mode)", async () => {
+  it("NEVER uses the deployment-specific VERCEL_URL — it is behind Vercel Deployment Protection (401s self-calls; the root cause of claimed_at=null)", async () => {
+    process.env.CRON_SECRET = "x"
+    // Deployment-specific host present, but no stable alias / override.
+    process.env.VERCEL_URL = "td-operations-deadbeef-proj.vercel.app"
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "td-operations.vercel.app"
+    const fetchSpy = vi.fn().mockReturnValue(Promise.resolve(new Response(null)))
+    global.fetch = fetchSpy as unknown as typeof global.fetch
+
+    await fireDirectTrigger("msg-x")
+
+    const [url] = fetchSpy.mock.calls[0]
+    expect(url).not.toContain("deadbeef")
+    expect(url).toMatch(/^https:\/\/td-operations\.vercel\.app\/api\/cron\/hermes-bridge/)
+  })
+
+  it("falls back to localhost when no override and no VERCEL_PROJECT_PRODUCTION_URL are set (dev mode)", async () => {
     process.env.CRON_SECRET = "x"
     const fetchSpy = vi.fn().mockReturnValue(Promise.resolve(new Response(null)))
     global.fetch = fetchSpy as unknown as typeof global.fetch
