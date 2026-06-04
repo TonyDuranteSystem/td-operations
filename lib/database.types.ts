@@ -759,6 +759,7 @@ export type Database = {
           sender: Database["public"]["Enums"]["agent_message_party"]
           status: Database["public"]["Enums"]["agent_message_status"]
           subject: string
+          thread_id: string | null
           updated_at: string
         }
         Insert: {
@@ -776,6 +777,7 @@ export type Database = {
           sender: Database["public"]["Enums"]["agent_message_party"]
           status?: Database["public"]["Enums"]["agent_message_status"]
           subject: string
+          thread_id?: string | null
           updated_at?: string
         }
         Update: {
@@ -793,6 +795,7 @@ export type Database = {
           sender?: Database["public"]["Enums"]["agent_message_party"]
           status?: Database["public"]["Enums"]["agent_message_status"]
           subject?: string
+          thread_id?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -1246,11 +1249,14 @@ export type Database = {
           created_at: string
           decided_at: string | null
           decided_by: string | null
+          env: string | null
           error_text: string | null
           executed_at: string | null
+          executed_by: string | null
           expires_at: string
           id: string
           idempotency_key: string | null
+          notification_sent: boolean | null
           params: Json
           params_hash: string
           rationale: string | null
@@ -1258,6 +1264,7 @@ export type Database = {
           result: Json | null
           source_message_id: string | null
           status: Database["public"]["Enums"]["approval_status"]
+          thread_id: string | null
           tool_name: string
           updated_at: string
         }
@@ -1268,11 +1275,14 @@ export type Database = {
           created_at?: string
           decided_at?: string | null
           decided_by?: string | null
+          env?: string | null
           error_text?: string | null
           executed_at?: string | null
+          executed_by?: string | null
           expires_at?: string
           id?: string
           idempotency_key?: string | null
+          notification_sent?: boolean | null
           params?: Json
           params_hash: string
           rationale?: string | null
@@ -1280,6 +1290,7 @@ export type Database = {
           result?: Json | null
           source_message_id?: string | null
           status?: Database["public"]["Enums"]["approval_status"]
+          thread_id?: string | null
           tool_name: string
           updated_at?: string
         }
@@ -1290,11 +1301,14 @@ export type Database = {
           created_at?: string
           decided_at?: string | null
           decided_by?: string | null
+          env?: string | null
           error_text?: string | null
           executed_at?: string | null
+          executed_by?: string | null
           expires_at?: string
           id?: string
           idempotency_key?: string | null
+          notification_sent?: boolean | null
           params?: Json
           params_hash?: string
           rationale?: string | null
@@ -1302,6 +1316,7 @@ export type Database = {
           result?: Json | null
           source_message_id?: string | null
           status?: Database["public"]["Enums"]["approval_status"]
+          thread_id?: string | null
           tool_name?: string
           updated_at?: string
         }
@@ -5492,6 +5507,30 @@ export type Database = {
           id?: string
           refresh_token?: string
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      hermes_instances: {
+        Row: {
+          created_at: string
+          instance_id: string
+          last_heartbeat: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          instance_id: string
+          last_heartbeat?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          instance_id?: string
+          last_heartbeat?: string
+          status?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -11183,6 +11222,51 @@ export type Database = {
           template_text?: string
           trigger_keyword?: string | null
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      thread_summaries: {
+        Row: {
+          accounts_affected: string[] | null
+          created_at: string
+          files_changed: string[] | null
+          outcome: string | null
+          prompt_version: string | null
+          resolved_at: string | null
+          summary_text: string | null
+          tags: string[] | null
+          tasks_created: string[] | null
+          thread_id: string
+          thread_type: string
+          title: string | null
+        }
+        Insert: {
+          accounts_affected?: string[] | null
+          created_at?: string
+          files_changed?: string[] | null
+          outcome?: string | null
+          prompt_version?: string | null
+          resolved_at?: string | null
+          summary_text?: string | null
+          tags?: string[] | null
+          tasks_created?: string[] | null
+          thread_id: string
+          thread_type: string
+          title?: string | null
+        }
+        Update: {
+          accounts_affected?: string[] | null
+          created_at?: string
+          files_changed?: string[] | null
+          outcome?: string | null
+          prompt_version?: string | null
+          resolved_at?: string | null
+          summary_text?: string | null
+          tags?: string[] | null
+          tasks_created?: string[] | null
+          thread_id?: string
+          thread_type?: string
+          title?: string | null
         }
         Relationships: []
       }
