@@ -70,95 +70,124 @@ async function walk(dir: string, out: string[]): Promise<void> {
   }
 }
 
+/** Tool descriptions — shared between the MCP registration and the worker ToolDefs. */
+export const CODEBASE_READ_DESCRIPTION =
+  "Read a single source file from the repository (read-only). Give a path relative to the repo root, e.g. 'app/(dashboard)/finance/clients-invoices-tab.tsx' or 'lib/portal/td-invoice.ts'. Returns the file content with line numbers. Cannot read .env, secrets, node_modules, .git, or anything outside the repo. Max 100KB; binary files refused."
+export const CODEBASE_SEARCH_DESCRIPTION =
+  "Search the repository source for a string or regular expression (read-only — like grep). Returns matching file paths, line numbers, and the matching line. Optionally filter by file extension (e.g. 'tsx') or limit to a directory (e.g. 'lib/portal'). Capped at 50 matches. Cannot search env/secrets/deps."
+
+/**
+ * Read a single repo file and return its content (line-numbered) as a string,
+ * or a `❌ …` message on error. Pure of MCP framing so both the MCP tool and the
+ * Hermes worker (lib/ai-agent/worker-tools.ts) share ONE implementation — the
+ * 100KB cap, binary refusal, and path gate live here only.
+ */
+export async function readCodebaseFile(relPath: string): Promise<string> {
+  const r = resolveRepoPath(relPath)
+  if (!r.ok) return `❌ ${(r as { error: string }).error}`
+  try {
+    const st = await fs.stat(r.abs)
+    if (!st.isFile()) return "❌ Not a file."
+    if (st.size > MAX_FILE_BYTES) {
+      return `❌ File too large (${Math.round(st.size / 1024)}KB > 100KB).`
+    }
+    const buf = await fs.readFile(r.abs)
+    if (looksBinary(buf)) return "❌ Binary file — not readable."
+    const numbered = buf
+      .toString("utf8")
+      .split("\n")
+      .map((l, i) => `${i + 1}\t${l}`)
+      .join("\n")
+    return `# ${relPath}\n\n${numbered}`
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return `❌ File not found: ${relPath}`
+    return `❌ codebase_read error: ${err?.message || "unknown"}`
+  }
+}
+
+/**
+ * Search the repo source (grep-style) and return matches as a string, or a
+ * `❌ …` message on invalid pattern / blocked directory. Shared by the MCP tool
+ * and the Hermes worker — single implementation, same caps (50 matches).
+ */
+export async function searchCodebase(
+  pattern: string,
+  directory?: string,
+  extension?: string,
+): Promise<string> {
+  let re: RegExp
+  try {
+    re = new RegExp(pattern, "i")
+  } catch (e: any) {
+    return `❌ Invalid search pattern: ${e?.message}`
+  }
+  let roots: string[]
+  if (directory) {
+    const rd = resolveRepoPath(directory)
+    if (!rd.ok) return `❌ ${(rd as { error: string }).error}`
+    roots = [rd.abs]
+  } else {
+    roots = SOURCE_ROOTS.map((s) => path.resolve(REPO_ROOT, s))
+  }
+  const files: string[] = []
+  for (const root of roots) {
+    try {
+      const st = await fs.stat(root)
+      if (st.isFile()) files.push(root)
+      else await walk(root, files)
+    } catch {
+      /* missing root — skip */
+    }
+  }
+  const extRe = extension ? new RegExp(`\\.${extension.replace(/[^a-z0-9]/gi, "")}$`, "i") : null
+  const matches: string[] = []
+  for (const f of files) {
+    if (matches.length >= MAX_MATCHES) break
+    if (extRe && !extRe.test(f)) continue
+    let content: string
+    try {
+      const buf = await fs.readFile(f)
+      if (buf.length > 512 * 1024 || looksBinary(buf)) continue
+      content = buf.toString("utf8")
+    } catch {
+      continue
+    }
+    const rel = path.relative(REPO_ROOT, f)
+    const fileLines = content.split("\n")
+    for (let i = 0; i < fileLines.length; i++) {
+      if (matches.length >= MAX_MATCHES) break
+      if (re.test(fileLines[i])) {
+        matches.push(`${rel}:${i + 1}: ${fileLines[i].trim().slice(0, 200)}`)
+      }
+    }
+  }
+  const capped = matches.length >= MAX_MATCHES ? "\n\n(note: results capped at 50 matches)" : ""
+  const body = matches.length ? matches.join("\n") : "(no matches)"
+  return `${body}${capped}`
+}
+
 export function registerCodebaseReadTools(server: McpServer) {
   server.tool(
     "codebase_read",
-    "Read a single source file from the repository (read-only). Give a path relative to the repo root, e.g. 'app/(dashboard)/finance/clients-invoices-tab.tsx' or 'lib/portal/td-invoice.ts'. Returns the file content with line numbers. Cannot read .env, secrets, node_modules, .git, or anything outside the repo. Max 100KB; binary files refused.",
+    CODEBASE_READ_DESCRIPTION,
     {
       path: z.string().describe("File path relative to the repo root."),
     },
-    async ({ path: relPath }) => {
-      const r = resolveRepoPath(relPath)
-      if (!r.ok) return { content: [{ type: "text" as const, text: `❌ ${(r as { error: string }).error}` }] }
-      try {
-        const st = await fs.stat(r.abs)
-        if (!st.isFile()) return { content: [{ type: "text" as const, text: "❌ Not a file." }] }
-        if (st.size > MAX_FILE_BYTES) {
-          return { content: [{ type: "text" as const, text: `❌ File too large (${Math.round(st.size / 1024)}KB > 100KB).` }] }
-        }
-        const buf = await fs.readFile(r.abs)
-        if (looksBinary(buf)) return { content: [{ type: "text" as const, text: "❌ Binary file — not readable." }] }
-        const numbered = buf
-          .toString("utf8")
-          .split("\n")
-          .map((l, i) => `${i + 1}\t${l}`)
-          .join("\n")
-        return { content: [{ type: "text" as const, text: `# ${relPath}\n\n${numbered}` }] }
-      } catch (err: any) {
-        if (err?.code === "ENOENT") return { content: [{ type: "text" as const, text: `❌ File not found: ${relPath}` }] }
-        return { content: [{ type: "text" as const, text: `❌ codebase_read error: ${err?.message || "unknown"}` }] }
-      }
-    }
+    async ({ path: relPath }) => ({
+      content: [{ type: "text" as const, text: await readCodebaseFile(relPath) }],
+    })
   )
 
   server.tool(
     "codebase_search",
-    "Search the repository source for a string or regular expression (read-only — like grep). Returns matching file paths, line numbers, and the matching line. Optionally filter by file extension (e.g. 'tsx') or limit to a directory (e.g. 'lib/portal'). Capped at 50 matches. Cannot search env/secrets/deps.",
+    CODEBASE_SEARCH_DESCRIPTION,
     {
       pattern: z.string().describe("String or JavaScript regular expression to search for."),
       directory: z.string().optional().describe("Optional repo-relative directory to limit the search (e.g. 'lib/portal')."),
       extension: z.string().optional().describe("Optional file extension filter, no dot (e.g. 'tsx')."),
     },
-    async ({ pattern, directory, extension }) => {
-      let re: RegExp
-      try {
-        re = new RegExp(pattern, "i")
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `❌ Invalid search pattern: ${e?.message}` }] }
-      }
-      let roots: string[]
-      if (directory) {
-        const rd = resolveRepoPath(directory)
-        if (!rd.ok) return { content: [{ type: "text" as const, text: `❌ ${(rd as { error: string }).error}` }] }
-        roots = [rd.abs]
-      } else {
-        roots = SOURCE_ROOTS.map((s) => path.resolve(REPO_ROOT, s))
-      }
-      const files: string[] = []
-      for (const root of roots) {
-        try {
-          const st = await fs.stat(root)
-          if (st.isFile()) files.push(root)
-          else await walk(root, files)
-        } catch {
-          /* missing root — skip */
-        }
-      }
-      const extRe = extension ? new RegExp(`\\.${extension.replace(/[^a-z0-9]/gi, "")}$`, "i") : null
-      const matches: string[] = []
-      for (const f of files) {
-        if (matches.length >= MAX_MATCHES) break
-        if (extRe && !extRe.test(f)) continue
-        let content: string
-        try {
-          const buf = await fs.readFile(f)
-          if (buf.length > 512 * 1024 || looksBinary(buf)) continue
-          content = buf.toString("utf8")
-        } catch {
-          continue
-        }
-        const rel = path.relative(REPO_ROOT, f)
-        const fileLines = content.split("\n")
-        for (let i = 0; i < fileLines.length; i++) {
-          if (matches.length >= MAX_MATCHES) break
-          if (re.test(fileLines[i])) {
-            matches.push(`${rel}:${i + 1}: ${fileLines[i].trim().slice(0, 200)}`)
-          }
-        }
-      }
-      const capped = matches.length >= MAX_MATCHES ? "\n\n(note: results capped at 50 matches)" : ""
-      const body = matches.length ? matches.join("\n") : "(no matches)"
-      return { content: [{ type: "text" as const, text: `${body}${capped}` }] }
-    }
+    async ({ pattern, directory, extension }) => ({
+      content: [{ type: "text" as const, text: await searchCodebase(pattern, directory, extension) }],
+    })
   )
 }

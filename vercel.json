@@ -65,6 +65,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/hermes-health",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/invoice-overdue",
       "schedule": "0 9 * * *"
     },

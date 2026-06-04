@@ -45,15 +45,18 @@ describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
     }
   })
 
-  it("WORKER_TOOLS is the read-only AGENT_TOOLS subset PLUS propose_action (Phase 2 Slice 1)", () => {
-    // propose_action is the one non-read tool — it only QUEUES a proposal, it
-    // never executes. Everything else is the read-only research subset.
-    expect(WORKER_TOOLS.length).toBe(WORKER_READ_ONLY_TOOL_NAMES.size + 1)
+  it("WORKER_TOOLS is the read-only AGENT_TOOLS subset PLUS propose_action + codebase_read + codebase_search", () => {
+    // propose_action only QUEUES (never executes); codebase_read/codebase_search
+    // are strictly read-only repo-source access. Everything else is the
+    // read-only research subset (Phase A added the two codebase tools).
+    expect(WORKER_TOOLS.length).toBe(WORKER_READ_ONLY_TOOL_NAMES.size + 3)
     const workerNames = new Set(WORKER_TOOLS.map((t) => t.name))
     for (const name of WORKER_READ_ONLY_TOOL_NAMES) {
       expect(workerNames.has(name)).toBe(true)
     }
     expect(workerNames.has("propose_action")).toBe(true)
+    expect(workerNames.has("codebase_read")).toBe(true)
+    expect(workerNames.has("codebase_search")).toBe(true)
   })
 
   it("propose_action is NOT in the read-only allow-list (it's a proposer, not a reader)", () => {
@@ -75,5 +78,21 @@ describe("Hermes ↔ Claude bridge — executeWorkerTool guard", () => {
   it("rejects an unknown name (typo or invented tool)", async () => {
     const result = await executeWorkerTool("totally_made_up_tool", {})
     expect(result).toContain("not permitted")
+  })
+
+  it("routes codebase_read to the repo reader (NOT rejected)", async () => {
+    // package.json exists at the repo root and is not a blocked path.
+    const result = await executeWorkerTool("codebase_read", { path: "package.json" })
+    expect(result).not.toContain("not permitted")
+    expect(result).toContain("# package.json")
+  })
+
+  it("routes codebase_search to the repo grep (NOT rejected)", async () => {
+    const result = await executeWorkerTool("codebase_search", {
+      pattern: "executeWorkerTool",
+      directory: "lib/ai-agent",
+    })
+    expect(result).not.toContain("not permitted")
+    expect(result).toContain("worker-tools.ts")
   })
 })

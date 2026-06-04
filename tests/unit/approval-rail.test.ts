@@ -224,6 +224,22 @@ describe("proposeAction", () => {
     expect(h.store).toHaveLength(0)
   })
 
+  it("persists an optional thread_id on the queued row", async () => {
+    const out = await proposeAction({
+      tool_name: "create_task",
+      params: { task_title: "Threaded" },
+      thread_id: "11111111-2222-3333-4444-555555555555",
+    })
+    expect(out).toContain("queued for approval")
+    expect(h.store).toHaveLength(1)
+    expect(h.store[0].thread_id).toBe("11111111-2222-3333-4444-555555555555")
+  })
+
+  it("stores thread_id = null when omitted", async () => {
+    await proposeAction({ tool_name: "create_task", params: { task_title: "No thread" } })
+    expect(h.store[0].thread_id).toBeNull()
+  })
+
   it("idempotency: same key twice returns the existing row, no duplicate", async () => {
     const params = { account_id: "acc-1", note: "called client" }
     const first = await proposeAction({

@@ -32,6 +32,12 @@ import {
   computeParamsHash,
 } from "./approvable-tools"
 import { normalizeToolParams } from "./enum-normalization"
+import {
+  readCodebaseFile,
+  searchCodebase,
+  CODEBASE_READ_DESCRIPTION,
+  CODEBASE_SEARCH_DESCRIPTION,
+} from "@/lib/mcp/tools/codebase-read"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -107,12 +113,51 @@ export const PROPOSE_ACTION_TOOL: ToolDef = {
 }
 
 /**
+ * codebase_read / codebase_search — read-only repo-source access for the worker
+ * so it can trace a research question into the actual code, not just the DB.
+ *
+ * These are NOT AGENT_TOOLS (they live as MCP tools in lib/mcp/tools/
+ * codebase-read.ts). They're wired into the worker as standalone ToolDefs and
+ * dispatched explicitly in executeWorkerTool — they never touch executeTool.
+ * Both are strictly read-only (repo-scoped, env/secrets/deps blocked, 100KB cap,
+ * binary refused — all enforced in codebase-read.ts).
+ */
+export const CODEBASE_READ_TOOL: ToolDef = {
+  name: "codebase_read",
+  description: CODEBASE_READ_DESCRIPTION,
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File path relative to the repo root." },
+    },
+    required: ["path"],
+  },
+}
+
+export const CODEBASE_SEARCH_TOOL: ToolDef = {
+  name: "codebase_search",
+  description: CODEBASE_SEARCH_DESCRIPTION,
+  parameters: {
+    type: "object",
+    properties: {
+      pattern: { type: "string", description: "String or JavaScript regular expression to search for." },
+      directory: { type: "string", description: "Optional repo-relative directory to limit the search (e.g. 'lib/portal')." },
+      extension: { type: "string", description: "Optional file extension filter, no dot (e.g. 'tsx')." },
+    },
+    required: ["pattern"],
+  },
+}
+
+/**
  * Tools handed to sonnet at request time: the read-only research subset PLUS
- * propose_action (which only queues, never executes).
+ * propose_action (which only queues, never executes) PLUS the read-only
+ * codebase tools (so the worker can trace into source).
  */
 export const WORKER_TOOLS: ToolDef[] = [
   ...AGENT_TOOLS.filter((t) => WORKER_READ_ONLY_TOOL_NAMES.has(t.name)),
   PROPOSE_ACTION_TOOL,
+  CODEBASE_READ_TOOL,
+  CODEBASE_SEARCH_TOOL,
 ]
 
 /**
@@ -131,6 +176,7 @@ export async function proposeAction(input: {
   params?: unknown
   rationale?: unknown
   idempotency_key?: unknown
+  thread_id?: unknown
 }): Promise<string> {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
@@ -140,6 +186,11 @@ export async function proposeAction(input: {
   const rationale = typeof input.rationale === "string" ? input.rationale : null
   const idempotencyKey = typeof input.idempotency_key === "string" && input.idempotency_key.length > 0
     ? input.idempotency_key
+    : null
+  // Optional thread linkage — ties the proposal to a conversation thread. Only a
+  // non-empty string is accepted; anything else stores NULL (no thread).
+  const threadId = typeof input.thread_id === "string" && input.thread_id.length > 0
+    ? input.thread_id
     : null
 
   // 1) Allow-list check — a tool not in the set can never be proposed.
@@ -195,6 +246,7 @@ export async function proposeAction(input: {
       params_hash: paramsHash,
       rationale,
       idempotency_key: idempotencyKey,
+      thread_id: threadId,
       status: "pending",
     })
     .select("id, tool_name, status, params_hash, created_at")
@@ -241,6 +293,19 @@ export async function executeWorkerTool(name: string, params: Record<string, unk
   if (name === "propose_action") {
     return proposeAction(params)
   }
+  // Read-only repo-source tools — dispatched directly (not via executeTool;
+  // they're not AGENT_TOOLS). Repo-scoped + env/secrets/deps blocked in
+  // lib/mcp/tools/codebase-read.ts.
+  if (name === "codebase_read") {
+    return readCodebaseFile(typeof params.path === "string" ? params.path : "")
+  }
+  if (name === "codebase_search") {
+    return searchCodebase(
+      typeof params.pattern === "string" ? params.pattern : "",
+      typeof params.directory === "string" ? params.directory : undefined,
+      typeof params.extension === "string" ? params.extension : undefined,
+    )
+  }
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
@@ -257,7 +322,7 @@ export const WORKER_SYSTEM_PROMPT = [
   "A message has arrived from Hermes — Antonio's Telegram assistant — relaying a research question from Antonio.",
   "",
   "Your job:",
-  "  1. Investigate using the read-only tools available to you (CRM search/get, Gmail read, Drive list, KB/SOP search).",
+  "  1. Investigate using the read-only tools available to you (CRM search/get, Gmail read, Drive list, KB/SOP search, and codebase_read/codebase_search to trace a question into the actual repo source).",
   "  2. Verify every factual claim against a fresh tool call. NEVER assume column names, schemas, client state, or past actions.",
   "  3. Reply with concise, plain-English findings suitable for Hermes to relay back to Antonio on Telegram.",
   "  4. When an action is implied (send an email, create/update a record, advance a stage, move/upload a Drive file, log a conversation, save a memory), call propose_action — do NOT describe-only. propose_action does NOT run the action; it queues a pending proposal that does nothing until Antonio approves it on the approval rail. You still cannot execute, send, or mutate anything directly — propose_action is your only non-read tool, and it only queues.",
