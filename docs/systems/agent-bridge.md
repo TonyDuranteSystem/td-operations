@@ -1,5 +1,5 @@
 # Hermes ↔ Claude Agent Bridge
-_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3 part 1: proposeAction normalizes enum-backed params via enum-normalization.ts before validate/hash)_
+_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3: all 12 approvable tools verified end-to-end through propose→approve→execute in sandbox; two write-tool bugs found + fixed)_
 
 ## What it is
 A research/discussion channel that lets the **Hermes** Telegram bot (running on the Mac Mini, talking to Antonio on mobile) ask **Claude** (a server-side worker using `claude-sonnet-4-6`) questions and get answers back, without Antonio having to be the human relay between the two tools. Eliminates the "copy from Telegram into Claude Code, copy findings back to Telegram" workflow.
@@ -110,8 +110,18 @@ _Shipped 2026-06-04 (sandbox). **Approved actions now run for real**, gated by a
   - `executed` rows are never re-run (claim only matches `approved`).
   - Tests: `tests/unit/approval-executor.test.ts` (happy path, error-shaped result, throw, atomic single-winner claim, integrity mismatch, reject, approve, expiry, crash recovery, kill switch).
 
+## Phase 2 — Slice 3: enum normalization + full-rail E2E verification
+_Shipped 2026-06-04 (sandbox)._
+
+- **Part 1 — enum normalization** (`lib/ai-agent/enum-normalization.ts`): the approvable tools write to/filter on real Postgres ENUM columns; flexible input is now mapped to the canonical DB value at execution AND in `proposeAction` (before validate/hash). See `ai-agent.md` for the full write-up.
+- **Part 2 — systematic rail E2E:** all 12 approvable tools were driven through the FULL `propose → approve → execute` cycle against sandbox via `scripts/test-approval-rail-s3.ts` (a `tsx` driver: real `proposeAction` → assert `pending` + `params_hash` → `UPDATE status='approved'` → HTTP `GET /api/cron/approval-executor?id=` with `CRON_SECRET` → assert terminal status + `result` + outcome callback → tool-effect check → full cleanup). **Result: 12/12 pass**, zero sandbox residue.
+  - `SANDBOX_MODE=1` mocks Gmail send (`{success:true,sandbox:true}`) and Drive writes (`moveFile→{id:fileId}`, `uploadBinaryToDrive→{id:'sandbox-mock'}`) to success, so `send_email`/`drive_move`/`drive_upload_file` resolve **executed** with NO real external effect. `gmail_get_attachments` uses `gmailGet` (NOT mocked), so a fake message_id yields a real 404 → **failed**, which the rail captures cleanly with a callback — the intended failure-path proof.
+  - **Two pre-existing write-tool bugs found + fixed** (both also affected the in-dashboard agent, not just the rail): (1) `createTask`/`advanceServiceStage` auto-tasks omitted `attachments` (`tasks.attachments` is `NOT NULL`, no default) → every real insert threw `23502`; (2) `advanceServiceStage` filtered `service_deliveries.eq('service_id', …)` — a nonexistent column — so it never found a delivery; the lookup is now `.eq('id', …)` (the id the agent actually holds). See `ai-agent.md` gotchas + `tests/unit/agent-tools-insert-shape.test.ts`.
+  - **Lesson:** mocked-Supabase unit tests can't catch NOT-NULL / wrong-column DB errors. The real-DB rail E2E is the only thing that surfaced both — keep `scripts/test-approval-rail-s3.ts` runnable for any future approvable-tool change.
+
 ## How to verify current state
 - Read `lib/mcp/tools/agent-messages.ts` (the 3 MCP tools + `fireDirectTrigger`), `lib/ai-agent/worker-tools.ts` (the allow-list + `callWorker`), `app/api/cron/hermes-bridge/route.ts` (the cron worker).
+- **Phase 2 Slice 3:** `APPROVAL_RAIL_ENABLED=true` in `.env.local`, run `npm run dev`, then `npx tsx scripts/test-approval-rail-s3.ts` → expect a 12/12 PASS matrix (11 executed, gmail_get_attachments failed-by-design) and `🧹 cleanup done`. `npm run test:unit -- agent-tools-insert-shape enum-normalization` should pass.
 - Confirm the cron is registered: `grep -A 2 hermes-bridge vercel.json`.
 - Sanity-check the table exists in sandbox: `SELECT count(*), status FROM agent_messages GROUP BY status` (via sandbox MCP `execute_sql` or `psql`).
 - Confirm the worker allow-list contains no write-shaped names: `npm run test:unit -- agent-bridge-worker-tools` should pass.

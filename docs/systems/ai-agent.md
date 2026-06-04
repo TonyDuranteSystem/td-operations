@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3 part 1: enum normalization — `lib/ai-agent/enum-normalization.ts` maps flexible input to canonical DB enum values; fixed create_task's invalid `medium`/`Admin` defaults)_
+_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3: enum normalization + two write-tool fixes surfaced by the sandbox rail E2E — create_task now supplies `attachments` (NOT NULL); advance_service_stage looks up `service_deliveries` by `id`, not a nonexistent `service_id` column)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -44,6 +44,8 @@ Several tool params/filters map to real Postgres ENUM columns (`task_priority`, 
 ## Gotchas, invariants & past bugs
 - **Two different tool worlds** — the AI agent's `lib/ai-agent/tools.ts` (~34 tools) is NOT the MCP server's ~217 tools. A change in one doesn't affect the other; adding an MCP tool does NOT give the dashboard agent that capability (and vice-versa).
 - **Never re-introduce hardcoded enum literals in `tools.ts`** — route every enum-backed param/filter through `enum-normalization.ts`. The `create_task` `'medium'`/`'Admin'` defaults were a live break (invalid enum members → insert threw). Canonical values live in one place by design.
+- **`tasks.attachments` is `jsonb NOT NULL` with no DB default** — every task insert MUST supply `attachments: []` (see `lib/operations/task.ts`). `createTask` and `advanceServiceStage`'s auto-task insert omitted it and threw `23502` on every real insert; mocked unit tests can't catch a NOT-NULL violation, so a payload-shape regression test (`tests/unit/agent-tools-insert-shape.test.ts`) pins it. Surfaced by the Slice 3 sandbox rail E2E (`scripts/test-approval-rail-s3.ts`).
+- **`advance_service_stage` takes a `service_deliveries.id`, not a `service_id`** — `service_deliveries` has no `service_id` column; the agent gets the id from `search_services`/`get_account_detail` (both expose `service_deliveries.id`). The lookup filters `.eq('id', …)`. The old `.eq('service_id', …)` errored on a nonexistent column, so the tool never worked. Don't revert.
 - **Provider fallback can change behaviour** — Claude (sonnet-4-6) primary, GPT-4o fallback; outputs/tool-use may differ if it falls back. `provider` is returned in the response so you can tell which ran.
 - **`run_sql_query` runs against the deployment's DB** — staff-only, but on production it hits production. Treat it like any production query.
 - **Agent memory is separate** from `session_checkpoints` and from Claude Code memory — it's the dashboard agent's own `save_memory`/`recall_memories` store.

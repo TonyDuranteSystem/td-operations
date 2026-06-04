@@ -802,6 +802,8 @@ async function createTask(p: any) {
       account_id: p.account_id || null,
       category: category as never,
       status: 'To Do',
+      // tasks.attachments is NOT NULL with no DB default — always satisfy it.
+      attachments: [],
     })
     .select('id, task_title, status, priority, assigned_to, due_date')
     .single()
@@ -1422,18 +1424,20 @@ async function updateContact(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function advanceServiceStage(p: any) {
-  // Find the active service_delivery for this service
-  // @ts-expect-error Type instantiation is excessively deep
+  // Find the active service_delivery. The agent obtains this id from
+  // search_services / get_account_detail, both of which expose
+  // service_deliveries.id (there is no service_id column on the table), so we
+  // look it up by id, not by a (nonexistent) service_id column.
   const { data: delivery, error: dErr } = await supabaseAdmin
     .from('service_deliveries')
     .select('*')
-    .eq('service_id', p.service_id)
+    .eq('id', p.service_id)
     .eq('status', 'active')
     .limit(1)
     .single()
 
   if (dErr || !delivery) {
-    return JSON.stringify({ error: `No active service delivery found for service ${p.service_id}. Error: ${dErr?.message || 'not found'}` })
+    return JSON.stringify({ error: `No active service delivery found for id ${p.service_id}. Error: ${dErr?.message || 'not found'}` })
   }
 
   // Get current stage order
@@ -1497,6 +1501,8 @@ async function advanceServiceStage(p: any) {
           deal_id: delivery.deal_id,
           delivery_id: delivery.id,
           stage_order: nextStage.stage_order,
+          // tasks.attachments is NOT NULL with no DB default — always satisfy it.
+          attachments: [],
         })
       if (!tErr) createdTasks.push(taskDef.title)
     }
