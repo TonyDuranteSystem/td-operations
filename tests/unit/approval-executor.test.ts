@@ -375,6 +375,8 @@ describe("expiry sweep (runExecutorScan)", () => {
     const result = await runExecutorScan()
     expect(result.expired).toBe(1)
     expect(h.store.approval_queue[0].status).toBe("expired")
+    // Phase B: expiry flips notification_sent so the retry sweep won't duplicate it.
+    expect(h.store.approval_queue[0].notification_sent).toBe(true)
 
     const cb = h.store.agent_messages.find((m) => m.context_json?.approval_id === row.id)
     expect(cb).toBeTruthy()

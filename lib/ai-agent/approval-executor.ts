@@ -34,7 +34,7 @@
 
 import { executeTool } from "./tools"
 import { computeParamsHash } from "./approvable-tools"
-import { writeOutcomeCallback } from "./approval-callback"
+import { emitApprovalOutcome, runNotificationSweep } from "./approval-notifications"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 const STALE_CLAIM_MS = 10 * 60 * 1000 // executing rows older than this are treated as crashed
@@ -65,6 +65,7 @@ export interface ExecutorRunResult {
   recovered?: number
   executed?: number
   expired?: number
+  notified?: number
   results?: ExecResult[]
   note?: string
 }
@@ -151,16 +152,20 @@ async function finalize(
  * already-terminal row because the caller only ever passes freshly-claimed rows.
  */
 export async function executeApprovalRow(row: ApprovalRow): Promise<ExecResult> {
+  // The proposal row, reused for richer CRM-chat notification formatting.
+  const notifyRow = { id: row.id, tool_name: row.tool_name, params: row.params }
+
   // 1) Integrity: stored params must still hash to the stored params_hash.
   const recomputed = computeParamsHash(row.params)
   if (recomputed !== row.params_hash) {
     await finalize(row.id, "failed", { error_text: "params_hash integrity mismatch" })
-    await writeOutcomeCallback(
-      row.id,
-      row.tool_name,
-      `Proposal ${row.tool_name} NOT executed: params_hash integrity mismatch (stored params changed since approval).`,
-      "failed",
-    )
+    await emitApprovalOutcome({
+      id: row.id,
+      tool_name: row.tool_name,
+      status: "failed",
+      summary: `Proposal ${row.tool_name} NOT executed: params_hash integrity mismatch (stored params changed since approval).`,
+      row: notifyRow,
+    })
     return { id: row.id, status: "failed", reason: "integrity" }
   }
 
@@ -171,7 +176,13 @@ export async function executeApprovalRow(row: ApprovalRow): Promise<ExecResult> 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     await finalize(row.id, "failed", { error_text: msg })
-    await writeOutcomeCallback(row.id, row.tool_name, `Proposal ${row.tool_name} failed: ${msg}`, "failed")
+    await emitApprovalOutcome({
+      id: row.id,
+      tool_name: row.tool_name,
+      status: "failed",
+      summary: `Proposal ${row.tool_name} failed: ${msg}`,
+      row: notifyRow,
+    })
     return { id: row.id, status: "failed", reason: "throw" }
   }
 
@@ -179,13 +190,25 @@ export async function executeApprovalRow(row: ApprovalRow): Promise<ExecResult> 
   const interp = interpretToolResult(raw)
   if (!interp.ok) {
     await finalize(row.id, "failed", { result: interp.result, error_text: interp.error ?? "tool error" })
-    await writeOutcomeCallback(row.id, row.tool_name, `Proposal ${row.tool_name} failed: ${interp.error ?? "tool error"}`, "failed")
+    await emitApprovalOutcome({
+      id: row.id,
+      tool_name: row.tool_name,
+      status: "failed",
+      summary: `Proposal ${row.tool_name} failed: ${interp.error ?? "tool error"}`,
+      row: notifyRow,
+    })
     return { id: row.id, status: "failed", reason: "tool_error" }
   }
 
   // 4) Success.
   await finalize(row.id, "executed", { result: interp.result })
-  await writeOutcomeCallback(row.id, row.tool_name, `Proposal ${row.tool_name} executed successfully.`, "executed")
+  await emitApprovalOutcome({
+    id: row.id,
+    tool_name: row.tool_name,
+    status: "executed",
+    summary: `Proposal ${row.tool_name} executed successfully.`,
+    row: notifyRow,
+  })
   return { id: row.id, status: "executed" }
 }
 
@@ -234,17 +257,21 @@ export async function expireStalePending(): Promise<number> {
     .update({ status: "expired", updated_at: nowIso })
     .eq("status", "pending")
     .lt("expires_at", nowIso)
-    .select("id, tool_name")
+    .select("id, tool_name, params, rationale")
   if (error) throw error
 
-  const rows = (data ?? []) as Array<{ id: string; tool_name: string }>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data ?? []) as Array<{ id: string; tool_name: string; params?: Record<string, any> | null; rationale?: string | null }>
   for (const r of rows) {
-    await writeOutcomeCallback(
-      r.id,
-      r.tool_name,
-      `Proposal ${r.tool_name} expired (not approved before its expiry window).`,
-      "expired",
-    )
+    // Each expiry writes the Hermes callback, flips notification_sent, and mirrors
+    // to the CRM team chat (deliverable #3).
+    await emitApprovalOutcome({
+      id: r.id,
+      tool_name: r.tool_name,
+      status: "expired",
+      summary: `Proposal ${r.tool_name} expired (not approved before its expiry window).`,
+      row: { id: r.id, tool_name: r.tool_name, params: r.params ?? null, rationale: r.rationale ?? null },
+    })
   }
   return rows.length
 }
@@ -272,12 +299,18 @@ export async function runExecutorScan(): Promise<ExecutorRunResult> {
 
   const expired = await expireStalePending()
 
+  // Retry safety net: re-notify any terminal row whose first callback never set
+  // notification_sent (deliverable #1). Runs after the work above so freshly
+  // terminal rows from this same tick are already flagged and skipped here.
+  const notified = await runNotificationSweep()
+
   return {
     ok: true,
     mode: "scan",
     recovered,
     executed: results.filter((r) => r.status === "executed").length,
     expired,
+    notified,
     results,
   }
 }

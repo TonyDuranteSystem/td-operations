@@ -32,6 +32,7 @@ import {
   computeParamsHash,
 } from "./approvable-tools"
 import { normalizeToolParams } from "./enum-normalization"
+import { sendApprovalNotification } from "./approval-notifications"
 import {
   readCodebaseFile,
   searchCodebase,
@@ -260,6 +261,14 @@ export async function proposeAction(input: {
     return `❌ propose_action failed to queue: ${error.message ?? "unknown error"}`
   }
   if (!data) return `❌ propose_action: insert returned no row.`
+
+  // Heads-up to the CRM team chat so a proposal is visible to staff even before
+  // Hermes surfaces it on Telegram (Phase B, deliverable #4). Best-effort — the
+  // helper never throws, so a notification failure never fails the proposal.
+  await sendApprovalNotification(
+    { id: data.id, tool_name: toolName, params, rationale },
+    "proposed",
+  )
 
   return [
     `✅ Action proposed and queued for approval (NOT executed).`,
