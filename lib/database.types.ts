@@ -1238,6 +1238,83 @@ export type Database = {
         }
         Relationships: []
       }
+      approval_queue: {
+        Row: {
+          batch_id: string | null
+          claimed_at: string | null
+          claimed_by: string | null
+          created_at: string
+          decided_at: string | null
+          decided_by: string | null
+          error_text: string | null
+          executed_at: string | null
+          expires_at: string
+          id: string
+          idempotency_key: string | null
+          params: Json
+          params_hash: string
+          rationale: string | null
+          requested_by: Database["public"]["Enums"]["agent_message_party"]
+          result: Json | null
+          source_message_id: string | null
+          status: Database["public"]["Enums"]["approval_status"]
+          tool_name: string
+          updated_at: string
+        }
+        Insert: {
+          batch_id?: string | null
+          claimed_at?: string | null
+          claimed_by?: string | null
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          error_text?: string | null
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          idempotency_key?: string | null
+          params?: Json
+          params_hash: string
+          rationale?: string | null
+          requested_by?: Database["public"]["Enums"]["agent_message_party"]
+          result?: Json | null
+          source_message_id?: string | null
+          status?: Database["public"]["Enums"]["approval_status"]
+          tool_name: string
+          updated_at?: string
+        }
+        Update: {
+          batch_id?: string | null
+          claimed_at?: string | null
+          claimed_by?: string | null
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          error_text?: string | null
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          idempotency_key?: string | null
+          params?: Json
+          params_hash?: string
+          rationale?: string | null
+          requested_by?: Database["public"]["Enums"]["agent_message_party"]
+          result?: Json | null
+          source_message_id?: string | null
+          status?: Database["public"]["Enums"]["approval_status"]
+          tool_name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "approval_queue_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "agent_messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       approved_responses: {
         Row: {
           airtable_id: string | null
@@ -12232,6 +12309,14 @@ export type Database = {
         | "done"
         | "failed"
         | "cancelled"
+      approval_status:
+        | "pending"
+        | "approved"
+        | "rejected"
+        | "executing"
+        | "executed"
+        | "failed"
+        | "expired"
       billing_type: "Included" | "Standalone"
       company_type: "Single Member LLC" | "Multi Member LLC" | "C-Corp Elected"
       conversation_channel:
@@ -12519,6 +12604,15 @@ export const Constants = {
         "done",
         "failed",
         "cancelled",
+      ],
+      approval_status: [
+        "pending",
+        "approved",
+        "rejected",
+        "executing",
+        "executed",
+        "failed",
+        "expired",
       ],
       billing_type: ["Included", "Standalone"],
       company_type: ["Single Member LLC", "Multi Member LLC", "C-Corp Elected"],

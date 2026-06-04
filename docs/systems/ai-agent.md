@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-04 — Claude (added approvable-tools.ts + propose_action note for the bridge approval rail Phase 2 Slice 1)_
+_Last verified against code: 2026-06-04 — Claude (added approval-executor.ts + approval-callback.ts; executeTool is now the bridge approval rail's execution path, Phase 2 Slice 2)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -23,6 +23,7 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 - `callWorker()` mirrors `callClaude()` but uses that subset + `WORKER_SYSTEM_PROMPT` (sonnet-4-6). It deliberately does **not** reuse `callAgent()` (which hardcodes the full `AGENT_TOOLS` + dashboard prompt).
 - It is driven by the cron worker at `app/api/cron/hermes-bridge`, not `/api/ai-agent`. Full subsystem doc: `agent-bridge.md`.
 - **Phase 2 Slice 1 (2026-06-04):** `WORKER_TOOLS` now also includes **`propose_action`** (the one non-read tool — it only QUEUES, never executes). It validates against the allow-list + schema in `lib/ai-agent/approvable-tools.ts` (`APPROVABLE_TOOL_NAMES`, `computeParamsHash`, `validateToolParams`, `APPROVABLE_TOOL_CONSTRAINTS`) and INSERTs a `pending` row into `approval_queue`. `propose_action` is deliberately **not** in `WORKER_READ_ONLY_TOOL_NAMES`. See `agent-bridge.md` for the full rail.
+- **Phase 2 Slice 2 (2026-06-04):** `executeTool()` (this file's full dispatcher) is now the **execution path** for approved proposals. `lib/ai-agent/approval-executor.ts` claims an approved `approval_queue` row, re-checks its `params_hash`, then calls `executeTool(tool_name, params)` for real (kill-switch-gated by `APPROVAL_RAIL_ENABLED`); `lib/ai-agent/approval-callback.ts` writes the outcome back to Hermes via `agent_messages`. Note `executeTool` catches its own errors and returns an `{error:…}` string rather than throwing — the executor inspects the result so a logically-failed action is recorded `failed`, not `executed`. Run by `app/api/cron/approval-executor`; decided via the `approval_decide` MCP tool. See `agent-bridge.md`.
 
 ## Business rules
 - **Staff-only** — clients can never use it; non-admin staff need the `app_settings.ai_agent.enabled_for_team` toggle.

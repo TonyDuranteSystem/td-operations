@@ -61,6 +61,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/approval-executor",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/invoice-overdue",
       "schedule": "0 9 * * *"
     },
