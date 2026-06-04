@@ -1,10 +1,10 @@
 # Hermes ↔ Claude Agent Bridge
-_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3: all 12 approvable tools verified end-to-end through propose→approve→execute in sandbox; two write-tool bugs found + fixed)_
+_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 4: proposal formatter + Hermes-side approval rail wiring — Hermes can now present pending proposals and call approval_decide)_
 
 ## What it is
 A research/discussion channel that lets the **Hermes** Telegram bot (running on the Mac Mini, talking to Antonio on mobile) ask **Claude** (a server-side worker using `claude-sonnet-4-6`) questions and get answers back, without Antonio having to be the human relay between the two tools. Eliminates the "copy from Telegram into Claude Code, copy findings back to Telegram" workflow.
 
-This is **Phase 1 — research/discussion only.** Action authorization (Antonio approving before Claude does anything that mutates state) is **Phase 2** (`approval_queue` + `approval_decide` + the `approval-executor` worker; `/portal/team/approvals` + Telegram push are later slices), being built in slices — **Slice 1 (QUEUE + READ) and Slice 2 (DECISION + EXECUTION, kill-switch-gated) have shipped** (see the Phase 2 sections below). Re-tiering existing write tools (`gmail_send`, CRM mutations) onto that approval rail is **Phase 3**.
+This is **Phase 1 — research/discussion only.** Action authorization (Antonio approving before Claude does anything that mutates state) is **Phase 2** (`approval_queue` + `approval_decide` + the `approval-executor` worker; `/portal/team/approvals` + Telegram push are later slices), being built in slices — **Slices 1–4 have shipped** (1: QUEUE + READ; 2: DECISION + EXECUTION, kill-switch-gated; 3: enum normalization + full-rail E2E; 4: proposal formatter + Hermes-side approval wiring — see the Phase 2 sections below). Re-tiering existing write tools (`gmail_send`, CRM mutations) onto that approval rail is **Phase 3**.
 
 ## Business rules
 - **Hermes is restricted to research/discussion.** It can ask Claude things and read findings — it cannot ask Claude to send emails, modify records, push code, or run anything with side effects via this rail. (Phase 2 will move action requests to the approval rail.)
@@ -119,9 +119,38 @@ _Shipped 2026-06-04 (sandbox)._
   - **Two pre-existing write-tool bugs found + fixed** (both also affected the in-dashboard agent, not just the rail): (1) `createTask`/`advanceServiceStage` auto-tasks omitted `attachments` (`tasks.attachments` is `NOT NULL`, no default) → every real insert threw `23502`; (2) `advanceServiceStage` filtered `service_deliveries.eq('service_id', …)` — a nonexistent column — so it never found a delivery; the lookup is now `.eq('id', …)` (the id the agent actually holds). See `ai-agent.md` gotchas + `tests/unit/agent-tools-insert-shape.test.ts`.
   - **Lesson:** mocked-Supabase unit tests can't catch NOT-NULL / wrong-column DB errors. The real-DB rail E2E is the only thing that surfaced both — keep `scripts/test-approval-rail-s3.ts` runnable for any future approvable-tool change.
 
+## Phase 2 — Slice 4: proposal formatter + Hermes-side approval wiring
+_Shipped 2026-06-04 (sandbox). No new migration, no new server tool — Slice 4 makes the EXISTING `approval_list`/`approval_decide` tools usable from Hermes and gives both sides one shared way to render a proposal for Antonio._
+
+- **Why:** Slices 1–3 built the full server rail (queue → decide → execute → callback) and proved it end-to-end. But Hermes (on the Mac Mini) still had no way to (a) reach the decision tools, nor (b) present a pending proposal to Antonio in a consistent, risk-aware form. Slice 4 closes that last gap so Antonio can actually approve/reject from his phone.
+- **Proposal formatter** (`lib/ai-agent/format-approval-proposal.ts`) — a **pure, DB-free** `formatApprovalProposal(row)` that renders an `approval_queue` row into a plain-text, mobile-friendly Telegram message:
+  ```
+  📋 Action Proposal #<short-id>
+
+  🔧 <Tool Label>
+     <key>: <value>     (one line per SURFACED param present)
+
+  ⚠️ <External recipient / Cascades / Irreversible>   (only if the tool has flags)
+
+  💡 <rationale>        (only if present)
+
+  To approve: APPROVE <short-id>
+  To reject: REJECT <short-id> <reason>
+  ```
+  - **Single source of truth for surfacing:** label, which params to show, and the risk flags all come from `APPROVABLE_TOOL_CONSTRAINTS` in `approvable-tools.ts`. Adding a tool / flag there automatically flows into the message — the formatter never hardcodes per-tool logic. The eventual `/portal/team/approvals` card should reuse the same constraint metadata so the two views can't drift.
+  - **short-id = first 8 chars of the UUID** (`shortId()`), what Antonio types in `APPROVE <id>` / `REJECT <id> <reason>`.
+  - **Graceful degradation:** unknown tool → label falls back to the raw `tool_name` and ALL params are surfaced (can't know which matter); absent surface params are skipped; null/empty params → `(no parameters)` placeholder; null/empty rationale → the 💡 line is omitted; values are newline-collapsed and truncated to 240 chars (so a 20k-char email body doesn't blow up the message).
+  - **Formats only — never approves, never executes.** The MANDATORY discipline (show Antonio the full proposal, wait for explicit OK before `approval_decide(approve)`) lives in the MCP tool description + Hermes's `USER.md`.
+  - Tests: `tests/unit/format-approval-proposal.test.ts` (21 cases — create_task all-params, send_email external/irreversible flags + newline collapse, advance_service_stage cascade flag, missing/null params, unknown-tool fallback, long-value truncation, 8-char short id).
+- **Hermes-side wiring (Mac Mini, NOT in this repo — Hermes is a separate Python app at `~/.hermes/`):**
+  - `~/.hermes/config.yaml` → `mcp_servers.td_sandbox_readonly.tools.include` now also lists `approval_list` and `approval_decide` (alongside `agent_msg_send`, `agent_inbox_list`, etc.). The server already exposes both (registered via `registerAgentApprovalTools` in `app/api/[transport]/route.ts`); the include list is the client-side allow filter, so this is the only change needed to let Hermes call them.
+  - `~/.hermes/memories/USER.md` → new **"## Approval Rail (Phase 2)"** section: Hermes presents pending proposals using the formatted view (tool, key params, risk flags, rationale, APPROVE/REJECT), **NEVER auto-approves** (same discipline as `gmail_send`/`agent_msg_send`), maps Antonio's "approve"/"reject" to `approval_decide(id, 'approve'|'reject', note)`, surfaces expired/failed/rejected callbacks from `agent_messages`, and polls `approval_list` periodically.
+- **What Hermes needs on the Mac Mini side (to be live):** the two config edits above are already applied on THIS machine's `~/.hermes/`. If Hermes runs on a different machine, the same two edits must be made there. Hermes must be restarted (or reload its MCP config) so the new `include` entries take effect. `SANDBOX_MCP_TOKEN` must already be set (it gates the existing `agent_msg_send`/`agent_inbox_list` tools, so no new secret is required). No production change — the rail stays sandbox-only and `APPROVAL_RAIL_ENABLED` still gates execution.
+
 ## How to verify current state
 - Read `lib/mcp/tools/agent-messages.ts` (the 3 MCP tools + `fireDirectTrigger`), `lib/ai-agent/worker-tools.ts` (the allow-list + `callWorker`), `app/api/cron/hermes-bridge/route.ts` (the cron worker).
 - **Phase 2 Slice 3:** `APPROVAL_RAIL_ENABLED=true` in `.env.local`, run `npm run dev`, then `npx tsx scripts/test-approval-rail-s3.ts` → expect a 12/12 PASS matrix (11 executed, gmail_get_attachments failed-by-design) and `🧹 cleanup done`. `npm run test:unit -- agent-tools-insert-shape enum-normalization` should pass.
+- **Phase 2 Slice 4:** `npm run test:unit -- format-approval-proposal` should pass (21 cases). Confirm Hermes wiring: `grep approval_ ~/.hermes/config.yaml` shows `approval_list, approval_decide` in the `td_sandbox_readonly` include list, and `grep -A1 "Approval Rail" ~/.hermes/memories/USER.md` shows the Phase 2 section. (Hermes config is on the Mac Mini, NOT in this repo.)
 - Confirm the cron is registered: `grep -A 2 hermes-bridge vercel.json`.
 - Sanity-check the table exists in sandbox: `SELECT count(*), status FROM agent_messages GROUP BY status` (via sandbox MCP `execute_sql` or `psql`).
 - Confirm the worker allow-list contains no write-shaped names: `npm run test:unit -- agent-bridge-worker-tools` should pass.
