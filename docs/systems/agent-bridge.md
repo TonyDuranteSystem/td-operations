@@ -1,5 +1,5 @@
 # Hermes ↔ Claude Agent Bridge
-_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 2 + hotfix: canonical params_hash after JSONB key-order bug surfaced in sandbox E2E; full E2E green)_
+_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3 part 1: proposeAction normalizes enum-backed params via enum-normalization.ts before validate/hash)_
 
 ## What it is
 A research/discussion channel that lets the **Hermes** Telegram bot (running on the Mac Mini, talking to Antonio on mobile) ask **Claude** (a server-side worker using `claude-sonnet-4-6`) questions and get answers back, without Antonio having to be the human relay between the two tools. Eliminates the "copy from Telegram into Claude Code, copy findings back to Telegram" workflow.
@@ -73,7 +73,7 @@ _Shipped 2026-06-04. **Nothing executes in Slice 1.** It builds the queue + read
 - **Worker tool:** `propose_action` in `lib/ai-agent/worker-tools.ts`
   - Added to `WORKER_TOOLS` (the read-only research subset **plus** `propose_action`). It is **NOT** in `WORKER_READ_ONLY_TOOL_NAMES` — it's wired separately, so the write-prefix safety scan still governs that set.
   - `executeWorkerTool` routes `propose_action` → `proposeAction()`; the read subset → `executeTool`; everything else is rejected.
-  - `proposeAction()` validates tool_name against the allow-list + params against the tool schema, computes `params_hash`, then INSERTs a `pending` row. Idempotency: a matching `idempotency_key` whose row is `pending`/`approved` returns that row, no duplicate. **It never calls `executeTool` — it only queues.**
+  - `proposeAction()` first **normalizes enum-backed params** via `lib/ai-agent/enum-normalization.ts::normalizeToolParams` (so a proposal with `priority:'medium'` / `status:'todo'` is accepted → `'Normal'` / `'To Do'`), then validates tool_name against the allow-list + params against the tool schema, computes `params_hash`, then INSERTs a `pending` row. Normalizing **before** hashing means the stored params (and `params_hash`) reflect exactly what will execute. Idempotency: a matching `idempotency_key` whose row is `pending`/`approved` returns that row, no duplicate. **It never calls `executeTool` — it only queues.**
   - Worker system prompt updated: "when an action is implied, call `propose_action` (do NOT describe-only); it will NOT execute until Antonio approves."
 - **MCP read tool:** `approval_list` in `lib/mcp/tools/agent-approvals.ts` — `approval_list(status='pending', limit=20)`, newest-first, READ-ONLY. Registered in `app/api/[transport]/route.ts` via `registerAgentApprovalTools(server)`; described in `lib/mcp/instructions.ts`.
 - **Slice 1 invariants:**

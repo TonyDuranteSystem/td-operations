@@ -31,6 +31,7 @@ import {
   validateToolParams,
   computeParamsHash,
 } from "./approvable-tools"
+import { normalizeToolParams } from "./enum-normalization"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -132,7 +133,10 @@ export async function proposeAction(input: {
   idempotency_key?: unknown
 }): Promise<string> {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
-  const params = input.params ?? {}
+  // Normalize enum-backed params to their canonical DB value BEFORE validation +
+  // hashing, so a proposal with 'medium'/'todo' is accepted (→ 'Normal'/'To Do')
+  // and the stored params (and params_hash) reflect exactly what will execute.
+  const params = normalizeToolParams(toolName, input.params ?? {})
   const rationale = typeof input.rationale === "string" ? input.rationale : null
   const idempotencyKey = typeof input.idempotency_key === "string" && input.idempotency_key.length > 0
     ? input.idempotency_key

@@ -4,6 +4,19 @@
  * Schema matches actual Supabase tables.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import {
+  normalizeTaskPriority,
+  normalizeTaskStatus,
+  normalizeTaskCategory,
+  normalizeServiceStatus,
+  normalizeConversationChannel,
+  normalizeAccountStatus,
+  normalizePaymentStatus,
+  normalizeDealStage,
+  normalizeLeadStatus,
+  normalizeTaxReturnStatus,
+  normalizeDeadlineStatus,
+} from './enum-normalization'
 
 // ============================================================
 // Tool Definitions (used by both Claude and OpenAI)
@@ -23,7 +36,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Company name search term (partial match)' },
-        status: { type: 'string', description: 'Filter by status: Active, Pending, Inactive, Dormant, Dissolved' },
+        status: { type: 'string', description: 'Filter by status: Active, Pending Formation, Delinquent, Suspended, Offboarding, Cancelled, Closed (case-insensitive)' },
         limit: { type: 'number', description: 'Max results (default 10)' },
       },
     },
@@ -56,7 +69,7 @@ export const AGENT_TOOLS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
-        status: { type: 'string', description: 'Filter: Not Started, In Progress, Waiting Client, Waiting Third Party, Completed, Cancelled' },
+        status: { type: 'string', description: 'Filter: Not Started, In Progress, Waiting Client, Waiting Third Party, Completed, Cancelled (case-insensitive)' },
         service_type: { type: 'string', description: 'Filter by type: Formation, Tax, Compliance, Consulting, etc.' },
         account_id: { type: 'string', description: 'Filter by account UUID' },
         limit: { type: 'number', description: 'Max results (default 20)' },
@@ -69,7 +82,7 @@ export const AGENT_TOOLS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
-        status: { type: 'string', description: 'Filter: Pending, Paid, Overdue, Partial, Cancelled' },
+        status: { type: 'string', description: 'Filter: Pending, Paid, Overdue, Delinquent, Waived, Refunded, Not Invoiced, Cancelled (case-insensitive)' },
         account_id: { type: 'string', description: 'Filter by account UUID' },
         overdue_only: { type: 'boolean', description: 'Only show overdue payments' },
         limit: { type: 'number', description: 'Max results (default 20)' },
@@ -82,8 +95,8 @@ export const AGENT_TOOLS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
-        status: { type: 'string', description: 'Filter: To Do, In Progress, Waiting, Done' },
-        priority: { type: 'string', description: 'Filter: low, medium, high, urgent' },
+        status: { type: 'string', description: 'Filter: To Do, In Progress, Waiting, Done, Cancelled (case-insensitive)' },
+        priority: { type: 'string', description: 'Filter: Low, Normal, High, Urgent (case-insensitive)' },
         assigned_to: { type: 'string', description: 'Filter by assignee name' },
         query: { type: 'string', description: 'Search in task title' },
         limit: { type: 'number', description: 'Max results (default 20)' },
@@ -98,7 +111,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       properties: {
         company_name: { type: 'string', description: 'Company name (partial match)' },
         tax_year: { type: 'number', description: 'Tax year (e.g. 2025)' },
-        status: { type: 'string', description: 'Filter: Pending, In Progress, Filed, Extended' },
+        status: { type: 'string', description: 'Filter (case-insensitive): Payment Pending, Link Sent - Awaiting Data, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Paid - Not Started, Activated - Need Link, Not Invoiced, Extension Requested, 1st Installment Paid, 2nd Installment Paid, Wizard Available' },
         limit: { type: 'number', description: 'Max results (default 20)' },
       },
     },
@@ -123,7 +136,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search by name, email, or company' },
-        status: { type: 'string', description: 'Lead status: new, contacted, qualified, converted, lost' },
+        status: { type: 'string', description: 'Lead status (case-insensitive): New, Call Scheduled, Call Done, Offer Sent, Negotiating, Paid, Converted, Lost, Suspended' },
         limit: { type: 'number', description: 'Max results (default 15)' },
       },
     },
@@ -134,7 +147,7 @@ export const AGENT_TOOLS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
-        stage: { type: 'string', description: 'Pipeline stage: Lead, Qualified, Proposal, Negotiation, Won, Lost' },
+        stage: { type: 'string', description: 'Pipeline stage (case-insensitive): Initial Consultation, Offer Sent, Negotiation, Agreement Signed, Paid, Closed Won, Closed Lost' },
         query: { type: 'string', description: 'Search by deal name' },
         limit: { type: 'number', description: 'Max results (default 15)' },
       },
@@ -164,11 +177,11 @@ export const AGENT_TOOLS: ToolDef[] = [
       properties: {
         task_title: { type: 'string', description: 'Title of the task' },
         description: { type: 'string', description: 'Detailed description' },
-        priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'], description: 'Priority level' },
+        priority: { type: 'string', enum: ['Low', 'Normal', 'High', 'Urgent'], description: 'Priority level (default Normal). Case-insensitive — "medium" is accepted as Normal.' },
         assigned_to: { type: 'string', description: 'Assignee name (e.g. Antonio, Luca)' },
         due_date: { type: 'string', description: 'Due date in YYYY-MM-DD format' },
         account_id: { type: 'string', description: 'Related account UUID (optional)' },
-        category: { type: 'string', description: 'Category: Tax, Formation, Compliance, Admin, Billing, Client Communication' },
+        category: { type: 'string', description: 'Category (case-insensitive): Client Response, Document, Filing, Follow-up, Payment, CRM Update, Internal, KYC, Shipping, Notarization, Client Communication, Formation' },
       },
       required: ['task_title'],
     },
@@ -236,9 +249,9 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'UUID of the task to update' },
-        status: { type: 'string', enum: ['To Do', 'In Progress', 'Waiting', 'Done'], description: 'New status' },
+        status: { type: 'string', enum: ['To Do', 'In Progress', 'Waiting', 'Done', 'Cancelled'], description: 'New status (case-insensitive)' },
         notes: { type: 'string', description: 'Update task notes (appends to existing)' },
-        priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'], description: 'New priority' },
+        priority: { type: 'string', enum: ['Low', 'Normal', 'High', 'Urgent'], description: 'New priority (case-insensitive — "medium" is accepted as Normal)' },
         assigned_to: { type: 'string', description: 'New assignee' },
       },
       required: ['task_id'],
@@ -377,7 +390,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         service_id: { type: 'string', description: 'UUID of the service' },
-        status: { type: 'string', description: 'New status: Not Started, In Progress, Waiting Client, Waiting Third Party, Completed, Cancelled' },
+        status: { type: 'string', description: 'New status (case-insensitive): Not Started, In Progress, Waiting Client, Waiting Third Party, Completed, Cancelled' },
         current_step: { type: 'number', description: 'New current step number' },
         notes: { type: 'string', description: 'Notes to append (timestamped)' },
       },
@@ -421,7 +434,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       properties: {
         account_id: { type: 'string', description: 'Account UUID' },
         contact_id: { type: 'string', description: 'Contact UUID' },
-        channel: { type: 'string', description: 'Channel: WhatsApp, Email, Phone, Calendly, Telegram' },
+        channel: { type: 'string', description: 'Channel (case-insensitive): WhatsApp, Telegram, Email, Phone, Portal, In-Person, Calendly, Zoom' },
         topic: { type: 'string', description: 'Brief topic/subject of the conversation' },
         category: { type: 'string', description: 'Category (e.g., Support, Billing, Onboarding, Tax)' },
         client_message: { type: 'string', description: 'Summary of what the client said' },
@@ -528,7 +541,7 @@ async function searchAccounts(p: any) {
     .from('accounts')
     .select('id, company_name, entity_type, status, state_of_formation, ein_number, formation_date, client_health')
   if (p.query) query = query.ilike('company_name', `%${p.query}%`)
-  if (p.status) query = query.eq('status', p.status)
+  if (p.status) query = query.eq('status', normalizeAccountStatus(p.status) ?? p.status)
   const { data, error } = await query.order('company_name').limit(Number(p.limit) || 10)
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
@@ -597,7 +610,7 @@ async function searchServices(p: any) {
   let query = supabaseAdmin
     .from('service_deliveries')
     .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, account_id, accounts!inner(company_name)')
-  if (p.status) query = query.eq('status', p.status)
+  if (p.status) query = query.eq('status', normalizeServiceStatus(p.status) ?? p.status)
   if (p.service_type) query = query.eq('service_type', p.service_type)
   if (p.account_id) query = query.eq('account_id', p.account_id)
   const { data, error } = await query.order('updated_at', { ascending: false }).limit(Number(p.limit) || 20)
@@ -615,7 +628,7 @@ async function searchPayments(p: any) {
   let query = supabaseAdmin
     .from('payments')
     .select('id, description, amount, amount_currency, status, due_date, paid_date, invoice_number, account_id, accounts!inner(company_name)')
-  if (p.status) query = query.eq('status', p.status)
+  if (p.status) query = query.eq('status', normalizePaymentStatus(p.status) ?? p.status)
   if (p.account_id) query = query.eq('account_id', p.account_id)
   if (p.overdue_only) query = query.eq('status', 'Pending').lt('due_date', today)
   const { data, error } = await query.order('due_date', { ascending: false }).limit(Number(p.limit) || 20)
@@ -632,8 +645,8 @@ async function searchTasks(p: any) {
   let query = supabaseAdmin
     .from('tasks')
     .select('id, task_title, status, priority, due_date, assigned_to, category, description, account_id, notes')
-  if (p.status) query = query.eq('status', p.status)
-  if (p.priority) query = query.eq('priority', p.priority)
+  if (p.status) query = query.eq('status', normalizeTaskStatus(p.status) ?? p.status)
+  if (p.priority) query = query.eq('priority', normalizeTaskPriority(p.priority) ?? p.priority)
   if (p.assigned_to) query = query.ilike('assigned_to', `%${p.assigned_to}%`)
   if (p.query) query = query.ilike('task_title', `%${p.query}%`)
   const { data, error } = await query.order('created_at', { ascending: false }).limit(Number(p.limit) || 20)
@@ -648,7 +661,7 @@ async function searchTaxReturns(p: any) {
     .select('id, company_name, client_name, return_type, tax_year, deadline, status, paid, data_received, extension_filed, extension_deadline, notes, updated_at')
   if (p.company_name) query = query.ilike('company_name', `%${p.company_name}%`)
   if (p.tax_year) query = query.eq('tax_year', p.tax_year)
-  if (p.status) query = query.eq('status', p.status)
+  if (p.status) query = query.eq('status', normalizeTaxReturnStatus(p.status) ?? p.status)
   const { data, error } = await query.order('tax_year', { ascending: false }).limit(Number(p.limit) || 20)
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
@@ -663,7 +676,7 @@ async function searchDeadlines(p: any) {
   let query = supabaseAdmin
     .from('deadlines')
     .select('id, deadline_type, due_date, status, notes, account_id, accounts!inner(company_name)')
-  if (p.status) query = query.eq('status', p.status)
+  if (p.status) query = query.eq('status', normalizeDeadlineStatus(p.status) ?? p.status)
   if (p.account_id) query = query.eq('account_id', p.account_id)
   if (!p.status) query = query.in('status', ['Pending', 'Overdue'])
   query = query.lte('due_date', futureDate.toISOString().split('T')[0])
@@ -684,7 +697,7 @@ async function searchLeads(p: any) {
     .order('created_at', { ascending: false })
     .limit(Number(p.limit) || 15)
   if (p.query) query = query.or(`full_name.ilike.%${p.query}%,email.ilike.%${p.query}%,first_name.ilike.%${p.query}%,last_name.ilike.%${p.query}%`)
-  if (p.status) query = query.eq('status', p.status)
+  if (p.status) query = query.eq('status', normalizeLeadStatus(p.status) ?? p.status)
   const { data, error } = await query
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
@@ -697,7 +710,7 @@ async function searchDeals(p: any) {
     .select('id, deal_name, stage, amount, deal_type, notes, account_id, accounts!inner(company_name)')
     .order('created_at', { ascending: false })
     .limit(Number(p.limit) || 15)
-  if (p.stage) query = query.eq('stage', p.stage)
+  if (p.stage) query = query.eq('stage', normalizeDealStage(p.stage) ?? p.stage)
   if (p.query) query = query.ilike('deal_name', `%${p.query}%`)
   const { data, error } = await query
   if (error) return JSON.stringify({ error: error.message })
@@ -771,17 +784,23 @@ async function searchPortalMessages(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function createTask(p: any) {
+  // Normalize enum-backed fields to the canonical DB value. Defaults are valid
+  // enum members: priority → 'Normal' (the column default), category → 'Internal'.
+  // The previous literals ('medium' / 'Admin') are NOT valid task_priority /
+  // task_category enum values and threw on insert.
+  const priority = normalizeTaskPriority(p.priority) ?? 'Normal'
+  const category = p.category != null ? (normalizeTaskCategory(p.category) ?? 'Internal') : 'Internal'
   // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data, error } = await supabaseAdmin
     .from('tasks')
     .insert({
       task_title: p.task_title,
       description: p.description || null,
-      priority: p.priority || 'medium',
+      priority: priority as never,
       assigned_to: p.assigned_to || 'Antonio',
       due_date: p.due_date || null,
       account_id: p.account_id || null,
-      category: p.category || 'Admin',
+      category: category as never,
       status: 'To Do',
     })
     .select('id, task_title, status, priority, assigned_to, due_date')
@@ -1049,8 +1068,18 @@ async function updateTask(p: any) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const patch: Record<string, any> = {}
-  if (p.status) patch.status = p.status
-  if (p.priority) patch.priority = p.priority
+  // Normalize enum-backed fields; reject an unrecognized value with a clear
+  // message rather than letting the DB throw a raw 22P02.
+  if (p.status) {
+    const status = normalizeTaskStatus(p.status)
+    if (!status) return JSON.stringify({ error: `Invalid status "${p.status}". Valid: To Do, In Progress, Waiting, Done, Cancelled.` })
+    patch.status = status
+  }
+  if (p.priority) {
+    const priority = normalizeTaskPriority(p.priority)
+    if (!priority) return JSON.stringify({ error: `Invalid priority "${p.priority}". Valid: Low, Normal, High, Urgent.` })
+    patch.priority = priority
+  }
   if (p.assigned_to) patch.assigned_to = p.assigned_to
 
   if (Object.keys(patch).length === 0 && !p.notes) {
@@ -1327,7 +1356,11 @@ async function previewAttachmentTool(p: any) {
 async function updateService(p: any) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {}
-  if (p.status) updates.status = p.status
+  if (p.status) {
+    const status = normalizeServiceStatus(p.status)
+    if (!status) return JSON.stringify({ error: `Invalid status "${p.status}". Valid: Not Started, In Progress, Waiting Client, Waiting Third Party, Completed, Cancelled.` })
+    updates.status = status
+  }
   if (p.current_step !== undefined) updates.current_step = p.current_step
 
   // Handle notes — append to existing
@@ -1456,8 +1489,8 @@ async function advanceServiceStage(p: any) {
         .insert({
           task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
           assigned_to: taskDef.assigned_to || 'Luca',
-          category: (taskDef.category || 'Internal') as never,
-          priority: (taskDef.priority || 'Normal') as never,
+          category: (normalizeTaskCategory(taskDef.category) ?? 'Internal') as never,
+          priority: (normalizeTaskPriority(taskDef.priority) ?? 'Normal') as never,
           description: taskDef.description || `Auto-created by pipeline advance to "${nextStage.stage_name}"`,
           status: 'To Do',
           account_id: delivery.account_id,
@@ -1484,7 +1517,8 @@ async function logConversation(p: any) {
   const insert = {
     account_id: p.account_id || null,
     contact_id: p.contact_id || null,
-    channel: p.channel || null,
+    // conversation_channel is a real enum; normalize or drop (column is nullable).
+    channel: p.channel ? normalizeConversationChannel(p.channel) : null,
     topic: p.topic,
     category: p.category || null,
     client_message: p.client_message || null,

@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-04 — Claude (Slice 2 + hotfix: computeParamsHash is now key-order-canonical so JSONB round-trips don't break the integrity check; see agent-bridge.md)_
+_Last verified against code: 2026-06-04 — Claude (Phase 2 Slice 3 part 1: enum normalization — `lib/ai-agent/enum-normalization.ts` maps flexible input to canonical DB enum values; fixed create_task's invalid `medium`/`Admin` defaults)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -34,8 +34,16 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 - Files: `app/api/ai-agent/route.ts` (entry + access + rate limit), `app/api/ai-agent/attachment-preview/route.ts`, `lib/ai-agent/{providers,system-prompt,tools}.ts`. Background/architecture: sysdoc `antonio-brain-architecture`.
 - Tables: `app_settings` (`ai_agent` toggle), `conversations` (logging), the agent-memory store (`save_memory`/`recall_memories`), plus whatever the tools read/write.
 
+## Enum normalization (`lib/ai-agent/enum-normalization.ts`, 2026-06-04)
+Several tool params/filters map to real Postgres ENUM columns (`task_priority`, `task_status`, `task_category`, `service_status`, `conversation_channel`, plus the search-filter enums `account_status`, `payment_status`, `deal_stage`, `lead_status`, `tax_return_status`). An invalid value **throws `22P02` on a write** and **silently returns zero rows on a search**. This module is the single source of truth that maps flexible input (any casing + common synonyms: `medium→Normal`, `todo→To Do`) to the exact canonical DB value, or `null` if unrecognized.
+- **Canonical value sets** are verified against `pg_enum` and mirror the migration DDL — keep them in sync if an enum changes.
+- **Write paths** (`createTask`, `updateTask`, `updateService`, `advanceServiceStage` auto-tasks, `logConversation`) normalize before insert: `createTask` now defaults `priority→'Normal'` and `category→'Internal'` (the old literals `'medium'`/`'Admin'` were **not valid enum members** and made any category-less create_task throw); `updateTask`/`updateService` return a clear error on an unrecognized enum instead of letting the DB throw.
+- **Search filters** normalize then **fall back to the original value** on no-match (an exact match returning nothing is harmless — no behavior regression).
+- **Propose path** (`worker-tools.ts::proposeAction`) calls `normalizeToolParams()` BEFORE `validateToolParams` + `computeParamsHash`, so a proposal with `medium`/`todo` is accepted and the stored params (and hash) reflect exactly what executes. The schema `enum:` arrays in `AGENT_TOOLS` are the corrected canonical values (`['Low','Normal','High','Urgent']`, etc.) so propose-time validation still rejects genuine garbage.
+
 ## Gotchas, invariants & past bugs
 - **Two different tool worlds** — the AI agent's `lib/ai-agent/tools.ts` (~34 tools) is NOT the MCP server's ~217 tools. A change in one doesn't affect the other; adding an MCP tool does NOT give the dashboard agent that capability (and vice-versa).
+- **Never re-introduce hardcoded enum literals in `tools.ts`** — route every enum-backed param/filter through `enum-normalization.ts`. The `create_task` `'medium'`/`'Admin'` defaults were a live break (invalid enum members → insert threw). Canonical values live in one place by design.
 - **Provider fallback can change behaviour** — Claude (sonnet-4-6) primary, GPT-4o fallback; outputs/tool-use may differ if it falls back. `provider` is returned in the response so you can tell which ran.
 - **`run_sql_query` runs against the deployment's DB** — staff-only, but on production it hits production. Treat it like any production query.
 - **Agent memory is separate** from `session_checkpoints` and from Claude Code memory — it's the dashboard agent's own `save_memory`/`recall_memories` store.
