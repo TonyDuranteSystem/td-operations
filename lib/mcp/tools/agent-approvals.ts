@@ -18,7 +18,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
-import { writeOutcomeCallback } from "@/lib/ai-agent/approval-callback"
+import { emitApprovalOutcome } from "@/lib/ai-agent/approval-notifications"
 
 /** Who is recorded as the decider. Decisions are always made on Antonio's behalf. */
 const DECIDED_BY = "antonio"
@@ -209,7 +209,7 @@ export function registerAgentApprovalTools(server: McpServer) {
           .update({ status: "rejected", decided_by: DECIDED_BY, decided_at: nowIso, updated_at: nowIso })
           .eq("id", id)
           .eq("status", "pending")
-          .select("id, tool_name, status")
+          .select("id, tool_name, status, params, rationale")
           .maybeSingle()
 
         if (error) throw error
@@ -218,7 +218,17 @@ export function registerAgentApprovalTools(server: McpServer) {
         }
 
         const reason = note && note.trim().length > 0 ? note.trim() : "(no reason given)"
-        await writeOutcomeCallback(id, data.tool_name, `Proposal ${data.tool_name} rejected: ${reason}`, "rejected")
+        // Writes the Hermes callback, flips notification_sent, and mirrors to the
+        // CRM team chat (Phase B). notification_sent prevents the executor's
+        // retry sweep from duplicating this rejection notification.
+        await emitApprovalOutcome({
+          id,
+          tool_name: data.tool_name,
+          status: "rejected",
+          summary: `Proposal ${data.tool_name} rejected: ${reason}`,
+          row: { id, tool_name: data.tool_name, params: data.params ?? null, rationale: data.rationale ?? null },
+          detail: reason,
+        })
 
         return {
           content: [{

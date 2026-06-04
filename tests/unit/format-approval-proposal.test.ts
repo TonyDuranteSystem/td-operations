@@ -10,7 +10,12 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { formatApprovalProposal, shortId } from "@/lib/ai-agent/format-approval-proposal"
+import {
+  formatApprovalProposal,
+  formatApprovalOutcome,
+  formatProposeNotification,
+  shortId,
+} from "@/lib/ai-agent/format-approval-proposal"
 
 const FULL_UUID = "a1b2c3d4-5e6f-7890-abcd-ef1234567890"
 
@@ -206,5 +211,55 @@ describe("formatApprovalProposal — graceful handling of missing data", () => {
     expect(out).toContain("…")
     // the full 1000-char string must not appear verbatim
     expect(out).not.toContain(longBody)
+  })
+})
+
+describe("formatApprovalOutcome (Phase B)", () => {
+  it("renders the executed header, tool block, and detail line — no APPROVE/REJECT", () => {
+    const out = formatApprovalOutcome(
+      { id: FULL_UUID, tool_name: "create_task", params: { task_title: "Call client" } },
+      "executed",
+      "Proposal create_task executed successfully.",
+    )
+    expect(out).toContain(`✅ Action executed #${shortId(FULL_UUID)}`)
+    expect(out).toContain("🔧 Create CRM task")
+    expect(out).toContain("task_title: Call client")
+    expect(out).toContain("📄 Proposal create_task executed successfully.")
+    // It already happened — no decision instructions.
+    expect(out).not.toContain("APPROVE")
+    expect(out).not.toContain("REJECT")
+  })
+
+  it("uses the right header emoji per terminal status", () => {
+    const base = { id: FULL_UUID, tool_name: "create_task", params: { task_title: "x" } }
+    expect(formatApprovalOutcome(base, "failed")).toContain("❌ Action failed")
+    expect(formatApprovalOutcome(base, "rejected")).toContain("🛑 Action rejected")
+    expect(formatApprovalOutcome(base, "expired")).toContain("⌛ Action expired")
+  })
+
+  it("keeps the risk flags for an external send and omits an empty detail", () => {
+    const out = formatApprovalOutcome(
+      { id: FULL_UUID, tool_name: "send_email", params: { to: "a@b.c", subject: "S", body: "B" } },
+      "failed",
+      "  ",
+    )
+    expect(out).toContain("⚠️ External recipient / Irreversible")
+    expect(out).not.toContain("📄")
+  })
+})
+
+describe("formatProposeNotification (Phase B)", () => {
+  it("prefixes the awaiting-approval banner above the full proposal card", () => {
+    const out = formatProposeNotification({
+      id: FULL_UUID,
+      tool_name: "create_task",
+      params: { task_title: "Call client" },
+      rationale: "client asked",
+    })
+    expect(out).toContain("🆕 New action proposed — awaiting approval")
+    expect(out).toContain(`📋 Action Proposal #${shortId(FULL_UUID)}`)
+    expect(out).toContain("🔧 Create CRM task")
+    // Staff can act from the card.
+    expect(out).toContain(`APPROVE ${shortId(FULL_UUID)}`)
   })
 })
