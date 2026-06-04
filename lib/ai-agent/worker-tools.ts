@@ -24,6 +24,13 @@
  */
 
 import { AGENT_TOOLS, executeTool, type ToolDef } from "./tools"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import {
+  APPROVABLE_TOOL_NAMES,
+  isApprovableTool,
+  validateToolParams,
+  computeParamsHash,
+} from "./approvable-tools"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -58,16 +65,178 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Tools handed to sonnet at request time.
+ * propose_action — the ONLY non-read tool the worker gets (Phase 2, Slice 1).
+ *
+ * It does NOT execute anything. It validates a proposed action against the
+ * approvable allow-list + that tool's schema, then writes a status='pending'
+ * row into approval_queue for Antonio to approve later. Execution is a separate
+ * slice — there is no execute path in Slice 1.
  */
-export const WORKER_TOOLS: ToolDef[] = AGENT_TOOLS.filter((t) => WORKER_READ_ONLY_TOOL_NAMES.has(t.name))
+export const PROPOSE_ACTION_TOOL: ToolDef = {
+  name: "propose_action",
+  description: [
+    "Propose an action for Antonio to approve. This does NOT run the action — it queues it.",
+    "Use this whenever the research request implies a side-effecting action (sending an email, creating/updating a CRM record, advancing a stage, moving/uploading a Drive file, logging a conversation, saving a memory).",
+    "Do NOT describe-only: if an action is implied, propose it here. It will sit as 'pending' until Antonio approves it on the approval rail — nothing happens until then.",
+    `Allowed tool_name values: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`,
+    "params must match that tool's own parameters. Include a short rationale explaining why the action is warranted.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      tool_name: {
+        type: "string",
+        description: `The action tool to propose. One of: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`,
+      },
+      params: {
+        type: "object",
+        description: "The exact params the action would run with — must match the named tool's schema.",
+      },
+      rationale: {
+        type: "string",
+        description: "Short plain-English reason this action is warranted (surfaced on the approval card).",
+      },
+      idempotency_key: {
+        type: "string",
+        description: "Optional dedup key. Re-proposing with the same key returns the existing pending/approved row instead of creating a duplicate.",
+      },
+    },
+    required: ["tool_name", "params"],
+  },
+}
 
 /**
- * Wrapped execute that hard-rejects any tool name not in the allow-list.
+ * Tools handed to sonnet at request time: the read-only research subset PLUS
+ * propose_action (which only queues, never executes).
+ */
+export const WORKER_TOOLS: ToolDef[] = [
+  ...AGENT_TOOLS.filter((t) => WORKER_READ_ONLY_TOOL_NAMES.has(t.name)),
+  PROPOSE_ACTION_TOOL,
+]
+
+/**
+ * Queue a proposed action into approval_queue. NEVER executes — only inserts a
+ * pending row (Phase 2, Slice 1). Exported for unit tests.
+ *
+ * Rejects (returns an error string, no insert) when:
+ *   - tool_name is not in APPROVABLE_TOOL_NAMES, or
+ *   - params don't validate against that tool's schema.
+ *
+ * Idempotency: if idempotency_key matches an existing row whose status is
+ * pending or approved, returns that row instead of inserting a duplicate.
+ */
+export async function proposeAction(input: {
+  tool_name?: unknown
+  params?: unknown
+  rationale?: unknown
+  idempotency_key?: unknown
+}): Promise<string> {
+  const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
+  const params = input.params ?? {}
+  const rationale = typeof input.rationale === "string" ? input.rationale : null
+  const idempotencyKey = typeof input.idempotency_key === "string" && input.idempotency_key.length > 0
+    ? input.idempotency_key
+    : null
+
+  // 1) Allow-list check — a tool not in the set can never be proposed.
+  if (!isApprovableTool(toolName)) {
+    return `❌ "${toolName}" is not an approvable action. Allowed: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`
+  }
+
+  // 2) Schema check — reject a malformed proposal at propose time.
+  const validation = validateToolParams(toolName, params)
+  if (!validation.ok) {
+    return `❌ Invalid params for "${toolName}": ${validation.errors.join(" ")}`
+  }
+
+  // 3) Idempotency — return an existing pending/approved row rather than dup.
+  if (idempotencyKey) {
+    const { data: existing } = await (supabaseAdmin as unknown as {
+      from: (t: string) => {
+        select: (c: string) => {
+          eq: (col: string, val: string) => { maybeSingle: () => Promise<{ data: ApprovalQueueRow | null }> }
+        }
+      }
+    })
+      .from("approval_queue")
+      .select("id, tool_name, status, created_at")
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle()
+
+    if (existing && (existing.status === "pending" || existing.status === "approved")) {
+      return [
+        `✅ Duplicate idempotency_key — returning existing proposal (no new row).`,
+        `   id=${existing.id}`,
+        `   tool_name=${existing.tool_name}`,
+        `   status=${existing.status}`,
+        `   created_at=${existing.created_at}`,
+      ].join("\n")
+    }
+  }
+
+  // 4) Insert the pending proposal. NOTHING EXECUTES.
+  const paramsHash = computeParamsHash(params)
+  const { data, error } = await (supabaseAdmin as unknown as {
+    from: (t: string) => {
+      insert: (row: Record<string, unknown>) => {
+        select: (c: string) => { single: () => Promise<{ data: ApprovalQueueRow | null; error: { code?: string; message?: string } | null }> }
+      }
+    }
+  })
+    .from("approval_queue")
+    .insert({
+      requested_by: "worker",
+      tool_name: toolName,
+      params,
+      params_hash: paramsHash,
+      rationale,
+      idempotency_key: idempotencyKey,
+      status: "pending",
+    })
+    .select("id, tool_name, status, params_hash, created_at")
+    .single()
+
+  if (error) {
+    // 23505 = unique_violation — an idempotency_key race.
+    if (error.code === "23505") {
+      return `⚠️ A proposal with this idempotency_key already exists (race). Call approval_list to find it.`
+    }
+    return `❌ propose_action failed to queue: ${error.message ?? "unknown error"}`
+  }
+  if (!data) return `❌ propose_action: insert returned no row.`
+
+  return [
+    `✅ Action proposed and queued for approval (NOT executed).`,
+    `   id=${data.id}`,
+    `   tool_name=${data.tool_name}`,
+    `   status=${data.status}`,
+    `   params_hash=${data.params_hash}`,
+    `   created_at=${data.created_at}`,
+    "",
+    `This will run only after Antonio approves it. Nothing has happened yet.`,
+  ].join("\n")
+}
+
+interface ApprovalQueueRow {
+  id: string
+  tool_name: string
+  status: string
+  params_hash?: string
+  created_at: string
+}
+
+/**
+ * Wrapped execute that hard-rejects any tool name not permitted for the worker.
  * Defense-in-depth: even if sonnet somehow names a tool outside its visible
  * list, this returns a clear error instead of delegating to executeTool.
+ *
+ * propose_action is handled here (it queues, never executes); the read-only
+ * subset delegates to executeTool; everything else is rejected.
  */
 export async function executeWorkerTool(name: string, params: Record<string, unknown>): Promise<string> {
+  if (name === "propose_action") {
+    return proposeAction(params)
+  }
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
@@ -87,7 +256,7 @@ export const WORKER_SYSTEM_PROMPT = [
   "  1. Investigate using the read-only tools available to you (CRM search/get, Gmail read, Drive list, KB/SOP search).",
   "  2. Verify every factual claim against a fresh tool call. NEVER assume column names, schemas, client state, or past actions.",
   "  3. Reply with concise, plain-English findings suitable for Hermes to relay back to Antonio on Telegram.",
-  "  4. If an action is implied (send an email, update a record, push code), DESCRIBE the action you would propose — DO NOT call any tool that would execute it. You have no write/send/mutate tools. Action execution requires Antonio's explicit approval via the Phase 2 approval rail (not yet built).",
+  "  4. When an action is implied (send an email, create/update a record, advance a stage, move/upload a Drive file, log a conversation, save a memory), call propose_action — do NOT describe-only. propose_action does NOT run the action; it queues a pending proposal that does nothing until Antonio approves it on the approval rail. You still cannot execute, send, or mutate anything directly — propose_action is your only non-read tool, and it only queues.",
   "",
   "Output discipline:",
   "  - Plain English, no internal jargon.",

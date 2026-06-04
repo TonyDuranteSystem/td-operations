@@ -45,12 +45,21 @@ describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
     }
   })
 
-  it("WORKER_TOOLS is exactly the AGENT_TOOLS subset matching the allow-list", () => {
-    expect(WORKER_TOOLS.length).toBe(WORKER_READ_ONLY_TOOL_NAMES.size)
+  it("WORKER_TOOLS is the read-only AGENT_TOOLS subset PLUS propose_action (Phase 2 Slice 1)", () => {
+    // propose_action is the one non-read tool — it only QUEUES a proposal, it
+    // never executes. Everything else is the read-only research subset.
+    expect(WORKER_TOOLS.length).toBe(WORKER_READ_ONLY_TOOL_NAMES.size + 1)
     const workerNames = new Set(WORKER_TOOLS.map((t) => t.name))
     for (const name of WORKER_READ_ONLY_TOOL_NAMES) {
       expect(workerNames.has(name)).toBe(true)
     }
+    expect(workerNames.has("propose_action")).toBe(true)
+  })
+
+  it("propose_action is NOT in the read-only allow-list (it's a proposer, not a reader)", () => {
+    // Keeping it out of WORKER_READ_ONLY_TOOL_NAMES means the write-prefix scan
+    // above still governs that set, and propose_action is wired separately.
+    expect(WORKER_READ_ONLY_TOOL_NAMES.has("propose_action")).toBe(false)
   })
 })
 

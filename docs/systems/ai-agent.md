@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-03 — Claude (read lib/ai-agent/{providers,tools,system-prompt}.ts, ai-agent route; added worker-tools.ts note)_
+_Last verified against code: 2026-06-04 — Claude (added approvable-tools.ts + propose_action note for the bridge approval rail Phase 2 Slice 1)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -22,6 +22,7 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 - `WORKER_TOOLS` = a curated **read-only** subset of `tools.ts`'s `AGENT_TOOLS` (search/get/read only — no write/send, and `run_sql_query` is intentionally excluded). `executeWorkerTool()` hard-rejects any name outside the allow-list (defense-in-depth).
 - `callWorker()` mirrors `callClaude()` but uses that subset + `WORKER_SYSTEM_PROMPT` (sonnet-4-6). It deliberately does **not** reuse `callAgent()` (which hardcodes the full `AGENT_TOOLS` + dashboard prompt).
 - It is driven by the cron worker at `app/api/cron/hermes-bridge`, not `/api/ai-agent`. Full subsystem doc: `agent-bridge.md`.
+- **Phase 2 Slice 1 (2026-06-04):** `WORKER_TOOLS` now also includes **`propose_action`** (the one non-read tool — it only QUEUES, never executes). It validates against the allow-list + schema in `lib/ai-agent/approvable-tools.ts` (`APPROVABLE_TOOL_NAMES`, `computeParamsHash`, `validateToolParams`, `APPROVABLE_TOOL_CONSTRAINTS`) and INSERTs a `pending` row into `approval_queue`. `propose_action` is deliberately **not** in `WORKER_READ_ONLY_TOOL_NAMES`. See `agent-bridge.md` for the full rail.
 
 ## Business rules
 - **Staff-only** — clients can never use it; non-admin staff need the `app_settings.ai_agent.enabled_for_team` toggle.
