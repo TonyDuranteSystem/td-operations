@@ -63,31 +63,43 @@ function getInternalBaseUrl(): string {
 }
 
 /**
- * Fire the direct-trigger POST to the cron worker. NEVER awaited — we want
- * the MCP tool to return immediately so Hermes doesn't block waiting for a
- * sonnet tool loop. If the fetch fails or the function dies before the
- * request lands, the 5-min cron catches the row on its next pass.
+ * Fire the direct-trigger POST to the cron worker, AWAITED but bounded by a 3s
+ * timeout. Awaiting guarantees the request actually leaves this MCP function
+ * before the serverless runtime can freeze it — a previous fire-and-forget
+ * version was getting killed on freeze, so rows only got processed by the 5-min
+ * cron (~1-5 min latency). The 3s timeout is long enough to hand the row to the
+ * worker route (which then runs the sonnet loop to completion SERVER-SIDE,
+ * independent of this client connection) but short enough that agent_msg_send
+ * returns to Hermes promptly. Never throws — the row is already inserted and the
+ * 5-min cron is the safety net for any failure.
  *
  * Exported for unit tests.
  */
-export function fireDirectTrigger(messageId: string): void {
+export async function fireDirectTrigger(messageId: string): Promise<void> {
   const cronSecret = process.env.CRON_SECRET
   if (!cronSecret) {
     console.warn(`[agent_msg_send] CRON_SECRET not set — direct trigger skipped for ${messageId}; cron will pick up.`)
     return
   }
   const url = `${getInternalBaseUrl()}/api/cron/hermes-bridge?message_id=${encodeURIComponent(messageId)}`
-  // Fire-and-forget. .catch() prevents an unhandled rejection if the network
-  // hiccups; the cron safety net covers a missed direct fire.
-  fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${cronSecret}` },
-  }).catch((err) => {
-    console.error(
-      `[agent_msg_send] direct-trigger fetch failed for ${messageId} (cron will pick up):`,
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 3000)
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cronSecret}` },
+      signal: controller.signal,
+    })
+  } catch (err) {
+    // Aborting at 3s is expected and fine — the worker route keeps running
+    // server-side. Any other failure falls through to the 5-min cron safety net.
+    console.warn(
+      `[agent_msg_send] direct trigger returned/aborted for ${messageId} (worker continues server-side; cron is the net):`,
       err instanceof Error ? err.message : String(err),
     )
-  })
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export function registerAgentMessageTools(server: McpServer) {
@@ -200,8 +212,9 @@ export function registerAgentMessageTools(server: McpServer) {
 
         if (!data) throw new Error("Insert succeeded but no row returned.")
 
-        // Fire the direct trigger (fire-and-forget). Cron will catch any miss.
-        fireDirectTrigger(data.id)
+        // Trigger the worker now — awaited (3s-bounded) so the request reliably
+        // leaves this function; the worker then runs server-side. Cron is the net.
+        await fireDirectTrigger(data.id)
 
         return {
           content: [{
