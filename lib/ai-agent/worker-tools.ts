@@ -173,6 +173,16 @@ export const WORKER_TOOLS: ToolDef[] = [
 ]
 
 /**
+ * Mint a 6-digit confirmation code for a proposal (WP1). Antonio must type this
+ * exact code to approve the proposal (approval_decide(approve) verifies it), so
+ * an approval can't fire by accident or by typo'ing the wrong proposal id.
+ * Range 100000–999999 — always exactly 6 digits, never zero-padded.
+ */
+export function generateConfirmationCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
+/**
  * Queue a proposed action into approval_queue. NEVER executes — only inserts a
  * pending row (Phase 2, Slice 1). Exported for unit tests.
  *
@@ -249,6 +259,9 @@ export async function proposeAction(input: {
 
   // 4) Insert the pending proposal. NOTHING EXECUTES.
   const paramsHash = computeParamsHash(params)
+  // 6-digit confirmation code Antonio must type to approve (WP1). Bound to this
+  // specific proposal so approval can't fire by accident or wrong-id typo.
+  const confirmationCode = generateConfirmationCode()
   const { data, error } = await (supabaseAdmin as unknown as {
     from: (t: string) => {
       insert: (row: Record<string, unknown>) => {
@@ -269,9 +282,10 @@ export async function proposeAction(input: {
       // Lane tag: which approval environment will execute this (Phase D). Defaults
       // to 'production' on every real deployment unless APPROVAL_ENV carves a lane.
       env: currentApprovalEnv(),
+      confirmation_code: confirmationCode,
       status: "pending",
     })
-    .select("id, tool_name, status, params_hash, created_at")
+    .select("id, tool_name, status, params_hash, confirmation_code, created_at")
     .single()
 
   if (error) {
@@ -297,9 +311,10 @@ export async function proposeAction(input: {
     `   tool_name=${data.tool_name}`,
     `   status=${data.status}`,
     `   params_hash=${data.params_hash}`,
+    `   confirmation_code=${data.confirmation_code ?? confirmationCode}`,
     `   created_at=${data.created_at}`,
     "",
-    `This will run only after Antonio approves it. Nothing has happened yet.`,
+    `This will run only after Antonio approves it with the confirmation code. Nothing has happened yet.`,
   ].join("\n")
 }
 
@@ -338,6 +353,7 @@ interface ApprovalQueueRow {
   tool_name: string
   status: string
   params_hash?: string
+  confirmation_code?: string | null
   created_at: string
 }
 

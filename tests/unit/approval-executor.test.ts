@@ -136,6 +136,7 @@ function seedApproval(over: Record<string, any>) {
     status: over.status ?? "approved",
     decided_by: null,
     decided_at: null,
+    confirmation_code: over.confirmation_code ?? "424242",
     claimed_at: over.claimed_at ?? null,
     claimed_by: over.claimed_by ?? null,
     executed_at: null,
@@ -359,13 +360,21 @@ describe("approval_decide(reject)", () => {
 })
 
 describe("approval_decide(approve)", () => {
-  it("flips pending→approved (executor fired separately; trigger skipped without CRON_SECRET)", async () => {
-    const row = seedApproval({ tool_name: "create_task", status: "pending" })
+  it("flips pending→approved with the matching confirmation code (executor fired separately; trigger skipped without CRON_SECRET)", async () => {
+    const row = seedApproval({ tool_name: "create_task", status: "pending", confirmation_code: "424242" })
     const handler = captureDecideHandler()
-    const res = await handler({ id: row.id, decision: "approve" })
+    const res = await handler({ id: row.id, decision: "approve", confirmation_code: "424242" })
     expect(res.content[0].text).toContain("Approved")
     expect(h.store.approval_queue[0].status).toBe("approved")
     expect(h.store.approval_queue[0].decided_by).toBe("antonio")
+  })
+
+  it("rejects an approve with the wrong confirmation code — row stays pending (WP1)", async () => {
+    const row = seedApproval({ tool_name: "create_task", status: "pending", confirmation_code: "424242" })
+    const handler = captureDecideHandler()
+    const res = await handler({ id: row.id, decision: "approve", confirmation_code: "999999" })
+    expect(res.content[0].text).toContain("Invalid confirmation code")
+    expect(h.store.approval_queue[0].status).toBe("pending")
   })
 })
 
