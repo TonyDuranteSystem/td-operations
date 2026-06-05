@@ -35,6 +35,8 @@ export interface ApprovalProposalRow {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params?: Record<string, any> | null
   rationale?: string | null
+  /** 6-digit code Antonio must type to approve (WP1). Shown on the proposal card. */
+  confirmation_code?: string | null
 }
 
 /** Max chars shown for a single param value before truncation (mobile-friendly). */
@@ -163,8 +165,16 @@ export function formatApprovalProposal(row: ApprovalProposalRow): string {
     sections.push(`💡 ${rationale}`)
   }
 
-  // Decision instructions.
-  sections.push([`To approve: APPROVE ${sid}`, `To reject: REJECT ${sid} <reason>`].join("\n"))
+  // Confirmation code (WP1) — Antonio must type this to approve. Only shown when
+  // the row carries one (pre-WP1 rows have none and cannot be approved).
+  const code = (row.confirmation_code ?? "").trim()
+  if (code) {
+    sections.push(`🔑 Code: ${code}`)
+  }
+
+  // Decision instructions. Approving REQUIRES the code (WP1): APPROVE <id> <code>.
+  const approveLine = code ? `To approve: APPROVE ${sid} ${code}` : `To approve: APPROVE ${sid} <code>`
+  sections.push([approveLine, `To reject: REJECT ${sid} <reason>`].join("\n"))
 
   return sections.join("\n\n")
 }
