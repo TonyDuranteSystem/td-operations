@@ -217,6 +217,13 @@ describe("createThreadSummary (idempotent)", () => {
     expect(await createThreadSummary("", "investigation")).toBeNull()
     expect(h.store).toHaveLength(0)
   })
+
+  it("persists prompt_version when supplied (Phase D), null otherwise", async () => {
+    const withVer = await createThreadSummary("t-pv", "investigation", "title", "abc123def")
+    expect(withVer?.prompt_version).toBe("abc123def")
+    const without = await createThreadSummary("t-pv2", "investigation", "title")
+    expect(without?.prompt_version).toBeNull()
+  })
 })
 
 describe("getThreadSummary", () => {

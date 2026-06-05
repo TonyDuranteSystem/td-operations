@@ -59,6 +59,7 @@ export async function createThreadSummary(
   threadId: string,
   type: unknown,
   title?: string | null,
+  promptVersion?: string | null,
 ): Promise<ThreadSummary | null> {
   if (!threadId || typeof threadId !== "string") return null
   const threadType: ThreadType = normalizeThreadType(type)
@@ -69,6 +70,9 @@ export async function createThreadSummary(
       thread_id: threadId,
       thread_type: threadType,
       title: typeof title === "string" && title.length > 0 ? title.slice(0, 300) : null,
+      // Fingerprint of the worker's base system prompt at thread creation (Phase D)
+      // so the instructions can be reconstructed later. NULL when not supplied.
+      prompt_version: typeof promptVersion === "string" && promptVersion.length > 0 ? promptVersion : null,
     })
     .select(SELECT_COLS)
     .single()

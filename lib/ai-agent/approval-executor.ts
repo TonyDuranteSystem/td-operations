@@ -35,6 +35,7 @@
 import { executeTool } from "./tools"
 import { computeParamsHash } from "./approvable-tools"
 import { emitApprovalOutcome, runNotificationSweep } from "./approval-notifications"
+import { currentApprovalEnv } from "./approval-env"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 const STALE_CLAIM_MS = 10 * 60 * 1000 // executing rows older than this are treated as crashed
@@ -116,6 +117,10 @@ export async function claimApproval(id: string): Promise<ApprovalRow | null> {
     })
     .eq("id", id)
     .eq("status", "approved")
+    // Lane guard (Phase D): only execute rows in THIS executor's env. By default
+    // every row + executor are 'production', so this is inert until APPROVAL_ENV
+    // carves a staging lane. A mismatched-env row yields 0 rows → skipped.
+    .eq("env", currentApprovalEnv())
     .select("id, tool_name, params, params_hash, status")
     .maybeSingle()
 
@@ -238,6 +243,7 @@ export async function recoverStuckExecuting(): Promise<number> {
       updated_at: nowIso,
     })
     .eq("status", "executing")
+    .eq("env", currentApprovalEnv())
     .lt("claimed_at", cutoff)
     .select("id")
   if (error) throw error
@@ -256,6 +262,7 @@ export async function expireStalePending(): Promise<number> {
     .from("approval_queue")
     .update({ status: "expired", updated_at: nowIso })
     .eq("status", "pending")
+    .eq("env", currentApprovalEnv())
     .lt("expires_at", nowIso)
     .select("id, tool_name, params, rationale")
   if (error) throw error
@@ -288,6 +295,7 @@ export async function runExecutorScan(): Promise<ExecutorRunResult> {
     .from("approval_queue")
     .select("id")
     .eq("status", "approved")
+    .eq("env", currentApprovalEnv())
     .order("created_at", { ascending: true })
     .limit(SCAN_BATCH)
   if (error) throw error

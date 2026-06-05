@@ -142,6 +142,9 @@ function seedApproval(over: Record<string, any>) {
     result: null,
     error_text: null,
     idempotency_key: null,
+    // Phase D lane tag — defaults to the pinned test lane so the executor's
+    // env filter matches. Override with { env: '...' } to test cross-lane skip.
+    env: over.env ?? TEST_LANE,
     expires_at: over.expires_at ?? "2099-01-01T00:00:00Z",
     created_at: over.created_at ?? `2026-06-04T00:00:0${h.store.approval_queue.length}Z`,
     updated_at: "2026-06-04T00:00:00Z",
@@ -151,6 +154,7 @@ function seedApproval(over: Record<string, any>) {
 }
 
 const ORIGINAL_ENV = { ...process.env }
+const TEST_LANE = "test-lane"
 
 beforeEach(() => {
   h.store.approval_queue.length = 0
@@ -158,6 +162,7 @@ beforeEach(() => {
   h.tool.calls.length = 0
   h.tool.impl = async () => JSON.stringify({ ok: true })
   process.env.APPROVAL_RAIL_ENABLED = "true"
+  process.env.APPROVAL_ENV = TEST_LANE // pin the executor's lane deterministically
   delete process.env.CRON_SECRET // approve path skips the fetch trigger when unset
 })
 
@@ -439,6 +444,37 @@ describe("kill switch", () => {
     expect(result.disabled).toBeUndefined()
     expect(result.mode).toBe("direct")
     expect(h.store.approval_queue[0].status).toBe("executed")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase D — env lane isolation
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("env lane isolation", () => {
+  it("direct claim SKIPS a row whose env != the executor's lane (action never runs)", async () => {
+    const row = seedApproval({ status: "approved", env: "other-lane", tool_name: "create_task", params: { task_title: "X" } })
+    const result = await executeApproval(row.id)
+    expect(result.status).toBe("skipped")
+    expect(h.tool.calls).toHaveLength(0)
+    expect(h.store.approval_queue[0].status).toBe("approved") // untouched
+  })
+
+  it("scan only executes rows in the executor's own lane", async () => {
+    seedApproval({ id: "mine", status: "approved", env: TEST_LANE, params: { task_title: "mine" } })
+    seedApproval({ id: "theirs", status: "approved", env: "other-lane", params: { task_title: "theirs" } })
+
+    const res = await runExecutorScan()
+    expect(res.executed).toBe(1)
+    const byId = Object.fromEntries(h.store.approval_queue.map((r) => [r.id, r.status]))
+    expect(byId.mine).toBe("executed")
+    expect(byId.theirs).toBe("approved") // other lane left alone
+  })
+
+  it("claim matches a same-lane row (the default 'production'-style case)", async () => {
+    const row = seedApproval({ status: "approved", env: TEST_LANE, params: { task_title: "Z" } })
+    const result = await executeApproval(row.id)
+    expect(result.status).toBe("executed")
   })
 })
 
