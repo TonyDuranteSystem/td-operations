@@ -1246,6 +1246,7 @@ export type Database = {
           batch_id: string | null
           claimed_at: string | null
           claimed_by: string | null
+          confirmation_code: string | null
           created_at: string
           decided_at: string | null
           decided_by: string | null
@@ -1272,6 +1273,7 @@ export type Database = {
           batch_id?: string | null
           claimed_at?: string | null
           claimed_by?: string | null
+          confirmation_code?: string | null
           created_at?: string
           decided_at?: string | null
           decided_by?: string | null
@@ -1298,6 +1300,7 @@ export type Database = {
           batch_id?: string | null
           claimed_at?: string | null
           claimed_by?: string | null
+          confirmation_code?: string | null
           created_at?: string
           decided_at?: string | null
           decided_by?: string | null

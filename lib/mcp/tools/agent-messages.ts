@@ -155,12 +155,17 @@ export function registerAgentMessageTools(server: McpServer) {
         .max(200)
         .optional()
         .describe("Optional dedup key. If Hermes retries due to a network blip, pass the same key — returns the existing row instead of inserting a duplicate."),
+      thread_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("Optional conversation thread id (from thread_create, WP2). Links this message to a thread so the worker receives the thread's prior turns as context, a tool surface filtered by the thread type, and writes a durable summary when it resolves. Omit for a one-shot research message (backward-compatible)."),
       as_party: z
         .enum(PARTY_VALUES)
         .default("hermes")
         .describe("Which agent is sending. Default 'hermes' (the typical caller). Set 'claude' if Claude Code is replying outside the worker flow."),
     },
-    async ({ recipient, subject, body, context_json, idempotency_key, as_party }) => {
+    async ({ recipient, subject, body, context_json, idempotency_key, thread_id, as_party }) => {
       try {
         // Hard validation that the schema-default doesn't accidentally collide.
         // (CHECK constraint exists in DB too; this is a friendlier error.)
@@ -205,6 +210,7 @@ export function registerAgentMessageTools(server: McpServer) {
             body,
             context_json: context_json ?? {},
             idempotency_key: idempotency_key ?? null,
+            thread_id: thread_id ?? null,
             status: "pending",
           })
           .select("id, status, created_at")

@@ -224,6 +224,20 @@ describe("createThreadSummary (idempotent)", () => {
     const without = await createThreadSummary("t-pv2", "investigation", "title")
     expect(without?.prompt_version).toBeNull()
   })
+
+  it("persists accounts_affected when supplied (WP2), null otherwise", async () => {
+    const withAccts = await createThreadSummary("t-acc", "client_audit", "title", null, ["acc-1", "contact-2"])
+    expect(withAccts?.accounts_affected).toEqual(["acc-1", "contact-2"])
+    const without = await createThreadSummary("t-acc2", "investigation", "title")
+    expect(without?.accounts_affected).toBeNull()
+  })
+
+  it("drops empty entries from accounts_affected; all-empty → null", async () => {
+    const mixed = await createThreadSummary("t-acc3", "client_audit", "title", null, ["acc-1", ""])
+    expect(mixed?.accounts_affected).toEqual(["acc-1"])
+    const empty = await createThreadSummary("t-acc4", "client_audit", "title", null, ["", ""])
+    expect(empty?.accounts_affected).toBeNull()
+  })
 })
 
 describe("getThreadSummary", () => {
