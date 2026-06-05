@@ -56,6 +56,7 @@ interface AgentMessageRow {
   reply: string | null
   claimed_at: string | null
   claimed_by: string | null
+  thread_id: string | null
   created_at: string
 }
 
@@ -83,7 +84,7 @@ async function claimPending(id: string, claimedBy: string): Promise<AgentMessage
     })
     .eq("id", id)
     .eq("status", "pending")
-    .select("id, sender, recipient, subject, body, status, reply, claimed_at, claimed_by, created_at")
+    .select("id, sender, recipient, subject, body, status, reply, claimed_at, claimed_by, thread_id, created_at")
     .maybeSingle()
 
   if (error) throw error
@@ -117,7 +118,10 @@ async function recoverStaleClaims(): Promise<number> {
  */
 async function processOne(row: AgentMessageRow): Promise<{ id: string; ok: boolean; error?: string }> {
   try {
-    const { reply, toolsUsed } = await callWorker(row.body)
+    const { reply, toolsUsed } = await callWorker(row.body, {
+      threadId: row.thread_id,
+      messageId: row.id,
+    })
 
     const replyText = [
       reply,
