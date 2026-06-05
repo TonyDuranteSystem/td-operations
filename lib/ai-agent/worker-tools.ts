@@ -39,6 +39,15 @@ import {
   CODEBASE_READ_DESCRIPTION,
   CODEBASE_SEARCH_DESCRIPTION,
 } from "@/lib/mcp/tools/codebase-read"
+import {
+  getToolsForThreadType,
+  getPromptAddendumForThreadType,
+  normalizeThreadType,
+  DEFAULT_THREAD_TYPE,
+  type ThreadType,
+} from "./thread-routing"
+import { buildThreadContext } from "./thread-context"
+import { createThreadSummary, getThreadSummary, resolveThread } from "./thread-summaries"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -355,20 +364,53 @@ interface WorkerResponse {
 const MAX_TOOL_LOOPS = 8
 const ANTHROPIC_TIMEOUT_MS = 55_000 // per-call ceiling; cron route's maxDuration=300 covers the whole loop
 
+export interface CallWorkerOptions {
+  /**
+   * Thread this message belongs to. When set, the worker is given the thread's
+   * prior conversation as context, a tool subset filtered by the thread's type,
+   * and the thread is resolved (durable summary written) after the reply.
+   */
+  threadId?: string | null
+  /** The agent_messages id being answered — excluded from the prepended context. */
+  messageId?: string | null
+}
+
+/** First non-empty line of the request body, capped — used as the thread title. */
+export function deriveThreadTitle(body: string): string {
+  const firstLine = (body ?? "")
+    .split("\n")
+    .map((s) => s.trim())
+    .find(Boolean) ?? ""
+  return firstLine.slice(0, 80)
+}
+
 /**
- * Call sonnet-4-6 with the Hermes-bridge worker subset.
- *
- * Mirrors callClaude() in lib/ai-agent/providers.ts but:
- *   - Tools come from WORKER_TOOLS (not the full AGENT_TOOLS).
- *   - System prompt is WORKER_SYSTEM_PROMPT (not the dashboard's SYSTEM_PROMPT).
- *   - executeWorkerTool() is used for tool dispatch (extra guard).
+ * One-paragraph extractive summary of the worker's reply (whitespace-collapsed,
+ * capped at 600 chars). Deterministic — no second LLM call just to compress.
  */
-export async function callWorker(userBody: string): Promise<WorkerResponse> {
+export function oneParagraphSummary(reply: string): string {
+  const collapsed = (reply ?? "").replace(/\s+/g, " ").trim()
+  return collapsed.length > 600 ? `${collapsed.slice(0, 600)}…` : collapsed
+}
+
+/**
+ * The raw sonnet tool-use loop, parameterized by the tool list + system prompt
+ * so callWorker can hand it a thread-type-filtered subset and an augmented prompt.
+ *
+ * Mirrors callClaude() in lib/ai-agent/providers.ts but uses executeWorkerTool()
+ * for dispatch (the extra allow-list guard). Returns reachedMaxLoops=true only
+ * when the loop is exhausted without a final answer.
+ */
+async function runWorkerLoop(
+  userBody: string,
+  tools: ToolDef[],
+  systemPrompt: string,
+): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
 
   // Anthropic tool format
-  const claudeTools = WORKER_TOOLS.map((t) => ({
+  const claudeTools = tools.map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: t.parameters,
@@ -392,7 +434,7 @@ export async function callWorker(userBody: string): Promise<WorkerResponse> {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 2048,
-        system: WORKER_SYSTEM_PROMPT,
+        system: systemPrompt,
         tools: claudeTools,
         messages: currentMessages,
       }),
@@ -414,9 +456,9 @@ export async function callWorker(userBody: string): Promise<WorkerResponse> {
     if (toolUseBlocks.length === 0 || data.stop_reason === "end_turn") {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reply = textBlocks.map((b: any) => b.text).join("\n") || ""
-      if (reply) return { reply, toolsUsed }
+      if (reply) return { reply, toolsUsed, reachedMaxLoops: false }
       if (toolUseBlocks.length === 0) {
-        return { reply: "(no response generated)", toolsUsed }
+        return { reply: "(no response generated)", toolsUsed, reachedMaxLoops: false }
       }
     }
 
@@ -444,5 +486,83 @@ export async function callWorker(userBody: string): Promise<WorkerResponse> {
   return {
     reply: "Reached the worker's maximum tool-use iterations (8). Findings may be incomplete — consider narrowing the question.",
     toolsUsed,
+    reachedMaxLoops: true,
   }
+}
+
+/**
+ * Call sonnet-4-6 with the Hermes-bridge worker subset.
+ *
+ * Without a threadId this behaves exactly as before: full WORKER_TOOLS + the
+ * default WORKER_SYSTEM_PROMPT, no thread bookkeeping.
+ *
+ * With a threadId (Phase C):
+ *   1. resolve the thread's type (read thread_summaries; create it if new),
+ *   2. narrow the tool list to that type (getToolsForThreadType),
+ *   3. prepend the thread's prior conversation + type-specific formatting guidance,
+ *   4. after the reply, resolve the thread with an auto-generated one-paragraph
+ *      summary + a derived outcome.
+ * Every thread step is best-effort — a thread-layer failure never breaks the
+ * core research reply.
+ */
+export async function callWorker(userBody: string, opts: CallWorkerOptions = {}): Promise<WorkerResponse> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured")
+
+  const threadId = typeof opts.threadId === "string" && opts.threadId.length > 0 ? opts.threadId : null
+
+  let tools: ToolDef[] = WORKER_TOOLS
+  let systemPrompt = WORKER_SYSTEM_PROMPT
+  let threadType: ThreadType = DEFAULT_THREAD_TYPE
+  let rowEnsured = false
+
+  if (threadId) {
+    try {
+      const existing = await getThreadSummary(threadId)
+      threadType = existing ? normalizeThreadType(existing.thread_type) : DEFAULT_THREAD_TYPE
+      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody))
+      rowEnsured = true
+
+      tools = getToolsForThreadType(threadType)
+      const ctx = await buildThreadContext(threadId, {
+        excludeMessageId: typeof opts.messageId === "string" ? opts.messageId : undefined,
+      })
+      const addendum = getPromptAddendumForThreadType(threadType)
+      systemPrompt = [
+        WORKER_SYSTEM_PROMPT,
+        addendum ? `\n${addendum}` : "",
+        ctx.text
+          ? `\nCONVERSATION SO FAR (for reference — the current request follows as the user turn):\n${ctx.text}`
+          : "",
+      ].join("")
+    } catch (err) {
+      console.warn(
+        `[callWorker] thread setup failed for ${threadId} (falling back to full tool set + default prompt):`,
+        err instanceof Error ? err.message : String(err),
+      )
+      tools = WORKER_TOOLS
+      systemPrompt = WORKER_SYSTEM_PROMPT
+    }
+  }
+
+  const result = await runWorkerLoop(userBody, tools, systemPrompt)
+
+  if (threadId) {
+    try {
+      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody))
+      const proposed = result.toolsUsed.includes("propose_action")
+      const outcome = result.reachedMaxLoops
+        ? "incomplete"
+        : proposed
+          ? "action_proposed"
+          : "investigation_complete"
+      await resolveThread(threadId, outcome, oneParagraphSummary(result.reply))
+    } catch (err) {
+      console.warn(
+        `[callWorker] resolveThread failed for ${threadId} (reply still returned):`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+  }
+
+  return { reply: result.reply, toolsUsed: result.toolsUsed }
 }

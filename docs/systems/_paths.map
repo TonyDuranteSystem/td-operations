@@ -30,4 +30,4 @@ docs/systems/lease-oa.md|lib/mcp/tools/lease.ts,lib/mcp/tools/oa.ts,lib/types/oa
 docs/systems/mcp-tools.md|app/api/[transport]/route.ts,lib/mcp/instructions.ts,lib/mcp/safe-send.ts,lib/mcp/reminder.ts,lib/mcp/action-log.ts
 docs/systems/partners-team.md|lib/partners/,app/(dashboard)/partners/,app/portal/partner/
 docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/
-docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/
+docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/,lib/ai-agent/thread-summaries.ts,lib/ai-agent/thread-routing.ts,lib/ai-agent/thread-context.ts,lib/mcp/tools/agent-threads.ts
