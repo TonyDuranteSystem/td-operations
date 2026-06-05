@@ -57,7 +57,22 @@ interface AgentMessageRow {
   claimed_at: string | null
   claimed_by: string | null
   thread_id: string | null
+  context_json: Record<string, unknown> | null
   created_at: string
+}
+
+/**
+ * Per-request max tool-use override pulled from a message's context_json.
+ * Accepts a positive integer in [1, 50]; anything else → undefined so the worker
+ * falls back to AGENT_MAX_TOOL_LOOPS (env), then 8. The upper bound is a guard:
+ * each loop has a 55s Anthropic timeout under the route's 300s maxDuration, so an
+ * absurd value can't make a single invocation run unbounded.
+ */
+function readMaxIterations(contextJson: Record<string, unknown> | null | undefined): number | undefined {
+  const raw = contextJson?.max_iterations
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN
+  if (!Number.isInteger(n) || n < 1 || n > 50) return undefined
+  return n
 }
 
 function isAuthorized(req: NextRequest): boolean {
@@ -84,7 +99,7 @@ async function claimPending(id: string, claimedBy: string): Promise<AgentMessage
     })
     .eq("id", id)
     .eq("status", "pending")
-    .select("id, sender, recipient, subject, body, status, reply, claimed_at, claimed_by, thread_id, created_at")
+    .select("id, sender, recipient, subject, body, status, reply, claimed_at, claimed_by, thread_id, context_json, created_at")
     .maybeSingle()
 
   if (error) throw error
@@ -121,6 +136,7 @@ async function processOne(row: AgentMessageRow): Promise<{ id: string; ok: boole
     const { reply, toolsUsed } = await callWorker(row.body, {
       threadId: row.thread_id,
       messageId: row.id,
+      maxIterations: readMaxIterations(row.context_json),
     })
 
     const replyText = [

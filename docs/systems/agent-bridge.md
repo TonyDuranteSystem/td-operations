@@ -1,5 +1,5 @@
 # Hermes ↔ Claude Agent Bridge
-_Last verified against code: 2026-06-05 — Claude (WP3: Mac Mini executor — new `approval_execute(id)` server tool, server-is-backup via `serverShouldBackstop`, removed the instant-fire on approve, and server Telegram-on-propose push. See the "WP3" section.)_
+_Last verified against code: 2026-06-05 — Claude (configurable worker max tool loops: AGENT_MAX_TOOL_LOOPS env var + per-request override via agent_messages.context_json.max_iterations, threaded through callWorker/runWorkerLoop; cron route now SELECTs context_json. See the "How it's built" callWorker bullet.)_
 
 ## What it is
 A research/discussion channel that lets the **Hermes** Telegram bot (running on the Mac Mini, talking to Antonio on mobile) ask **Claude** (a server-side worker using `claude-sonnet-4-6`) questions and get answers back, without Antonio having to be the human relay between the two tools. Eliminates the "copy from Telegram into Claude Code, copy findings back to Telegram" workflow.
@@ -36,7 +36,7 @@ This is **Phase 1 — research/discussion only.** Action authorization (Antonio 
   - `WORKER_TOOLS` — `AGENT_TOOLS.filter(t => allowlist.has(t.name))`.
   - `executeWorkerTool(name, params)` — wraps `executeTool` with an allow-list check (defense-in-depth).
   - `WORKER_SYSTEM_PROMPT` — research-only framing, plain-English output discipline.
-  - `callWorker(userBody)` — mirrors `callClaude` in `lib/ai-agent/providers.ts` but uses the worker subset + worker system prompt. Direct Anthropic API (`claude-sonnet-4-6`), max 8 tool loops, 55s per-call timeout.
+  - `callWorker(userBody)` — mirrors `callClaude` in `lib/ai-agent/providers.ts` but uses the worker subset + worker system prompt. Direct Anthropic API (`claude-sonnet-4-6`), 55s per-call timeout. **Max tool loops** default to `AGENT_MAX_TOOL_LOOPS` env var, then 8 (was a hardcoded `8`); `callWorker`/`runWorkerLoop` accept an optional `maxIterations` per-request override, and the cron worker derives it from `agent_messages.context_json.max_iterations` (parsed + bounded to `[1,50]`). The max-iteration reply now reports the actual limit, not a hardcoded "(8)".
 - **Cron schedule:** `vercel.json` `{ path: "/api/cron/hermes-bridge", schedule: "*/5 * * * *" }` — runs every 5 min as the safety net.
 - **Direct-trigger URL resolution:** `lib/mcp/tools/agent-messages.ts::getInternalBaseUrl()` — `APP_BASE_URL` (explicit override / local) → `https://${VERCEL_PROJECT_PRODUCTION_URL}` (the project's STABLE public alias) → `http://localhost:3000`. **Never `VERCEL_URL`** (deployment-specific host behind Vercel Deployment Protection → 401s self-calls; see the "claimed_at stayed null" gotcha below). Shared by `fireExecutorTrigger` (approval-executor) too.
 
@@ -214,7 +214,7 @@ _Shipped 2026-06-04 (sandbox). No new migration — pure code on Phase A's `thre
   - `callWorker(userBody, { threadId?, messageId? })`. **No `threadId` → identical to before** (full `WORKER_TOOLS` + default prompt, no thread bookkeeping). The raw sonnet loop is extracted into `runWorkerLoop(body, tools, systemPrompt)` so the tool list + prompt can be swapped per thread.
   - With a `threadId`: resolve the type (read `thread_summaries`; create it if new) → narrow tools via `getToolsForThreadType` → prepend the thread context + type addendum to the system prompt → after the reply, `resolveThread` with a derived `outcome` (`action_proposed` if `propose_action` was used, else `investigation_complete`, or `incomplete` if the loop hit max iterations) and a one-paragraph extractive `summary_text` (`oneParagraphSummary`).
   - **Every thread step is best-effort** — wrapped in try/catch that falls back to the full tool set + default prompt; a thread-layer bug never breaks the core research reply.
-  - The cron route (`app/api/cron/hermes-bridge/route.ts`) now SELECTs `thread_id` and passes `{ threadId: row.thread_id, messageId: row.id }` into `callWorker`.
+  - The cron route (`app/api/cron/hermes-bridge/route.ts`) now SELECTs `thread_id` (and, since 2026-06-05, `context_json`) and passes `{ threadId: row.thread_id, messageId: row.id, maxIterations: readMaxIterations(row.context_json) }` into `callWorker`.
 - **MCP tool — `thread_search` in `lib/mcp/tools/agent-threads.ts`** (`registerAgentThreadTools`, registered in `app/api/[transport]/route.ts`; described in `lib/mcp/instructions.ts`): `thread_search(query, type?, tags?, limit?)` over `searchThreads`. READ-ONLY. Lets Hermes reference past investigations.
 - **Invariants / gotchas:**
   - **No new migration, no new column** — Phase C is pure code on the Phase A schema. If you find yourself writing DDL, stop.

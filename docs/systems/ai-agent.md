@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-05 — Claude (WP3: new lib/ai-agent/telegram-notify.ts + proposeAction Telegram push; approval-executor.ts gains executeClaimedRow + serverShouldBackstop (server-is-backup) — see the WP3 bullet + agent-bridge.md WP3)_
+_Last verified against code: 2026-06-05 — Claude (configurable max tool-use iterations: AGENT_MAX_TOOL_LOOPS env var + per-request maxIterations on callAgent/callClaude/callOpenAI/callWorker — see the Providers bullet + agent-bridge.md)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -8,6 +8,7 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 - **Endpoint:** `POST /api/ai-agent`, body `{ messages: [...] }`, returns `{ content, provider, tools_used }`. Rate-limited to **20 requests/min**.
 - **Access:** **admin** (Antonio) always; **team** members only if `app_settings.ai_agent.enabled_for_team = true`; **clients are blocked**.
 - **Providers** (`lib/ai-agent/providers.ts`): **Claude `claude-sonnet-4-6` (primary, `ANTHROPIC_API_KEY`)** with **GPT-4o (fallback, `OPENAI_API_KEY`)**. `callAgent()` runs the tool-use loop for whichever provider is configured (Anthropic first). Note: direct provider keys, not the Vercel AI Gateway.
+- **Max tool-use iterations** (2026-06-05): the loop ceiling defaults to **`AGENT_MAX_TOOL_LOOPS` env var, then 8** (was a hardcoded `MAX_TOOL_LOOPS = 8`). `callAgent`/`callClaude`/`callOpenAI` accept an optional `maxIterations` per-request override; the max-iteration error string now reports the actual limit. The **same env var** governs the Hermes-bridge worker (`worker-tools.ts`) — see `agent-bridge.md`.
 - **System prompt:** `lib/ai-agent/system-prompt.ts` (`SYSTEM_PROMPT`) — embeds business knowledge + instructions.
 
 ## The agent's tool set (`lib/ai-agent/tools.ts`)

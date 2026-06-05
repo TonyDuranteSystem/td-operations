@@ -78,8 +78,9 @@ function buildOpenAIContent(text: string, attachment: Attachment): any[] {
   return [{ type: 'text', text: combined }]
 }
 
-// Max tool-use iterations to prevent infinite loops
-const MAX_TOOL_LOOPS = 8
+// Max tool-use iterations to prevent infinite loops.
+// Configurable via AGENT_MAX_TOOL_LOOPS env var; callers may override per-request.
+const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
 
 // ============================================================
 // Shared Tool definitions + execution (imported lazily)
@@ -94,9 +95,11 @@ async function getTools() {
 // CLAUDE (Anthropic) — Primary Provider
 // ============================================================
 
-async function callClaude(messages: Message[], attachment?: Attachment): Promise<AgentResponse> {
+async function callClaude(messages: Message[], attachment?: Attachment, maxIterations?: number): Promise<AgentResponse> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
+
+  const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
   const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await getTools()
 
@@ -127,7 +130,7 @@ async function callClaude(messages: Message[], attachment?: Attachment): Promise
     }
   }
 
-  for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
+  for (let i = 0; i < maxLoops; i++) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 55_000)
 
@@ -198,16 +201,18 @@ async function callClaude(messages: Message[], attachment?: Attachment): Promise
     ]
   }
 
-  return { reply: 'Reached maximum tool iterations. Please try a simpler request.', provider: 'claude', toolsUsed }
+  return { reply: `Reached maximum tool iterations (${maxLoops}). Please try a simpler request.`, provider: 'claude', toolsUsed }
 }
 
 // ============================================================
 // GPT-4o (OpenAI) — Fallback Provider
 // ============================================================
 
-async function callOpenAI(messages: Message[], attachment?: Attachment): Promise<AgentResponse> {
+async function callOpenAI(messages: Message[], attachment?: Attachment, maxIterations?: number): Promise<AgentResponse> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
+
+  const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
   const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await getTools()
 
@@ -244,7 +249,7 @@ async function callOpenAI(messages: Message[], attachment?: Attachment): Promise
     }
   }
 
-  for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
+  for (let i = 0; i < maxLoops; i++) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 55_000)
 
@@ -298,28 +303,28 @@ async function callOpenAI(messages: Message[], attachment?: Attachment): Promise
     return { reply, provider: 'openai', toolsUsed }
   }
 
-  return { reply: 'Reached maximum tool iterations. Please try a simpler request.', provider: 'openai', toolsUsed }
+  return { reply: `Reached maximum tool iterations (${maxLoops}). Please try a simpler request.`, provider: 'openai', toolsUsed }
 }
 
 // ============================================================
 // Main Entry — Claude first, fallback to OpenAI
 // ============================================================
 
-export async function callAgent(messages: Message[], forcedProvider?: string, attachment?: Attachment): Promise<AgentResponse> {
+export async function callAgent(messages: Message[], forcedProvider?: string, attachment?: Attachment, maxIterations?: number): Promise<AgentResponse> {
   // If a specific provider is forced
   if (forcedProvider === 'claude') {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured')
-    return await callClaude(messages, attachment)
+    return await callClaude(messages, attachment, maxIterations)
   }
   if (forcedProvider === 'openai') {
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured')
-    return await callOpenAI(messages, attachment)
+    return await callOpenAI(messages, attachment, maxIterations)
   }
 
   // Auto mode: Try Claude first, fallback to OpenAI
   if (process.env.ANTHROPIC_API_KEY) {
     try {
-      return await callClaude(messages, attachment)
+      return await callClaude(messages, attachment, maxIterations)
     } catch (err) {
       console.error('[ai-agent] Claude failed, falling back to OpenAI:', err instanceof Error ? err.message : err)
     }
@@ -328,7 +333,7 @@ export async function callAgent(messages: Message[], forcedProvider?: string, at
   // Fallback to OpenAI
   if (process.env.OPENAI_API_KEY) {
     try {
-      return await callOpenAI(messages, attachment)
+      return await callOpenAI(messages, attachment, maxIterations)
     } catch (err) {
       console.error('[ai-agent] OpenAI also failed:', err instanceof Error ? err.message : err)
       throw new Error('Both AI providers failed. Please try again later.')

@@ -445,7 +445,10 @@ interface WorkerResponse {
   toolsUsed: string[]
 }
 
-const MAX_TOOL_LOOPS = 8
+// Default max tool-use iterations. Configurable via AGENT_MAX_TOOL_LOOPS env var
+// (shared with the in-dashboard provider in providers.ts); callWorker callers may
+// also override per-request (e.g. agent_messages.context_json.max_iterations).
+const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
 const ANTHROPIC_TIMEOUT_MS = 55_000 // per-call ceiling; cron route's maxDuration=300 covers the whole loop
 
 export interface CallWorkerOptions {
@@ -457,6 +460,12 @@ export interface CallWorkerOptions {
   threadId?: string | null
   /** The agent_messages id being answered — excluded from the prepended context. */
   messageId?: string | null
+  /**
+   * Per-request override for the worker's max tool-use loops. Falls back to the
+   * AGENT_MAX_TOOL_LOOPS env var, then 8. The cron route derives this from the
+   * message's context_json.max_iterations.
+   */
+  maxIterations?: number
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -489,9 +498,12 @@ async function runWorkerLoop(
   userBody: string,
   tools: ToolDef[],
   systemPrompt: string,
+  maxIterations?: number,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
+
+  const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
   // Anthropic tool format
   const claudeTools = tools.map((t) => ({
@@ -504,7 +516,7 @@ async function runWorkerLoop(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let currentMessages: any[] = [{ role: "user", content: userBody }]
 
-  for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
+  for (let i = 0; i < maxLoops; i++) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS)
 
@@ -568,7 +580,7 @@ async function runWorkerLoop(
   }
 
   return {
-    reply: "Reached the worker's maximum tool-use iterations (8). Findings may be incomplete — consider narrowing the question.",
+    reply: `Reached the worker's maximum tool-use iterations (${maxLoops}). Findings may be incomplete — consider narrowing the question.`,
     toolsUsed,
     reachedMaxLoops: true,
   }
@@ -628,7 +640,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     }
   }
 
-  const result = await runWorkerLoop(userBody, tools, systemPrompt)
+  const result = await runWorkerLoop(userBody, tools, systemPrompt, opts.maxIterations)
 
   if (threadId) {
     try {
