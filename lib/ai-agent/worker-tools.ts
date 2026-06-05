@@ -23,6 +23,7 @@
  *     research surface, raw SQL is unnecessary and adds risk.
  */
 
+import { createHash, randomUUID } from "crypto"
 import { AGENT_TOOLS, executeTool, type ToolDef } from "./tools"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
@@ -33,6 +34,7 @@ import {
 } from "./approvable-tools"
 import { normalizeToolParams } from "./enum-normalization"
 import { sendApprovalNotification } from "./approval-notifications"
+import { currentApprovalEnv } from "./approval-env"
 import {
   readCodebaseFile,
   searchCodebase,
@@ -187,6 +189,7 @@ export async function proposeAction(input: {
   rationale?: unknown
   idempotency_key?: unknown
   thread_id?: unknown
+  batch_id?: unknown
 }): Promise<string> {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
@@ -201,6 +204,11 @@ export async function proposeAction(input: {
   // non-empty string is accepted; anything else stores NULL (no thread).
   const threadId = typeof input.thread_id === "string" && input.thread_id.length > 0
     ? input.thread_id
+    : null
+  // Optional batch grouping — multiple proposals minted together share one
+  // batch_id so they're queryable as a unit (Phase D, batch_propose). NULL = solo.
+  const batchId = typeof input.batch_id === "string" && input.batch_id.length > 0
+    ? input.batch_id
     : null
 
   // 1) Allow-list check — a tool not in the set can never be proposed.
@@ -257,6 +265,10 @@ export async function proposeAction(input: {
       rationale,
       idempotency_key: idempotencyKey,
       thread_id: threadId,
+      batch_id: batchId,
+      // Lane tag: which approval environment will execute this (Phase D). Defaults
+      // to 'production' on every real deployment unless APPROVAL_ENV carves a lane.
+      env: currentApprovalEnv(),
       status: "pending",
     })
     .select("id, tool_name, status, params_hash, created_at")
@@ -289,6 +301,36 @@ export async function proposeAction(input: {
     "",
     `This will run only after Antonio approves it. Nothing has happened yet.`,
   ].join("\n")
+}
+
+/**
+ * Propose several actions as ONE batch — they share a single batch_id so they're
+ * queryable as a unit (approval_list(batch_id=…)). Phase D UX prep: there is NO
+ * batch approve/reject yet — each proposal is still decided individually; this
+ * only establishes the grouping.
+ *
+ * Mints a fresh batch_id (or reuses opts.batch_id), then routes every proposal
+ * through proposeAction, so allow-list/schema validation, enum normalization,
+ * hashing, idempotency and the propose notification all still apply per row.
+ * Returns the batch_id + each proposal's result string (in input order).
+ */
+export async function batchPropose(
+  proposals: Array<{
+    tool_name?: unknown
+    params?: unknown
+    rationale?: unknown
+    idempotency_key?: unknown
+    thread_id?: unknown
+  }>,
+  opts: { batch_id?: string } = {},
+): Promise<{ batch_id: string; count: number; results: string[] }> {
+  const batchId =
+    typeof opts.batch_id === "string" && opts.batch_id.length > 0 ? opts.batch_id : randomUUID()
+  const results: string[] = []
+  for (const p of proposals ?? []) {
+    results.push(await proposeAction({ ...p, batch_id: batchId }))
+  }
+  return { batch_id: batchId, count: results.length, results }
 }
 
 interface ApprovalQueueRow {
@@ -351,6 +393,19 @@ export const WORKER_SYSTEM_PROMPT = [
   "  - Separate verified facts from inference. Flag anything you couldn't verify.",
   "  - Keep it short enough for a Telegram chat — Hermes will summarize further if needed.",
 ].join("\n")
+
+/**
+ * Version fingerprint of the worker's base system prompt — SHA-256 of
+ * WORKER_SYSTEM_PROMPT, computed once at module load (Phase D). Stored on each
+ * thread at creation (thread_summaries.prompt_version) so we can later
+ * reconstruct what base instructions the worker had during any thread. The
+ * per-thread-type addendum is NOT folded in: thread_type is stored alongside and
+ * getPromptAddendumForThreadType(type) is deterministic, so base-hash + type
+ * fully reconstruct the instruction set.
+ */
+export const WORKER_PROMPT_VERSION: string = createHash("sha256")
+  .update(WORKER_SYSTEM_PROMPT)
+  .digest("hex")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // callWorker — Claude (sonnet-4-6) tool-use loop, scoped to WORKER_TOOLS
@@ -519,7 +574,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     try {
       const existing = await getThreadSummary(threadId)
       threadType = existing ? normalizeThreadType(existing.thread_type) : DEFAULT_THREAD_TYPE
-      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody))
+      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION)
       rowEnsured = true
 
       tools = getToolsForThreadType(threadType)
@@ -548,7 +603,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
 
   if (threadId) {
     try {
-      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody))
+      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION)
       const proposed = result.toolsUsed.includes("propose_action")
       const outcome = result.reachedMaxLoops
         ? "incomplete"

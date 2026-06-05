@@ -79,12 +79,14 @@ import {
   validateToolParams,
   APPROVABLE_TOOL_CONSTRAINTS,
 } from "@/lib/ai-agent/approvable-tools"
-import { proposeAction } from "@/lib/ai-agent/worker-tools"
+import { proposeAction, batchPropose } from "@/lib/ai-agent/worker-tools"
 import { registerAgentApprovalTools } from "@/lib/mcp/tools/agent-approvals"
 import { AGENT_TOOLS } from "@/lib/ai-agent/tools"
 
+const ORIGINAL_ENV = { ...process.env }
 beforeEach(() => {
   h.store.length = 0
+  process.env = { ...ORIGINAL_ENV }
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -299,5 +301,82 @@ describe("approval_list MCP tool", () => {
     const handler = captureHandler()
     const res = await handler({ status: "approved", limit: 20 })
     expect(res.content[0].text).toContain("No proposals")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase D — env lane tag + batch grouping
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("proposeAction — env lane tag (Phase D)", () => {
+  it("stamps env from APPROVAL_ENV when set", async () => {
+    process.env.APPROVAL_ENV = "staging"
+    await proposeAction({ tool_name: "create_task", params: { task_title: "X" } })
+    expect(h.store[0].env).toBe("staging")
+  })
+
+  it("falls back to NODE_ENV / 'production' when APPROVAL_ENV is unset", async () => {
+    delete process.env.APPROVAL_ENV
+    process.env.NODE_ENV = "production"
+    await proposeAction({ tool_name: "create_task", params: { task_title: "Y" } })
+    expect(h.store[0].env).toBe("production")
+  })
+})
+
+describe("batchPropose (Phase D)", () => {
+  it("mints ONE batch_id shared by every proposal in the batch", async () => {
+    const res = await batchPropose([
+      { tool_name: "create_task", params: { task_title: "A" } },
+      { tool_name: "create_task", params: { task_title: "B" } },
+      { tool_name: "update_account_notes", params: { account_id: "acc", note: "n" } },
+    ])
+    expect(res.count).toBe(3)
+    expect(h.store).toHaveLength(3)
+    const batchIds = new Set(h.store.map((r) => r.batch_id))
+    expect(batchIds.size).toBe(1)
+    expect([...batchIds][0]).toBe(res.batch_id)
+    expect(res.batch_id).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it("reuses a supplied batch_id", async () => {
+    const fixed = "11111111-1111-4111-8111-111111111111"
+    const res = await batchPropose([{ tool_name: "create_task", params: { task_title: "A" } }], { batch_id: fixed })
+    expect(res.batch_id).toBe(fixed)
+    expect(h.store[0].batch_id).toBe(fixed)
+  })
+
+  it("still validates each proposal — a bad tool_name yields an error string, no row", async () => {
+    const res = await batchPropose([
+      { tool_name: "create_task", params: { task_title: "ok" } },
+      { tool_name: "not_a_tool", params: {} },
+    ])
+    expect(res.count).toBe(2)
+    expect(res.results[1]).toContain("not an approvable action")
+    expect(h.store).toHaveLength(1) // only the valid one inserted
+  })
+})
+
+describe("approval_list — batch_id filter (Phase D)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function captureHandler(): (args: any) => Promise<any> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let handler: any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerAgentApprovalTools({ tool: (n: string, _d: string, _s: any, fn: any) => { if (n === "approval_list") handler = fn } } as any)
+    return handler
+  }
+
+  it("restricts results to one batch_id", async () => {
+    const batch = await batchPropose([
+      { tool_name: "create_task", params: { task_title: "in-batch-1" } },
+      { tool_name: "create_task", params: { task_title: "in-batch-2" } },
+    ])
+    await proposeAction({ tool_name: "create_task", params: { task_title: "solo" } })
+
+    const handler = captureHandler()
+    const res = await handler({ status: "pending", batch_id: batch.batch_id, limit: 20 })
+    const rows = JSON.parse(res.content[0].text)
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r: { batch_id: string }) => r.batch_id === batch.batch_id)).toBe(true)
   })
 })

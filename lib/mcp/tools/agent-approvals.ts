@@ -101,6 +101,8 @@ export function registerAgentApprovalTools(server: McpServer) {
       "status filter (default 'pending'):",
       "  pending | approved | rejected | executing | executed | failed | expired",
       "",
+      "batch_id (optional): restrict to one batch — proposals minted together by batch_propose share a batch_id so they can be reviewed as a group.",
+      "",
       "Returns up to `limit` rows newest first. READ-ONLY — this tool never approves, rejects, or executes anything.",
     ].join("\n"),
     {
@@ -108,17 +110,20 @@ export function registerAgentApprovalTools(server: McpServer) {
         .enum(APPROVAL_STATUS_VALUES)
         .default("pending")
         .describe("Filter by proposal status. Default 'pending'."),
+      batch_id: z.string().uuid().optional().describe("Optional: restrict to one batch_id (group of proposals)."),
       limit: z.number().int().min(1).max(100).default(20).describe("Max rows (default 20)."),
     },
-    async ({ status, limit }) => {
+    async ({ status, batch_id, limit }) => {
       try {
-        const { data, error } = await // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (supabaseAdmin as any)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let query = (supabaseAdmin as any)
           .from("approval_queue")
           .select(
             "id, batch_id, source_message_id, requested_by, tool_name, params, params_hash, rationale, status, decided_by, decided_at, expires_at, created_at, updated_at",
           )
           .eq("status", status)
+        if (batch_id) query = query.eq("batch_id", batch_id)
+        const { data, error } = await query
           .order("created_at", { ascending: false })
           .limit(limit)
 
