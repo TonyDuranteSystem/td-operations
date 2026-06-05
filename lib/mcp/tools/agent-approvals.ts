@@ -17,49 +17,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
 import { emitApprovalOutcome } from "@/lib/ai-agent/approval-notifications"
 import { computeParamsHash } from "@/lib/ai-agent/approvable-tools"
 import { currentApprovalEnv } from "@/lib/ai-agent/approval-env"
+import { isApprovalRailEnabled, executeClaimedRow } from "@/lib/ai-agent/approval-executor"
 
 /** Who is recorded as the decider. Decisions are always made on Antonio's behalf. */
 const DECIDED_BY = "antonio"
-
-/**
- * Fire the executor route for a freshly-approved row — awaited but bounded by a
- * 3s timeout, mirroring fireDirectTrigger in agent-messages.ts. Awaiting
- * guarantees the request leaves this function before the serverless runtime can
- * freeze it; the 3s cap means we don't block on the full action. The executor
- * route runs to completion server-side regardless, and the 5-min cron is the net.
- * Never throws — the row is already 'approved'; the cron scan picks up any miss.
- *
- * Do NOT use waitUntil here (broke the bridge route on Next 14.2 — see
- * docs/systems/agent-bridge.md).
- */
-export async function fireExecutorTrigger(approvalId: string): Promise<void> {
-  const cronSecret = process.env.CRON_SECRET
-  if (!cronSecret) {
-    console.warn(`[approval_decide] CRON_SECRET not set — executor trigger skipped for ${approvalId}; cron will pick up.`)
-    return
-  }
-  const url = `${getInternalBaseUrl()}/api/cron/approval-executor?id=${encodeURIComponent(approvalId)}`
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 3000)
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${cronSecret}` },
-      signal: controller.signal,
-    })
-  } catch (err) {
-    console.warn(
-      `[approval_decide] executor trigger returned/aborted for ${approvalId} (executor continues server-side; cron is the net):`,
-      err instanceof Error ? err.message : String(err),
-    )
-  } finally {
-    clearTimeout(timeout)
-  }
-}
 
 // Must mirror scripts/migrations/20260604-1100-approval-queue.sql.
 const APPROVAL_STATUS_VALUES = [
@@ -228,15 +192,17 @@ export function registerAgentApprovalTools(server: McpServer) {
             return { content: [{ type: "text" as const, text: `⚠️ Proposal ${id} is not pending (already decided, expired, or not found). No change.` }] }
           }
 
-          // Run the action now (awaited, 3s-bounded); cron is the net.
-          await fireExecutorTrigger(id)
-
+          // WP3: approve no longer instant-fires the server. It only flips the
+          // row to 'approved'. The Mac Mini (primary) claims it via approval_claim
+          // and runs it via approval_execute; the server executor cron is the
+          // BACKUP that steps in only if the Mac Mini is offline/stale or a row
+          // strands past the grace window (serverShouldBackstop).
           return {
             content: [{
               type: "text" as const,
               text: [
                 `✅ Approved proposal ${id} (${data.tool_name}).`,
-                `Executor triggered — the action is running now. Poll approval_list(status='executed') / approval_list(status='failed') for the outcome (or read the agent_messages callback to Hermes).`,
+                `Queued for execution — the Mac Mini will claim and run it (server backs up if the Mac Mini is offline). Poll approval_list(status='executed') / approval_list(status='failed') for the outcome (or read the agent_messages callback to Hermes).`,
               ].join("\n"),
             }],
           }
@@ -438,6 +404,63 @@ export function registerAgentApprovalTools(server: McpServer) {
       } catch (err) {
         return {
           content: [{ type: "text" as const, text: `❌ approval_claim error: ${err instanceof Error ? err.message : String(err)}` }],
+        }
+      }
+    },
+  )
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // approval_execute — run a row the Operating Agent just claimed (WP3).
+  // The Mac Mini decides WHEN to run (approval_claim → executing); the SERVER does
+  // the RUNNING here via the same tested executeTool path the server executor
+  // uses — no per-tool translation on the Mac Mini side (the 12 approvable tools
+  // are in-dashboard tools the Mac Mini's MCP set can't reliably reproduce).
+  //
+  // Gated by APPROVAL_RAIL_ENABLED (ONE master switch, Antonio's decision): the
+  // same flag that gates the server executor cron also gates this Mac Mini path,
+  // so flipping it off stops ALL execution. (approval_claim is NOT gated — it only
+  // moves approved→executing; a row a claim left 'executing' while the switch is
+  // off is recovered to 'approved' by the cron net once it's re-enabled.)
+  // ═══════════════════════════════════════════════════════════════════════════
+  server.tool(
+    "approval_execute",
+    [
+      "Execute an APPROVED action you just claimed via approval_claim (WP3 — Mac Mini executor).",
+      "",
+      "Pass the id of a row you claimed (it must be status='executing', claimed by your instance). The SERVER runs the action on the same tested path the server executor uses (integrity re-check → executeTool → outcome), then finalizes the row (executed/failed + result/error + executed_at + executed_by) and notifies Hermes + the CRM team chat.",
+      "",
+      "This SUPERSEDES the old 'run the tool yourself then call approval_complete' flow for the 12 approvable tools — you do NOT translate or run the tool locally; the server does, with TD's credentials and the proven implementations.",
+      "",
+      "Idempotent / race-safe: the finalize only flips a row still in 'executing'. Calling on a non-executing row is a no-op message. If APPROVAL_RAIL_ENABLED is off, this returns disabled and nothing runs.",
+    ].join("\n"),
+    {
+      id: z.string().uuid().describe("approval_queue row id you claimed (status must be 'executing')."),
+    },
+    async ({ id }) => {
+      try {
+        // ONE master switch (Antonio's decision): the same flag that gates the
+        // server executor cron also gates this Mac Mini execution path.
+        if (!isApprovalRailEnabled()) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `⛔ Approval rail disabled (APPROVAL_RAIL_ENABLED is not 'true'). Proposal ${id} was NOT executed; it stays as-is and the cron net will recover/run it when the rail is re-enabled.`,
+            }],
+          }
+        }
+
+        const res = await executeClaimedRow(id)
+        if (res.status === "executed") {
+          return { content: [{ type: "text" as const, text: `✅ Executed proposal ${id}. Outcome reported to Hermes + CRM.` }] }
+        }
+        if (res.status === "failed") {
+          return { content: [{ type: "text" as const, text: `❌ Proposal ${id} ran to a FAILED outcome (${res.reason ?? "see error_text"}). Outcome reported to Hermes + CRM.` }] }
+        }
+        // skipped — not executing / not found / already finalized by another caller.
+        return { content: [{ type: "text" as const, text: `⚠️ Proposal ${id} not executed: ${res.reason ?? "not in 'executing' state"}. No change.` }] }
+      } catch (err) {
+        return {
+          content: [{ type: "text" as const, text: `❌ approval_execute error: ${err instanceof Error ? err.message : String(err)}` }],
         }
       }
     },

@@ -36,11 +36,34 @@ import { executeTool } from "./tools"
 import { computeParamsHash } from "./approvable-tools"
 import { emitApprovalOutcome, runNotificationSweep } from "./approval-notifications"
 import { currentApprovalEnv } from "./approval-env"
+import { isInstanceStale, type HermesInstanceRow } from "./hermes-health"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 const STALE_CLAIM_MS = 10 * 60 * 1000 // executing rows older than this are treated as crashed
 const SCAN_BATCH = 10                  // max approved rows to execute per cron tick
 const CLAIMED_BY = "approval-executor"
+
+/**
+ * The primary Operating-Agent instance the server defers to (WP3). When this
+ * instance is alive (recent heartbeat), the server executor stays out of the way
+ * and lets the Mac Mini claim+execute approved rows. Must match the instance_id
+ * the Mac Mini runner heartbeats with (hermes_heartbeat('hermes-mac-mini')).
+ */
+const PRIMARY_INSTANCE_ID = "hermes-mac-mini"
+
+/**
+ * Backup grace (WP3): the server will not back up a freshly-approved row until it
+ * has been approved for at least this long — long enough for a briefly-asleep Mac
+ * Mini to wake and claim it. Tuned per Antonio's decision (3 min).
+ */
+export const BACKUP_GRACE_MS = 3 * 60 * 1000
+
+/**
+ * Long-strand failsafe (WP3): regardless of whether the Mac Mini looks online,
+ * an approved row older than this is backed up by the server so a never-claiming
+ * primary can't strand an approval forever. Tuned per Antonio's decision (30 min).
+ */
+export const LONG_STRAND_MS = 30 * 60 * 1000
 
 export interface ApprovalRow {
   id: string
@@ -65,6 +88,8 @@ export interface ExecutorRunResult {
   mode?: "direct" | "scan"
   recovered?: number
   executed?: number
+  /** WP3: approved rows the scan left for the Mac Mini (primary) to claim. */
+  deferred?: number
   expired?: number
   notified?: number
   results?: ExecResult[]
@@ -74,6 +99,47 @@ export interface ExecutorRunResult {
 /** Kill switch — execution only runs when APPROVAL_RAIL_ENABLED === 'true'. */
 export function isApprovalRailEnabled(): boolean {
   return process.env.APPROVAL_RAIL_ENABLED === "true"
+}
+
+/**
+ * WP3 — server-is-backup decision (pure, testable). The Mac Mini is the PRIMARY
+ * executor: it heartbeats + claims approved rows. The server only steps in when
+ * the primary can't, so it never races the Mac Mini on a healthy row.
+ *
+ * The server backs up an approved row IFF:
+ *   - it has been approved longer than BACKUP_GRACE_MS (don't snipe a row a
+ *     briefly-asleep Mac Mini is about to claim on wake), AND
+ *   - the primary instance is stale/offline (no recent heartbeat) OR the row has
+ *     stranded past LONG_STRAND_MS (failsafe so a never-online primary can't
+ *     pin an approval forever).
+ *
+ * Reference time = decided_at (set at approve) ?? created_at. If neither parses,
+ * the row's age is treated as infinite → eligible for backstop, so a malformed
+ * row can never strand silently.
+ */
+export function serverShouldBackstop(
+  row: { decided_at?: string | null; created_at?: string | null },
+  instanceRow: HermesInstanceRow | null,
+  nowMs: number,
+): boolean {
+  const ref = row.decided_at ?? row.created_at ?? null
+  const refMs = ref ? new Date(ref).getTime() : NaN
+  const age = Number.isNaN(refMs) ? Number.POSITIVE_INFINITY : nowMs - refMs
+  if (age <= BACKUP_GRACE_MS) return false
+  const stale = isInstanceStale(instanceRow?.last_heartbeat ?? null, nowMs)
+  return stale || age > LONG_STRAND_MS
+}
+
+/** Load the primary Operating-Agent instance row (null if it has never beat). */
+async function loadPrimaryInstance(): Promise<HermesInstanceRow | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabaseAdmin as any)
+    .from("hermes_instances")
+    .select("instance_id, last_heartbeat, status")
+    .eq("instance_id", PRIMARY_INSTANCE_ID)
+    .maybeSingle()
+  if (error) throw error
+  return (data as HermesInstanceRow | null) ?? null
 }
 
 /**
@@ -217,6 +283,119 @@ export async function executeApprovalRow(row: ApprovalRow): Promise<ExecResult> 
   return { id: row.id, status: "executed" }
 }
 
+/**
+ * Guarded finalize for the Mac Mini path (WP3). Unlike finalize(), this only
+ * flips a row STILL in 'executing' (WHERE status='executing') and stamps
+ * executed_by from the claiming instance, so a concurrent approval_complete or
+ * cron crash-recovery can't double-finalize. Returns true iff this caller won
+ * the finalize (so the caller knows whether to emit the outcome notification).
+ */
+async function finalizeClaimed(
+  id: string,
+  status: ExecOutcome,
+  executedBy: string | null,
+  extra: { result?: unknown; error_text?: string },
+): Promise<boolean> {
+  const nowIso = new Date().toISOString()
+  const patch: Record<string, unknown> = {
+    status,
+    executed_at: nowIso,
+    executed_by: executedBy ?? null,
+    notification_sent: false,
+    updated_at: nowIso,
+  }
+  if (extra.result !== undefined) patch.result = extra.result
+  if (extra.error_text !== undefined) patch.error_text = extra.error_text.slice(0, 10000)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabaseAdmin as any)
+    .from("approval_queue")
+    .update(patch)
+    .eq("id", id)
+    .eq("status", "executing")
+    .select("id")
+    .maybeSingle()
+  if (error) throw error
+  return !!data
+}
+
+/**
+ * WP3 — execute a row the Operating Agent (Mac Mini) already claimed via
+ * approval_claim (so it is status='executing', claimed_by=<instance>). This is
+ * the server tool approval_execute(id)'s engine: the Mac Mini decides WHEN to run
+ * (claim), the server does the RUNNING on the same tested path the server
+ * executor uses — no per-tool translation on the Mac Mini side.
+ *
+ * Reuses the proven building blocks (computeParamsHash → executeTool →
+ * interpretToolResult → emitApprovalOutcome). Differs from executeApprovalRow by
+ * (a) requiring the row already be 'executing' (it does NOT claim), (b) stamping
+ * executed_by from claimed_by, and (c) a GUARDED finalize so it can't
+ * double-finalize against a concurrent approval_complete / cron recovery.
+ */
+export async function executeClaimedRow(id: string): Promise<ExecResult> {
+  // 1) Read the claimed row; require it to be 'executing'.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: row, error: readErr } = await (supabaseAdmin as any)
+    .from("approval_queue")
+    .select("id, tool_name, params, params_hash, status, claimed_by, rationale")
+    .eq("id", id)
+    .maybeSingle()
+  if (readErr) throw readErr
+  if (!row) return { id, status: "skipped", reason: "not found" }
+  if (row.status !== "executing") {
+    return { id, status: "skipped", reason: `not executing (status='${row.status}') — claim it first via approval_claim` }
+  }
+
+  const claimedBy: string | null = row.claimed_by ?? null
+  const notifyRow = { id: row.id, tool_name: row.tool_name, params: row.params ?? {}, rationale: row.rationale ?? null }
+
+  // 2) Integrity re-check (second line; approval_claim already checked once).
+  const recomputed = computeParamsHash(row.params ?? {})
+  if (recomputed !== row.params_hash) {
+    const won = await finalizeClaimed(id, "failed", claimedBy, { error_text: "params_hash integrity mismatch" })
+    if (won) {
+      await emitApprovalOutcome({
+        id,
+        tool_name: row.tool_name,
+        status: "failed",
+        summary: `Proposal ${row.tool_name} NOT executed: params_hash integrity mismatch (stored params changed since approval).`,
+        row: notifyRow,
+      })
+    }
+    return { id, status: "failed", reason: "integrity" }
+  }
+
+  // 3) Execute the real action (same path as the server executor).
+  let raw: string
+  try {
+    raw = await executeTool(row.tool_name, row.params ?? {})
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const won = await finalizeClaimed(id, "failed", claimedBy, { error_text: msg })
+    if (won) {
+      await emitApprovalOutcome({ id, tool_name: row.tool_name, status: "failed", summary: `Proposal ${row.tool_name} failed: ${msg}`, row: notifyRow })
+    }
+    return { id, status: "failed", reason: "throw" }
+  }
+
+  // 4) executeTool doesn't throw on logical failure — inspect the result.
+  const interp = interpretToolResult(raw)
+  if (!interp.ok) {
+    const won = await finalizeClaimed(id, "failed", claimedBy, { result: interp.result, error_text: interp.error ?? "tool error" })
+    if (won) {
+      await emitApprovalOutcome({ id, tool_name: row.tool_name, status: "failed", summary: `Proposal ${row.tool_name} failed: ${interp.error ?? "tool error"}`, row: notifyRow })
+    }
+    return { id, status: "failed", reason: "tool_error" }
+  }
+
+  // 5) Success.
+  const won = await finalizeClaimed(id, "executed", claimedBy, { result: interp.result })
+  if (won) {
+    await emitApprovalOutcome({ id, tool_name: row.tool_name, status: "executed", summary: `Proposal ${row.tool_name} executed successfully.`, row: notifyRow })
+  }
+  return { id, status: won ? "executed" : "skipped", reason: won ? undefined : "already finalized by another caller" }
+}
+
 /** Direct mode: claim + execute exactly one row. */
 export async function executeApproval(id: string): Promise<ExecResult> {
   const claimed = await claimApproval(id)
@@ -284,16 +463,28 @@ export async function expireStalePending(): Promise<number> {
 }
 
 /**
- * Scan mode (cron safety net): recover stale claims, execute approved rows a
- * direct trigger missed, then expire stale pending proposals.
+ * Scan mode (cron safety net, WP3 = BACKUP only): recover stale claims, then
+ * back up ONLY the approved rows the Mac Mini (primary) failed to claim —
+ * serverShouldBackstop gates each row on the grace window + primary liveness —
+ * then expire stale pending proposals.
+ *
+ * This replaced the old "execute every approved row" behaviour: approve no
+ * longer instant-fires the server (the fireExecutorTrigger call was removed from
+ * approval_decide), and this scan defers to the Mac Mini unless it's stale or a
+ * row has stranded. The atomic claim still guarantees no double-execution if the
+ * Mac Mini and the server ever target the same row in the same window.
  */
 export async function runExecutorScan(): Promise<ExecutorRunResult> {
   const recovered = await recoverStuckExecuting()
+  const nowMs = Date.now()
+
+  // Primary liveness drives the backstop decision (loaded once per scan).
+  const instanceRow = await loadPrimaryInstance()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: approved, error } = await (supabaseAdmin as any)
     .from("approval_queue")
-    .select("id")
+    .select("id, decided_at, created_at")
     .eq("status", "approved")
     .eq("env", currentApprovalEnv())
     .order("created_at", { ascending: true })
@@ -301,7 +492,14 @@ export async function runExecutorScan(): Promise<ExecutorRunResult> {
   if (error) throw error
 
   const results: ExecResult[] = []
-  for (const r of (approved ?? []) as Array<{ id: string }>) {
+  let deferred = 0
+  for (const r of (approved ?? []) as Array<{ id: string; decided_at?: string | null; created_at?: string | null }>) {
+    if (!serverShouldBackstop(r, instanceRow, nowMs)) {
+      // Mac Mini is primary + healthy (or the grace window hasn't elapsed) —
+      // leave this row for it to claim.
+      deferred++
+      continue
+    }
     results.push(await executeApproval(r.id))
   }
 
@@ -317,6 +515,7 @@ export async function runExecutorScan(): Promise<ExecutorRunResult> {
     mode: "scan",
     recovered,
     executed: results.filter((r) => r.status === "executed").length,
+    deferred,
     expired,
     notified,
     results,

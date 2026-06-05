@@ -34,6 +34,7 @@ import {
 } from "./approvable-tools"
 import { normalizeToolParams } from "./enum-normalization"
 import { sendApprovalNotification } from "./approval-notifications"
+import { sendTelegramApprovalNotification } from "./telegram-notify"
 import { currentApprovalEnv } from "./approval-env"
 import {
   readCodebaseFile,
@@ -304,6 +305,18 @@ export async function proposeAction(input: {
     { id: data.id, tool_name: toolName, params, rationale },
     "proposed",
   )
+
+  // WP3: also push the proposal straight to Antonio on Telegram (server-side) so
+  // he sees it in seconds even if the Mac Mini is asleep. Best-effort, never
+  // throws, skips cleanly when TELEGRAM_BOT_TOKEN/CHAT_ID are unset. Third
+  // independent channel alongside the CRM mirror + web push.
+  await sendTelegramApprovalNotification({
+    id: data.id,
+    tool_name: toolName,
+    params,
+    rationale,
+    confirmation_code: data.confirmation_code ?? confirmationCode,
+  })
 
   return [
     `✅ Action proposed and queued for approval (NOT executed).`,

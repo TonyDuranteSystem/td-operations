@@ -21,7 +21,7 @@ import { createHash } from "crypto"
 // Hoisted shared state: an in-memory two-table store + a controllable executeTool.
 const h = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const store: { approval_queue: any[]; agent_messages: any[] } = { approval_queue: [], agent_messages: [] }
+  const store: { approval_queue: any[]; agent_messages: any[]; hermes_instances: any[] } = { approval_queue: [], agent_messages: [], hermes_instances: [] }
   const tool = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     impl: (async (_name: string, _params: any) => "{}") as (name: string, params: unknown) => Promise<string>,
@@ -43,7 +43,7 @@ vi.mock("@/lib/ai-agent/tools", () => ({
 vi.mock("@/lib/supabase-admin", () => {
   // Chainable query builder over h.store. Supports the exact call shapes used by
   // approval-executor.ts, approval-callback.ts and approval_decide.
-  function from(table: "approval_queue" | "agent_messages") {
+  function from(table: "approval_queue" | "agent_messages" | "hermes_instances") {
     const st = {
       op: "select" as "select" | "update" | "insert",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,10 +115,14 @@ vi.mock("@/lib/supabase-admin", () => {
 import {
   claimApproval,
   executeApproval,
+  executeClaimedRow,
   recoverStuckExecuting,
   runExecutorScan,
   runApprovalExecutor,
   interpretToolResult,
+  serverShouldBackstop,
+  BACKUP_GRACE_MS,
+  LONG_STRAND_MS,
 } from "@/lib/ai-agent/approval-executor"
 import { computeParamsHash } from "@/lib/ai-agent/approvable-tools"
 import { registerAgentApprovalTools } from "@/lib/mcp/tools/agent-approvals"
@@ -160,6 +164,7 @@ const TEST_LANE = "test-lane"
 beforeEach(() => {
   h.store.approval_queue.length = 0
   h.store.agent_messages.length = 0
+  h.store.hermes_instances.length = 0
   h.tool.calls.length = 0
   h.tool.impl = async () => JSON.stringify({ ok: true })
   process.env.APPROVAL_RAIL_ENABLED = "true"
@@ -484,6 +489,188 @@ describe("env lane isolation", () => {
     const row = seedApproval({ status: "approved", env: TEST_LANE, params: { task_title: "Z" } })
     const result = await executeApproval(row.id)
     expect(result.status).toBe("executed")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WP3 — serverShouldBackstop (pure decision)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("serverShouldBackstop (WP3)", () => {
+  const NOW = Date.parse("2026-06-05T12:00:00Z")
+  const freshBeat = (msAgo: number) => new Date(NOW - msAgo).toISOString()
+
+  it("does NOT back up a row approved within the grace window (Mac Mini gets first dibs)", () => {
+    const row = { decided_at: new Date(NOW - 60_000).toISOString() } // 1 min ago < 3 min grace
+    // even with an OFFLINE primary, the grace window protects a just-approved row
+    expect(serverShouldBackstop(row, null, NOW)).toBe(false)
+  })
+
+  it("backs up after grace when the primary is stale/offline", () => {
+    const row = { decided_at: new Date(NOW - (BACKUP_GRACE_MS + 60_000)).toISOString() }
+    // no instance row → treated as stale
+    expect(serverShouldBackstop(row, null, NOW)).toBe(true)
+  })
+
+  it("does NOT back up after grace when the primary is fresh (healthy Mac Mini keeps the row)", () => {
+    const row = { decided_at: new Date(NOW - (BACKUP_GRACE_MS + 60_000)).toISOString() }
+    const instance = { instance_id: "hermes-mac-mini", last_heartbeat: freshBeat(30_000), status: "online" }
+    expect(serverShouldBackstop(row, instance, NOW)).toBe(false)
+  })
+
+  it("long-strand failsafe: backs up a very old row even if the primary looks fresh", () => {
+    const row = { decided_at: new Date(NOW - (LONG_STRAND_MS + 60_000)).toISOString() }
+    const instance = { instance_id: "hermes-mac-mini", last_heartbeat: freshBeat(10_000), status: "online" }
+    expect(serverShouldBackstop(row, instance, NOW)).toBe(true)
+  })
+
+  it("falls back to created_at when decided_at is missing", () => {
+    const row = { decided_at: null, created_at: new Date(NOW - (BACKUP_GRACE_MS + 60_000)).toISOString() }
+    expect(serverShouldBackstop(row, null, NOW)).toBe(true)
+  })
+
+  it("treats an unparseable/absent reference time as eligible (never strands a malformed row)", () => {
+    expect(serverShouldBackstop({ decided_at: null, created_at: null }, null, NOW)).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WP3 — runExecutorScan defers to a healthy Mac Mini
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("runExecutorScan — server is BACKUP (WP3)", () => {
+  it("DEFERS an approved row (past grace) when the Mac Mini is online (does not execute)", async () => {
+    // primary heartbeat is fresh → server defers even though grace has elapsed
+    h.store.hermes_instances.push({ instance_id: "hermes-mac-mini", last_heartbeat: new Date().toISOString(), status: "online" })
+    // approved well past the grace window, but the primary is healthy → not stranded
+    const pastGrace = new Date(Date.now() - (BACKUP_GRACE_MS + 60_000)).toISOString()
+    seedApproval({ status: "approved", decided_at: pastGrace, created_at: pastGrace, params: { task_title: "primary" } })
+
+    const res = await runExecutorScan()
+    expect(res.executed).toBe(0)
+    expect(res.deferred).toBe(1)
+    expect(h.store.approval_queue[0].status).toBe("approved") // untouched — Mac Mini's to claim
+    expect(h.tool.calls).toHaveLength(0)
+  })
+
+  it("BACKS UP an old approved row when the Mac Mini is offline", async () => {
+    // no hermes_instances row → primary is stale → server backs up old rows
+    seedApproval({
+      status: "approved",
+      decided_at: "2020-01-01T00:00:00Z", // ancient → past grace + strand
+      created_at: "2020-01-01T00:00:00Z",
+      params: { task_title: "stranded" },
+    })
+
+    const res = await runExecutorScan()
+    expect(res.executed).toBe(1)
+    expect(res.deferred).toBe(0)
+    expect(h.store.approval_queue[0].status).toBe("executed")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WP3 — executeClaimedRow (the approval_execute engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("executeClaimedRow (WP3)", () => {
+  it("runs an 'executing' row, marks executed, stamps executed_by from claimed_by, notifies", async () => {
+    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", tool_name: "create_task", params: { task_title: "Run me" } })
+    h.tool.impl = async () => JSON.stringify({ task_id: "t-1", created: true })
+
+    const res = await executeClaimedRow(row.id)
+    expect(res.status).toBe("executed")
+
+    const stored = h.store.approval_queue[0]
+    expect(stored.status).toBe("executed")
+    expect(stored.executed_by).toBe("hermes-mac-mini")
+    expect(stored.executed_at).toBeTruthy()
+    expect(stored.result).toEqual({ task_id: "t-1", created: true })
+    expect(h.tool.calls).toEqual([{ name: "create_task", params: { task_title: "Run me" } }])
+
+    const cb = h.store.agent_messages[0]
+    expect(cb.context_json).toEqual({ approval_id: row.id, tool_name: "create_task", outcome_status: "executed" })
+  })
+
+  it("is a no-op (skipped) on a row that is NOT executing — never runs the tool", async () => {
+    const row = seedApproval({ status: "approved", params: { task_title: "X" } }) // not yet claimed
+    const res = await executeClaimedRow(row.id)
+    expect(res.status).toBe("skipped")
+    expect(h.tool.calls).toHaveLength(0)
+    expect(h.store.approval_queue[0].status).toBe("approved")
+  })
+
+  it("marks 'failed' (never runs) on a params_hash integrity mismatch", async () => {
+    const row = seedApproval({
+      status: "executing",
+      claimed_by: "hermes-mac-mini",
+      tool_name: "send_email",
+      params: { to: "a@b.c", subject: "S", body: "B" },
+      params_hash: "deadbeef-not-the-real-hash",
+    })
+    const res = await executeClaimedRow(row.id)
+    expect(res.status).toBe("failed")
+    expect(res.reason).toBe("integrity")
+    expect(h.tool.calls).toHaveLength(0)
+    expect(h.store.approval_queue[0].status).toBe("failed")
+    expect(h.store.approval_queue[0].error_text).toBe("params_hash integrity mismatch")
+  })
+
+  it("marks 'failed' on an error-shaped executeTool result", async () => {
+    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", tool_name: "send_email", params: { to: "a@b.c", subject: "S", body: "B" } })
+    h.tool.impl = async () => JSON.stringify({ error: "SMTP refused" })
+    const res = await executeClaimedRow(row.id)
+    expect(res.status).toBe("failed")
+    expect(h.store.approval_queue[0].status).toBe("failed")
+    expect(h.store.approval_queue[0].error_text).toContain("SMTP refused")
+  })
+
+  it("marks 'failed' when executeTool throws", async () => {
+    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", tool_name: "create_task", params: { task_title: "X" } })
+    h.tool.impl = async () => { throw new Error("network down") }
+    const res = await executeClaimedRow(row.id)
+    expect(res.status).toBe("failed")
+    expect(h.store.approval_queue[0].error_text).toContain("network down")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WP3 — approval_execute MCP tool (kill-switch gate + dispatch)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function captureExecuteHandler(): (args: { id: string }) => Promise<{ content: Array<{ text: string }> }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let handler: any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registerAgentApprovalTools({ tool: (name: string, _d: string, _s: any, fn: any) => { if (name === "approval_execute") handler = fn } } as any)
+  return handler
+}
+
+describe("approval_execute MCP tool (WP3)", () => {
+  it("executes a claimed row when APPROVAL_RAIL_ENABLED is 'true'", async () => {
+    process.env.APPROVAL_RAIL_ENABLED = "true"
+    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", tool_name: "create_task", params: { task_title: "Go" } })
+    h.tool.impl = async () => JSON.stringify({ ok: true })
+    const res = await captureExecuteHandler()({ id: row.id })
+    expect(res.content[0].text).toContain("Executed proposal")
+    expect(h.store.approval_queue[0].status).toBe("executed")
+  })
+
+  it("is DISABLED (runs nothing) when the kill switch is off — ONE master switch", async () => {
+    delete process.env.APPROVAL_RAIL_ENABLED
+    const row = seedApproval({ status: "executing", claimed_by: "hermes-mac-mini", params: { task_title: "Go" } })
+    const res = await captureExecuteHandler()({ id: row.id })
+    expect(res.content[0].text).toContain("Approval rail disabled")
+    expect(h.tool.calls).toHaveLength(0)
+    expect(h.store.approval_queue[0].status).toBe("executing") // untouched
+  })
+
+  it("reports a clear no-op when the row is not in 'executing'", async () => {
+    process.env.APPROVAL_RAIL_ENABLED = "true"
+    const row = seedApproval({ status: "approved", params: { task_title: "Go" } })
+    const res = await captureExecuteHandler()({ id: row.id })
+    expect(res.content[0].text).toContain("not executed")
+    expect(h.tool.calls).toHaveLength(0)
   })
 })
 
