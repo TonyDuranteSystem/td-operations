@@ -54,15 +54,28 @@ const db = () => supabaseAdmin as any
  *
  * thread_type is NOT NULL; an unknown/absent type is coerced to the default
  * ('investigation') so the column constraint is always satisfied.
+ *
+ * accountsAffected (WP2) — optional uuid[] of entities this thread concerns. The
+ * thread_create MCP tool passes account_id and/or contact_id here when Hermes
+ * starts a thread about a specific client (accounts_affected is the only
+ * affected-entities array on the table — there is no separate contacts column).
+ * Empty/absent → NULL. callWorker creates threads WITHOUT this arg, so an
+ * existing thread_create-seeded row keeps its accounts_affected (PK-idempotent
+ * insert returns the existing row rather than overwriting).
  */
 export async function createThreadSummary(
   threadId: string,
   type: unknown,
   title?: string | null,
   promptVersion?: string | null,
+  accountsAffected?: string[] | null,
 ): Promise<ThreadSummary | null> {
   if (!threadId || typeof threadId !== "string") return null
   const threadType: ThreadType = normalizeThreadType(type)
+
+  const cleanedAccounts = Array.isArray(accountsAffected)
+    ? accountsAffected.filter((x): x is string => typeof x === "string" && x.length > 0)
+    : []
 
   const { data, error } = await db()
     .from("thread_summaries")
@@ -73,6 +86,8 @@ export async function createThreadSummary(
       // Fingerprint of the worker's base system prompt at thread creation (Phase D)
       // so the instructions can be reconstructed later. NULL when not supplied.
       prompt_version: typeof promptVersion === "string" && promptVersion.length > 0 ? promptVersion : null,
+      // WP2: entities this thread concerns (account_id / contact_id from thread_create).
+      accounts_affected: cleanedAccounts.length > 0 ? cleanedAccounts : null,
     })
     .select(SELECT_COLS)
     .single()
