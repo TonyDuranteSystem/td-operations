@@ -20,6 +20,7 @@ export type AppSettingKey =
   | "renewal_banner_min_year" // number — minimum agreement_year for the portal renewal-MSA banner to show. Default 2027 (hides 2026 in purgatory). Bump higher to hide future years too.
   | "auto_activate_confidence_threshold" // 'exact' (default) | 'exact_or_high' — which match confidence levels trigger auto-activation. Anything below threshold goes to the bank-feed review queue.
   | "portal_admin_email_on_client_message" // boolean — when true (default), a client portal chat message emails support@tonydurante.us. Set false to silence those emails (push notifications are unaffected). Toggled in Dev Tools → Maintenance.
+  | "new_document_alert_enabled" // boolean — when true (default), making a document client-visible alerts the client (in-portal notification + push; digest email for non-push users) and shows it as "New" until opened. Global kill switch for the new-document alert feature; consumed in lib/portal/document-alerts.ts.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,

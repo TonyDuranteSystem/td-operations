@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
       .limit(1)
 
     if (!existingDoc?.length) {
-      await supabaseAdmin.from('documents').insert({
+      const { data: newDoc } = await supabaseAdmin.from('documents').insert({
         file_name: finalFileName,
         drive_file_id: driveFile.id,
         drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
@@ -118,8 +118,16 @@ export async function POST(req: NextRequest) {
         account_id: accountId,
         contact_id: null,
         portal_visible: true,
-      })
+      }).select('id').single()
       sideEffects.push('Document record created')
+
+      // Alert the client of the new document (in-portal + push; digest email for
+      // non-push users). Fire-and-forget — never block the upload response.
+      if (newDoc?.id) {
+        const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
+        notifyClientsOfNewDocument(newDoc.id as string).catch((e) =>
+          console.warn('[upload-account-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
+      }
     }
 
     // Log action

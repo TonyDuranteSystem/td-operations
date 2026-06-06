@@ -43,6 +43,7 @@ interface PortalSidebarProps {
   navVisibility?: PortalNavVisibility
   portalTier?: string
   unreadChatCount?: number
+  unreadDocsCount?: number
   hasWizardPending?: boolean
   accountType?: string | null
   contactId?: string
@@ -165,7 +166,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -363,7 +364,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const selectedCompanyName = accounts.find(a => a.id === selectedAccountId)?.company_name ?? null
 
   const renderNavItem = (item: NavItem) => {
-    const badge = item.href === '/portal/chat' && liveUnreadCount > 0 ? liveUnreadCount : 0
+    const isDocsItem = item.href === '/portal/documents'
+    // Documents tab pulses while there are unopened client-visible docs, and
+    // stops once the client is actually on the Documents page.
+    const docsPulse = isDocsItem && unreadDocsCount > 0 && !isActive(item.href)
+    const badge = item.href === '/portal/chat' && liveUnreadCount > 0
+      ? liveUnreadCount
+      : (isDocsItem && unreadDocsCount > 0 ? unreadDocsCount : 0)
 
     // Context-aware label for the wizard nav item.
     // The tab serves two purposes depending on the client's stage:
@@ -399,7 +406,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
           isActive(item.href)
             ? 'bg-blue-50 text-blue-700'
-            : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+            : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900',
+          docsPulse && 'animate-pulse'
         )}
       >
         <item.icon className="h-4 w-4 shrink-0" />

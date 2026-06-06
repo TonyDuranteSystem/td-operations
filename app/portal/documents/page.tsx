@@ -6,6 +6,7 @@ import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
+import { getNewDocumentIds } from '@/lib/portal/document-alerts'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -125,6 +126,13 @@ export default async function PortalDocumentsPage() {
   // Fetch invoice archive documents
   const invoiceArchive = selectedAccountId ? await getInvoiceArchive(selectedAccountId) : []
 
+  // Which documents are "new" (alert-eligible + unopened) for THIS contact —
+  // drives the "New" pill + tinted row. Teammates have no per-person state.
+  const allDocIds = [...companyDocs, ...myDocs].map(d => d.id)
+  const newDocIds = contactId
+    ? Array.from(await getNewDocumentIds(allDocIds, contactId))
+    : []
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -171,7 +179,7 @@ export default async function PortalDocumentsPage() {
                 <Building2 className="h-4 w-4 text-zinc-500" />
                 <h2 className="text-sm font-semibold text-zinc-700">Company Documents</h2>
               </div>
-              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} />
+              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} locale={locale} />
             </div>
           )}
 
@@ -181,7 +189,7 @@ export default async function PortalDocumentsPage() {
                 <User className="h-4 w-4 text-zinc-500" />
                 <h2 className="text-sm font-semibold text-zinc-700">My Documents</h2>
               </div>
-              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} />
+              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} locale={locale} />
             </div>
           )}
         </>

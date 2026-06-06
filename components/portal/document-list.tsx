@@ -19,6 +19,9 @@ interface Document {
 interface DocumentListProps {
   documents: Document[]
   categoryLabels: Record<number, string>
+  /** Ids of documents that are "new" (unopened) for the current contact. */
+  newDocIds?: string[]
+  locale?: 'en' | 'it'
 }
 
 const CATEGORY_COLORS: Record<number, string> = {
@@ -29,12 +32,25 @@ const CATEGORY_COLORS: Record<number, string> = {
   5: 'bg-zinc-100 text-zinc-700',
 }
 
-export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
+export function DocumentList({ documents, categoryLabels, newDocIds = [], locale = 'en' }: DocumentListProps) {
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string; url: string } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+
+  // "New" (unopened) tracking. seenIds holds docs the client just opened this
+  // session so the pill/tint clears instantly, before the server round-trip.
+  const [seenIds, setSeenIds] = useState<Set<string>>(new Set())
+  const newSet = new Set(newDocIds)
+  const isNew = (id: string) => newSet.has(id) && !seenIds.has(id)
+  const newLabel = locale === 'it' ? 'Novità' : 'New'
+  const markViewed = (docId: string) => {
+    if (!newSet.has(docId) || seenIds.has(docId)) return
+    setSeenIds(prev => new Set(prev).add(docId))
+    // Record the open so it stops showing as new across devices/sessions.
+    fetch(`/api/portal/documents/${docId}/view`, { method: 'POST' }).catch(() => {})
+  }
 
   const categories = Array.from(new Set(documents.map(d => d.category).filter((c): c is number => c != null)))
 
@@ -48,6 +64,7 @@ export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
   })
 
   const handleDownload = async (docId: string, fileName: string) => {
+    markViewed(docId)
     setDownloading(docId)
     try {
       const res = await fetch(`/api/portal/documents/${docId}`)
@@ -75,6 +92,7 @@ export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
   }
 
   const handlePreview = async (docId: string, fileName: string) => {
+    markViewed(docId)
     setPreviewLoading(true)
     try {
       const res = await fetch(`/api/portal/documents/${docId}`)
@@ -184,13 +202,28 @@ export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
           {filtered.map(doc => (
             <div
               key={doc.id}
-              className="bg-white rounded-xl border shadow-sm p-4 flex items-center gap-4 hover:shadow-md transition-shadow"
+              className={cn(
+                'rounded-xl border shadow-sm p-4 flex items-center gap-4 hover:shadow-md transition-shadow',
+                isNew(doc.id)
+                  ? 'bg-indigo-50/70 border-l-4 border-l-indigo-400'
+                  : 'bg-white'
+              )}
             >
-              <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                <FileText className="h-5 w-5 text-blue-600" />
+              <div className={cn(
+                'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
+                isNew(doc.id) ? 'bg-indigo-100' : 'bg-blue-50'
+              )}>
+                <FileText className={cn('h-5 w-5', isNew(doc.id) ? 'text-indigo-600' : 'text-blue-600')} />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-zinc-900 truncate">{doc.file_name}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-zinc-900 truncate">{doc.file_name}</p>
+                  {isNew(doc.id) && (
+                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">
+                      {newLabel}
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 mt-0.5">
                   {doc.document_type_name && (
                     <span className="text-xs text-zinc-500">{doc.document_type_name}</span>

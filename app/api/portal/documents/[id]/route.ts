@@ -47,6 +47,14 @@ export async function GET(
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
+  // Record that this contact opened the document (clears its "New" state for
+  // them). Backstop for the client-side view ping; contact users only —
+  // teammates have no contact id and don't carry per-person "new" state.
+  if (contactId) {
+    const { recordDocumentView } = await import('@/lib/portal/document-alerts')
+    recordDocumentView(doc.id, contactId).catch(() => {})
+  }
+
   // Download from Drive and stream to client
   try {
     const { buffer, mimeType, fileName } = await downloadFileBinary(doc.drive_file_id)

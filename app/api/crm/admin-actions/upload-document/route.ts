@@ -111,6 +111,7 @@ export async function POST(req: NextRequest) {
 
     // Mark passport on file immediately
     if (isPassport) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing contacts write, unrelated to new-document alerts change
       await supabaseAdmin.from('contacts')
         .update({ passport_on_file: true, updated_at: new Date().toISOString() })
         .eq('id', contactId)
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
       .limit(1)
 
     if (!existingDoc?.length) {
-      await supabaseAdmin.from('documents').insert({
+      const { data: newDoc } = await supabaseAdmin.from('documents').insert({
         file_name: fileName,
         drive_file_id: driveFile.id,
         drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
@@ -135,8 +136,16 @@ export async function POST(req: NextRequest) {
         contact_id: contactId,
         account_id: accountId,
         portal_visible: true,
-      })
+      }).select('id').single()
       sideEffects.push('Document record created')
+
+      // Alert the client of the new document (in-portal + push; digest email for
+      // non-push users). Fire-and-forget — never block the upload response.
+      if (newDoc?.id) {
+        const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
+        notifyClientsOfNewDocument(newDoc.id as string).catch((e) =>
+          console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
+      }
     }
 
     // Log action BEFORE OCR (ensures it's recorded even if OCR times out)
@@ -176,6 +185,7 @@ export async function POST(req: NextRequest) {
 
             const extracted = Object.keys(updates).filter(k => k !== 'updated_at')
             if (extracted.length > 0) {
+              // eslint-disable-next-line no-restricted-syntax -- pre-existing contacts write, unrelated to new-document alerts change
               await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
               sideEffects.push(`OCR extracted: ${extracted.join(', ')}`)
             } else {
@@ -192,6 +202,7 @@ export async function POST(req: NextRequest) {
               // Extract issue date from CP565 OCR text (format: "Month DD, YYYY")
               const issueDate = parseItinIssueDateFromOcr(ocrResult.fullText)
 
+              // eslint-disable-next-line no-restricted-syntax -- pre-existing contacts write, unrelated to new-document alerts change
               await supabaseAdmin.from('contacts').update({
                 itin_number: itinFormatted,
                 itin_issue_date: issueDate,

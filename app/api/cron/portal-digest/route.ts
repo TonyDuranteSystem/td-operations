@@ -150,9 +150,25 @@ export async function GET(request: NextRequest) {
         language,
       })
 
+      // No-double-notify rule for new-document alerts: a client with the PWA
+      // installed already got a push when the doc was published, so skip those
+      // from the digest email (they're still marked email_sent_at below so the
+      // cron doesn't reprocess them). Other notification types are unaffected.
+      let hasPush = false
+      {
+        const pushQuery = supabaseAdmin
+          .from('push_subscriptions')
+          .select('id', { count: 'exact', head: true })
+        const { count } = type === 'account'
+          ? await pushQuery.eq('account_id', id)
+          : await pushQuery.eq('contact_id', id)
+        hasPush = !!count && count > 0
+      }
+      const emailNotifs = notifications.filter(n => !(n.type === 'new_document' && hasPush))
+
       // Group notifications by type
       const byType = new Map<string, typeof notifications>()
-      for (const n of notifications) {
+      for (const n of emailNotifs) {
         if (!byType.has(n.type)) byType.set(n.type, [])
         byType.get(n.type)!.push(n)
       }
@@ -219,38 +235,41 @@ export async function GET(request: NextRequest) {
       `
 
       // Build email subject
-      const totalCount = notifications.length
+      const totalCount = emailNotifs.length
       const subject = isItalian
         ? `${totalCount} nuov${totalCount === 1 ? 'o aggiornamento' : 'i aggiornamenti'} nel tuo portale`
         : `${totalCount} new update${totalCount === 1 ? '' : 's'} in your portal`
 
-      // Send email
-      try {
-        const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-        const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`
-        const rawEmail = [
-          `From: TD Portal <support@tonydurante.us>`,
-          `To: ${contactEmail}`,
-          `Subject: ${encodedSubject}`,
-          `MIME-Version: 1.0`,
-          `Content-Type: multipart/alternative; boundary="${boundary}"`,
-          '',
-          `--${boundary}`,
-          'Content-Type: text/html; charset=UTF-8',
-          'Content-Transfer-Encoding: base64',
-          '',
-          Buffer.from(html).toString('base64'),
-          `--${boundary}--`,
-        ].join('\r\n')
+      // Send email — skipped entirely if every pending item was push-delivered
+      // (e.g. a PWA client whose only updates are new-document alerts).
+      if (emailNotifs.length > 0) {
+        try {
+          const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+          const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`
+          const rawEmail = [
+            `From: TD Portal <support@tonydurante.us>`,
+            `To: ${contactEmail}`,
+            `Subject: ${encodedSubject}`,
+            `MIME-Version: 1.0`,
+            `Content-Type: multipart/alternative; boundary="${boundary}"`,
+            '',
+            `--${boundary}`,
+            'Content-Type: text/html; charset=UTF-8',
+            'Content-Transfer-Encoding: base64',
+            '',
+            Buffer.from(html).toString('base64'),
+            `--${boundary}--`,
+          ].join('\r\n')
 
-        await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
-        emailsSent++
-      } catch (err) {
-        console.error(`[portal-digest] Failed to send to ${contactEmail}:`, err)
-        continue // Don't mark as sent if email failed
+          await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+          emailsSent++
+        } catch (err) {
+          console.error(`[portal-digest] Failed to send to ${contactEmail}:`, err)
+          continue // Don't mark as sent if email failed
+        }
       }
 
-      // Mark all notifications as email-sent
+      // Mark all notifications as email-sent (including push-skipped new_document)
       const notifIds = notifications.map(n => n.id)
       await supabaseAdmin
         .from('portal_notifications')

@@ -10,6 +10,7 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
+import { getUnopenedDocsCount } from '@/lib/portal/document-alerts'
 import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
@@ -163,6 +164,11 @@ export default async function PortalLayout({
         contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
 
+  // Unopened client-visible documents — drives the Documents tab pulse + count.
+  const unreadDocsCount = contactId
+    ? await getUnopenedDocsCount(contactId, accounts.map(a => a.id))
+    : 0
+
   // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
   // for the three branches (SD-by-account, SD-by-contact, tier-based
   // onboarding fallback per SOP v7.2 Phase 0).
@@ -193,6 +199,7 @@ export default async function PortalLayout({
             navVisibility={navVisibility}
             portalTier={portalTier}
             unreadChatCount={unreadChatCount}
+            unreadDocsCount={unreadDocsCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
             portalRole={portalRole}
