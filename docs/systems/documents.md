@@ -1,5 +1,5 @@
 # Documents & Storage
-_Last verified against code: 2026-06-02 — Claude (read google-drive.ts, doc.ts, classify.ts, auto-save-document.ts; invoice-pdf.ts line-item rendering)_
+_Last verified against code: 2026-06-06 — Claude (new-document client alerts: document-alerts.ts + upload-route hooks; prior 2026-06-02 read of google-drive.ts, doc.ts, classify.ts, auto-save-document.ts; invoice-pdf.ts line-item rendering)_
 
 ## What it is
 How files are stored, processed, classified, indexed, and generated. Three storage surfaces + a processing pipeline + PDF generation.
@@ -26,6 +26,8 @@ Form fillers and generators: `ss4-fill` (EIN), `w7-fill` (ITIN W-7), `8832-fill`
 
 ## Auto-save & portal visibility
 `lib/portal/auto-save-document.ts` inserts a `documents` row (e.g. when an offer is signed) — deduped by `drive_file_id`, `status='classified'`, and a **`portal_visible`** flag (default false) that controls whether the client sees it in the portal. `lib/portal/document-templates.ts` generates templated docs.
+
+**New-document client alerts (2026-06-06):** when staff make a doc client-visible, the client gets a portal notification + push (email for non-push users) and the doc shows as "New" in the portal until opened. Detection is app-level — `notifyClientsOfNewDocument()` (`lib/portal/document-alerts.ts`) is called fire-and-forget from the manual admin upload routes (`app/api/crm/admin-actions/upload-document` + `upload-account-document`). Extra `documents` columns: `notify_client` (per-doc opt-out, default true) + `client_notified_at` (idempotency + baseline). Per-contact opened state lives in `portal_document_views`. Full behavior + the open follow-up (wiring the automated upload paths) is in `portal.md`.
 
 ## Business rules
 - **`drive_upload` = text, `drive_upload_file` = binary** (PDF/images). Using the wrong one corrupts binary content.
