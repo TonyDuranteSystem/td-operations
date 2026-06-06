@@ -243,7 +243,7 @@ export async function notifyClientOfAdminMessage({
 
   // Resolve all recipients. For contact_id: one recipient. For account_id: ALL
   // contacts on the account so every member of a Multi-Member LLC is notified.
-  type Recipient = { email: string; firstName: string | null; language: string }
+  type Recipient = { email: string; firstName: string | null; language: string; contactId: string | null }
   let recipients: Recipient[] = []
 
   if (contact_id) {
@@ -253,19 +253,19 @@ export async function notifyClientOfAdminMessage({
       .eq('id', contact_id)
       .single()
     if (contact?.email) {
-      recipients = [{ email: contact.email, firstName: contact.full_name?.split(' ')[0] ?? null, language: contact.language ?? 'en' }]
+      recipients = [{ email: contact.email, firstName: contact.full_name?.split(' ')[0] ?? null, language: contact.language ?? 'en', contactId: contact_id }]
     }
   } else if (account_id) {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
-      .select('role, contacts(email, full_name, language)')
+      .select('role, contacts(id, email, full_name, language)')
       .eq('account_id', account_id)
     const linkRows = links ?? []
     const contactRecipients = linkRows
       .map(l => {
-        const c = l.contacts as { email: string; full_name: string; language: string } | null
+        const c = l.contacts as { id: string; email: string; full_name: string; language: string } | null
         if (!c?.email) return null
-        return { email: c.email, firstName: c.full_name?.split(' ')[0] ?? null, language: c.language ?? 'en' }
+        return { email: c.email, firstName: c.full_name?.split(' ')[0] ?? null, language: c.language ?? 'en', contactId: c.id ?? null }
       })
       .filter((r): r is Recipient => r !== null)
 
@@ -294,6 +294,7 @@ export async function notifyClientOfAdminMessage({
         email: t.email as string,
         firstName: ((t.display_name as string | null) ?? '').split(' ')[0] || null,
         language: ownerLanguage, // teammates follow the account owner's language
+        contactId: null, // teammates aren't contacts; covered by the account-level push check
       }))
 
     // Dedupe so a teammate sharing a contact's email isn't emailed twice.
@@ -308,6 +309,26 @@ export async function notifyClientOfAdminMessage({
   const portalChatUrl = `${PORTAL_BASE_URL}/portal/chat`
 
   for (const recipient of recipients) {
+    // Skip email if this client already has active push subscriptions (PWA with
+    // notifications) — they'll get the push instead. Check contact-level first,
+    // then account-level (some subscriptions are keyed by account, not contact).
+    let hasPush = false
+    if (recipient.contactId) {
+      const { count } = await supabaseAdmin
+        .from('push_subscriptions')
+        .select('id', { count: 'exact', head: true })
+        .eq('contact_id', recipient.contactId)
+      if (count && count > 0) hasPush = true
+    }
+    if (!hasPush && account_id) {
+      const { count } = await supabaseAdmin
+        .from('push_subscriptions')
+        .select('id', { count: 'exact', head: true })
+        .eq('account_id', account_id)
+      if (count && count > 0) hasPush = true
+    }
+    if (hasPush) continue // has push — skip the redundant email
+
     const isIt = recipient.language === 'it'
     const greeting = recipient.firstName ? (isIt ? `Ciao ${recipient.firstName},` : `Hi ${recipient.firstName},`) : (isIt ? 'Ciao,' : 'Hi,')
     const subject = isIt ? 'Nuovo messaggio dal team Tony Durante' : 'New message from the Tony Durante team'

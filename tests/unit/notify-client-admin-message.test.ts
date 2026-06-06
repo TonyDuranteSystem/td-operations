@@ -64,22 +64,25 @@ function extractMimeTo(raw: string): string {
 // chained .eq().eq(), terminal .single(), and `await chain` (thenable) — so it
 // works for the contact_id (.single()) path AND both array paths (account_contacts,
 // portal_team_members) which await the builder directly.
-function makeChain(data: unknown) {
+function makeChain(data: unknown, count?: number) {
+  const result = { data, error: null, count: count ?? null }
   const chain: Record<string, unknown> = {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
-    single: vi.fn().mockResolvedValue({ data, error: null }),
-    then: (resolve: (v: { data: unknown; error: null }) => unknown) => resolve({ data, error: null }),
+    single: vi.fn().mockResolvedValue(result),
+    then: (resolve: (v: typeof result) => unknown) => resolve(result),
   }
   return chain
 }
 
 // Dispatch the mocked supabaseAdmin.from(table) to per-table data.
-function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[] }) {
+// pushSubs simulates the push_subscriptions count check (0 = no push → email sent).
+function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[]; pushSubs?: number }) {
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
     if (table === 'contacts') return makeChain(opts.contact ?? null)
     if (table === 'account_contacts') return makeChain(opts.accountContacts ?? [])
     if (table === 'portal_team_members') return makeChain(opts.teammates ?? [])
+    if (table === 'push_subscriptions') return makeChain(null, opts.pushSubs ?? 0)
     return makeChain(null)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any)
@@ -345,5 +348,53 @@ describe('notifyClientOfAdminMessage', () => {
 
     const teammateCall = vi.mocked(gmailPost).mock.calls.find(c => extractMimeTo((c[1] as { raw: string }).raw) === 'teammate@example.com')!
     expect(extractMimeSubject((teammateCall[1] as { raw: string }).raw)).toBe('Nuovo messaggio dal team Tony Durante')
+  })
+
+  // ── Push-subscription skip (PWA installed → email is redundant) ──────────
+
+  it('skips the email when the contact has an active push subscription', async () => {
+    mockDb({
+      contact: { email: 'pwa@example.com', full_name: 'PWA User', language: 'en' },
+      pushSubs: 1,
+    })
+
+    await notifyClientOfAdminMessage({ contact_id: 'contact-pwa', messagePreview: 'You have a new message.' })
+
+    expect(gmailPost).not.toHaveBeenCalled()
+  })
+
+  it('sends the email when the contact has no push subscription', async () => {
+    mockDb({
+      contact: { email: 'nopwa@example.com', full_name: 'No PWA', language: 'en' },
+      pushSubs: 0,
+    })
+
+    await notifyClientOfAdminMessage({ contact_id: 'contact-nopwa', messagePreview: 'You have a new message.' })
+
+    expect(gmailPost).toHaveBeenCalledOnce()
+    expect(extractMimeTo((vi.mocked(gmailPost).mock.calls[0][1] as { raw: string }).raw)).toBe('nopwa@example.com')
+  })
+
+  it('skips the email via the contact-level push check (account path)', async () => {
+    mockDb({
+      accountContacts: [{ contacts: { id: 'c-pwa', email: 'acct@example.com', full_name: 'Acct Owner', language: 'en' } }],
+      pushSubs: 1,
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-pwa', messagePreview: 'New message' })
+
+    expect(gmailPost).not.toHaveBeenCalled()
+  })
+
+  it('skips the email via the account-level push check when the recipient has no contact id (teammate)', async () => {
+    mockDb({
+      accountContacts: [],
+      teammates: [{ email: 'teammate@example.com', display_name: 'Mate', capabilities: { chat: true }, status: 'active' }],
+      pushSubs: 1,
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-team-pwa', messagePreview: 'New message' })
+
+    expect(gmailPost).not.toHaveBeenCalled()
   })
 })

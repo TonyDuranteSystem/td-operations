@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     .insert({
       user_id: user.id,
       account_id: account_id || null,
+      contact_id: contactId || null,
       endpoint: subscription.endpoint,
       p256dh: subscription.keys.p256dh,
       auth_key: subscription.keys.auth,
