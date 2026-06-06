@@ -771,7 +771,7 @@ export async function getUnreadChatCount(contactId: string): Promise<number> {
     .select('id', { count: 'exact', head: true })
     .eq('contact_id', contactId)
     .eq('sender_type', 'admin')
-    .is('read_at', null)
+    .or('read_at.is.null,client_kept_unread.eq.true')
     .is('deleted_at', null)
   return count ?? 0
 }

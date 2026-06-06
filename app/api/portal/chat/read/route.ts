@@ -59,6 +59,9 @@ export async function POST(request: NextRequest) {
       .eq('account_id', account_id)
       .eq('sender_type', senderTypeToMark)
       .is('read_at', null)
+    // Skip messages the client explicitly kept unread.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
+    q = (q as any).eq('client_kept_unread', false)
     if (topicFilterPresent) {
       q = topicFilter === null ? q.is('topic', null) : q.eq('topic', topicFilter)
     }
@@ -84,6 +87,9 @@ export async function POST(request: NextRequest) {
     .eq('contact_id', contact_id)
     .eq('sender_type', senderTypeToMark)
     .is('read_at', null)
+  // Skip messages the client explicitly kept unread.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
+  q1 = (q1 as any).eq('client_kept_unread', false)
   if (topicFilterPresent) {
     q1 = topicFilter === null ? q1.is('topic', null) : q1.eq('topic', topicFilter)
   }
@@ -100,6 +106,9 @@ export async function POST(request: NextRequest) {
       .in('account_id', linkedAccountIds)
       .eq('sender_type', senderTypeToMark)
       .is('read_at', null)
+    // Skip messages the client explicitly kept unread.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
+    q2 = (q2 as any).eq('client_kept_unread', false)
     if (topicFilterPresent) {
       q2 = topicFilter === null ? q2.is('topic', null) : q2.eq('topic', topicFilter)
     }

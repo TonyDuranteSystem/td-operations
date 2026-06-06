@@ -234,6 +234,28 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: `contact_id=eq.${contactId}`,
+        },
+        (payload) => {
+          // Client-side "Mark as Unread" toggles client_kept_unread on admin
+          // messages. REPLICA IDENTITY FULL ships the old value, so we only react
+          // when the flag actually flipped — other column changes (read_at, pin,
+          // edit) leave it unchanged and are ignored.
+          const oldMsg = payload.old as { client_kept_unread?: boolean }
+          const newMsg = payload.new as { sender_type: string; client_kept_unread?: boolean }
+          if (newMsg.sender_type !== 'admin') return
+          const was = oldMsg.client_kept_unread === true
+          const now = newMsg.client_kept_unread === true
+          if (was === now) return
+          setLiveUnreadCount(prev => Math.max(0, prev + (now ? 1 : -1)))
+        }
+      )
       .subscribe()
 
     return () => {

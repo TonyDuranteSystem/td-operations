@@ -488,6 +488,7 @@ export interface PortalMessage {
   pinned_at?: string | null
   pinned_by?: string | null
   pinned_by_type?: 'client' | 'staff' | null
+  client_kept_unread?: boolean
 }
 
 export interface PortalNotification {

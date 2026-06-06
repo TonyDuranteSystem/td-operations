@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
@@ -132,6 +132,21 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pinned }),
+      })
+      if (res.ok) refresh()
+    } catch {
+      /* realtime will reconcile */
+    }
+  }
+  // Mark an admin message as unread (client side) — keeps it counting toward the
+  // unread badge even after it's been read. Realtime reconciles the sidebar;
+  // refresh() updates this list's local copy.
+  const toggleKeepUnread = async (id: string, kept: boolean) => {
+    try {
+      const res = await fetch(`/api/portal/chat/message/${id}/keep-unread`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kept }),
       })
       if (res.ok) refresh()
     } catch {
@@ -318,7 +333,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
 
   // Unread count per topic tab (admin messages not yet read by the client)
   const unreadByTopic = messages.reduce<Record<string, number>>((acc, m) => {
-    if (m.sender_type !== 'admin' || m.read_at) return acc
+    if (m.sender_type !== 'admin' || (m.read_at && !m.client_kept_unread)) return acc
     const key = m.topic ?? ''
     acc[key] = (acc[key] ?? 0) + 1
     return acc
@@ -539,7 +554,8 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                     'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
                     isOwn
                       ? 'bg-blue-600 text-white rounded-br-md'
-                      : 'bg-zinc-100 text-zinc-900 rounded-bl-md'
+                      : 'bg-zinc-100 text-zinc-900 rounded-bl-md',
+                    msg.client_kept_unread && 'border-l-2 border-blue-400'
                   )}>
                     {/* PR 2 Step 6 — sender_context badge. Shown when the
                         message was tagged at send time. NULL = legacy
@@ -677,6 +693,15 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                       >
                         <Pin className={cn('h-3.5 w-3.5', msg.pinned_at && 'fill-amber-400')} />
                       </button>
+                      {msg.sender_type === 'admin' && (
+                        <button
+                          onClick={() => toggleKeepUnread(msg.id, !msg.client_kept_unread)}
+                          className={cn('p-1 rounded-full hover:bg-zinc-100 transition-colors shrink-0', msg.client_kept_unread ? 'text-blue-500' : 'text-zinc-300 hover:text-zinc-600')}
+                          title={msg.client_kept_unread ? (locale === 'it' ? 'Segna come letto' : 'Mark read') : (locale === 'it' ? 'Segna come non letto' : 'Mark unread')}
+                        >
+                          <MailOpen className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
