@@ -19,6 +19,7 @@ import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
 import { TeamAccessAnnouncementBanner } from '@/components/portal/team-access-announcement-banner'
+import { WhatsNewBanner } from '@/components/portal/whats-new-banner'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { RenewalBanner } from '@/components/portal/renewal-banner'
@@ -612,6 +613,9 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* What's New - one-time (per device) feature announcement, dismissed via localStorage */}
+      <WhatsNewBanner locale={locale} />
 
       {/* Offer banner — persistent until the offer is completed or expired */}
       {pendingOffer && (
