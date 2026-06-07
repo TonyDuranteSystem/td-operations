@@ -2214,18 +2214,34 @@ export default function PortalChatsPage() {
                   <MessageSquare className="h-3.5 w-3.5" />
                   Messages
                 </button>
-                <button
-                  onClick={() => setChatViewMode('whatsnew')}
-                  className={cn(
-                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
-                    chatViewMode === 'whatsnew'
-                      ? 'text-amber-600 border-b-2 border-amber-500 bg-amber-50/30'
-                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
-                  )}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  What&apos;s New
-                </button>
+                {(() => {
+                  const totalNew = whatsNewCounts?.total ?? 0
+                  const isActive = chatViewMode === 'whatsnew'
+                  // When unhandled items exist and this tab isn't selected, draw
+                  // attention with a pulsing amber background + a count badge.
+                  const inactiveCls = totalNew > 0
+                    ? 'text-amber-700 bg-amber-100/70 border-b-2 border-amber-300 animate-pulse'
+                    : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                  return (
+                    <button
+                      onClick={() => setChatViewMode('whatsnew')}
+                      className={cn(
+                        'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                        isActive
+                          ? 'text-amber-600 border-b-2 border-amber-500 bg-amber-50/30'
+                          : inactiveCls
+                      )}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      What&apos;s New
+                      {totalNew > 0 && (
+                        <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold bg-amber-500 text-white">
+                          {totalNew > 999 ? '999+' : totalNew}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })()}
                 <button
                   onClick={() => setChatViewMode('todo')}
                   className={cn(

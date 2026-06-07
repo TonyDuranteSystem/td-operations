@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { WorkflowIssuesLink } from '@/components/accounts/workflow-issues-link'
 import {
@@ -568,7 +568,13 @@ function ContactsSection({
 
 export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [] }: AccountDetailProps) {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState('overview')
+  const searchParams = useSearchParams()
+  // Deep-link support: a `?tab=<key>` param (e.g. from the What's New "Open"
+  // button) selects that tab on load. Falls back to overview for missing/unknown
+  // keys so a bad param never blanks the page.
+  const tabParam = searchParams.get('tab')
+  const initialTab = tabParam && TABS.some(t => t.key === tabParam) ? tabParam : 'overview'
+  const [activeTab, setActiveTab] = useState(initialTab)
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)

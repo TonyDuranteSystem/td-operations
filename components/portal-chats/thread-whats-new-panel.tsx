@@ -14,7 +14,7 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare } from 'lucide-react'
+import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare, ExternalLink } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
@@ -23,11 +23,55 @@ import type { Task } from '@/lib/types'
 
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
 
+/** Human-readable category label keyed off the note's event_key (the chat-event
+ *  `kind`, or the workflow_slug for workflow_spawned notes). Replaces the old
+ *  per-message `topic` badge — topic is no longer written for system notes. */
+const EVENT_KEY_LABELS: Record<string, string> = {
+  payment_received: 'Payment',
+  ss4_signed: 'SS-4 Signed',
+  document_uploaded: 'Document',
+  wizard_submitted: 'Form',
+  members_updated: 'Members',
+  contact_updated: 'Contact',
+  offer_signed: 'Contract',
+  workflow_spawned: 'Workflow',
+  formation_progress: 'Formation',
+  onboarding_progress: 'Onboarding',
+  closure_progress: 'Closure',
+  banking_review_payset: 'Banking',
+  banking_review_relay: 'Banking',
+  banking_physical_progress: 'Banking',
+  tax_form_review: 'Tax',
+  itin_review: 'ITIN',
+}
+
+/** Deep-link target for a note's source entity. Returns null when there's no
+ *  meaningful destination (the button is then not rendered). The account detail
+ *  page reads the `?tab=` param to land on the right tab. */
+function deepLinkFor(src: string | null, accountId: string | null): string | null {
+  if (!src) return null
+  const [table, id] = src.split(':')
+  if (!table || !id) return null
+  switch (table) {
+    case 'payments': return accountId ? `/accounts/${accountId}?tab=payments` : null
+    case 'documents': return accountId ? `/accounts/${accountId}?tab=documents` : null
+    // No dedicated "formation" tab — the signed SS-4 lives under Documents.
+    case 'ss4_applications': return accountId ? `/accounts/${accountId}?tab=documents` : null
+    // Offers have no standalone page (viewed via the embedded panel on the
+    // account/contact); a deep-link would 404, so omit it.
+    case 'offers': return null
+    case 'tasks': return null // workflow tasks already show inline
+    default: return null
+  }
+}
+
 interface ApiNote {
   id: string
   event_key: string | null
   task_id: string | null
   topic: string | null
+  /** Source-entity ref from the marker, e.g. "payments:uuid". Drives the Open deep-link. */
+  src: string | null
   text: string
   /** Suggested next step for "Open card" — resolved server-side (per-event
    *  override from Board Settings → code default). Editable, no longer hardcoded. */
@@ -157,11 +201,14 @@ export function ThreadWhatsNewPanel({
               <div key={note.id} className={`rounded-md border bg-white p-2.5 ${handled ? 'opacity-60' : ''}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    {note.topic && (
-                      <span className="inline-block text-[9px] font-semibold uppercase tracking-wide text-zinc-500 bg-zinc-100 border border-zinc-200 rounded px-1 py-px mb-1">
-                        {note.topic}
-                      </span>
-                    )}
+                    {(() => {
+                      const label = (note.event_key && EVENT_KEY_LABELS[note.event_key]) ?? note.topic ?? note.event_key
+                      return label ? (
+                        <span className="inline-block text-[9px] font-semibold uppercase tracking-wide text-zinc-500 bg-zinc-100 border border-zinc-200 rounded px-1 py-px mb-1">
+                          {label}
+                        </span>
+                      ) : null
+                    })()}
                     <p className="text-sm text-zinc-800">{note.text}</p>
                     <p className="text-[10px] text-zinc-400 mt-1">
                       {format(new Date(note.created_at), 'MMM d, yyyy · h:mm a')}
@@ -169,17 +216,37 @@ export function ThreadWhatsNewPanel({
                       {handled && note.handled_by ? ` · handled by ${note.handled_by}` : ''}
                     </p>
                   </div>
-                  {/* No "Open card" for workflow notes — the workflow itself IS the to-do
-                      and its action buttons are shown below. */}
-                  {!handled && !wfTask && (
-                    <button
-                      onClick={() => open(note)}
-                      className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-0.5 bg-white"
-                      title="Open a To-Do card for this"
-                    >
-                      <Plus className="h-3 w-3" /> Open card
-                    </button>
-                  )}
+                  {(() => {
+                    const deepLink = deepLinkFor(note.src, cardAccountId ?? accountId)
+                    return (
+                      <div className="shrink-0 flex items-center gap-1">
+                        {/* Deep-link to the related entity (payment / document / SS-4).
+                            Opens in a new tab so the triage feed stays put. */}
+                        {deepLink && (
+                          <a
+                            href={deepLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5 bg-white"
+                            title="Open the related record"
+                          >
+                            <ExternalLink className="h-3 w-3" /> Open
+                          </a>
+                        )}
+                        {/* No "Open card" for workflow notes — the workflow itself IS the to-do
+                            and its action buttons are shown below. */}
+                        {!handled && !wfTask && (
+                          <button
+                            onClick={() => open(note)}
+                            className="flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900 border border-violet-200 rounded px-2 py-0.5 bg-white"
+                            title="Open a To-Do card for this"
+                          >
+                            <Plus className="h-3 w-3" /> Open card
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 {/* Workflow note → render the workflow task's own stage actions + SLA inline. */}

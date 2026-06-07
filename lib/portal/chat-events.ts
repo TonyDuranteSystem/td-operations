@@ -87,21 +87,6 @@ function buildMarker(source: ChatEventSource, kind: ChatEventKind): string {
   return `${MARKER_PREFIX} kind=${kind} src=${source.table}:${source.id}${MARKER_SUFFIX}`
 }
 
-/** Resolve a topic slug → display name via the `topic_templates` catalog.
- *  When the input isn't a known slug, returns the input verbatim — supports
- *  callers passing a literal topic name when no catalog entry exists.
- */
-async function resolveTopicName(slugOrLiteral: string): Promise<string> {
-  const { data } = await supabaseAdmin
-    .from("catalog_entries")
-    .select("display_name")
-    .eq("catalog_id", "topic_templates")
-    .eq("slug", slugOrLiteral.toLowerCase())
-    .eq("status", "active")
-    .maybeSingle()
-  return (data?.display_name as string | undefined) ?? slugOrLiteral
-}
-
 /**
  * Emit a system-authored portal-chat message under the given topic. Idempotent
  * on (source.table, source.id, event_kind) — re-running is safe.
@@ -113,7 +98,6 @@ export async function emitClientChatEvent(
     return { emitted: false, reason: "missing_recipient" }
   }
 
-  const topicName = await resolveTopicName(params.topic)
   const marker = buildMarker(params.source, params.event_kind)
 
   // Idempotency: search portal_messages for an existing row whose body
@@ -149,7 +133,11 @@ export async function emitClientChatEvent(
       sender_type: "system",
       sender_id: SYSTEM_SENDER_ID,
       message: messageBody,
-      topic: topicName,
+      // topic intentionally null: the What's New panel derives the category
+      // label from the event_key encoded in the marker (kind=... / workflow_slug),
+      // so the per-message topic field is no longer needed for system notes.
+      // Callers still pass `topic` in params for documentation/future use.
+      topic: null,
     })
     .select("id")
     .single()

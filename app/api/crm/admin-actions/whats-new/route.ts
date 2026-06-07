@@ -196,6 +196,9 @@ export async function GET(req: NextRequest) {
             id: n.id,
             event_key: key,
             task_id,
+            // Raw source ref ("payments:uuid", "documents:uuid", ...) so the
+            // panel can deep-link the "Open" button to the related entity.
+            src,
             topic: n.topic ?? null,
             text: n.message.replace(MARKER_RE, "").trim(),
             // Suggested next step for "Open card": per-event override → code default.

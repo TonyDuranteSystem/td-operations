@@ -65,6 +65,8 @@ interface NavItem {
   href: string
   icon: React.ElementType
   badge?: number
+  /** Secondary purple badge — used for the Portal Chats "What's New" unhandled count. */
+  purpleBadge?: number
   adminOnly?: boolean
   featureFlag?: string
   tooltip?: string
@@ -179,6 +181,14 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
             {item.badge > 999 ? '999+' : item.badge}
           </span>
         )}
+        {item.purpleBadge != null && item.purpleBadge > 0 && (
+          <span
+            className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-500 text-white min-w-[20px] text-center"
+            title="What's New — unhandled client actions"
+          >
+            {item.purpleBadge > 999 ? '999+' : item.purpleBadge}
+          </span>
+        )}
       </Link>
     </div>
   )
@@ -201,6 +211,7 @@ export function Sidebar({
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
+  const [liveWhatsNew, setLiveWhatsNew] = useState(0)
   const pathnameRef = useRef(pathname)
 
   // Keep pathname ref in sync for use inside realtime callback
@@ -241,6 +252,22 @@ export function Sidebar({
     const interval = setInterval(fetchBadges, 15_000)
     return () => { clearTimeout(initialTimer); clearInterval(interval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the global "What's New" unhandled total for the Portal Chats badge.
+  // Same source the Portal Chats page uses; staff-only endpoint (403 → ignored).
+  useEffect(() => {
+    const fetchWhatsNew = () => {
+      fetch('/api/crm/admin-actions/whats-new?counts=true')
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && typeof data.total === 'number') setLiveWhatsNew(data.total)
+        })
+        .catch(() => {})
+    }
+    const initialTimer = setTimeout(fetchWhatsNew, 2000)
+    const interval = setInterval(fetchWhatsNew, 30_000)
+    return () => { clearTimeout(initialTimer); clearInterval(interval) }
+  }, [])
 
   // When entering a page, refetch badges instead of resetting to 0
   // The badge disappears naturally when messages are actually read
@@ -367,7 +394,7 @@ export function Sidebar({
       // Apply live badges
       if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
       // Tasks badge removed — daily work tracked via message action tags instead
-      if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
+      if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       return item
