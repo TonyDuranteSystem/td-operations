@@ -144,15 +144,21 @@ export async function GET(req: NextRequest) {
       const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(notes)])
       const by_account: Record<string, number> = {}
       const by_contact: Record<string, number> = {}
+      let total = 0
       for (const n of notes) {
         const key = keys.get(n)
         // Hidden only if explicitly toggled off; unknown/unresolved keys show.
         if (key && config.get(key)?.visible === false) continue
+        // A note can carry BOTH account_id and contact_id (e.g. a payment on an
+        // account that is also linked to a contact). Such a note surfaces in
+        // BOTH the account-keyed and the contact-keyed thread view, so it must
+        // be counted in EACH relevant bucket — otherwise a contact-keyed thread
+        // (single-member client) shows 0 while its panel lists the note.
+        // `total` still counts each distinct note once (for the global sidebar).
         if (n.account_id) by_account[n.account_id] = (by_account[n.account_id] ?? 0) + 1
-        else if (n.contact_id) by_contact[n.contact_id] = (by_contact[n.contact_id] ?? 0) + 1
+        if (n.contact_id) by_contact[n.contact_id] = (by_contact[n.contact_id] ?? 0) + 1
+        if (n.account_id || n.contact_id) total += 1
       }
-      const total = Object.values(by_account).reduce((s, n) => s + n, 0) +
-        Object.values(by_contact).reduce((s, n) => s + n, 0)
       return NextResponse.json({ by_account, by_contact, total })
     }
 

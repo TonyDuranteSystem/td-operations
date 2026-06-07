@@ -1655,11 +1655,20 @@ export default function PortalChatsPage() {
                         this client. Clears as you tick them handled / open a card;
                         gone at zero. Replaces the legacy orange task dot below. */}
                     {(() => {
-                      const newCount = thread.account_id
+                      // Key the count the SAME way this thread opens (see the
+                      // onClick scope decision above): a multi-member account
+                      // thread reads its account bucket; every other thread is
+                      // contact-keyed and reads its contact bucket. This keeps
+                      // the dot, the What's New tab badge, and the panel in
+                      // agreement — including notes that carry both ids.
+                      const isAccountThread = !!thread.account_id && (thread.members ?? []).length > 0
+                      const newCount = isAccountThread
                         ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
                         : thread.contact_id
                           ? whatsNewCounts?.by_contact?.[thread.contact_id] ?? 0
-                          : 0
+                          : thread.account_id
+                            ? whatsNewCounts?.by_account?.[thread.account_id] ?? 0
+                            : 0
                       return newCount > 0 ? (
                         <span
                           className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-violet-600"
