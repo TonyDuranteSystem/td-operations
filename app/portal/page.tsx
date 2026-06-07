@@ -676,6 +676,11 @@ export default async function PortalDashboardPage() {
         // is at a pre-data-receipt status. Clients past "Data Received"
         // already submitted their data and are naturally gated by the 2nd
         // installment — pausing them is stale/misleading.
+        // 'Activated - Need Link' and 'Link Sent - Awaiting Data' are LEGACY statuses
+        // (old "email a data link, await data" flow, replaced by the wizard — no current
+        // pipeline stage produces them). Kept here on purpose: both are pre-data-receipt,
+        // so a row manually set to one still pauses correctly during a tax-season pause.
+        // Do not remove. See docs/systems/tax-returns.md.
         const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Wizard Available', 'Extension Filed'])
         const isPaused = tr.sd_status === 'on_hold' && PAUSE_ELIGIBLE_TR_STATUS.has(tr.status ?? '')
         if (isPaused) {

@@ -523,6 +523,11 @@ export default async function WizardPage({
       // receipt stage, don't render the pause banner — the wizard gate
       // should unblock so the client can still reach their data. This
       // mirrors the portal home check in app/portal/page.tsx.
+      // 'Activated - Need Link' and 'Link Sent - Awaiting Data' are LEGACY statuses
+      // (old "email a data link, await data" flow, replaced by the wizard — no current
+      // pipeline stage produces them). Kept here on purpose: both are pre-data-receipt,
+      // so a row manually set to one still pauses correctly. Do not remove.
+      // See docs/systems/tax-returns.md.
       const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Wizard Available', 'Extension Filed'])
       const pauseEligible = !trStatus || PAUSE_ELIGIBLE_TR_STATUS.has(trStatus)
       if (pauseEligible) {

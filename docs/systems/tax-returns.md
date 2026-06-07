@@ -1,12 +1,14 @@
 # Tax Returns & Filings
-_Last verified against code: 2026-05-29 — Claude (read lib/mcp/tools/tax.ts, lib/tax/reactivation.ts, extension-deadline.ts)_
+_Last verified against code: 2026-06-07 — Claude (verified status pipeline against live tax_returns counts + pipeline_stages; flagged "Activated - Need Link" / "Link Sent - Awaiting Data" as legacy via tax-return-sd-bridge.ts + service-delivery.ts inverse map)_
 
 ## What it is
 Tracking and filing clients' US tax returns through tax season: collecting their data, sending the package to the accountant ("India" team), tracking the long status pipeline, handling extensions, and pausing/resuming work tied to installment payments. Return types: **1065** (MMLLC / partnership), **1120-S** (S-corp), **1040NR** (individual non-resident).
 
 ## The status pipeline
-A tax return moves through a long status (on `tax_returns.status`):
-`Payment Pending` → `Paid - Not Started` → `Activated - Need Link` → `Link Sent - Awaiting Data` → `Wizard Available` → `Data Received` → `Sent to India` → `Extension Filed` → `TR Completed - Awaiting Signature` → `TR Filed` (plus `Not Invoiced`).
+A tax return moves through a status on `tax_returns.status`. The **current** flow (installment + wizard model) is:
+`Payment Pending` → `1st Installment Paid` → `Wizard Available` → `Data Received` → `Sent to India` → `TR Completed - Awaiting Signature` → `TR Filed`, with `Extension Requested` / `Extension Filed` as the extension branch and `Not Invoiced` for un-billed returns.
+
+> **Legacy statuses — still in the enum, NOT produced by the current flow:** `Activated - Need Link` and `Link Sent - Awaiting Data` are vestiges of the old *"email the client a data link, then wait for their data"* model that predates the installment + wizard redesign. The data link was replaced by the portal wizard, and the old "2nd Installment Paid" stage was renamed "Wizard Available". No tax return currently carries either status, and the pipeline stages that once produced them (`Payment Verified`, `Data Link Sent`) no longer exist. They remain valid enum values — an admin could still set one manually — so they are kept mapped defensively: `lib/operations/tax-return-sd-bridge.ts` aliases both to live SD stages, and the portal pause-banner keeps them in its pre-data-receipt set so a manually-set legacy row still pauses correctly during a tax-season pause. **Do not treat them as live pipeline steps.**
 
 Separately, boolean **workflow-progress flags** track milestones: `paid`, `link_sent`, `data_received`, `sent_to_india`, `extension`, `india_status`.
 
