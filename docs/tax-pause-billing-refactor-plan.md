@@ -1,5 +1,31 @@
 # Tax Pause + Billing/Services Refactor — Master Plan
-_Last updated: 2026-04-20 evening (session handoff — new machine resumption)_
+_Last updated: 2026-06-07 — reality-check added (verified against live production + git). Plan body below is the April 20–21 design; the reality-check supersedes it where they conflict._
+
+---
+
+## ⚠️ REALITY CHECK — verified against LIVE PRODUCTION 2026-06-07
+
+The plan body below was written 20–21 April. Verified today against production (`ydzipybqeebtpcvsbtvs`) and git. **Where this section conflicts with the April text, this section wins.**
+
+### What HAS shipped to production since April
+- **Tax Return pipeline redesign is LIVE in prod** (PRs #64/#66/#67). Prod `pipeline_stages` for Tax Return = 11 stages: `Company Data Pending`(-1) → `Paid - Awaiting Data`(0) → `1st Installment Paid`(1) → `Extension Filed`(2) → `Awaiting 2nd Payment`(3) → `Wizard Available`(4) → `Data Received`(5) → `Preparation`(6) → `TR Completed`(7) → `TR Filed`(8) → `Terminated - Non Payment`(9). The deprecated statuses `Activated - Need Link` and `Link Sent - Awaiting Data` were migrated out — **0 production tax_returns carry them** (verified). See `docs/systems/tax-returns.md`.
+- **2026-transition June 2nd-installment cron is LIVE** (commit `97617b5d`, 29 May, + June follow-ups `bc4fa7c3`/`f9a07dd2`/`5463f705`/`3e032eee`/`20a8be37`/`40419aff`). It **DRAFTS** (no auto-send) Installment-2 invoices via pure helper `lib/billing/june-installment-eligibility.ts::decideJuneInstallment`. Transition rules: amount from CRM only (no hardcoded default); duplicate guard; **2026 gate = bill 2nd installment only if 1st was paid**; **Year-1 clients skipped**; **September-onward cohort owes June at standard amount (no pro-rating)**; onboarding-aware; hard-excludes non-Active/non-Client/test; credit-note netting preserved; 2027+ path gated on a signed agreement.
+- **Partial Phase-1 columns reached prod:** `accounts.setup_fee_amount / setup_fee_currency / setup_fee_paid_date` exist.
+
+### What is NOT in production (still sandbox-only or not built)
+- New enums `payment_type_enum` / `subject_type_enum` — **NOT in prod**.
+- `service_deliveries.billing_type` 6-value expansion — **NOT in prod** (prod still only `Included` + null).
+- `accounts.services_bundle_detail` — **NOT in prod**.
+- Phase 2 data backfill, Phase 3 switch logic, Phase 4 UI, and the full production cut-over — **NOT done**.
+
+### Current posture (2026-06-07)
+- The big structural refactor (Phases 1–4 below) is effectively **DORMANT**. The 2026 transition is being carried **operationally by the June installment cron**, not by the schema rebuild.
+- Active focus has shifted elsewhere (Hermes Operating Agent, client-health audit, ITIN portal fixes — see `sysdoc session-context` 2026-06-07).
+- `tax_season_paused = false` in prod right now — correct for June (extensions filed, 2nd installment being collected, client data being gathered).
+- **Net:** 2026 = bridge year (old + new coexist, handled case-by-case). 2027 = target for the fully automated "1st-installment → filed return" flow. The per-account case review of ~231 active clients is still gated behind the (not-yet-done) production cut-over.
+
+---
+
 
 ## HOW TO RESUME ON A DIFFERENT MACHINE (READ FIRST)
 
