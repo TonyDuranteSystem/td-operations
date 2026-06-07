@@ -1620,18 +1620,10 @@ export default function PortalChatsPage() {
                           ))}
                         </div>
                       )}
-                      {/* Active SD badges — one pill per in-progress service, fully dynamic from DB */}
-                      {(thread.active_services ?? []).length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {thread.active_services.map((sd, i) => (
-                            <span key={i} className="inline-flex items-center gap-0.5 text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full whitespace-nowrap">
-                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
-                              {sd.service_type}
-                              {sd.stage && <span className="text-amber-500 ml-0.5">· {sd.stage}</span>}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      {/* Active SD badges removed (2026-06-07): the amber service-delivery
+                          pills were noise in the conversation list. The data is still
+                          returned by the threads API (thread.active_services) for any
+                          future use, but it is intentionally not rendered here. */}
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 ml-2 shrink-0">
