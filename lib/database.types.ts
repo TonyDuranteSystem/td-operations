@@ -4683,6 +4683,7 @@ export type Database = {
           account_name: string | null
           category: number | null
           category_name: string | null
+          client_notified_at: string | null
           confidence: string | null
           contact_id: string | null
           created_at: string | null
@@ -4696,6 +4697,7 @@ export type Database = {
           file_size: number | null
           id: string
           mime_type: string | null
+          notify_client: boolean
           ocr_confidence: number | null
           ocr_page_count: number | null
           ocr_text: string | null
@@ -4710,6 +4712,7 @@ export type Database = {
           account_name?: string | null
           category?: number | null
           category_name?: string | null
+          client_notified_at?: string | null
           confidence?: string | null
           contact_id?: string | null
           created_at?: string | null
@@ -4723,6 +4726,7 @@ export type Database = {
           file_size?: number | null
           id?: string
           mime_type?: string | null
+          notify_client?: boolean
           ocr_confidence?: number | null
           ocr_page_count?: number | null
           ocr_text?: string | null
@@ -4737,6 +4741,7 @@ export type Database = {
           account_name?: string | null
           category?: number | null
           category_name?: string | null
+          client_notified_at?: string | null
           confidence?: string | null
           contact_id?: string | null
           created_at?: string | null
@@ -4750,6 +4755,7 @@ export type Database = {
           file_size?: number | null
           id?: string
           mime_type?: string | null
+          notify_client?: boolean
           ocr_confidence?: number | null
           ocr_page_count?: number | null
           ocr_text?: string | null
@@ -8793,6 +8799,46 @@ export type Database = {
           },
         ]
       }
+      portal_document_views: {
+        Row: {
+          contact_id: string
+          document_id: string
+          viewed_at: string
+        }
+        Insert: {
+          contact_id: string
+          document_id: string
+          viewed_at?: string
+        }
+        Update: {
+          contact_id?: string
+          document_id?: string
+          viewed_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_document_views_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_document_views_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "portal_document_views_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       portal_issues: {
         Row: {
           account_id: string | null
@@ -8890,6 +8936,7 @@ export type Database = {
           attachment_name: string | null
           attachment_url: string | null
           attachments: Json
+          client_kept_unread: boolean | null
           contact_id: string | null
           created_at: string | null
           deleted_at: string | null
@@ -8916,6 +8963,7 @@ export type Database = {
           attachment_name?: string | null
           attachment_url?: string | null
           attachments?: Json
+          client_kept_unread?: boolean | null
           contact_id?: string | null
           created_at?: string | null
           deleted_at?: string | null
@@ -8942,6 +8990,7 @@ export type Database = {
           attachment_name?: string | null
           attachment_url?: string | null
           attachments?: Json
+          client_kept_unread?: boolean | null
           contact_id?: string | null
           created_at?: string | null
           deleted_at?: string | null
