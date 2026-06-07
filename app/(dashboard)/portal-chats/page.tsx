@@ -2215,11 +2215,19 @@ export default function PortalChatsPage() {
                   Messages
                 </button>
                 {(() => {
-                  const totalNew = whatsNewCounts?.total ?? 0
+                  // Count for THIS thread only — not the global total. Mirrors the
+                  // conversation-list dot (by_account / by_contact). Using
+                  // whatsNewCounts.total here would show the global count on every
+                  // client's tab (the "70 on one company" bug).
+                  const threadNew = selectedAccountId
+                    ? (whatsNewCounts?.by_account?.[selectedAccountId] ?? 0)
+                    : selectedContactId
+                      ? (whatsNewCounts?.by_contact?.[selectedContactId] ?? 0)
+                      : 0
                   const isActive = chatViewMode === 'whatsnew'
                   // When unhandled items exist and this tab isn't selected, draw
                   // attention with a pulsing amber background + a count badge.
-                  const inactiveCls = totalNew > 0
+                  const inactiveCls = threadNew > 0
                     ? 'text-amber-700 bg-amber-100/70 border-b-2 border-amber-300 animate-pulse'
                     : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
                   return (
@@ -2234,9 +2242,9 @@ export default function PortalChatsPage() {
                     >
                       <Sparkles className="h-3.5 w-3.5" />
                       What&apos;s New
-                      {totalNew > 0 && (
+                      {threadNew > 0 && (
                         <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold bg-amber-500 text-white">
-                          {totalNew > 999 ? '999+' : totalNew}
+                          {threadNew > 999 ? '999+' : threadNew}
                         </span>
                       )}
                     </button>
