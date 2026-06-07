@@ -1,7 +1,9 @@
 #!/bin/bash
 # production-write-guard.sh
-# PreToolUse hook — fires before MCP execute_sql calls targeting PRODUCTION
-# Supabase (mcp__af7d85f2-*__execute_sql).
+# PreToolUse hook — fires before any MCP execute_sql call. Allows the sandbox
+# connection (mcp__td-ops-sandbox__execute_sql) and gates EVERY other
+# connection'"'"'s execute_sql as production (af7d85f2 OAuth connector,
+# td-ops-prod, td-ops-production, and any future production connection name).
 #
 # Two layers of protection, in order:
 #
@@ -20,8 +22,8 @@
 # Reads (mode='read' or unspecified) pass through unaffected.
 #
 # Sandbox execute_sql (mcp__td-ops-sandbox__execute_sql) is NOT affected —
-# the matcher in .claude/settings.json scopes this hook to the production
-# tool name prefix, and the script double-checks defensively.
+# the script allowlists the sandbox connection explicitly and gates all
+# other (i.e. production) connections by default.
 #
 # How to create the marker after sandbox verification:
 #   touch /tmp/.sandbox-verified-$(date +%Y-%m-%d)
@@ -49,10 +51,19 @@ if not tool_name:
     print("ALLOW")
     sys.exit(0)
 
-# Belt-and-suspenders: only act on production execute_sql even if a future
-# settings.json change widens the matcher. Sandbox tool prefix differs and
-# is intentionally unguarded.
-if not re.match(r"^mcp__af7d85f2.*__execute_sql$", tool_name):
+# Only act on MCP execute_sql tools (belt-and-suspenders if the settings
+# matcher is ever narrowed or changed).
+if not re.match(r"^mcp__.*__execute_sql$", tool_name):
+    print("ALLOW")
+    sys.exit(0)
+
+# Sandbox execute_sql is intentionally UNGUARDED — dev work needs free writes.
+# EVERY other connection'"'"'s execute_sql is treated as production and gated
+# below, so any current OR future production connection name is covered by
+# default (af7d85f2 OAuth connector, td-ops-prod, td-ops-production, …).
+# This fail-safe default is the fix for the old af7d85f2-only gap, where a
+# hand-added production connection with a new name slipped past the brake.
+if re.match(r"^mcp__td-ops-sandbox__execute_sql$", tool_name):
     print("ALLOW")
     sys.exit(0)
 
