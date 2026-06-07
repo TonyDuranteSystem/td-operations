@@ -671,7 +671,7 @@ export default async function PortalDashboardPage() {
           not UI rendering — otherwise One-Time standalone Tax Return
           clients (who are exempt from parking) would see a pause banner
           that doesn't apply to them, and their wizard would be unreachable. */}
-      {taxReturns.filter(tr => tr.status !== 'TR Filed').slice(0, 1).map(tr => {
+      {taxReturns.filter(tr => tr.status !== 'TR Filed' && !tr.data_received).slice(0, 1).map(tr => {
         // Pause banner fires only when the SD is on_hold AND the tax_return
         // is at a pre-data-receipt status. Clients past "Data Received"
         // already submitted their data and are naturally gated by the 2nd
