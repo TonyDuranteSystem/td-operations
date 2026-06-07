@@ -1225,10 +1225,27 @@ export default function PortalChatsPage() {
     setAdminNewTopicInput('')
   }, [selectedAccountId, selectedContactId])
 
-  // Scroll to bottom on new messages
+  // Scroll to the latest message. On OPENING a thread we jump instantly to the
+  // bottom after layout settles — a smooth scroll started too early stalls
+  // mid-way while bubbles/topic-tabs are still rendering, leaving the view in
+  // the middle. For a new message arriving in the already-open thread, scroll
+  // smoothly. (block:'end' keeps the sentinel pinned to the bottom edge.)
+  const scrollThreadKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (!messages || messages.length === 0) return
+    const threadKey = selectedAccountId ?? selectedContactId ?? null
+    const isThreadSwitch = scrollThreadKeyRef.current !== threadKey
+    scrollThreadKeyRef.current = threadKey
+    if (isThreadSwitch) {
+      // Two frames + a short fallback so late layout (images, tabs) can't strand
+      // the view above the last message.
+      const jump = () => messagesEndRef.current?.scrollIntoView({ block: 'end' })
+      requestAnimationFrame(() => requestAnimationFrame(jump))
+      const t = setTimeout(jump, 200)
+      return () => clearTimeout(t)
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [messages, selectedAccountId, selectedContactId])
 
   // Auto-grow textareas
   useEffect(() => {
