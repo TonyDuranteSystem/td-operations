@@ -32,7 +32,7 @@
         ]
       },
       {
-        "matcher": "mcp__af7d85f2.*__execute_sql",
+        "matcher": "mcp__.*__execute_sql",
         "hooks": [
           {
             "type": "command",
