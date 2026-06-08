@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-05 — Claude (configurable max tool-use iterations: AGENT_MAX_TOOL_LOOPS env var + per-request maxIterations on callAgent/callClaude/callOpenAI/callWorker — see the Providers bullet + agent-bridge.md)_
+_Last verified against code: 2026-06-08 — Claude (no in-dashboard-assistant change this push; flagged because the Hermes↔Claude worker shares lib/ai-agent/ — see agent-bridge.md for worker max_tokens 2048→16384 + ANTHROPIC_TIMEOUT_MS 55s→240s)_
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.

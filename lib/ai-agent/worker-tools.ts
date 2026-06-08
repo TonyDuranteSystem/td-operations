@@ -449,7 +449,7 @@ interface WorkerResponse {
 // (shared with the in-dashboard provider in providers.ts); callWorker callers may
 // also override per-request (e.g. agent_messages.context_json.max_iterations).
 const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
-const ANTHROPIC_TIMEOUT_MS = 55_000 // per-call ceiling; cron route's maxDuration=300 covers the whole loop
+const ANTHROPIC_TIMEOUT_MS = 240_000 // per-call ceiling; raised from 55s so max_tokens=16384 is usable for long pure-text responses. Stays under cron route's maxDuration=300 with 60s buffer.
 
 export interface CallWorkerOptions {
   /**

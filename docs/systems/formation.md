@@ -1,12 +1,12 @@
 # Company Formation
-_Last verified against code: 2026-06-08 — Claude (advanceStage/advanceStageIfAt gained a generic `skip_notify` option for bulk reconciles; no formation-behaviour change)_
+_Last verified against code: 2026-06-08 — Claude (PR #96: activate-service.ts now creates contact-scoped Company Formation SD at activation so the portal switcher reaches returning active clients; formation-setup.ts dedupes at wizard submit)_
 
 ## What it is
 The end-to-end flow of creating a client's US LLC: from a signed formation offer + payment, through filing the company with the state, to receiving the EIN — at which point the client becomes a fully active client. It's the core product, multi-step, and several automatic side-effects fire at each stage, so it's high-risk to touch blindly.
 
 ## The lifecycle (happy path)
-1. **Signed + paid** → `activateService()` (`lib/operations/activation.ts`) orchestrates lead→contact, ensure-account, create service deliveries, set tier. It creates a **"Company Formation"** service delivery (SD).
-2. **Account starts at tier `formation`** (company being formed, no EIN yet). Account status "Pending Formation". The client sees a **formation-specific dashboard/wizard**. Tier is derived by `tierForContract('formation')` → `'formation'` (`lib/portal/auto-create.ts`).
+1. **Signed + paid** → `activateService()` (`lib/operations/activation.ts`) orchestrates lead→contact, ensure-account, create service deliveries, set tier. It creates a **"Company Formation"** service delivery (SD) — **contact-scoped (`account_id=NULL`)** because the LLC does not yet exist (Articles pending). The SD's `notes` carries the offer_token for dedupe. `formation-setup.ts` dedupes at wizard submit so no double-create.
+2. **Account starts at tier `formation`** (company being formed, no EIN yet). Account status "Pending Formation". The client sees a **formation-specific dashboard/wizard**. Tier is derived by `tierForContract('formation')` → `'formation'` (`lib/portal/auto-create.ts`). **Exception — returning active client:** when the contact is already at tier `active` from another LLC, `syncTier` correctly refuses to downgrade. No new account row is created at payment either. The portal switcher (`getInProgressFormations` in `lib/portal/queries.ts`) sources the new entity directly from the contact-scoped Company Formation SD — the client sees a switcher with the existing LLC + "New company (in formation)", and the formation entity carries `tier='formation'` implicitly via `resolveSelectedEntity`.
 3. **Formation data reviewed** (`formation_form_review` tool) — can upgrade tier onboarding→formation and advances the SD.
 4. **Filing with the state** happens via Harbor Compliance (see the compliance system / `hc_*` tools).
 5. **EIN received** → the formation→active hand-off runs (see below). Tier advances to **`active`**; the client gains full portal access (documents, invoices, chat).
@@ -48,7 +48,7 @@ Resolves the first pipeline stage for the service type; propagates `is_test` fro
 
 ## How to verify current state
 - Read `lib/operations/ein-received.ts` (the canonical EIN→active steps), `activation.ts` (`activateService`), `service-delivery.ts` (`createSD`).
-- A client's formation SD: `SELECT id, stage, status FROM service_deliveries WHERE service_type='Company Formation' AND account_id='<id>';`
+- A client's formation SD: `SELECT id, stage, status, account_id, contact_id FROM service_deliveries WHERE service_type='Company Formation' AND (account_id='<account_id>' OR (account_id IS NULL AND contact_id='<contact_id>'));` — in-flight formations are contact-scoped (`account_id IS NULL`), materialized formations are account-scoped.
 - Tier logic: `lib/operations/sync-tier.ts` + `tierForContract` in `lib/portal/auto-create.ts`.
 - Pipeline stages for Company Formation: query `pipeline_stages` / the services catalog.
 - Note (R096): sandbox via sandbox MCP / `psql`; production `execute_sql` hits production.
