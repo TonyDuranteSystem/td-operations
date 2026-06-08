@@ -503,13 +503,17 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     }
   }
 
-  // Formation and Onboarding both skip ALL SD creation at payment per SOP v7.2:
+  // Formation vs Onboarding SD-creation policy (SOP v7.2):
   //
-  // Formation: at payment the LLC does not exist yet (waiting for Secretary of
-  // State Articles of Organization). No account exists, so no SD can be linked
-  // meaningfully. The Company Formation SD + auto-tasks are created by
-  // formation-setup.ts when the wizard is submitted and the account is created.
-  // Banking Fintech SD is created when EIN is received (record-ein-received).
+  // Formation: SD created AT PAYMENT — but contact-scoped (account_id=null)
+  // because the LLC does not exist yet (waiting for Secretary of State Articles
+  // of Organization). The portal switcher (getInProgressFormations in
+  // lib/portal/queries.ts) keys off this contact-scoped SD to surface "New
+  // company (in formation)" so returning active clients (whose contact tier
+  // stays at 'active'; the tier-based wizard-visibility fallback cannot fire
+  // for them) can reach the wizard. formation-setup.ts dedupes at wizard submit
+  // (contact_id + service_type + status='active') so no double-create.
+  // Banking Fintech SD is still created at EIN received (record-ein-received).
   //
   // Onboarding: SDs created by wizard submit / closing per SOP v7.2.
   //   - Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD
