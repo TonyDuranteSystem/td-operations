@@ -119,7 +119,8 @@ export default async function PortalDashboardPage() {
   const cookieFormation = (await cookieStore).get('portal_formation')?.value
   if (contactId && cookieFormation) {
     const inProgress = await getInProgressFormations(contactId)
-    if (inProgress.some(f => f.id === cookieFormation)) {
+    const selectedFormation = inProgress.find(f => f.id === cookieFormation)
+    if (selectedFormation) {
       const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
       const ctx = await getFormationContext(contactId)
       return (
@@ -131,6 +132,7 @@ export default async function PortalDashboardPage() {
           ss4Data={ctx.ss4}
           oaData={ctx.oa}
           leaseData={ctx.lease}
+          formationLeadId={selectedFormation.leadId}
         />
       )
     }

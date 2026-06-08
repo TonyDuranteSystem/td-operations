@@ -16,6 +16,7 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, getFlexibleServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
+import { getInProgressFormations } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
@@ -61,23 +62,44 @@ export default async function WizardPage({
   const { type: typeParam, lead: leadParam } = await searchParams
   const forcedType = isValidWizardType(typeParam) ? typeParam : null
 
+  // When the company switcher has an in-progress formation selected (the
+  // portal_formation cookie) and no explicit ?lead= or ?type= was passed,
+  // resolve that formation's lead so the wizard scopes to the NEW company.
+  // Without this, a returning client who also owns an account (e.g. Alessandro
+  // Federici: existing Scaledge LLC + new MMLLC) clicks "Complete Your
+  // Formation Details" — which links to bare /portal/wizard — and falls through
+  // to their account context, opening that account's Tax Return wizard instead
+  // of the new company's formation. The ownership check below still applies
+  // (the lead comes from getInProgressFormations, which only returns formations
+  // for THIS contact), so this never widens access.
+  let effectiveLeadParam = leadParam
+  if (!effectiveLeadParam && !forcedType && contactId) {
+    const cookieFormation = (await cookieStore).get('portal_formation')?.value
+    if (cookieFormation) {
+      const inProgress = await getInProgressFormations(contactId)
+      const selected = inProgress.find(f => f.id === cookieFormation)
+      if (selected?.leadId) effectiveLeadParam = selected.leadId
+    }
+  }
+
   // ── Formation-for-a-new-company scope ──────────────────────────────────────
-  // When ?lead=<lead_id> is present AND the offer on that lead belongs to this
-  // logged-in user, the wizard is for a BRAND NEW company that has no account
-  // yet. We must NOT load any existing account (that bug pre-filled THW Global
-  // LLC's data for Adam Mihaly). The wizard is scoped to the lead instead.
-  // Ownership check: the offer's client_email must match the user/contact email
-  // — never trust a raw ?lead= param from the client.
+  // When ?lead=<lead_id> is present (or resolved from the selected formation
+  // above) AND the offer on that lead belongs to this logged-in user, the
+  // wizard is for a BRAND NEW company that has no account yet. We must NOT load
+  // any existing account (that bug pre-filled THW Global LLC's data for Adam
+  // Mihaly). The wizard is scoped to the lead instead. Ownership check: the
+  // offer's client_email must match the user/contact email — never trust a raw
+  // ?lead= param from the client.
   let formationLeadId: string | null = null
   let formationEntityType: string | null = null
-  if (leadParam) {
+  if (effectiveLeadParam) {
     const ownerEmails = new Set<string>()
     if (user.email) ownerEmails.add(user.email.toLowerCase())
     if (contact.email) ownerEmails.add(String(contact.email).toLowerCase())
     const { data: leadOffer } = await supabaseAdmin
       .from('offers')
       .select('client_email, contract_type, entity_type')
-      .eq('lead_id', leadParam)
+      .eq('lead_id', effectiveLeadParam)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -86,7 +108,7 @@ export default async function WizardPage({
       leadOffer.client_email &&
       ownerEmails.has(String(leadOffer.client_email).toLowerCase())
     ) {
-      formationLeadId = leadParam
+      formationLeadId = effectiveLeadParam
       formationEntityType = (leadOffer.entity_type as string | null) ?? null
     }
   }
