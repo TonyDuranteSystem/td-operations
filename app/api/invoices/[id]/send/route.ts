@@ -10,8 +10,10 @@
  *  - Gmail send + payments.invoice_status → Sent update
  *  - QB sync (non-blocking)
  *
- * For Overdue resends: temporarily resets invoice_status to 'Draft'
- * so sendTDInvoice can run its normal flow (which sets it back to 'Sent').
+ * For Sent/Overdue/Partial resends: temporarily resets invoice_status to
+ * 'Draft' so sendTDInvoice can run its normal flow (which sets it to 'Sent').
+ * Partial invoices are restored to 'Partial' after a successful send so the
+ * partially-paid indicator survives the resend.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -39,15 +41,15 @@ export async function POST(
 
   if (!payment) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
 
-  // Already sent — idempotent
-  if (payment.invoice_status === 'Sent') {
-    return NextResponse.json({ success: true, message: `Invoice already sent on ${payment.sent_at ?? 'an earlier date'}` })
-  }
+  // Capture the original status — the resend flow temporarily flips it to
+  // 'Draft' below, so we restore from this on failure (and for Partial, on
+  // success too).
+  const originalStatus = payment.invoice_status ?? ''
 
-  const allowedStatuses = ['Draft', 'Overdue']
-  if (!allowedStatuses.includes(payment.invoice_status ?? '')) {
+  const allowedStatuses = ['Draft', 'Sent', 'Overdue', 'Partial']
+  if (!allowedStatuses.includes(originalStatus)) {
     return NextResponse.json(
-      { error: `Cannot send invoice with status "${payment.invoice_status}"` },
+      { error: `Cannot send invoice with status "${originalStatus}"` },
       { status: 400 },
     )
   }
@@ -89,9 +91,9 @@ export async function POST(
   }
 
   try {
-    // For Overdue resends, temporarily reset to Draft so sendTDInvoice
-    // can proceed (it sets status back to Sent on success).
-    if (payment.invoice_status === 'Overdue') {
+    // For Sent/Overdue/Partial resends, temporarily reset to Draft so
+    // sendTDInvoice can proceed (it sets status to Sent on success).
+    if (originalStatus === 'Overdue' || originalStatus === 'Sent' || originalStatus === 'Partial') {
       // eslint-disable-next-line no-restricted-syntax -- temporary resend status reset; tracked by dev_task 7ebb1e0c
       await supabaseAdmin
         .from('payments')
@@ -104,19 +106,30 @@ export async function POST(
       clientName: clientName || undefined,
     })
 
+    // sendTDInvoice always ends at 'Sent'. A Partial invoice (already partially
+    // paid) must keep its Partial status so the partially-paid indicator and
+    // amount-due math survive the resend.
+    if (originalStatus === 'Partial') {
+      // eslint-disable-next-line no-restricted-syntax -- restore partial status after resend; tracked by dev_task 7ebb1e0c
+      await supabaseAdmin
+        .from('payments')
+        .update({ invoice_status: 'Partial', updated_at: new Date().toISOString() })
+        .eq('id', id)
+    }
+
     return NextResponse.json({ success: true })
   } catch (err) {
-    // If Overdue reset succeeded but send failed, restore Overdue status.
-    if (payment.invoice_status === 'Overdue') {
+    // If the temp reset succeeded but send failed, restore the original status.
+    if (originalStatus === 'Overdue' || originalStatus === 'Sent' || originalStatus === 'Partial') {
       try {
         // eslint-disable-next-line no-restricted-syntax -- restore on failure; tracked by dev_task 7ebb1e0c
         await supabaseAdmin
           .from('payments')
-          .update({ invoice_status: 'Overdue', updated_at: new Date().toISOString() })
+          .update({ invoice_status: originalStatus, updated_at: new Date().toISOString() })
           .eq('id', id)
       } catch {
         // Best-effort restore; log but don't mask the original error.
-        console.error('[send-route] failed to restore Overdue status after send failure')
+        console.error('[send-route] failed to restore status after send failure')
       }
     }
     const msg = err instanceof Error ? err.message : String(err)

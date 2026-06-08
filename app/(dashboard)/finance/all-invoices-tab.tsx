@@ -396,6 +396,16 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
     })
   }
 
+  const handleResendInvoice = () => {
+    if (!window.confirm(`Resend invoice ${invoiceNumber} with PDF to the client?`)) return
+    startTransition(async () => {
+      const res = await fetch(`/api/invoices/${invoiceId}/send`, { method: 'POST' })
+      const data = await res.json().catch(() => ({} as { success?: boolean; error?: string }))
+      if (data.success) { toast.success(`Invoice ${invoiceNumber} resent with PDF`); router.refresh() }
+      else toast.error(data.error ?? 'Failed to resend')
+    })
+  }
+
   const handleSendReminder = () => {
     if (!window.confirm(`Send payment reminder for ${invoiceNumber}?`)) return
     startTransition(async () => {
@@ -442,18 +452,21 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
     <>
       <div className="flex items-center justify-center gap-0.5">
         {status !== 'Paid' && status !== 'Cancelled' && (
-          <ActionButton onClick={handleMarkPaid} label="Mark as Paid" icon={CheckCircle} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
+          <ActionButton onClick={handleMarkPaid} label="Mark as Paid — record this invoice as paid manually" icon={CheckCircle} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
         )}
-        {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
-          <ActionButton onClick={handleSendReminder} label="Send Reminder Email" icon={Send} color="text-blue-600" hoverBg="hover:bg-blue-100" />
+        {['Sent', 'Overdue', 'Partial'].includes(status) && (
+          <ActionButton onClick={handleResendInvoice} label="Resend Invoice — send the full invoice email with PDF attached to the client" icon={FileText} color="text-blue-600" hoverBg="hover:bg-blue-100" />
+        )}
+        {['Sent', 'Overdue', 'Partial'].includes(status) && (
+          <ActionButton onClick={handleSendReminder} label="Send Reminder — send a short payment reminder email (no PDF)" icon={Send} color="text-sky-600" hoverBg="hover:bg-sky-100" />
         )}
         {status !== 'Paid' && status !== 'Cancelled' && (
-          <ActionButton onClick={handleVoid} label="Void / Cancel Invoice" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
+          <ActionButton onClick={handleVoid} label="Void Invoice — cancel this invoice and reverse any applied credits" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
         )}
         {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
-          <ActionButton onClick={handleRegenerate} label="Regenerate — show an applied credit as a line" icon={RefreshCw} color="text-indigo-600" hoverBg="hover:bg-indigo-100" />
+          <ActionButton onClick={handleRegenerate} label="Regenerate — recalculate and apply any available credit notes" icon={RefreshCw} color="text-indigo-600" hoverBg="hover:bg-indigo-100" />
         )}
-        <ActionButton onClick={() => setEditing(true)} label="Edit Invoice" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        <ActionButton onClick={() => setEditing(true)} label="Edit — change amount, due date, notes, or payment terms" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
         {status === 'Paid' && (
           <ActionButton
             onClick={() => {
@@ -464,7 +477,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
                 else toast.error(result.error ?? 'Failed to unlink')
               })
             }}
-            label="Unlink payment"
+            label="Unlink Payment — detach the payment from this invoice and revert to Draft"
             icon={Unlink}
             color="text-orange-600"
             hoverBg="hover:bg-orange-100"
