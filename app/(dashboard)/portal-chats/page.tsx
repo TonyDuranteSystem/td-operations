@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -433,15 +433,72 @@ export default function PortalChatsPage() {
     refetchInterval: 30_000, // fallback reconciliation; realtime subscription below is primary
   })
 
+  // Older-message pagination (manual accumulation; the API supports
+  // ?before=<created_at>&limit=50). olderMessages holds every older page fetched
+  // via the "Older messages" button, prepended oldest-first ahead of the live
+  // 50-message window from the query above. oldestTimestamp is the cursor: the
+  // created_at of the oldest message currently displayed. hasMoreOlder flips
+  // false once a page comes back short (start of the conversation reached).
+  const [olderMessages, setOlderMessages] = useState<ChatMessage[]>([])
+  const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [hasMoreOlder, setHasMoreOlder] = useState(true)
+
+  // The full list the UI renders from = accumulated older pages + live window.
+  // Older pages use a strict `before` cursor so they never overlap the live
+  // window — no duplicate keys.
+  const combinedMessages = useMemo(
+    () => (olderMessages.length ? [...olderMessages, ...(messages ?? [])] : (messages ?? [])),
+    [olderMessages, messages],
+  )
+
+  // Reset pagination whenever the selected thread changes.
+  useEffect(() => {
+    setOlderMessages([])
+    setOldestTimestamp(null)
+    setHasMoreOlder(true)
+  }, [selectedAccountId, selectedContactId])
+
+  // Seed the cursor from the initial fetch (oldest message of the live window).
+  // While the user hasn't paged yet (olderMessages empty), keep it tracking the
+  // live window's oldest message so the first "Older" click pages from the right
+  // anchor even after a 30s refetch.
+  useEffect(() => {
+    if (olderMessages.length === 0 && messages && messages.length > 0) {
+      setOldestTimestamp(messages[0].created_at)
+    }
+  }, [messages, olderMessages.length])
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!chatQueryParam || !oldestTimestamp || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const res = await fetch(`/api/portal/chat?${chatQueryParam}&before=${encodeURIComponent(oldestTimestamp)}&limit=50`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to load older messages.')
+      const older: ChatMessage[] = data.messages ?? []
+      if (older.length > 0) {
+        setOlderMessages(prev => [...older, ...prev])
+        setOldestTimestamp(older[0].created_at)
+      }
+      // A short page means there are no more older messages.
+      if (older.length < 50) setHasMoreOlder(false)
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to load older messages.')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [chatQueryParam, oldestTimestamp, loadingOlder])
+
   // Topics derived from messages — deduplicated, sorted
   const adminTopics = Array.from(
-    new Set((messages ?? []).map(m => m.topic).filter((t): t is string => !!t))
+    new Set(combinedMessages.map(m => m.topic).filter((t): t is string => !!t))
   ).sort()
 
   // Messages filtered by active topic tab
   const adminFilteredMessages = adminActiveTopic
-    ? (messages ?? []).filter(m => m.topic === adminActiveTopic)
-    : (messages ?? []).filter(m => !m.topic)
+    ? combinedMessages.filter(m => m.topic === adminActiveTopic)
+    : combinedMessages.filter(m => !m.topic)
 
   // Deep-link to a specific message (?message=<id>, set by a Notification Center
   // To-Do card). When the scoped thread's messages have loaded, switch to that
@@ -469,7 +526,7 @@ export default function PortalChatsPage() {
   // System messages are auto-emitted on client actions (wizard submitted,
   // document uploaded, payment received, etc.) — they must count toward the
   // red badge so staff sees the topic immediately.
-  const adminUnreadByTopic = (messages ?? []).reduce<Record<string, number>>((acc, m) => {
+  const adminUnreadByTopic = combinedMessages.reduce<Record<string, number>>((acc, m) => {
     if (m.sender_type === 'admin' || m.read_at) return acc
     const key = m.topic ?? ''
     acc[key] = (acc[key] ?? 0) + 1
@@ -2490,7 +2547,7 @@ export default function PortalChatsPage() {
 
             {/* Pinned messages strip — shared with the client; click to jump. No limit. */}
             {(() => {
-              const pinned = (messages ?? []).filter(m => m.pinned_at && !m.deleted_at)
+              const pinned = combinedMessages.filter(m => m.pinned_at && !m.deleted_at)
               if (pinned.length === 0) return null
               return (
                 <div className="shrink-0 border-b border-amber-100 bg-amber-50/70 px-3 py-1.5">
@@ -2551,21 +2608,26 @@ export default function PortalChatsPage() {
                   </div>
                 )}
                 {/* Load older messages */}
-                {messages && messages.length >= 50 && (
+                {hasMoreOlder && (messages?.length ?? 0) >= 50 && (
                   <div className="flex justify-center mb-2">
                     <button
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 transition-colors"
-                      onClick={() => {/* Pagination handled by increasing limit or cursor */}}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={loadOlderMessages}
+                      disabled={loadingOlder}
                     >
-                      <ChevronUp className="h-3 w-3" />
-                      Older messages available
+                      {loadingOlder ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <ChevronUp className="h-3 w-3" />
+                      )}
+                      {loadingOlder ? 'Loading…' : 'Older messages available'}
                     </button>
                   </div>
                 )}
                 {adminFilteredMessages.map(msg => {
                   const isAdmin = msg.sender_type === 'admin'
                   const isSystem = msg.sender_type === 'system'
-                  const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
+                  const replyRef = msg.reply_to_id ? combinedMessages.find(m => m.id === msg.reply_to_id) : null
                   const isDeleted = !!msg.deleted_at
 
                   // System events (auto-emitted on client actions: wizard submitted,
