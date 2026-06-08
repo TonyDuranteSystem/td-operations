@@ -246,6 +246,14 @@ export default function PortalChatsPage() {
   const internalInputRef = useRef<HTMLTextAreaElement>(null)
   const internalFileRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // "Jump to latest" floating button: shown when the user has scrolled up away
+  // from the newest message. messagesScrollRef is the scroll container; the rAF
+  // ref throttles the scroll handler. unreadBelowCount badges any unread
+  // client/system messages currently below the fold.
+  const messagesScrollRef = useRef<HTMLDivElement>(null)
+  const jumpRafRef = useRef<number | null>(null)
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const [unreadBelowCount, setUnreadBelowCount] = useState(0)
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const adminFileRef = useRef<HTMLInputElement>(null)
@@ -499,6 +507,52 @@ export default function PortalChatsPage() {
   const adminFilteredMessages = adminActiveTopic
     ? combinedMessages.filter(m => m.topic === adminActiveTopic)
     : combinedMessages.filter(m => !m.topic)
+
+  // "Jump to latest" — recompute whether the user is scrolled away from the
+  // bottom (>200px) and, if so, how many unread client/system messages sit below
+  // the visible area. Measured with getBoundingClientRect (viewport-relative, so
+  // it's robust regardless of the container's positioning context).
+  const recomputeJumpState = useCallback(() => {
+    const sc = messagesScrollRef.current
+    if (!sc) return
+    const distanceFromBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight
+    const scrolledUp = distanceFromBottom > 200
+    setShowJumpToLatest(scrolledUp)
+    if (!scrolledUp) {
+      setUnreadBelowCount(0)
+      return
+    }
+    const contBottom = sc.getBoundingClientRect().bottom
+    let count = 0
+    for (const m of adminFilteredMessages) {
+      if (m.sender_type === 'admin' || m.read_at || m.deleted_at) continue
+      const el = document.getElementById(`pc-msg-${m.id}`)
+      if (el && el.getBoundingClientRect().top >= contBottom) count++
+    }
+    setUnreadBelowCount(count)
+  }, [adminFilteredMessages])
+
+  // Throttle scroll-driven recomputes to one per animation frame.
+  const handleMessagesScroll = useCallback(() => {
+    if (jumpRafRef.current != null) return
+    jumpRafRef.current = requestAnimationFrame(() => {
+      jumpRafRef.current = null
+      recomputeJumpState()
+    })
+  }, [recomputeJumpState])
+
+  const jumpToLatest = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [])
+
+  // Recompute when the visible list changes (older page loaded, new message
+  // arrived, topic switched) so the button/badge reflect the new layout. rAF
+  // lets the DOM settle first. The scroll-to-bottom on thread switch fires its
+  // own scroll events, which keep the state correct.
+  useEffect(() => {
+    const id = requestAnimationFrame(recomputeJumpState)
+    return () => cancelAnimationFrame(id)
+  }, [adminFilteredMessages, recomputeJumpState])
 
   // Deep-link to a specific message (?message=<id>, set by a Notification Center
   // To-Do card). When the scoped thread's messages have loaded, switch to that
@@ -2580,7 +2634,12 @@ export default function PortalChatsPage() {
               )
             })()}
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
+            <div className="relative flex-1 min-h-0">
+            <div
+              ref={messagesScrollRef}
+              onScroll={handleMessagesScroll}
+              className="h-full overflow-y-auto overflow-x-hidden p-4 space-y-3"
+            >
               {messagesLoading ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
@@ -2638,7 +2697,7 @@ export default function PortalChatsPage() {
                     const displayBody = msg.message.replace(/<!--[\s\S]*?-->/g, '').trim()
                     const isUnread = !msg.read_at
                     return (
-                      <div key={msg.id} className="flex justify-center my-1.5">
+                      <div key={msg.id} id={`pc-msg-${msg.id}`} className="flex justify-center my-1.5 scroll-mt-4">
                         <div className={cn(
                           'inline-flex items-center gap-2 max-w-[85%] px-3 py-1.5 rounded-full border text-xs',
                           isUnread
@@ -3019,6 +3078,25 @@ export default function PortalChatsPage() {
                 </>
               )}
               <div ref={messagesEndRef} />
+            </div>
+            {/* Jump to latest — floating pill, bottom-center of the messages area.
+                Inverted styling vs the "Older messages" pill. Shows an unread
+                count badge when unread messages sit below the fold. */}
+            {showJumpToLatest && (
+              <button
+                onClick={jumpToLatest}
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
+                title="Jump to latest message"
+              >
+                <ChevronDown className="h-3 w-3" />
+                Latest
+                {unreadBelowCount > 0 && (
+                  <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
+                    {unreadBelowCount}
+                  </span>
+                )}
+              </button>
+            )}
             </div>
 
             {/* Recording indicator */}
