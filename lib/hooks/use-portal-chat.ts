@@ -85,7 +85,11 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     setLoadingMore(true)
     try {
       const oldest = messages[0]
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50&before=${oldest.created_at}`)
+      // encodeURIComponent is REQUIRED: created_at carries a "+00:00" timezone
+      // offset, and an unencoded "+" is decoded as a space server-side, which
+      // made this request 500 ("invalid input syntax for timestamp") and the
+      // load-older button silently fail. (2026-06-08)
+      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50&before=${encodeURIComponent(oldest.created_at)}`)
       if (res.ok) {
         const data = await res.json()
         const older = data.messages ?? []

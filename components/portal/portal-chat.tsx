@@ -1,11 +1,11 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
-import type { ChatAttachment } from '@/lib/types'
+import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -165,6 +165,73 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
+  // "Jump to latest" floating button + smart auto-scroll. stickToBottomRef is
+  // true while the user is pinned near the newest message; the auto-scroll
+  // effect only snaps down when it's true, so loading older messages (or
+  // reading history) no longer yanks the view to the bottom. jumpRafRef
+  // throttles the scroll handler to one recompute per frame.
+  const jumpRafRef = useRef<number | null>(null)
+  const stickToBottomRef = useRef(true)
+  // Mirror of the active-tab messages so the scroll handler (defined before
+  // filteredMessages) can count unread-below without a stale closure.
+  const filteredMessagesRef = useRef<PortalMessage[]>([])
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const [unreadBelowCount, setUnreadBelowCount] = useState(0)
+
+  // Recompute the Jump button state: visible when >200px from the bottom, and
+  // how many unread TEAM (admin) messages sit below the fold. Client-side
+  // unread mirrors unreadByTopic: an admin message that's unread OR kept-unread.
+  // getBoundingClientRect is viewport-relative, so it's robust regardless of
+  // the container's positioning context.
+  const recomputeJumpState = useCallback(() => {
+    const sc = scrollRef.current
+    if (!sc) return
+    const distanceFromBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight
+    stickToBottomRef.current = distanceFromBottom <= 120
+    const scrolledUp = distanceFromBottom > 200
+    setShowJumpToLatest(scrolledUp)
+    if (!scrolledUp) {
+      setUnreadBelowCount(0)
+      return
+    }
+    const contBottom = sc.getBoundingClientRect().bottom
+    let count = 0
+    for (const m of filteredMessagesRef.current) {
+      if (m.sender_type !== 'admin' || m.deleted_at) continue
+      if (m.read_at && !m.client_kept_unread) continue
+      const el = document.getElementById(`pc-msg-${m.id}`)
+      if (el && el.getBoundingClientRect().top >= contBottom) count++
+    }
+    setUnreadBelowCount(count)
+  }, [])
+
+  const handleMessagesScroll = useCallback(() => {
+    if (jumpRafRef.current != null) return
+    jumpRafRef.current = requestAnimationFrame(() => {
+      jumpRafRef.current = null
+      recomputeJumpState()
+    })
+  }, [recomputeJumpState])
+
+  const jumpToLatest = useCallback(() => {
+    const sc = scrollRef.current
+    if (sc) sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' })
+  }, [])
+
+  // Load older messages while preserving the user's scroll position. loadMore()
+  // prepends older messages, which would otherwise shift the viewport; we record
+  // the pre-fetch height and re-anchor by the delta after the DOM updates.
+  const handleLoadMore = useCallback(async () => {
+    const sc = scrollRef.current
+    const prevHeight = sc?.scrollHeight ?? 0
+    const prevTop = sc?.scrollTop ?? 0
+    await loadMore()
+    requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (!el) return
+      el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
+    })
+  }, [loadMore])
 
   // Close emoji picker on click outside
   useEffect(() => {
@@ -217,10 +284,16 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
     return () => window.removeEventListener('beforeunload', handler)
   }, [input, draftKey])
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages — but ONLY when the user is already
+  // pinned near the bottom. If they've scrolled up to read history or just
+  // loaded older messages, keep their position instead of yanking them down.
+  // handleLoadMore re-anchors after a prepend; handleSend forces stick=true so
+  // a sent message is always shown.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    const sc = scrollRef.current
+    if (!sc) return
+    if (stickToBottomRef.current) {
+      sc.scrollTop = sc.scrollHeight
     }
   }, [messages])
 
@@ -233,6 +306,8 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   const handleSend = async () => {
     if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
     if (isRecording) stopRecording()
+    // Sending implies the user wants to see their message land at the bottom.
+    stickToBottomRef.current = true
     const msg = input
     const replyId = replyTo?.id
     const filesToSend = pendingFiles
@@ -330,6 +405,16 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   const filteredMessages = activeTopic
     ? messages.filter(m => m.topic === activeTopic)
     : messages.filter(m => !m.topic)
+
+  // Keep the Jump button's unread-below count in sync with the visible list:
+  // mirror the active-tab messages into a ref (read by the scroll handler) and
+  // recompute when the list changes (new team message arrives below, topic
+  // switch, older page loaded). rAF lets the DOM settle first.
+  filteredMessagesRef.current = filteredMessages
+  useEffect(() => {
+    const id = requestAnimationFrame(recomputeJumpState)
+    return () => cancelAnimationFrame(id)
+  }, [filteredMessages, recomputeJumpState])
 
   // Unread count per topic tab (admin messages not yet read by the client)
   const unreadByTopic = messages.reduce<Record<string, number>>((acc, m) => {
@@ -446,7 +531,8 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
+      <div className="relative flex-1 min-h-0">
+      <div ref={scrollRef} onScroll={handleMessagesScroll} className="h-full overflow-y-auto p-4 space-y-1">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
@@ -463,7 +549,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           {hasMore && (
             <div className="flex justify-center mb-2">
               <button
-                onClick={loadMore}
+                onClick={handleLoadMore}
                 disabled={loadingMore}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 disabled:opacity-50 transition-colors"
               >
@@ -710,6 +796,25 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           })}
           </>
         )}
+      </div>
+      {/* Jump to latest — floating pill, bottom-center of the messages area.
+          Inverted styling vs the "Older messages" pill. Shows when scrolled
+          >200px from the bottom, smooth-scrolls to newest, hides at bottom. */}
+      {showJumpToLatest && (
+        <button
+          onClick={jumpToLatest}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
+          title={locale === 'it' ? 'Vai al più recente' : 'Jump to latest'}
+        >
+          <ChevronDown className="h-3 w-3" />
+          {locale === 'it' ? 'Più recenti' : 'Latest'}
+          {unreadBelowCount > 0 && (
+            <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
+              {unreadBelowCount}
+            </span>
+          )}
+        </button>
+      )}
       </div>
 
       {/* Recording indicator */}
