@@ -1,5 +1,5 @@
 # Company Formation
-_Last verified against code: 2026-06-08 — Claude (PR #96: activate-service.ts now creates contact-scoped Company Formation SD at activation so the portal switcher reaches returning active clients; formation-setup.ts dedupes at wizard submit)_
+_Last verified against code: 2026-06-09 — Claude (formation-materialize.ts forces 'formation' tier via syncTier allowDowngrade:true — accounts default to 'active' so a plain sync no-ops as a downgrade; prior 2026-06-08 PR #96 contact-scoped Company Formation SD at activation + formation-setup.ts dedupe)_
 
 ## What it is
 The end-to-end flow of creating a client's US LLC: from a signed formation offer + payment, through filing the company with the state, to receiving the EIN — at which point the client becomes a fully active client. It's the core product, multi-step, and several automatic side-effects fire at each stage, so it's high-risk to touch blindly.
@@ -41,6 +41,7 @@ Resolves the first pipeline stage for the service type; propagates `is_test` fro
 
 ## Gotchas, invariants & past bugs
 - **Never advance tier by hand or write `portal_tier` directly** (R102) — EIN→active happens only through the EIN-received workflow / `syncTier`.
+- **Materialization forces `formation` tier with `allowDowngrade: true`.** `accounts.portal_tier` **defaults to `'active'`** at insert, so a plain `syncTier('formation')` is treated as a downgrade and silently no-ops — leaving a just-formed company wrongly at `active`. `formation-materialize.ts` passes `allowDowngrade: true` so the new account becomes `formation`. Safe because materialization always runs **before** the EIN exists and the `already_materialized` guard blocks re-runs on an account that has since gone active. The contact-tier cascade still uses `computeContactTier` (MAX across the contact's accounts), so a returning client who already owns an active company keeps their `active` contact tier — only the new company's account row is `formation`.
 - **MMLLC nuance:** the `ein-received.ts` helper **intentionally excludes** the MMLLC member-info portal-message flow, so silent inline EIN edits don't auto-message clients. MMLLC clients must be promoted via the explicit "Record EIN Received" button, which includes that messaging.
 - **`createSD` fires the workflow dispatcher** (sd_created trigger) fire-and-forget in a try/catch — a workflow failure won't block SD creation, but check the dispatch result/logs if an expected follow-up didn't spawn.
 - **Shared "Closing" stage:** the Closure system shares stage names with formation; any stage migration must scope `service_type='Company Formation'` only.
