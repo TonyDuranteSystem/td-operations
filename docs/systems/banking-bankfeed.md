@@ -1,5 +1,5 @@
 # Banking & Bank-Feed Reconciliation
-_Last verified against code: 2026-05-29 — Claude (read bank-feed-matcher.ts, process-bank-feed-matches.ts, reconciliation/actions.ts)_
+_Last verified against code: 2026-06-08 — Claude (matcher now fires the installment handler on a confirmed installment payment — Tax Return Phase 1)_
 
 ## What it is
 Two related-but-separate systems:
@@ -15,6 +15,7 @@ Most of the complexity — and bugs — live in #2.
    - `pending_activations` with `status='awaiting_payment'`.
    Confidence levels: **exact** (amount within $1/€1), **high** (within 5% + sender name contains the account/client name), **medium** (within 5% only). An **invoice-number reference found in the memo + matching amount is the strongest** match. `STOP_WORDS` strips generic business words ("LLC", "consulting", "wise"…) so names don't cross-match.
 3. **On a confident match** → marks the invoice **Paid**, sets the feed `status='matched'`. (It also calls `syncPaymentToQB`, but **QuickBooks is DEAD** — that call is an inert no-op; see "Gotchas" below.)
+   - **Installment payments fire the installment handler (Tax Return Phase 1, 2026-06-08).** After marking an **installment** invoice Paid, the matcher dispatches `onInstallmentPaid` (`lib/operations/payment.ts`) — classified via `payment_category` (`isFirstInstallment`/`isSecondInstallment`), guarded to `account_type='Client'`, fire-and-forget so a handler error never rolls back the match. This is what advances the bundle's Tax Return card on a real wire 2nd-installment payment (previously only manual mark-paid / the June cron did, so wire-payers got stranded). See `tax-returns.md`.
 4. **The orchestrator** `processBankFeedMatches()` (`lib/operations/process-bank-feed-matches.ts`) walks a batch and, when an invoice with a linked `pending_activation` is auto-paid, runs the activation chain (`runActivation`). Per-feed outcome is one of: `auto_activated`, `needs_review`, `activation_crashed`, `no_match`.
 5. **Manual review** for anything not auto-matched: the **`/reconciliation`** page (`matchFeedToInvoice`, `ignoreFeed` in `actions.ts`) + the Finance "Bank Feed" tab; admin actions `bank-feed-confirm-match`, `bank-feed-reject-match`, `bank-feed-retry-activation`.
 

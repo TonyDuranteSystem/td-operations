@@ -1,5 +1,5 @@
 # Company Formation
-_Last verified against code: 2026-05-29 — Claude (read service-delivery.ts createSD, ein-received.ts, formation.ts tool, auto-create.ts)_
+_Last verified against code: 2026-06-08 — Claude (advanceStage/advanceStageIfAt gained a generic `skip_notify` option for bulk reconciles; no formation-behaviour change)_
 
 ## What it is
 The end-to-end flow of creating a client's US LLC: from a signed formation offer + payment, through filing the company with the state, to receiving the EIN — at which point the client becomes a fully active client. It's the core product, multi-step, and several automatic side-effects fire at each stage, so it's high-risk to touch blindly.
