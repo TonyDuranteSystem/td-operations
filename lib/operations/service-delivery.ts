@@ -110,6 +110,8 @@ export interface AdvanceStageIfAtParams {
   actor?: string
   notes?: string
   skip_tasks?: boolean
+  /** Suppress client-facing notifications (bulk reconcile/backfill). */
+  skip_notify?: boolean
 }
 
 export interface AdvanceStageIfAtResult {
@@ -608,6 +610,7 @@ export async function advanceStageIfAt(
     actor: params.actor,
     notes: params.notes,
     skip_tasks: params.skip_tasks,
+    skip_notify: params.skip_notify,
   })
 
   return {

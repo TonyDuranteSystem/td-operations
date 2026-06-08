@@ -15,6 +15,7 @@ export interface PipelineStageRow {
   sla_days: number | null
   auto_advance: boolean | null
   requires_approval: boolean | null
+  auto_actions: Record<string, unknown> | null
 }
 
 export function PipelineStageEditButton({ row }: { row: PipelineStageRow }) {
@@ -45,12 +46,20 @@ function PipelineStageEditDialog({
   const [slaDays, setSlaDays] = useState<string>(row.sla_days?.toString() ?? "")
   const [autoAdvance, setAutoAdvance] = useState(row.auto_advance ?? false)
   const [requiresApproval, setRequiresApproval] = useState(row.requires_approval ?? false)
+  const [secondInstallmentTarget, setSecondInstallmentTarget] = useState(
+    (row.auto_actions as { second_installment_target?: boolean } | null)?.second_installment_target === true,
+  )
   const [isPending, startTransition] = useTransition()
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault()
     startTransition(async () => {
       const slaNum = slaDays.trim() ? parseInt(slaDays, 10) : null
+      // Preserve any other keys already in auto_actions; only flip our marker.
+      const nextAutoActions = {
+        ...(row.auto_actions ?? {}),
+        second_installment_target: secondInstallmentTarget,
+      }
       const result = await savePipelineStage(row.id, {
         stage_name: stageName.trim(),
         stage_description: stageDescription.trim() || null,
@@ -58,6 +67,7 @@ function PipelineStageEditDialog({
         sla_days: slaNum,
         auto_advance: autoAdvance,
         requires_approval: requiresApproval,
+        auto_actions: nextAutoActions,
       })
       if (result.success) {
         toast.success("Pipeline stage saved")
@@ -140,6 +150,25 @@ function PipelineStageEditDialog({
                 onChange={e => setRequiresApproval(e.target.checked)}
               />
               Requires approval
+            </label>
+          </div>
+
+          <div className="border-t pt-4">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={secondInstallmentTarget}
+                onChange={e => setSecondInstallmentTarget(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">2nd-installment wizard target</span>
+                <span className="block text-xs text-zinc-500">
+                  When the 2nd installment is paid, the service delivery advances to THIS stage
+                  from any earlier bundle stage (stage order ≥ 1). Set this on exactly one stage
+                  per service.
+                </span>
+              </span>
             </label>
           </div>
         </div>

@@ -60,7 +60,7 @@ async function fetchPipelineStages(): Promise<PipelineStageRow[]> {
   const { data } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "id, service_type, stage_order, stage_name, stage_description, client_description, sla_days, auto_advance, requires_approval",
+      "id, service_type, stage_order, stage_name, stage_description, client_description, sla_days, auto_advance, requires_approval, auto_actions",
     )
     .order("service_type", { ascending: true })
     .order("stage_order", { ascending: true })

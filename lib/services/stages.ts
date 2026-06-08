@@ -11,6 +11,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 
 export interface StageRow {
   stage_order: number
@@ -20,18 +21,62 @@ export interface StageRow {
   auto_advance?: boolean | null
   notify_client_email?: boolean
   client_description?: string | null
+  /** Generic per-stage rule bag (e.g. { second_installment_target: true }). */
+  auto_actions?: Record<string, unknown> | null
 }
 
 export async function getStagesForService(serviceType: string): Promise<StageRow[]> {
   const { data, error } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description",
+      "stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, auto_actions",
     )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
   if (error) throw new Error(`getStagesForService(${serviceType}): ${error.message}`)
   return (data ?? []) as StageRow[]
+}
+
+/** The rule for advancing a service delivery when the 2nd installment is paid. */
+export interface SecondInstallmentAdvanceRule {
+  target_stage: string
+  source_stages: string[]
+}
+
+/**
+ * Resolve, from `pipeline_stages` DATA (never hardcoded stage names), the rule
+ * for advancing a service delivery to its wizard stage when the 2nd installment
+ * is paid:
+ *   - target  = the stage flagged `auto_actions.second_installment_target = true`
+ *   - sources = every stage at `stage_order >= 1` (bundle entry onward,
+ *               EXCLUDING the negative/zero standalone-intake stages) and below
+ *               the target's order.
+ *
+ * This survives renames/reorders done in /config: the rule follows stage_order
+ * + one data marker, not literal names.
+ *
+ * Returns null when no stage is flagged (rule not configured) so the caller can
+ * fail safe + visible rather than guessing a stage name.
+ */
+export async function resolveSecondInstallmentAdvance(
+  serviceType: string,
+): Promise<SecondInstallmentAdvanceRule | null> {
+  const { data, error } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("stage_name, stage_order, auto_actions")
+    .eq("service_type", serviceType)
+    .order("stage_order", { ascending: true })
+  if (error) throw new Error(`resolveSecondInstallmentAdvance(${serviceType}): ${error.message}`)
+
+  const rows = (data ?? []) as Array<{ stage_name: string; stage_order: number; auto_actions: Record<string, unknown> | null }>
+  const target = rows.find(r => r.auto_actions?.second_installment_target === true)
+  if (!target) return null
+
+  const source_stages = rows
+    .filter(r => r.stage_order >= 1 && r.stage_order < target.stage_order)
+    .map(r => r.stage_name)
+
+  return { target_stage: target.stage_name, source_stages }
 }
 
 /**
@@ -75,6 +120,9 @@ export async function replaceStagesForService(
     auto_advance: s.auto_advance ?? false,
     notify_client_email: s.notify_client_email ?? false,
     client_description: s.client_description ?? null,
+    // Preserve the generic rule bag (e.g. second_installment_target) so a
+    // full re-author of a service's stages does not silently drop it.
+    auto_actions: (s.auto_actions ?? null) as Json,
   }))
 
   const { error: insErr } = await supabaseAdmin.from("pipeline_stages").insert(insertRows)

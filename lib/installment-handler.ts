@@ -22,6 +22,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
+import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
 
@@ -247,23 +248,40 @@ export async function onFirstInstallmentPaid(
   }
 
   // ─── 6. Create task for lease ───
+  // Idempotent: the title is year-scoped, so an existing task with the same
+  // title means this handler already ran for this account+year (e.g. the
+  // bank-feed matcher fired it, then a manual mark-paid or the cron fired it
+  // again). Skip rather than insert a duplicate.
   try {
-    await dbWriteSafe(
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      supabaseAdmin.from("tasks").insert({
-        task_title: `Create lease ${year} -- ${account.company_name}`,
-        description: `1st installment paid. Create and send new lease agreement for ${year}.\n\nUse: lease_create(account_id="${accountId}", suite_number="...")\nThen: lease_send(token)`,
-        assigned_to: "Luca",
-        priority: "High",
-        category: "Document",
-        status: "To Do",
-        due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-        account_id: accountId,
-        created_by: "System",
-      }),
-      "tasks.insert"
-    )
-    steps.push({ step: "lease_task", status: "ok" })
+    const leaseTitle = `Create lease ${year} -- ${account.company_name}`
+    const { data: existingLeaseTask } = await supabaseAdmin
+      .from("tasks")
+      .select("id")
+      .eq("account_id", accountId)
+      .eq("task_title", leaseTitle)
+      .limit(1)
+      .maybeSingle()
+
+    if (existingLeaseTask) {
+      steps.push({ step: "lease_task", status: "skipped", detail: "Lease task already exists for this account/year" })
+    } else {
+      await dbWriteSafe(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+        supabaseAdmin.from("tasks").insert({
+          task_title: leaseTitle,
+          description: `1st installment paid. Create and send new lease agreement for ${year}.\n\nUse: lease_create(account_id="${accountId}", suite_number="...")\nThen: lease_send(token)`,
+          assigned_to: "Luca",
+          priority: "High",
+          category: "Document",
+          status: "To Do",
+          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          account_id: accountId,
+          created_by: "System",
+        }),
+        "tasks.insert"
+      )
+      steps.push({ step: "lease_task", status: "ok" })
+    }
   } catch (e) {
     steps.push({ step: "lease_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
@@ -328,10 +346,17 @@ export async function onSecondInstallmentPaid(
     steps.push({ step: "tax_gate", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
-  // ─── 2. Advance Tax Return SD if at "Awaiting 2nd Payment" ───
-  // 2nd installment paid = green light to send client data to India team.
-  // Routed through advanceStageIfAt so stage_history, action_log, auto-tasks,
-  // portal notification, and tax_returns sync all fire from the canonical helper.
+  // ─── 2. Advance Tax Return SD to its wizard stage ───
+  // 2nd installment paid = the wizard becomes available. The advance rule is
+  // DATA-DRIVEN (no hardcoded stage names): resolveSecondInstallmentAdvance
+  // reads pipeline_stages and returns the target stage (the one flagged
+  // auto_actions.second_installment_target) + the source stages (bundle stages
+  // at stage_order >= 1 below the target, EXCLUDING the negative/zero
+  // standalone-intake stages, which require the company_info wizard first).
+  // Editable in /config. No-op if the SD is already at/after the target
+  // (idempotent). Routed through advanceStageIfAt so stage_history, action_log,
+  // auto-tasks, portal notification, and tax_returns sync all fire from the
+  // canonical helper.
   try {
     const { data: taxSd } = await supabaseAdmin
       .from("service_deliveries")
@@ -342,28 +367,42 @@ export async function onSecondInstallmentPaid(
       .maybeSingle()
 
     if (taxSd) {
-      const advanceResult = await advanceStageIfAt({
-        delivery_id: taxSd.id,
-        if_current_stage: "Awaiting 2nd Payment",
-        target_stage: "Wizard Available",
-        actor: "installment-handler",
-        notes: "2nd installment paid",
-      })
-
-      if (advanceResult.advanced) {
-        steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Wizard Available` })
-      } else if (advanceResult.current_stage === "Awaiting 2nd Payment") {
-        steps.push({
-          step: "tax_sd_advance",
-          status: "error",
-          detail: advanceResult.result?.error || advanceResult.reason || "advanceStageIfAt failed",
-        })
-      } else {
+      const rule = await resolveSecondInstallmentAdvance("Tax Return")
+      if (!rule) {
+        // No stage flagged as the 2nd-installment target in pipeline_stages.
+        // Fail safe + visible rather than guessing a stage name.
         steps.push({
           step: "tax_sd_advance",
           status: "skipped",
-          detail: `SD at "${advanceResult.current_stage}", not awaiting payment`,
+          detail: "No 2nd-installment target stage configured (pipeline_stages.auto_actions.second_installment_target)",
         })
+      } else {
+        const advanceResult = await advanceStageIfAt({
+          delivery_id: taxSd.id,
+          if_current_stage: rule.source_stages,
+          target_stage: rule.target_stage,
+          actor: "installment-handler",
+          notes: "2nd installment paid",
+        })
+
+        if (advanceResult.advanced) {
+          steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> ${rule.target_stage}` })
+        } else if (advanceResult.current_stage && rule.source_stages.includes(advanceResult.current_stage)) {
+          // Was at an advanceable stage but the advance itself failed.
+          steps.push({
+            step: "tax_sd_advance",
+            status: "error",
+            detail: advanceResult.result?.error || advanceResult.reason || "advanceStageIfAt failed",
+          })
+        } else {
+          // Already at/after the target (idempotent no-op), or at an intake
+          // stage we intentionally do not auto-advance.
+          steps.push({
+            step: "tax_sd_advance",
+            status: "skipped",
+            detail: `SD at "${advanceResult.current_stage}", no advance needed`,
+          })
+        }
       }
     }
   } catch (e) {
@@ -420,21 +459,36 @@ export async function onSecondInstallmentPaid(
       .maybeSingle()
 
     if (tr?.data_received) {
-      await dbWriteSafe(
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        supabaseAdmin.from("tasks").insert({
-          task_title: `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`,
-          description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
-          assigned_to: "Luca",
-          priority: "High",
-          category: "Tax" as never,
-          status: "To Do",
-          account_id: accountId,
-          created_by: "System",
-        }),
-        "tasks.insert"
-      )
-      steps.push({ step: "india_task", status: "ok", detail: "Data ready + paid — task created to send to India" })
+      // Idempotent: year-scoped title, skip if it already exists so a second
+      // handler run (matcher + cron/manual) does not duplicate the task.
+      const indiaTitle = `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`
+      const { data: existingIndiaTask } = await supabaseAdmin
+        .from("tasks")
+        .select("id")
+        .eq("account_id", accountId)
+        .eq("task_title", indiaTitle)
+        .limit(1)
+        .maybeSingle()
+
+      if (existingIndiaTask) {
+        steps.push({ step: "india_task", status: "skipped", detail: "India task already exists for this account/year" })
+      } else {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+          supabaseAdmin.from("tasks").insert({
+            task_title: indiaTitle,
+            description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
+            assigned_to: "Luca",
+            priority: "High",
+            category: "Tax" as never,
+            status: "To Do",
+            account_id: accountId,
+            created_by: "System",
+          }),
+          "tasks.insert"
+        )
+        steps.push({ step: "india_task", status: "ok", detail: "Data ready + paid — task created to send to India" })
+      }
     }
   } catch (e) {
     steps.push({ step: "india_task", status: "error", detail: e instanceof Error ? e.message : String(e) })

@@ -457,6 +457,43 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       .update({ payment_method: paymentMethod })
       .eq("id", best.id)
 
+    // Fire the installment handler for installment 1/2 payments so the bundle's
+    // service-delivery stages advance on real, bank-confirmed money-in. The
+    // bank-feed match IS the real-payment signal (invoice Paid + matched feed) —
+    // previously this only happened on manual mark-paid / the June cron, so
+    // wire-paying clients got stranded. Guarded to Client accounts; classified
+    // via payment_category (reliable) not the installment label; idempotent (the
+    // handlers dedup their writes). A handler failure must never roll back the
+    // match — swallow and log.
+    try {
+      const { data: paidPayment } = await supabaseAdmin
+        .from("payments")
+        .select("account_id, payment_category, status, invoice_status, year")
+        .eq("id", best.id)
+        .maybeSingle()
+
+      if (paidPayment?.account_id) {
+        const { isFirstInstallment, isSecondInstallment } = await import("@/lib/billing/payment-classification")
+        const installmentNumber = isFirstInstallment(paidPayment) ? 1 : isSecondInstallment(paidPayment) ? 2 : null
+
+        if (installmentNumber) {
+          const { data: acct } = await supabaseAdmin
+            .from("accounts")
+            .select("account_type")
+            .eq("id", paidPayment.account_id)
+            .maybeSingle()
+
+          if (acct?.account_type === "Client") {
+            const installmentYear = paidPayment.year ?? new Date(today).getFullYear()
+            const { onInstallmentPaid } = await import("@/lib/operations/payment")
+            await onInstallmentPaid(paidPayment.account_id, installmentYear, installmentNumber)
+          }
+        }
+      }
+    } catch (handlerErr) {
+      console.error(`[bank-feed-matcher] installment handler dispatch failed for payment ${best.id}:`, handlerErr)
+    }
+
     // QB sync (non-blocking)
     syncPaymentToQB(best.id, { paymentDate: today }).catch(() => {})
 

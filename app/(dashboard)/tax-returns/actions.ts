@@ -42,7 +42,15 @@ export async function toggleTaxReturnField(
   }
 
   return safeAction(async () => {
-    const result = await updateWithLock('tax_returns', id, { [field]: value }, updatedAt)
+    // Keep data_received_date in sync with the data_received flag so a dateless
+    // "received" can never be created (the source of the stale null-date flags
+    // that block clients from submitting their wizard). true → stamp today;
+    // false → clear.
+    const updates: Record<string, unknown> = { [field]: value }
+    if (field === 'data_received') {
+      updates.data_received_date = value ? new Date().toISOString().slice(0, 10) : null
+    }
+    const result = await updateWithLock('tax_returns', id, updates, updatedAt)
     if (!result.success) throw new Error(result.error)
     revalidatePath('/tax-returns')
   }, {

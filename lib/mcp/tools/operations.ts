@@ -891,15 +891,17 @@ export function registerOperationsTools(server: McpServer) {
       delivery_id: z.string().uuid().describe("Service delivery UUID"),
       target_stage: z.string().optional().describe("Specific stage name to advance to (skips intermediate). If omitted, advances to next stage."),
       skip_tasks: z.boolean().optional().default(false).describe("Skip auto-task creation (default: false)"),
+      skip_notify: z.boolean().optional().default(false).describe("Suppress client-facing notifications (portal notification, push, email). Use for bulk reconcile/backfill so correcting many SDs does not spam clients (default: false)."),
       notes: z.string().optional().describe("Notes about why this stage was advanced"),
     },
-    async ({ delivery_id, target_stage, skip_tasks, notes }) => {
+    async ({ delivery_id, target_stage, skip_tasks, skip_notify, notes }) => {
       try {
         const { advanceServiceDelivery } = await import("@/lib/service-delivery")
         const result = await advanceServiceDelivery({
           delivery_id,
           target_stage,
           skip_tasks,
+          skip_notify,
           notes,
           actor: "mcp",
         })

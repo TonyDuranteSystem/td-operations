@@ -33,6 +33,13 @@ export interface AdvanceStageParams {
   delivery_id: string
   target_stage?: string
   skip_tasks?: boolean
+  /**
+   * Suppress all CLIENT-FACING notifications for this advance (portal
+   * notification, web-push, and the milestone email). Used by bulk
+   * reconciliation/backfills so correcting many SDs at once does not spam
+   * clients. Does NOT affect stage_history / action_log / tax_returns sync.
+   */
+  skip_notify?: boolean
   notes?: string
   actor?: string // "crm-tracker" | "mcp" | etc.
 }
@@ -57,7 +64,7 @@ export interface AdvanceStageResult {
 export async function advanceServiceDelivery(
   params: AdvanceStageParams,
 ): Promise<AdvanceStageResult> {
-  const { delivery_id, target_stage, skip_tasks = false, notes, actor = "system" } = params
+  const { delivery_id, target_stage, skip_tasks = false, skip_notify = false, notes, actor = "system" } = params
 
   // 1. Get current delivery
   const { data: delivery, error: dErr } = await supabaseAdmin
@@ -197,8 +204,8 @@ export async function advanceServiceDelivery(
 
   // 8. Portal notification for client. Accept either account-scoped SDs or
   // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
-  // the client too.
-  if (delivery.account_id || delivery.contact_id) {
+  // the client too. Suppressed when skip_notify (bulk reconcile/backfill).
+  if (!skip_notify && (delivery.account_id || delivery.contact_id)) {
     try {
       const { createPortalNotification } = await import("@/lib/portal/notifications")
       const title = isCompleted
@@ -225,7 +232,8 @@ export async function advanceServiceDelivery(
   // Tagged with sd-advance-<delivery_id> so the OS stacks/replaces older pushes
   // for the same delivery instead of accumulating. Account-scoped SDs push to
   // the account; contact-only SDs (ITIN) push to the contact.
-  if (delivery.account_id || delivery.contact_id) {
+  // Suppressed when skip_notify (bulk reconcile/backfill).
+  if (!skip_notify && (delivery.account_id || delivery.contact_id)) {
     try {
       const { sendPushToAccount, sendPushToContact } = await import("@/lib/portal/web-push")
       const serviceLabel = delivery.service_name || delivery.service_type
@@ -258,7 +266,7 @@ export async function advanceServiceDelivery(
   // strip the field otherwise. The cast collapses to the canonical row
   // shape once production is migrated and types refresh.
   const targetStageWithNotify = targetStage as typeof targetStage & { notify_client_email?: boolean | null }
-  if (targetStageWithNotify.notify_client_email && (delivery.account_id || delivery.contact_id)) {
+  if (!skip_notify && targetStageWithNotify.notify_client_email && (delivery.account_id || delivery.contact_id)) {
     try {
       const { notifyClientOfStageAdvance } = await import("@/lib/portal/notifications")
       const result = await notifyClientOfStageAdvance({
