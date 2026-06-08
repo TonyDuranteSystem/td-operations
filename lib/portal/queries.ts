@@ -138,6 +138,14 @@ export interface InProgressFormation {
   label: string
   /** Portal stage used for tier-gating when this entity is selected. */
   stage: 'formation'
+  /**
+   * The lead this new-company formation is anchored on. The formation wizard
+   * scopes via ?lead=<leadId> (PR #75 / dev_task 21fd1f4a), so every CTA that
+   * opens this formation's wizard MUST carry it — otherwise a returning client
+   * who already owns an account falls through to that account's wizard. Null
+   * only when the offer/lead linkage can't be resolved.
+   */
+  leadId: string | null
 }
 
 /**
@@ -157,16 +165,67 @@ export interface InProgressFormation {
  * is not included — the formation SD is created at activation. That window is
  * short; the offer-based path can be added later if needed.
  */
+/**
+ * Pull the offer token out of a Company Formation SD's notes. activate-service
+ * writes `Auto-created from offer <token>` (the manual-backfill path appends
+ * extra text but keeps that prefix). Returns null when no token is present.
+ * Pure — unit-tested in tests/unit/in-progress-formation-lead.test.ts.
+ */
+export function extractOfferTokenFromNotes(notes: string | null | undefined): string | null {
+  if (typeof notes !== 'string') return null
+  const m = notes.match(/from offer ([\w-]+)/i)
+  return m ? m[1] : null
+}
+
 export async function getInProgressFormations(contactId: string): Promise<InProgressFormation[]> {
   const { data: sds } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_name')
+    .select('id, service_name, notes')
     .eq('contact_id', contactId)
     .eq('service_type', 'Company Formation')
     .is('account_id', null)
     .eq('status', 'active')
 
   if (!sds || sds.length === 0) return []
+
+  // Resolve the lead each formation is anchored on. Formation offers for this
+  // contact are linked either directly (offers.contact_id) or via the converted
+  // lead (offers.lead_id -> leads.converted_to_contact_id = contactId). The SD's
+  // notes carry "...from offer <token>" (written by activate-service), which
+  // disambiguates which offer -> lead maps to which SD when there are several
+  // in-progress formations. Single-formation contacts fall back to their one
+  // formation offer's lead even if the notes token can't be matched.
+  const { data: convertedLeads } = await supabaseAdmin
+    .from('leads')
+    .select('id')
+    .eq('converted_to_contact_id', contactId)
+  const convertedLeadIds = (convertedLeads ?? []).map(l => l.id)
+
+  const offerOr = [`contact_id.eq.${contactId}`]
+  if (convertedLeadIds.length > 0) offerOr.push(`lead_id.in.(${convertedLeadIds.join(',')})`)
+  const { data: formationOffers } = await supabaseAdmin
+    .from('offers')
+    .select('token, lead_id, created_at')
+    .eq('contract_type', 'formation')
+    .or(offerOr.join(','))
+    .order('created_at', { ascending: false })
+
+  const tokenToLead = new Map<string, string>()
+  for (const o of formationOffers ?? []) {
+    if (o.token && o.lead_id) tokenToLead.set(o.token, o.lead_id)
+  }
+  const soleFormationLeadId =
+    (formationOffers ?? []).filter(o => o.lead_id).length > 0
+      ? ((formationOffers ?? []).find(o => o.lead_id)?.lead_id ?? null)
+      : null
+
+  function resolveLeadId(notes: string | null): string | null {
+    const token = extractOfferTokenFromNotes(notes)
+    if (token && tokenToLead.has(token)) return tokenToLead.get(token) ?? null
+    // Fallback only when there is exactly one in-progress formation, so we
+    // never misattribute a lead to the wrong company.
+    return sds.length === 1 ? soleFormationLeadId : null
+  }
 
   // Chosen LLC name from the formation wizard, when submitted. Applied only when
   // there is exactly one in-progress formation (the name→SD mapping is otherwise
@@ -193,6 +252,7 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
       (sd.service_name ? sd.service_name.replace(/^Company Formation - /, '') : '') ||
       'New company (in formation)',
     stage: 'formation' as const,
+    leadId: resolveLeadId(sd.notes as string | null),
   }))
 }
 

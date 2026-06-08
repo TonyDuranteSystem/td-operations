@@ -27,6 +27,12 @@ interface FormationDashboardProps {
    * NEW LLC being formed AND an external LLC being wound down). Patrick
    * Covelli is the canonical case. */
   closureData?: { id: string } | null
+  /** Lead the in-progress formation is anchored on. When set, the "Complete
+   * Your Formation Details" CTA links to /portal/wizard?lead=<leadId>. Required
+   * for returning clients who already own an account — without it the wizard
+   * page falls through to that account's context and opens the wrong wizard
+   * (tax/onboarding) instead of this new company's formation. */
+  formationLeadId?: string | null
 }
 
 export function FormationDashboard({
@@ -38,8 +44,16 @@ export function FormationDashboard({
   oaData,
   leaseData,
   closureData,
+  formationLeadId,
 }: FormationDashboardProps) {
   const tr = locale === 'it' ? IT : EN
+  // New-company formations are lead-anchored: the wizard page only enters the
+  // formation scope via ?lead=. Carry it so returning clients (who already own
+  // an account) aren't routed to that account's wizard. Falls back to the bare
+  // path for the fresh-client case where no account exists to fall through to.
+  const wizardHref = formationLeadId
+    ? `/portal/wizard?lead=${formationLeadId}`
+    : '/portal/wizard'
 
   // Derive milestone completion
   const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed'
@@ -89,7 +103,7 @@ export function FormationDashboard({
       {/* Active CTA — prominent card for the next required action */}
       {needsWizard && (
         <Link
-          href="/portal/wizard"
+          href={wizardHref}
           className="flex items-center gap-4 p-5 bg-indigo-50 border-2 border-indigo-300 rounded-xl hover:bg-indigo-100 transition-colors group"
         >
           <div className="h-12 w-12 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0">
