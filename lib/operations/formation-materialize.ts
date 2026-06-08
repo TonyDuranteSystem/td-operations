@@ -765,10 +765,22 @@ export async function materializeFormationCompany(
     }
 
     // 11. Sync portal tier.
+    // allowDowngrade:true is REQUIRED here: accounts.portal_tier defaults to
+    // 'active' at insert, so a plain syncTier('formation') is treated as a
+    // downgrade and silently no-ops, leaving a just-formed company wrongly at
+    // 'active'. Forcing 'formation' is correct because materialization always
+    // runs BEFORE the EIN exists (the account is created here; EIN is recorded
+    // on it afterwards), and the "already_materialized" guard above prevents a
+    // re-run from ever touching an account that has since gone active. The
+    // contact-tier cascade inside syncTier still uses computeContactTier (MAX
+    // across the contact's accounts), so a returning client who already owns an
+    // active company keeps their 'active' contact tier — only the new company's
+    // account row becomes 'formation'.
     try {
       const tierResult = await syncTier({
         accountId,
         newTier: "formation",
+        allowDowngrade: true,
         reason: "company materialized from Articles of Organization",
         actor,
       })
