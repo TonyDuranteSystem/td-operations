@@ -1,5 +1,5 @@
 # Tax Returns & Filings
-_Last verified against code: 2026-06-07 — Claude (verified status pipeline against live tax_returns counts + pipeline_stages; flagged "Activated - Need Link" / "Link Sent - Awaiting Data" as legacy via tax-return-sd-bridge.ts + service-delivery.ts inverse map)_
+_Last verified against code: 2026-06-08 — Claude (Phase 1 "Card = Truth": bank-feed matcher now fires the installment handler; 2nd-installment SD advance is data-driven via pipeline_stages.auto_actions; data_received always stamps a date)_
 
 ## What it is
 Tracking and filing clients' US tax returns through tax season: collecting their data, sending the package to the accountant ("India" team), tracking the long status pipeline, handling extensions, and pausing/resuming work tied to installment payments. Return types: **1065** (MMLLC / partnership), **1120-S** (S-corp), **1040NR** (individual non-resident).
@@ -20,6 +20,14 @@ Separately, boolean **workflow-progress flags** track milestones: `paid`, `link_
 ## Tax pause + installment reactivation
 - During tax season, Tax Return service deliveries can be **parked `on_hold`**. The global master switch is `app_settings.tax_season_paused`.
 - `reactivateOnHoldTaxReturns()` (`lib/tax/reactivation.ts`) flips an individual `on_hold` Tax Return SD back to `active` **once the client's 2nd installment is paid** — run synchronously from `onSecondInstallmentPaid` (`lib/installment-handler.ts`) and as a daily safety-net cron (`/api/cron/tax-reactivation`).
+
+## 2nd-installment → wizard advance (Phase 1 "Card = Truth", 2026-06-08)
+The card now advances to the wizard stage on a **real, bank-confirmed** 2nd-installment payment — fixing the bug where wire-paying clients got stranded pre-wizard (the matcher marked the invoice Paid but nothing fired the stage advance).
+- **Trigger:** `matchAndReconcile` (`lib/bank-feed-matcher.ts`) fires `onInstallmentPaid` (`lib/operations/payment.ts`) when it confirms an **installment** invoice Paid — classified via `payment_category` (`isFirstInstallment`/`isSecondInstallment`, `lib/billing/payment-classification.ts`), guarded to `account_type='Client'`, fire-and-forget so a handler error never rolls back the match. (The June `annual-installments` cron + manual CRM mark-paid remain the other entry points.)
+- **Advance rule is DATA-DRIVEN — no hardcoded stage names.** `onSecondInstallmentPaid` calls `resolveSecondInstallmentAdvance('Tax Return')` (`lib/services/stages.ts`): the **target** stage is the one flagged `auto_actions: [{ "type": "second_installment_target" }]`, the **source** stages are every stage at `stage_order >= 1` below it (bundle stages — EXCLUDES the negative/zero standalone-intake stages "Company Data Pending"/"Paid - Awaiting Data"). Editable in **/config** (stage edit dialog → "2nd-installment wizard target" checkbox). Fails safe (skips) if no stage is flagged. Marker helpers: `lib/services/stage-actions.ts`.
+- **Idempotent:** the handler's lease task + "[READY] Send tax return to India" task now dedup by title, so a second run (matcher + cron/manual) never duplicates them.
+- **`data_received` always stamps a date.** The dashboard toggle (`app/(dashboard)/tax-returns/actions.ts`) now sets/clears `data_received_date` with the flag. A dateless `data_received=true` is the legacy bug that BLOCKS a client from submitting (`app/api/portal/wizard-submit/route.ts` requires `data_received=false`) and hides their banner — never create one. A backfill cleared the historical dateless flags (`scripts/backfill-tax-data-received-2025.sql`).
+- **Silent bulk advances:** `advanceServiceDelivery` (`lib/service-delivery.ts`) accepts `skip_notify` to suppress the portal notification + push for reconciliation/backfills so correcting many cards at once does not spam clients.
 
 ## Business rules
 - **Send-to-accountant is dry-run-first + approval-gated** (built into the tool's contract) — never blast documents without reviewing the package.
