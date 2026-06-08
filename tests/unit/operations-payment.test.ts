@@ -24,6 +24,9 @@ let paymentFixture: PaymentRow | null = null
 let accountFixture: { account_type: string | null } | null = null
 const paymentUpdateLog: Array<Record<string, unknown>> = []
 
+// Result of the invoice-number lookup in reconcilePaymentByInvoiceNumber (maybeSingle).
+let invoiceLookupFixture: { id: string; stripe_payment_id: string | null } | null = null
+
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
@@ -44,7 +47,9 @@ vi.mock("@/lib/supabase-admin", () => ({
             }
             return chain
           }),
+          limit: vi.fn(() => chain),
           single: vi.fn(() => Promise.resolve({ data: paymentFixture, error: null })),
+          maybeSingle: vi.fn(() => Promise.resolve({ data: invoiceLookupFixture, error: null })),
           then: (resolve: (v: { data: PaymentRow | null; error: null }) => void) =>
             resolve({ data: paymentFixture, error: null }),
         }
@@ -124,11 +129,12 @@ vi.mock("@/lib/invoice-auto-send", () => ({
   sendPaidReceipt: vi.fn(() => Promise.resolve()),
 }))
 
-import { confirmPayment } from "@/lib/operations/payment"
+import { confirmPayment, reconcilePaymentByInvoiceNumber } from "@/lib/operations/payment"
 
 beforeEach(() => {
   paymentFixture = null
   accountFixture = null
+  invoiceLookupFixture = null
   paymentUpdateLog.length = 0
   installmentCalls.length = 0
   syncCalls.length = 0
@@ -280,6 +286,57 @@ describe("confirmPayment", () => {
       trigger_installment_handler: false,
     })
     expect(result.installment_handler).toBeUndefined()
+    expect(installmentCalls).toHaveLength(0)
+  })
+})
+
+describe("reconcilePaymentByInvoiceNumber (channel-agnostic invoice reconcile)", () => {
+  it("reconciles an OPEN invoice → marks Paid, fires installment handler, stamps stripe id", async () => {
+    invoiceLookupFixture = { id: "p1", stripe_payment_id: null }
+    paymentFixture = {
+      id: "p1",
+      account_id: "a1",
+      installment: "Installment 2 (Jun)",
+      status: "Overdue",
+      portal_invoice_id: null,
+    }
+    accountFixture = { account_type: "Client" }
+
+    const r = await reconcilePaymentByInvoiceNumber("INV-002162", {
+      amountPaid: 1000,
+      paidDate: "2026-06-08",
+      stripePaymentId: "pi_123",
+    })
+
+    expect(r.reconciled).toBe(true)
+    expect(r.payment_id).toBe("p1")
+    expect(installmentCalls).toEqual([{ fn: "second", account_id: "a1", year: 2026 }])
+    expect(paymentUpdateLog.some(u => u.stripe_payment_id === "pi_123")).toBe(true)
+  })
+
+  it("does NOT reconcile an ALREADY-PAID invoice (lets a genuine 2nd payment record itself)", async () => {
+    invoiceLookupFixture = { id: "p1", stripe_payment_id: null }
+    paymentFixture = {
+      id: "p1",
+      account_id: "a1",
+      installment: "Installment 2 (Jun)",
+      status: "Paid",
+      portal_invoice_id: null,
+    }
+    accountFixture = { account_type: "Client" }
+
+    const r = await reconcilePaymentByInvoiceNumber("INV-002162", { amountPaid: 1000 })
+
+    expect(r.reconciled).toBe(false)
+    expect(r.outcome).toBe("already_paid")
+    expect(installmentCalls).toHaveLength(0)
+  })
+
+  it("returns reconciled=false when no invoice matches the number", async () => {
+    invoiceLookupFixture = null
+    const r = await reconcilePaymentByInvoiceNumber("INV-NOPE", { amountPaid: 1000 })
+    expect(r.reconciled).toBe(false)
+    expect(r.outcome).toBeUndefined()
     expect(installmentCalls).toHaveLength(0)
   })
 })

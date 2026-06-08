@@ -211,6 +211,58 @@ export async function confirmPayment(
   }
 }
 
+// ─── reconcilePaymentByInvoiceNumber ───────────────────
+
+/**
+ * Channel-agnostic reconciliation: given the (globally-unique) invoice number a
+ * payment was made against, mark THAT invoice Paid and fire the installment
+ * handler — the single step every payment channel should funnel through (Stripe
+ * webhook today; any future channel). Matches by invoice number, so it works
+ * even when a third party pays (we reconcile the invoice, not the payer name).
+ *
+ * Returns `reconciled: true` ONLY when this call flipped the invoice Paid
+ * (outcome "paid"). An already-paid invoice returns `reconciled: false` so the
+ * caller can still record a genuine second payment instead of silently dropping
+ * it. Returns `reconciled: false` (no outcome) when no invoice matches.
+ */
+export async function reconcilePaymentByInvoiceNumber(
+  invoiceNumber: string,
+  opts: { amountPaid?: number; paidDate?: string; stripePaymentId?: string } = {},
+): Promise<{ reconciled: boolean; outcome?: ConfirmPaymentResult["outcome"]; payment_id?: string }> {
+  const { data: existing } = await supabaseAdmin
+    .from("payments")
+    .select("id, stripe_payment_id")
+    .eq("invoice_number", invoiceNumber)
+    .limit(1)
+    .maybeSingle()
+
+  if (!existing?.id) return { reconciled: false }
+
+  const result = await confirmPayment({
+    payment_id: existing.id,
+    paid_date: opts.paidDate,
+    amount_paid: opts.amountPaid,
+    trigger_installment_handler: true,
+  })
+
+  if (result.outcome !== "paid") {
+    return { reconciled: false, outcome: result.outcome, payment_id: existing.id }
+  }
+
+  // Stamp the Stripe id for idempotency + audit, without clobbering an existing one.
+  if (opts.stripePaymentId && !existing.stripe_payment_id) {
+    await dbWrite(
+      supabaseAdmin
+        .from("payments")
+        .update({ stripe_payment_id: opts.stripePaymentId, payment_method: "Stripe" })
+        .eq("id", existing.id),
+      "payments.update",
+    )
+  }
+
+  return { reconciled: true, outcome: "paid", payment_id: existing.id }
+}
+
 // ─── reconcileInvoiceMirror (task 918fe55e) ───────────
 
 /**

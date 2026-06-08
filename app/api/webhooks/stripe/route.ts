@@ -213,7 +213,33 @@ async function handleCheckoutCompleted(session: StripeSession) {
     if (paRows?.length) activationPortalInvoiceId = paRows[0].portal_invoice_id
   }
 
-  // 4. Create payment record (skipped when offer-signed already created a draft)
+  // 3c. Reconcile to an EXISTING invoice when the portal Pay-link carried its
+  //     number (the common case: a 2nd-installment / annual invoice paid by
+  //     card). Mark THAT invoice Paid + fire the installment handler via the
+  //     shared confirmPayment path — the SAME engine wires use — instead of
+  //     inserting an orphan "annual_renewal" row that leaves the real invoice
+  //     Overdue. Bug fix: Stripe portal payments were creating duplicate paid
+  //     rows. Reconcile by the (globally-unique) invoice number, so it works
+  //     even when a third party pays (we match the invoice, not the payer name).
+  const metaInvoiceNumber = session.metadata?.invoice_number || null
+  let reconciledExistingInvoice = false
+  if (!activationPortalInvoiceId && metaInvoiceNumber) {
+    const { reconcilePaymentByInvoiceNumber } = await import("@/lib/operations/payment")
+    const r = await reconcilePaymentByInvoiceNumber(metaInvoiceNumber, {
+      amountPaid: total,
+      paidDate: new Date().toISOString().split("T")[0],
+      stripePaymentId: paymentIntentId || sessionId,
+    })
+    if (r.reconciled && r.payment_id) {
+      reconciledExistingInvoice = true
+      const { emitPaymentReceivedEvent } = await import("@/lib/portal/chat-events")
+      await emitPaymentReceivedEvent({ payment_id: r.payment_id, method_hint: "Stripe" })
+      console.warn(`[stripe-webhook] Reconciled Stripe payment to existing invoice ${metaInvoiceNumber} (no orphan row)`)
+    }
+  }
+
+  // 4. Create payment record (skipped when offer-signed created a draft, or
+  //    when 3c reconciled to an existing invoice).
   const productName = session.metadata?.contract_type
     ? `${session.metadata.contract_type === "formation" ? "LLC Formation" : session.metadata.contract_type} — ${clientName || email || "unknown"}`
     : `Stripe payment — ${clientName || email || "unknown"}`
@@ -234,7 +260,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId
 
-  if (!activationPortalInvoiceId) {
+  if (!activationPortalInvoiceId && !reconciledExistingInvoice) {
     // eslint-disable-next-line no-restricted-syntax -- Stripe-webhook payment record insert; tracked by dev_task 7ebb1e0c
     const { data: payRow, error: payErr } = await getSupabase().from("payments").insert(paymentRecord).select("id").single()
     if (payErr) {
@@ -245,7 +271,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
       const { emitPaymentReceivedEvent } = await import("@/lib/portal/chat-events")
       await emitPaymentReceivedEvent({ payment_id: payRow.id as string, method_hint: "Stripe" })
     }
-  } else {
+  } else if (activationPortalInvoiceId) {
     console.warn(`[stripe-webhook] Skipping raw payments insert — activation has draft invoice ${activationPortalInvoiceId}; auto-reconcile will flip it Paid`)
   }
 
