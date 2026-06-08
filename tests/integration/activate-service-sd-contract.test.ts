@@ -249,6 +249,28 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
     )
   })
 
+  it("route source creates a contact-scoped Company Formation SD when contractType === 'formation'", async () => {
+    // SOP v7.2 verbatim: formation SD is created AT PAYMENT (not at wizard
+    // submit). PR #96 restored this behaviour after a regression that had
+    // both formation and onboarding skipping SD creation at activation —
+    // which broke the in-portal switcher for returning active clients
+    // (their contact tier stays at 'active', so the tier-based
+    // wizard-visibility fallback cannot fire; the only path that surfaces
+    // the wizard is a contact-scoped Company Formation SD with
+    // account_id IS NULL via getInProgressFormations).
+    const { readFileSync } = await import("node:fs")
+    const { resolve } = await import("node:path")
+    const source = readFileSync(
+      resolve(process.cwd(), "lib/operations/activate-service.ts"),
+      "utf-8",
+    )
+    // The formation branch must call createSD with service_type='Company
+    // Formation' and account_id: null, before any onboarding/pipelines branch.
+    const formationCreatePattern =
+      /if \(contractType === "formation"\)\s*\{[\s\S]{0,2000}?createSD\(\{[\s\S]{0,400}?service_type:\s*"Company Formation"[\s\S]{0,400}?account_id:\s*null/
+    expect(source).toMatch(formationCreatePattern)
+  })
+
   it("route source skips SD-creation block when contractType === 'onboarding'", async () => {
     // SOP v7.2 verbatim rows:
     //   Formation vs Onboarding — "SD created": formation=At payment,
@@ -266,10 +288,11 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
       resolve(process.cwd(), "lib/operations/activate-service.ts"),
       "utf-8",
     )
-    // The SD block must check for formation/onboarding BEFORE the pipelines.length
-    // branch, and emit a "skipped" step for observability.
+    // The onboarding branch must emit a "skipped" step for observability.
+    // After PR #96 the formation and onboarding cases are split into
+    // separate branches; this regex matches the onboarding branch only.
     const onboardingSkipPattern =
-      /if \(contractType === "formation" \|\| contractType === "onboarding"\)\s*\{[\s\S]{0,400}?step:\s*"service_deliveries",[\s\S]{0,100}?status:\s*"skipped"/
+      /else if \(contractType === "onboarding"\)\s*\{[\s\S]{0,400}?step:\s*"service_deliveries",[\s\S]{0,100}?status:\s*"skipped"/
     expect(source).toMatch(onboardingSkipPattern)
   })
 })
