@@ -529,7 +529,7 @@ async function runWorkerLoop(
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 2048,
+        max_tokens: 16384,
         system: systemPrompt,
         tools: claudeTools,
         messages: currentMessages,
