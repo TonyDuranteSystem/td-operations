@@ -515,13 +515,62 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   //   - Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD
   //   - Phase 1 Auto-Chain step 11: wizard creates Tax Return SD when answer is "No"
   //   - Phase 3 steps 30-31: closing creates RA Renewal + Annual Report SDs
-  if (contractType === "formation" || contractType === "onboarding") {
+  if (contractType === "formation") {
+    // Contact-scoped Company Formation SD at activation. The portal switcher
+    // (getInProgressFormations) keys off this row to surface "New company (in
+    // formation)" — required for returning active clients whose contact tier
+    // stays at 'active' (the tier-based wizard fallback in wizard-visibility.ts
+    // cannot fire for them). formation-setup.ts dedupes at wizard submit.
+    if (contactId) {
+      const { data: existingByOffer } = await supabase
+        .from("service_deliveries")
+        .select("id")
+        .eq("service_type", "Company Formation")
+        .ilike("notes", `%${activation.offer_token}%`)
+
+      if ((existingByOffer?.length ?? 0) > 0) {
+        sdResults.push({ pipeline: "Company Formation", status: "existing", id: existingByOffer![0]?.id })
+        steps.push({
+          step: "service_deliveries",
+          status: "skipped",
+          detail: `formation — Company Formation SD already exists for offer ${activation.offer_token}: ${existingByOffer![0]?.id}`,
+        })
+      } else {
+        try {
+          const sd = await createSD({
+            service_type: "Company Formation",
+            contact_id: contactId,
+            account_id: null,
+            target_stage: "Data Collection",
+            target_stage_order: 1,
+            notes: `Auto-created from offer ${activation.offer_token}`,
+          })
+          sdResults.push({ pipeline: "Company Formation", status: "created", id: sd.id })
+          steps.push({
+            step: "service_deliveries",
+            status: "created",
+            detail: `formation — Company Formation SD created (contact-scoped, account_id=null): ${sd.id}`,
+          })
+        } catch (e) {
+          steps.push({
+            step: "service_deliveries",
+            status: "error",
+            detail: `formation — createSD failed: ${e instanceof Error ? e.message : String(e)}`,
+          })
+        }
+      }
+    } else {
+      steps.push({
+        step: "service_deliveries",
+        status: "skipped",
+        detail: "formation — no contactId available; cannot create contact-scoped Company Formation SD",
+      })
+    }
+  } else if (contractType === "onboarding") {
     steps.push({
       step: "service_deliveries",
       status: "skipped",
-      detail: contractType === "formation"
-        ? "formation — Company Formation SD created by formation-setup.ts at wizard submit; Banking Fintech SD created at EIN received"
-        : "onboarding — SDs created by wizard submit / closing per SOP v7.2",
+      detail: "onboarding — SDs created by wizard submit / closing per SOP v7.2",
     })
   } else if (pipelines.length > 0) {
     // Get first pipeline stage for each type (including auto_tasks for task creation)
