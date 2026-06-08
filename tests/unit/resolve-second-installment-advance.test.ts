@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 interface StageRow {
   stage_name: string
   stage_order: number
-  auto_actions: Record<string, unknown> | null
+  auto_actions: unknown
 }
 
 let stagesFixture: StageRow[] = []
@@ -35,13 +35,13 @@ import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 
 // Mirrors the real Tax Return pipeline ordering.
 const TAX_STAGES: StageRow[] = [
-  { stage_name: "Company Data Pending", stage_order: -1, auto_actions: null },
-  { stage_name: "Paid - Awaiting Data", stage_order: 0, auto_actions: null },
-  { stage_name: "1st Installment Paid", stage_order: 1, auto_actions: null },
-  { stage_name: "Extension Filed", stage_order: 2, auto_actions: null },
-  { stage_name: "Awaiting 2nd Payment", stage_order: 3, auto_actions: null },
-  { stage_name: "Wizard Available", stage_order: 4, auto_actions: { second_installment_target: true } },
-  { stage_name: "Data Received", stage_order: 5, auto_actions: null },
+  { stage_name: "Company Data Pending", stage_order: -1, auto_actions: [] },
+  { stage_name: "Paid - Awaiting Data", stage_order: 0, auto_actions: [] },
+  { stage_name: "1st Installment Paid", stage_order: 1, auto_actions: [] },
+  { stage_name: "Extension Filed", stage_order: 2, auto_actions: [] },
+  { stage_name: "Awaiting 2nd Payment", stage_order: 3, auto_actions: [] },
+  { stage_name: "Wizard Available", stage_order: 4, auto_actions: [{ type: "second_installment_target" }] },
+  { stage_name: "Data Received", stage_order: 5, auto_actions: [] },
 ]
 
 beforeEach(() => {

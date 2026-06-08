@@ -12,6 +12,14 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { Json } from "@/lib/database.types"
+import {
+  type StageAction,
+  SECOND_INSTALLMENT_TARGET_ACTION,
+  stageHasAction,
+} from "@/lib/services/stage-actions"
+
+export { SECOND_INSTALLMENT_TARGET_ACTION, stageHasAction } from "@/lib/services/stage-actions"
+export type { StageAction } from "@/lib/services/stage-actions"
 
 export interface StageRow {
   stage_order: number
@@ -21,8 +29,12 @@ export interface StageRow {
   auto_advance?: boolean | null
   notify_client_email?: boolean
   client_description?: string | null
-  /** Generic per-stage rule bag (e.g. { second_installment_target: true }). */
-  auto_actions?: Record<string, unknown> | null
+  /**
+   * Ordered list of per-stage action markers (jsonb array, mirrors auto_tasks).
+   * Each entry is an object with a `type`. E.g. the 2nd-installment advance
+   * target is marked with `{ type: "second_installment_target" }`.
+   */
+  auto_actions?: StageAction[] | null
 }
 
 export async function getStagesForService(serviceType: string): Promise<StageRow[]> {
@@ -47,7 +59,8 @@ export interface SecondInstallmentAdvanceRule {
  * Resolve, from `pipeline_stages` DATA (never hardcoded stage names), the rule
  * for advancing a service delivery to its wizard stage when the 2nd installment
  * is paid:
- *   - target  = the stage flagged `auto_actions.second_installment_target = true`
+ *   - target  = the stage whose `auto_actions` array contains
+ *               `{ type: "second_installment_target" }`
  *   - sources = every stage at `stage_order >= 1` (bundle entry onward,
  *               EXCLUDING the negative/zero standalone-intake stages) and below
  *               the target's order.
@@ -68,8 +81,8 @@ export async function resolveSecondInstallmentAdvance(
     .order("stage_order", { ascending: true })
   if (error) throw new Error(`resolveSecondInstallmentAdvance(${serviceType}): ${error.message}`)
 
-  const rows = (data ?? []) as Array<{ stage_name: string; stage_order: number; auto_actions: Record<string, unknown> | null }>
-  const target = rows.find(r => r.auto_actions?.second_installment_target === true)
+  const rows = (data ?? []) as Array<{ stage_name: string; stage_order: number; auto_actions: unknown }>
+  const target = rows.find(r => stageHasAction(r.auto_actions, SECOND_INSTALLMENT_TARGET_ACTION))
   if (!target) return null
 
   const source_stages = rows

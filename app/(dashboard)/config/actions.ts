@@ -45,7 +45,7 @@ export async function savePipelineStage(
     sla_days?: number | null
     auto_advance?: boolean | null
     requires_approval?: boolean | null
-    auto_actions?: Record<string, unknown> | null
+    auto_actions?: unknown[] | null
   },
 ): Promise<ActionResult> {
   return safeAction(async () => {

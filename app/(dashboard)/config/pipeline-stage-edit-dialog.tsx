@@ -4,6 +4,12 @@ import { useState, useTransition } from "react"
 import { X, Loader2, Save, Pencil } from "lucide-react"
 import { toast } from "sonner"
 import { savePipelineStage } from "./actions"
+import {
+  type StageAction,
+  SECOND_INSTALLMENT_TARGET_ACTION,
+  stageHasAction,
+  setStageAction,
+} from "@/lib/services/stage-actions"
 
 export interface PipelineStageRow {
   id: string
@@ -15,7 +21,7 @@ export interface PipelineStageRow {
   sla_days: number | null
   auto_advance: boolean | null
   requires_approval: boolean | null
-  auto_actions: Record<string, unknown> | null
+  auto_actions: StageAction[] | null
 }
 
 export function PipelineStageEditButton({ row }: { row: PipelineStageRow }) {
@@ -47,7 +53,7 @@ function PipelineStageEditDialog({
   const [autoAdvance, setAutoAdvance] = useState(row.auto_advance ?? false)
   const [requiresApproval, setRequiresApproval] = useState(row.requires_approval ?? false)
   const [secondInstallmentTarget, setSecondInstallmentTarget] = useState(
-    (row.auto_actions as { second_installment_target?: boolean } | null)?.second_installment_target === true,
+    stageHasAction(row.auto_actions, SECOND_INSTALLMENT_TARGET_ACTION),
   )
   const [isPending, startTransition] = useTransition()
 
@@ -55,11 +61,12 @@ function PipelineStageEditDialog({
     e.preventDefault()
     startTransition(async () => {
       const slaNum = slaDays.trim() ? parseInt(slaDays, 10) : null
-      // Preserve any other keys already in auto_actions; only flip our marker.
-      const nextAutoActions = {
-        ...(row.auto_actions ?? {}),
-        second_installment_target: secondInstallmentTarget,
-      }
+      // Preserve any other action entries; only add/remove our marker.
+      const nextAutoActions = setStageAction(
+        row.auto_actions,
+        SECOND_INSTALLMENT_TARGET_ACTION,
+        secondInstallmentTarget,
+      )
       const result = await savePipelineStage(row.id, {
         stage_name: stageName.trim(),
         stage_description: stageDescription.trim() || null,
