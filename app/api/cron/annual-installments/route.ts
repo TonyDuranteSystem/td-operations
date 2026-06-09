@@ -27,7 +27,7 @@
  *
  * On payment detection (via check-wire-payments cron or Whop webhook):
  * - 1st installment paid -> create 4 recurring SDs (CMRA, RA, AR, Tax Return)
- * - 2nd installment paid -> lift tax return gate (ready to send to India)
+ * - 2nd installment paid -> lift tax return gate (ready to send to accountant)
  *
  * Schedule: 1st of every month via Vercel Cron
  */

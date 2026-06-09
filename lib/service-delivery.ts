@@ -305,7 +305,7 @@ export async function advanceServiceDelivery(
           "Extension Requested": "Extension Requested",
           "Extension Filed": "Extension Filed",
           "Data Received": "Data Received",
-          "Sent to be filed": "Sent to India",
+          "Sent to be filed": "Sent to Accountant",
           "TR Completed": "TR Completed - Awaiting Signature",
           "TR Filed": "TR Filed",
         }
@@ -322,9 +322,9 @@ export async function advanceServiceDelivery(
             trUpdates.data_received = true
             trUpdates.data_received_date = new Date().toISOString().slice(0, 10)
           } else if (targetStage.stage_name === "Sent to be filed") {
-            trUpdates.sent_to_india = true
-            trUpdates.sent_to_india_date = new Date().toISOString().slice(0, 10)
-            trUpdates.india_status = "Sent - Pending"
+            trUpdates.sent_to_accountant = true
+            trUpdates.sent_to_accountant_date = new Date().toISOString().slice(0, 10)
+            trUpdates.accountant_status = "Sent - Pending"
           }
 
           await dbWriteSafe(

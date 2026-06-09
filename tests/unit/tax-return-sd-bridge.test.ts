@@ -105,7 +105,8 @@ describe("mapTaxReturnStatusToSDStage", () => {
     ["Wizard Available", "Wizard Available", 4],
     ["Link Sent - Awaiting Data", "Wizard Available", 4],
     ["Data Received", "Data Received", 5],
-    ["Sent to India", "Preparation", 6],
+    ["Sent to Accountant", "Preparation", 6],
+    ["Sent to India", "Preparation", 6], // legacy label kept mapped defensively (rename 2026-06-09)
     ["TR Completed - Awaiting Signature", "TR Completed", 7],
     ["TR Filed", "TR Filed", 8],
   ])("maps %s to %s (order %d)", (status, stageName, stageOrder) => {

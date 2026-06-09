@@ -6,8 +6,8 @@ interface TaxBannerProps {
   locale: 'en' | 'it'
   /** Whether the client's data has been received (wizard submitted + job processed) */
   dataReceived?: boolean
-  /** Whether the return has been sent to India for processing (editing locked) */
-  sentToIndia?: boolean
+  /** Whether the return has been sent to the accountant for processing (editing locked) */
+  sentToAccountant?: boolean
 }
 
 /**
@@ -15,14 +15,14 @@ interface TaxBannerProps {
  *
  * Three variants:
  * - State 1 (amber): data_received=false — client needs to complete the form
- * - State 2 (blue + Edit): data_received=true, sent_to_india=false — under review, edits still allowed
- * - State 3 (blue, no Edit): sent_to_india=true — processing in progress, edits locked
+ * - State 2 (blue + Edit): data_received=true, sent_to_accountant=false — under review, edits still allowed
+ * - State 3 (blue, no Edit): sent_to_accountant=true — processing in progress, edits locked
  */
-export function TaxBanner({ taxYear, returnType, locale, dataReceived = false, sentToIndia = false }: TaxBannerProps) {
+export function TaxBanner({ taxYear, returnType, locale, dataReceived = false, sentToAccountant = false }: TaxBannerProps) {
   const returnLabel = returnType || 'Tax Return'
 
-  // State 3: sent to India — in progress, no edit
-  if (sentToIndia) {
+  // State 3: sent to the accountant — in progress, no edit (client copy stays neutral: "being processed")
+  if (sentToAccountant) {
     const title = locale === 'it'
       ? `In elaborazione: ${returnLabel} ${taxYear}`
       : `In progress: ${returnLabel} ${taxYear}`

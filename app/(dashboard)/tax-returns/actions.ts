@@ -6,7 +6,7 @@ import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-acti
 import type { DryRunResult } from '@/lib/operations/destructive'
 import { syncTaxReturnToSD } from '@/lib/operations/tax-return-sd-bridge'
 
-const TOGGLE_ALLOWLIST = ['paid', 'data_received', 'sent_to_india', 'extension_filed'] as const
+const TOGGLE_ALLOWLIST = ['paid', 'data_received', 'sent_to_accountant', 'extension_filed'] as const
 type ToggleField = (typeof TOGGLE_ALLOWLIST)[number]
 
 export async function updateTaxReturnStatus(
@@ -115,7 +115,7 @@ export async function deleteTaxReturnPreview(
     const supabase = createClient()
     const { data: tr } = await supabase
       .from('tax_returns')
-      .select('id, company_name, client_name, return_type, tax_year, status, deadline, paid, data_received, sent_to_india, extension_filed')
+      .select('id, company_name, client_name, return_type, tax_year, status, deadline, paid, data_received, sent_to_accountant, extension_filed')
       .eq('id', id)
       .maybeSingle()
     if (!tr) return { success: false, error: 'Tax return not found' }
@@ -135,7 +135,7 @@ export async function deleteTaxReturnPreview(
               tr.deadline ? `deadline ${tr.deadline}` : '',
               tr.paid ? 'paid' : 'unpaid',
               tr.data_received ? 'data received' : 'no data',
-              tr.sent_to_india ? 'sent to india' : '',
+              tr.sent_to_accountant ? 'sent to accountant' : '',
               tr.extension_filed ? 'extension filed' : '',
             ].filter(Boolean) as string[],
           },

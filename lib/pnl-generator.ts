@@ -391,7 +391,7 @@ export async function generatePnlExcel(
 }
 
 /**
- * Generate CSV versions of P&L + Balance Sheet for India team.
+ * Generate CSV versions of P&L + Balance Sheet for the accountant.
  * Returns two CSV strings: pnl and balance_sheet.
  * All amounts in USD (converted from original currency using IRS rate).
  */
@@ -530,7 +530,7 @@ export async function generatePnlCsv(
     `"Total Equity","${csvHasPrior ? csvPriorTotalAssets.toFixed(2) : "N/A"}","${csvHasPrior ? toCsvPriorUSD(csvPriorTotalAssets).toFixed(2) : "N/A"}","${csvTotalAssets.toFixed(2)}","${toUSD(csvTotalAssets, primaryCurrency).toFixed(2)}"`,
   )
 
-  // ── Transactions CSV (all transactions for India team) ──
+  // ── Transactions CSV (all transactions for the accountant) ──
   const txLines = [
     `"Date","Description","Counterparty","Category","Subcategory","${primaryCurrency}","USD","Related Party","Reference"`,
   ]

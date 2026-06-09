@@ -714,7 +714,7 @@ export default async function PortalDashboardPage() {
             returnType={tr.return_type}
             locale={locale}
             dataReceived={tr.data_received ?? false}
-            sentToIndia={tr.sent_to_india ?? false}
+            sentToAccountant={tr.sent_to_accountant ?? false}
           />
         )
       })}

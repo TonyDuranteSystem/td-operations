@@ -853,7 +853,7 @@ export async function getPortalTaxReturns(accountId: string) {
   const [taxRes, sdRes] = await Promise.all([
     supabaseAdmin
       .from('tax_returns')
-      .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, extension_submission_id, data_received, sent_to_india')
+      .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, extension_submission_id, data_received, sent_to_accountant')
       .eq('company_name', account.company_name)
       .order('tax_year', { ascending: false })
       .limit(5),
@@ -1023,7 +1023,7 @@ export async function getPortalActionItems(
           .select('id, tax_year, return_type, created_at, status')
           .eq('company_name', acctForTax.company_name)
           .eq('data_received', false)
-          .not('status', 'in', '("TR Filed","Data Received","Sent to India","Payment Pending")')
+          .not('status', 'in', '("TR Filed","Data Received","Sent to Accountant","Sent to India","Payment Pending")')
           .limit(5)
       : Promise.resolve({ data: [] }),
 

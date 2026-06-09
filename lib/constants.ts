@@ -122,7 +122,7 @@ export const TAX_RETURN_TYPE = ['SMLLC', 'MMLLC', 'Corp', 'LSE'] as const
 
 export const TAX_RETURN_STATUS = [
   'Payment Pending', 'Link Sent - Awaiting Data', 'Data Received',
-  'Sent to India', 'Extension Filed', 'TR Completed - Awaiting Signature',
+  'Sent to Accountant', 'Extension Filed', 'TR Completed - Awaiting Signature',
   'TR Filed', 'Paid - Not Started', 'Activated - Need Link', 'Not Invoiced',
   'Extension Requested', 'Wizard Available',
 ] as const

@@ -109,6 +109,9 @@ export const TAX_RETURN_STATUS_VALUES = [
   "Payment Pending",
   "Link Sent - Awaiting Data",
   "Data Received",
+  "Sent to Accountant",
+  // Legacy label — still a valid tax_return_status enum value (renamed to "Sent to
+  // Accountant" 2026-06-09, old value not dropped). Kept so normalization accepts it.
   "Sent to India",
   "Extension Filed",
   "TR Completed - Awaiting Signature",

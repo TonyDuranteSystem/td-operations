@@ -275,9 +275,9 @@ IMPORTANT: When creating a referral, always set referrer_type (client or partner
 IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT crm_search_deals.
 
 ### Tax Returns (7 tools: tax_*)
-- tax_search: Search by year, status, type, account. Shows workflow progress (✅ Paid → Link → Data → India → Filed).
+- tax_search: Search by year, status, type, account. Shows workflow progress (✅ Paid → Link → Data → Accountant → Filed).
 - tax_tracker: 📊 VISUAL DASHBOARD — color-coded progress bars, status counts by return type, overdue alerts. Use for daily briefings.
-- tax_update: Update status, dates, india_status.
+- tax_update: Update status, dates, accountant_status.
 - tax_form_create: Create a data collection form for a client. Pre-fills from CRM data. Returns URL to send.
   Workflow: tax_form_create → email client the URL → client fills form → tax_form_review → apply_changes.
   Entity types: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120).

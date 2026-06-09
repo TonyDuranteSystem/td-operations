@@ -369,14 +369,14 @@ export default async function WizardPage({
     }
   }
 
-  // For submitted tax wizards: lock only when sent_to_india=true (processing started)
+  // For submitted tax wizards: lock only when sent_to_accountant=true (processing started)
   let isLocked = false
   if (wizardSubmitStatus === 'submitted' && wizardType === 'tax' && accountId) {
     const { data: sentTr } = await supabaseAdmin
       .from('tax_returns')
       .select('id')
       .eq('account_id', accountId)
-      .eq('sent_to_india', true)
+      .eq('sent_to_accountant', true)
       .limit(1)
       .maybeSingle()
     isLocked = !!sentTr

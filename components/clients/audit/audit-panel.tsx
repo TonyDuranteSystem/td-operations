@@ -81,8 +81,8 @@ type TaxReturnRow = {
   extension_deadline: string | null
   deadline: string
   paid: boolean | null
-  sent_to_india: boolean | null
-  india_status: string | null
+  sent_to_accountant: boolean | null
+  accountant_status: string | null
   notes: string | null
   link_sent: boolean | null
 }
@@ -157,7 +157,7 @@ const TAX_STATUSES = [
   'Payment Pending',
   'Link Sent - Awaiting Data',
   'Data Received',
-  'Sent to India',
+  'Sent to Accountant',
   'Extension Filed',
   'TR Completed - Awaiting Signature',
   'TR Filed',
@@ -2285,7 +2285,7 @@ export function AuditPanel({
                     </div>
                     <div className="flex gap-4 text-xs text-zinc-500">
                       <span>Paid: {tr.paid ? <span className="text-emerald-600">✓</span> : '—'}</span>
-                      <span>India: {tr.india_status ?? '—'}</span>
+                      <span>Accountant: {tr.accountant_status ?? '—'}</span>
                       <span>Extension: {tr.extension_filed ? `Filed → ${fmt(tr.extension_deadline)}` : '—'}</span>
                       <span>Link sent: {tr.link_sent ? '✓' : '—'}</span>
                       <span>Deadline: {fmt(tr.deadline)}</span>

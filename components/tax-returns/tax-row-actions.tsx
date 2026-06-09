@@ -3,7 +3,7 @@
 /**
  * P3.9 — row-level action menu for tax return cards on /tax-returns.
  *
- * TaxCard already exposes click-to-edit + paid/data/india toggle chips.
+ * TaxCard already exposes click-to-edit + paid/data/accountant toggle chips.
  * This menu adds:
  *   • Set status to any tax_return_status value (11 options)
  *   • Delete (with P3.7 preview, blocked on "TR Filed")
@@ -37,7 +37,7 @@ const TAX_STATUSES = [
   'Link Sent - Awaiting Data',
   'Wizard Available',
   'Data Received',
-  'Sent to India',
+  'Sent to Accountant',
   'Extension Requested',
   'Extension Filed',
   'TR Completed - Awaiting Signature',
@@ -52,7 +52,7 @@ const STATUS_DOT: Record<string, string> = {
   'Link Sent - Awaiting Data': 'text-blue-500',
   'Wizard Available': 'text-yellow-500',
   'Data Received': 'text-indigo-500',
-  'Sent to India': 'text-violet-500',
+  'Sent to Accountant': 'text-violet-500',
   'Extension Requested': 'text-orange-400',
   'Extension Filed': 'text-orange-500',
   'TR Completed - Awaiting Signature': 'text-emerald-400',

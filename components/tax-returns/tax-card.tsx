@@ -21,7 +21,7 @@ const STATUS_SHORT: Record<string, string> = {
   'Link Sent - Awaiting Data': 'Awaiting Data',
   'Wizard Available': 'Wizard Ready',
   'Data Received': 'Data OK',
-  'Sent to India': 'India',
+  'Sent to Accountant': 'Accountant',
   'Extension Filed': 'Extension',
   'TR Completed - Awaiting Signature': 'Signature',
   'TR Filed': 'Completed',
@@ -148,9 +148,9 @@ export function TaxCard({
           disabled={isPending}
         />
         <ToggleChip
-          label="India"
-          checked={tr.sent_to_india ?? false}
-          onToggle={() => handleToggle('sent_to_india', tr.sent_to_india)}
+          label="Accountant"
+          checked={tr.sent_to_accountant ?? false}
+          onToggle={() => handleToggle('sent_to_accountant', tr.sent_to_accountant)}
           disabled={isPending}
         />
         <div className="ml-auto" onClick={(e) => e.stopPropagation()}>

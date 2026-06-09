@@ -17,8 +17,8 @@
  *
  *   Pre-payment statuses ("Payment Pending", "Not Invoiced") map to the
  *   new "Company Data Pending" stage (stage_order=-1) so an SD exists from
- *   intake onward. "Sent to India" maps to "Preparation" because that's the
- *   stage the accountant works at while the return is at India Adas.
+ *   intake onward. "Sent to Accountant" maps to "Preparation" because that's the
+ *   stage the accountant works at while the return is with the accountant.
  *
  * The inverse map (SD stage → TR status) lives in
  * `lib/service-delivery.ts::advanceServiceDelivery` step 9. When the bridge
@@ -53,6 +53,8 @@ const TAX_RETURN_STATUS_TO_SD_STAGE: Record<string, TaxReturnSDStage> = {
   "Wizard Available":                   { stage_name: "Wizard Available",      stage_order: 4  },
   "Link Sent - Awaiting Data":          { stage_name: "Wizard Available",      stage_order: 4  },
   "Data Received":                      { stage_name: "Data Received",         stage_order: 5  },
+  "Sent to Accountant":                 { stage_name: "Preparation",           stage_order: 6  },
+  // Legacy label (renamed 2026-06-09) — kept mapped defensively for any leftover/rollback row.
   "Sent to India":                      { stage_name: "Preparation",           stage_order: 6  },
   "TR Completed - Awaiting Signature":  { stage_name: "TR Completed",          stage_order: 7  },
   "TR Filed":                           { stage_name: "TR Filed",              stage_order: 8  },

@@ -111,7 +111,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       properties: {
         company_name: { type: 'string', description: 'Company name (partial match)' },
         tax_year: { type: 'number', description: 'Tax year (e.g. 2025)' },
-        status: { type: 'string', description: 'Filter (case-insensitive): Payment Pending, Link Sent - Awaiting Data, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Paid - Not Started, Activated - Need Link, Not Invoiced, Extension Requested, 1st Installment Paid, 2nd Installment Paid, Wizard Available' },
+        status: { type: 'string', description: 'Filter (case-insensitive): Payment Pending, Link Sent - Awaiting Data, Data Received, Sent to Accountant, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Paid - Not Started, Activated - Need Link, Not Invoiced, Extension Requested, 1st Installment Paid, 2nd Installment Paid, Wizard Available' },
         limit: { type: 'number', description: 'Max results (default 20)' },
       },
     },

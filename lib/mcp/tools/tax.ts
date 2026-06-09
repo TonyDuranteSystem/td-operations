@@ -19,10 +19,10 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_search",
-    "Search tax returns by year, status, return type, account, or special case flag. Returns company name, return type (1065/1120-S/1040NR), status, deadline, and workflow progress (paid/link_sent/data_received/sent_to_india/extension/india_status). Use tax_tracker for the visual dashboard overview.",
+    "Search tax returns by year, status, return type, account, or special case flag. Returns company name, return type (1065/1120-S/1040NR), status, deadline, and workflow progress (paid/link_sent/data_received/sent_to_accountant/extension/accountant_status). Use tax_tracker for the visual dashboard overview.",
     {
       tax_year: z.number().optional().describe("Tax year (e.g., 2025)"),
-      status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Wizard Available, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
+      status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Wizard Available, Data Received, Sent to Accountant, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
       return_type: z.string().optional().describe("Return type: 1065, 1120-S, 1040NR"),
       account_id: z.string().uuid().optional().describe("Filter by account UUID"),
       contact_id: z.string().uuid().optional().describe("Filter by contact UUID (for individual tax returns without account)"),
@@ -68,7 +68,7 @@ export function registerTaxTools(server: McpServer) {
           "Link Sent - Awaiting Data": "🟡",
           "Wizard Available": "🟡",
           "Data Received": "🟡",
-          "Sent to India": "🔵",
+          "Sent to Accountant": "🔵",
           "Extension Filed": "🔵",
           "TR Completed - Awaiting Signature": "🟣",
           "TR Filed": "🟢",
@@ -81,10 +81,10 @@ export function registerTaxTools(server: McpServer) {
           const deadline = tr.deadline || "—"
           const ext = tr.extension_filed ? ` → ext: ${tr.extension_deadline || "?"}` : ""
           const special = tr.special_case ? " ⚠️" : ""
-          const india = tr.india_status && tr.india_status !== "Not Sent" ? ` | India: ${tr.india_status}` : ""
+          const accountant = tr.accountant_status && tr.accountant_status !== "Not Sent" ? ` | Accountant: ${tr.accountant_status}` : ""
 
           lines.push(`${icon} ${tr.company_name}${special}`)
-          lines.push(`   ${tr.return_type} ${tr.tax_year} | ${tr.status}${india}`)
+          lines.push(`   ${tr.return_type} ${tr.tax_year} | ${tr.status}${accountant}`)
           lines.push(`   Deadline: ${deadline}${ext}`)
 
           // Workflow progress
@@ -92,7 +92,7 @@ export function registerTaxTools(server: McpServer) {
             tr.paid ? "✅ Paid" : "⬜ Paid",
             tr.link_sent ? "✅ Link" : "⬜ Link",
             tr.data_received ? "✅ Data" : "⬜ Data",
-            tr.sent_to_india ? "✅ India" : "⬜ India",
+            tr.sent_to_accountant ? "✅ Accountant" : "⬜ Accountant",
             tr.extension_filed ? "✅ Ext" : "⬜ Ext",
             tr.status === "TR Filed" ? "✅ Filed" : "⬜ Filed",
           ]
@@ -152,7 +152,7 @@ export function registerTaxTools(server: McpServer) {
         // Status categories
         const isActionNeeded = (s: string) => ["Payment Pending", "Not Invoiced", "Paid - Not Started", "Activated - Need Link"].includes(s)
         const isWaiting = (s: string) => ["Link Sent - Awaiting Data", "Wizard Available"].includes(s)
-        const isInProgress = (s: string) => ["Data Received", "Sent to India"].includes(s)
+        const isInProgress = (s: string) => ["Data Received", "Sent to Accountant", "Sent to India"].includes(s)
         const isExtended = (s: string) => ["Extension Filed"].includes(s)
         const isNearDone = (s: string) => ["TR Completed - Awaiting Signature"].includes(s)
         const isDone = (s: string) => ["TR Filed"].includes(s)
@@ -221,13 +221,13 @@ export function registerTaxTools(server: McpServer) {
             for (const [s, c] of Object.entries(sub)) {
               lines.push(`     ${s} ${"·".repeat(Math.max(1, 35 - s.length))} ${c}`)
             }
-            // India status sub-breakdown
-            const indiaStatuses: Record<string, number> = {}
-            for (const r of inProgress.filter(r => r.india_status)) {
-              indiaStatuses[r.india_status] = (indiaStatuses[r.india_status] || 0) + 1
+            // Accountant status sub-breakdown
+            const accountantStatuses: Record<string, number> = {}
+            for (const r of inProgress.filter(r => r.accountant_status)) {
+              accountantStatuses[r.accountant_status] = (accountantStatuses[r.accountant_status] || 0) + 1
             }
-            if (Object.keys(indiaStatuses).length > 0) {
-              lines.push(`     India: ${Object.entries(indiaStatuses).map(([s, c]) => `${s}: ${c}`).join(", ")}`)
+            if (Object.keys(accountantStatuses).length > 0) {
+              lines.push(`     Accountant: ${Object.entries(accountantStatuses).map(([s, c]) => `${s}: ${c}`).join(", ")}`)
             }
           }
 
@@ -281,7 +281,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_update",
-    "Update a tax return's workflow fields — status, dates, india_status, extension, notes. Use tax_search first to find the ID. Common updates: mark as paid, set link_sent_date, update india_status, mark as filed.",
+    "Update a tax return's workflow fields — status, dates, accountant_status, extension, notes. Use tax_search first to find the ID. Common updates: mark as paid, set link_sent_date, update accountant_status, mark as filed.",
     {
       id: z.string().uuid().describe("Tax return UUID (from tax_search)"),
       updates: z.record(z.string(), z.any()).describe("Fields to update (e.g., {status: 'Data Received', data_received: true, data_received_date: '2026-03-09'})"),
@@ -705,7 +705,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_extension_list",
-    "Generate the list of ALL clients needing a tax extension for a given tax year. Returns CSV-ready data: company name, EIN, entity type, state, return type. Use this in February to prepare the bulk extension list for the India team. Optionally sends the list via email to a specified address.",
+    "Generate the list of ALL clients needing a tax extension for a given tax year. Returns CSV-ready data: company name, EIN, entity type, state, return type. Use this in February to prepare the bulk extension list for the accountant. Optionally sends the list via email to a specified address.",
     {
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
       send_to_email: z.string().optional().describe("If provided, sends the extension list to this email address"),
@@ -831,12 +831,12 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_extension_update",
-    "Bulk update extension filing status for tax returns. Use after receiving filing IDs from the India team. Accepts an array of {tax_return_id, submission_id} pairs and marks each as extension_filed=true with the confirmation ID.",
+    "Bulk update extension filing status for tax returns. Use after receiving filing IDs from the accountant. Accepts an array of {tax_return_id, submission_id} pairs and marks each as extension_filed=true with the confirmation ID.",
     {
       tax_year: z.number().describe("Tax year"),
       extensions: z.array(z.object({
         tax_return_id: z.string().uuid().describe("Tax return UUID"),
-        submission_id: z.string().describe("Filing/Submission ID from India team"),
+        submission_id: z.string().describe("Filing/Submission ID from the accountant"),
       })).describe("Array of {tax_return_id, submission_id} pairs"),
     },
     async ({ tax_year, extensions }) => {
@@ -937,8 +937,8 @@ export function registerTaxTools(server: McpServer) {
         if (!taxReturn) return { content: [{ type: "text" as const, text: `❌ No tax return found for ${account.company_name} (${tax_year})` }] }
 
         // ── 2. Idempotency check ──
-        if (taxReturn.sent_to_india && !force_resend) {
-          return { content: [{ type: "text" as const, text: `⚠️ Already sent to accountant on ${taxReturn.sent_to_india_date}. Use force_resend=true to re-send.` }] }
+        if (taxReturn.sent_to_accountant && !force_resend) {
+          return { content: [{ type: "text" as const, text: `⚠️ Already sent to accountant on ${taxReturn.sent_to_accountant_date}. Use force_resend=true to re-send.` }] }
         }
 
         // ── 3. Determine required docs by entity type ──
@@ -1157,10 +1157,10 @@ export function registerTaxTools(server: McpServer) {
         await supabaseAdmin
           .from("tax_returns")
           .update({
-            sent_to_india: true,
-            sent_to_india_date: today,
-            india_status: "Sent - Pending",
-            status: "Sent to India",
+            sent_to_accountant: true,
+            sent_to_accountant_date: today,
+            accountant_status: "Sent - Pending",
+            status: "Sent to Accountant",
             updated_at: new Date().toISOString(),
           })
           .eq("id", taxReturn.id)
@@ -1206,7 +1206,7 @@ export function registerTaxTools(server: McpServer) {
           ...foundFiles.map(f => `   • ${f.category}: ${f.name}`),
           "",
           `📝 CRM Updates:`,
-          `   • tax_returns: status → "Sent to India", india_status → "Sent - Pending"`,
+          `   • tax_returns: status → "Sent to Accountant", accountant_status → "Sent - Pending"`,
           sd ? `   • Service delivery: stage → "Sent to be filed"` : `   • No active service delivery found`,
           "",
           missing.length > 0 ? `⚠️ Missing (sent anyway): ${missing.join(", ")}` : "",

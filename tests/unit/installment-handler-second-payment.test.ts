@@ -5,8 +5,10 @@
  *   1.3 — the Tax Return SD advances to "Wizard Available" from ANY of the
  *         bundle pre-wizard stages (1st Installment Paid / Extension Filed /
  *         Awaiting 2nd Payment), not just "Awaiting 2nd Payment".
- *   1.1 — the "[READY] Send tax return to India" task is idempotent: a second
- *         run with the same account/year does not insert a duplicate.
+ *   1.1 — the "[READY] Send tax return to Accountant" task is idempotent: a second
+ *         run with the same account/year does not insert a duplicate. The dedup
+ *         lookup also matches the legacy "...to India" title during the rename
+ *         transition (two-phase Slice 0, 2026-06-09).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -46,7 +48,7 @@ vi.mock("@/lib/services/stages", () => ({
 // Fixtures the supabaseAdmin mock serves per table.
 let accountFixture: Record<string, unknown> | null = { id: "acct-1", company_name: "Test MMLLC LLC" }
 let taxReturnFixture: Record<string, unknown> | null = {
-  id: "tr-1", status: "Extension Filed", sent_to_india: false, data_received: true,
+  id: "tr-1", status: "Extension Filed", sent_to_accountant: false, data_received: true,
 }
 let sdFixture: Record<string, unknown> | null = { id: "sd-1", stage: "1st Installment Paid" }
 let existingTaskFixture: Record<string, unknown> | null = null
@@ -57,6 +59,7 @@ vi.mock("@/lib/supabase-admin", () => {
     const chain: Record<string, unknown> = {
       select: vi.fn(() => chain),
       eq: vi.fn(() => chain),
+      in: vi.fn(() => chain),
       order: vi.fn(() => chain),
       limit: vi.fn(() => chain),
       update: vi.fn(() => chain),
@@ -85,7 +88,7 @@ beforeEach(() => {
   taskInserts.length = 0
   advanceResult = { advanced: true, current_stage: "1st Installment Paid", result: { success: true } }
   accountFixture = { id: "acct-1", company_name: "Test MMLLC LLC" }
-  taxReturnFixture = { id: "tr-1", status: "Extension Filed", sent_to_india: false, data_received: true }
+  taxReturnFixture = { id: "tr-1", status: "Extension Filed", sent_to_accountant: false, data_received: true }
   sdFixture = { id: "sd-1", stage: "1st Installment Paid" }
   existingTaskFixture = null
   ruleFixture = {
@@ -109,20 +112,20 @@ describe("onSecondInstallmentPaid — stage gate (1.3, data-driven)", () => {
   })
 })
 
-describe("onSecondInstallmentPaid — India task idempotency (1.1)", () => {
-  it("inserts the India task when none exists and data is received", async () => {
+describe("onSecondInstallmentPaid — accountant task idempotency (1.1)", () => {
+  it("inserts the accountant task when none exists and data is received", async () => {
     existingTaskFixture = null
     await onSecondInstallmentPaid("acct-1", 2026)
-    const indiaInserts = taskInserts.filter(t =>
-      String(t.task_title).startsWith("[READY] Send tax return to India"))
-    expect(indiaInserts).toHaveLength(1)
+    const accountantInserts = taskInserts.filter(t =>
+      String(t.task_title).startsWith("[READY] Send tax return to Accountant"))
+    expect(accountantInserts).toHaveLength(1)
   })
 
-  it("does NOT insert a duplicate India task when one already exists", async () => {
+  it("does NOT insert a duplicate accountant task when one already exists", async () => {
     existingTaskFixture = { id: "task-existing" }
     await onSecondInstallmentPaid("acct-1", 2026)
-    const indiaInserts = taskInserts.filter(t =>
-      String(t.task_title).startsWith("[READY] Send tax return to India"))
-    expect(indiaInserts).toHaveLength(0)
+    const accountantInserts = taskInserts.filter(t =>
+      String(t.task_title).startsWith("[READY] Send tax return to Accountant"))
+    expect(accountantInserts).toHaveLength(0)
   })
 })

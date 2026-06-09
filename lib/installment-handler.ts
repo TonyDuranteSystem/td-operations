@@ -9,13 +9,13 @@
  * - Email team with confirmation
  *
  * 2nd Installment Paid:
- * - Lift tax return gate (ready to send to India)
+ * - Lift tax return gate (ready to send to accountant)
  * - Update tax_returns status
  * - Email team
  *
  * Rules (from MASTER RULES):
  * - C5: 1st installment triggers 4 recurring SDs
- * - C6: 2nd installment = gate before tax return -> India
+ * - C6: 2nd installment = gate before tax return -> accountant
  * - P1: No service until paid
  */
 
@@ -315,22 +315,22 @@ export async function onSecondInstallmentPaid(
   try {
     const { data: tr } = await supabaseAdmin
       .from("tax_returns")
-      .select("id, status, sent_to_india")
+      .select("id, status, sent_to_accountant")
       .eq("account_id", accountId)
       .eq("tax_year", taxYear)
       .maybeSingle()
 
     if (tr) {
-      if (tr.sent_to_india) {
-        steps.push({ step: "tax_gate", status: "skipped", detail: "Already sent to India" })
+      if (tr.sent_to_accountant) {
+        steps.push({ step: "tax_gate", status: "skipped", detail: "Already sent to accountant" })
       } else {
-        // Gate lifted — ready to send to India
+        // Gate lifted — ready to send to accountant
         await dbWrite(
           supabaseAdmin
             .from("tax_returns")
             .update({
               status: tr.status === "Data Received" ? "Data Received" : tr.status,
-              notes: `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for India.`,
+              notes: `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for accountant.`,
               updated_at: new Date().toISOString(),
             })
             .eq("id", tr.id),
@@ -429,7 +429,7 @@ export async function onSecondInstallmentPaid(
   // ─── 3. Email team ───
   try {
     const { gmailPost } = await import("@/lib/gmail")
-    const installment2Subject = `[PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for India`
+    const installment2Subject = `[PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for accountant`
     const encodedSubject2 = `=?utf-8?B?${Buffer.from(installment2Subject).toString("base64")}?=`
     const raw = Buffer.from(
       `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
@@ -440,7 +440,7 @@ export async function onSecondInstallmentPaid(
       `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +
       `<h2>[PAID] 2nd Installment ${year} -- ${account.company_name}</h2>` +
       `<p>2nd installment confirmed. Tax return gate lifted.</p>` +
-      `<p>If data is received and reviewed, this client's tax return can now be sent to India.</p>` +
+      `<p>If data is received and reviewed, this client's tax return can now be sent to the accountant.</p>` +
       `</div>`
     ).toString("base64url")
     await gmailPost("/messages/send", { raw })
@@ -461,23 +461,27 @@ export async function onSecondInstallmentPaid(
     if (tr?.data_received) {
       // Idempotent: year-scoped title, skip if it already exists so a second
       // handler run (matcher + cron/manual) does not duplicate the task.
-      const indiaTitle = `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`
-      const { data: existingIndiaTask } = await supabaseAdmin
+      // Renamed "India" -> "Accountant" 2026-06-09; the dedup match ALSO checks the
+      // legacy title so a task created before the rename is not duplicated during
+      // the transition window.
+      const accountantTitle = `[READY] Send tax return to Accountant -- ${account.company_name} (${taxYear})`
+      const legacyIndiaTitle = `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`
+      const { data: existingAccountantTask } = await supabaseAdmin
         .from("tasks")
         .select("id")
         .eq("account_id", accountId)
-        .eq("task_title", indiaTitle)
+        .in("task_title", [accountantTitle, legacyIndiaTitle])
         .limit(1)
         .maybeSingle()
 
-      if (existingIndiaTask) {
-        steps.push({ step: "india_task", status: "skipped", detail: "India task already exists for this account/year" })
+      if (existingAccountantTask) {
+        steps.push({ step: "india_task", status: "skipped", detail: "Accountant task already exists for this account/year" })
       } else {
         await dbWriteSafe(
           // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           supabaseAdmin.from("tasks").insert({
-            task_title: indiaTitle,
-            description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
+            task_title: accountantTitle,
+            description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to the accountant for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
             assigned_to: "Luca",
             priority: "High",
             category: "Tax" as never,
@@ -487,7 +491,7 @@ export async function onSecondInstallmentPaid(
           }),
           "tasks.insert"
         )
-        steps.push({ step: "india_task", status: "ok", detail: "Data ready + paid — task created to send to India" })
+        steps.push({ step: "india_task", status: "ok", detail: "Data ready + paid — task created to send to accountant" })
       }
     }
   } catch (e) {

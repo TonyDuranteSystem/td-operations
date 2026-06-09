@@ -244,7 +244,7 @@ export async function POST(req: NextRequest) {
             "Extension Requested": "Extension Requested",
             "Extension Filed": "Extension Filed",
             "Data Received": "Data Received",
-            "Sent to be filed": "Sent to India",
+            "Sent to be filed": "Sent to Accountant",
             "TR Completed": "TR Completed - Awaiting Signature",
             "TR Filed": "TR Filed",
           }

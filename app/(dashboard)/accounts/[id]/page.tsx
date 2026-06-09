@@ -77,7 +77,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Tax Returns (matched by company_name)
     supabase
       .from('tax_returns')
-      .select('id, company_name, client_name, return_type, tax_year, deadline, status, paid, data_received, sent_to_india, india_status, special_case, extension_filed, extension_deadline, notes, updated_at')
+      .select('id, company_name, client_name, return_type, tax_year, deadline, status, paid, data_received, sent_to_accountant, accountant_status, special_case, extension_filed, extension_deadline, notes, updated_at')
       .eq('company_name', account.company_name)
       .order('tax_year', { ascending: false }),
     // Documents

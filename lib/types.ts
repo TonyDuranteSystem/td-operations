@@ -64,8 +64,13 @@ export interface TaxReturn {
   status: string
   paid: boolean | null
   data_received: boolean | null
-  sent_to_india: boolean | null
-  india_status: string | null
+  // Phase 1 two-phase rename (2026-06-09): code now selects the new accountant fields.
+  // The legacy india fields are optional — they still exist in the DB but are no longer
+  // selected, and are dropped entirely in Phase 2.
+  sent_to_india?: boolean | null
+  india_status?: string | null
+  sent_to_accountant: boolean | null
+  accountant_status: string | null
   special_case: boolean | null
   extension_filed: boolean | null
   extension_deadline: string | null
