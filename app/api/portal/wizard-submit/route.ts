@@ -22,6 +22,8 @@ import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -58,6 +60,17 @@ export async function POST(req: NextRequest) {
   // ?lead= scope submitted their new company onto their EXISTING account —
   // the THW Global hijack (Adam Mihaly, 2026-05-20, dev_task 358e8cbe).
   const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
+
+  // ─── 0a. ISOLATION GUARD (default-deny) ───
+  // The logged-in user must be allowed to submit for this subject. Without this
+  // the route trusted the body's account_id / contact_id, so a member of one
+  // company could tamper account_id to another company they aren't linked to and
+  // submit wizard data onto it. Mirrors the access checks on the other portal
+  // routes (chat / payment-links / customers). dev_task b41cc66f.
+  const identity = await resolvePortalIdentity(user)
+  if (!canSubmitWizard(identity, account_id, contact_id ?? null)) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
 
   // ─── 0. SYNCHRONOUS VALIDATION ───
   // Structural fix: validate at the route boundary so the client sees field

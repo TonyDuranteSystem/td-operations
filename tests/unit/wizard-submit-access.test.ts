@@ -1,0 +1,61 @@
+import { describe, it, expect } from 'vitest'
+import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
+import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
+
+const contact = (contactId: string, accountIds: string[]): PortalIdentity => ({
+  kind: 'contact',
+  contactId,
+  accountIds,
+})
+const teammate = (accountId: string): PortalIdentity =>
+  ({ kind: 'teammate', accountId, teamMemberId: 'tm-1' } as PortalIdentity)
+const none: PortalIdentity = { kind: 'none' }
+
+describe('canSubmitWizard — contact', () => {
+  const id = contact('C1', ['ACC-X', 'ACC-Z'])
+
+  it('allows an account-scoped submit for a linked company', () => {
+    expect(canSubmitWizard(id, 'ACC-X', 'C1')).toBe(true)
+  })
+
+  it('BLOCKS submitting onto a company the contact is NOT linked to (the leak)', () => {
+    expect(canSubmitWizard(id, 'ACC-Y', 'C1')).toBe(false)
+  })
+
+  it('allows a formation/individual submit (no account) for the logged-in contact', () => {
+    // formation: accountIdForWizardSubmission already nulled the account
+    expect(canSubmitWizard(id, null, 'C1')).toBe(true)
+  })
+
+  it('BLOCKS submitting under a different contact_id', () => {
+    expect(canSubmitWizard(id, null, 'C2')).toBe(false)
+    expect(canSubmitWizard(id, 'ACC-X', 'C2')).toBe(false)
+  })
+
+  it('allows when neither account nor contact is targeted', () => {
+    expect(canSubmitWizard(id, null, null)).toBe(true)
+  })
+})
+
+describe('canSubmitWizard — teammate', () => {
+  const id = teammate('ACC-X')
+
+  it('allows a submit for the teammate’s own company', () => {
+    expect(canSubmitWizard(id, 'ACC-X', null)).toBe(true)
+  })
+
+  it('BLOCKS a submit for a different company', () => {
+    expect(canSubmitWizard(id, 'ACC-Y', null)).toBe(false)
+  })
+
+  it('allows when no account is targeted', () => {
+    expect(canSubmitWizard(id, null, null)).toBe(true)
+  })
+})
+
+describe('canSubmitWizard — none', () => {
+  it('denies when there is no resolvable portal identity', () => {
+    expect(canSubmitWizard(none, null, null)).toBe(false)
+    expect(canSubmitWizard(none, 'ACC-X', 'C1')).toBe(false)
+  })
+})
