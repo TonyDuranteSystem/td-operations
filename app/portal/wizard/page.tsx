@@ -20,6 +20,7 @@ import { getInProgressFormations } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 
@@ -369,17 +370,21 @@ export default async function WizardPage({
     }
   }
 
-  // For submitted tax wizards: lock only when sent_to_accountant=true (processing started)
+  // For submitted tax wizards: lock based on the REVIEW state (Slice 2), not the
+  // old sent_to_accountant flag. Editable while submitted / revision_requested /
+  // approved / reopened; LOCKED while staff are actively reviewing (under_review)
+  // or after the client has confirmed (confirmed).
   let isLocked = false
   if (wizardSubmitStatus === 'submitted' && wizardType === 'tax' && accountId) {
-    const { data: sentTr } = await supabaseAdmin
-      .from('tax_returns')
-      .select('id')
+    const { data: sub } = await supabaseAdmin
+      .from('tax_return_submissions')
+      .select('review_status')
       .eq('account_id', accountId)
-      .eq('sent_to_accountant', true)
+      .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    isLocked = !!sentTr
+    const rs = (sub?.review_status ?? null) as ReviewStatus | null
+    isLocked = rs !== null && !isClientEditable(rs)
   }
 
   // ── ITIN applicants (dev_task fcf5e254) ──

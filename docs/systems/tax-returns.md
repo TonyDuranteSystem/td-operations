@@ -1,5 +1,6 @@
 # Tax Returns & Filings
-_Last verified against code: 2026-06-09 — Claude (Slice 0 "Sent to India → Sent to Accountant" rename, Phase 1 of a two-phase rename: new `sent_to_accountant` / `accountant_status` / `sent_to_accountant_date` / `accountant_follow_up_count` columns + `accountant_status` enum + `Sent to Accountant` status label added ALONGSIDE the legacy `india_*` columns and `Sent to India` label; data copied; all code cut over to the new names. The legacy columns and the old enum label are NOT dropped yet — that is Phase 2. Migration is split in two files because Postgres forbids using a newly `ALTER TYPE ... ADD VALUE` label in the same transaction (SQLSTATE 55P04): `scripts/migrations/20260609-rename-sent-to-india.sql` (part 1: columns/enum/`ADD VALUE`/data copy) then `scripts/migrations/20260609-rename-sent-to-india-part2-status.sql` (part 2: the status `UPDATE`, run AFTER part 1 commits). Type bridge during the transition: `lib/database.types.augmented.ts`.)_
+_Last verified against code: 2026-06-09 — Claude (Slices 1–3: tax submission review workflow — `review_status` sub-state on `tax_return_submissions`, 6 new pipeline stages (Data Submitted 45, Under Review 46, Revision Requested 47, Approved 48, Confirmed 49, 2nd Installment Paid 35), gap-renumbered existing stages ×10, SD stays at "Data Submitted" through the whole review loop, only `confirmed` releases forward. Pure state machine in `lib/tax/review-status.ts`. Staff actions: `POST /api/crm/tax-review/action`. Client confirm: `POST /api/portal/tax-confirm` → `applyConfirmedTaxSubmission`. Portal banner (`components/portal/tax-banner.tsx`) now has 7 states driven by `review_status`; `getPortalTaxReturns` now joins the latest submission per account. Migrations: `20260609-2015-tax-review-slice1-columns.sql` + `20260609-2300-tax-pipeline-renumber-review-stages.sql`.)_
+_Slice 0: 2026-06-09 — Claude ("Sent to India → Sent to Accountant" rename, Phase 1: new `sent_to_accountant` / `accountant_status` / `sent_to_accountant_date` / `accountant_follow_up_count` columns + `accountant_status` enum + `Sent to Accountant` status label added ALONGSIDE the legacy `india_*` columns and `Sent to India` label; data copied; all code cut over to the new names. Legacy columns NOT dropped yet — Phase 2. Migration split in two files because of Postgres SQLSTATE 55P04. Type bridge: `lib/database.types.augmented.ts`.)_
 
 ## What it is
 Tracking and filing clients' US tax returns through tax season: collecting their data, sending the package to the accountant, tracking the long status pipeline, handling extensions, and pausing/resuming work tied to installment payments. Return types: **1065** (MMLLC / partnership), **1120-S** (S-corp), **1040NR** (individual non-resident). _(The accountant team was historically referred to in code/UI as "India"; renamed to "Accountant" 2026-06-09 — see header note.)_
@@ -11,6 +12,29 @@ A tax return moves through a status on `tax_returns.status`. The **current** flo
 > **Legacy statuses — still in the enum, NOT produced by the current flow:** `Activated - Need Link` and `Link Sent - Awaiting Data` are vestiges of the old *"email the client a data link, then wait for their data"* model that predates the installment + wizard redesign. The data link was replaced by the portal wizard, and the old "2nd Installment Paid" stage was renamed "Wizard Available". No tax return currently carries either status, and the pipeline stages that once produced them (`Payment Verified`, `Data Link Sent`) no longer exist. They remain valid enum values — an admin could still set one manually — so they are kept mapped defensively: `lib/operations/tax-return-sd-bridge.ts` aliases both to live SD stages, and the portal pause-banner keeps them in its pre-data-receipt set so a manually-set legacy row still pauses correctly during a tax-season pause. **Do not treat them as live pipeline steps.**
 
 Separately, boolean **workflow-progress flags** track milestones: `paid`, `link_sent`, `data_received`, `sent_to_accountant`, `extension`, `accountant_status`. _(Renamed from `sent_to_india` / `india_status` on 2026-06-09; the legacy columns still exist in the DB until Phase 2 but code no longer reads/writes them.)_
+
+## Tax submission review workflow (Slices 1–3, shipped 2026-06-09)
+
+The client portal wizard submit no longer auto-completes the return. Instead it parks the submission in a **staff review loop** tracked on `tax_return_submissions.review_status`:
+
+```
+null → submitted → under_review → approved → confirmed → (releases)
+                         ↓                      ↓
+                 revision_requested          reopened → submitted
+                         ↓
+                    resubmitted → under_review
+```
+
+- **Pure state machine:** `lib/tax/review-status.ts` — `canTransition`, `isClientEditable`, `advancesServiceDelivery`, `buildReviewHistoryEntry`. Only `confirmed` sets `advancesServiceDelivery=true`.
+- **SD stays at "Data Submitted" (stage 45)** through the whole review loop. Only the client's `Confirm` advances the SD to "Data Received" (50) via `lib/tax/apply-confirmed-submission.ts`.
+- **`review_history`** (JSONB) on `tax_return_submissions` keeps an immutable log: `{from, to, at, by, actor}` per transition.
+- **Staff actions:** `POST /api/crm/tax-review/action` — body `{submission_id, action, note?}`. Valid actions: `start_review`, `approve`, `request_changes` (note required), `reopen`. Each resolves the open What's New card so a re-submission raises a fresh one.
+- **Client confirm:** `POST /api/portal/tax-confirm` — only allowed when `review_status=approved`. On success: appends history entry, calls `applyConfirmedTaxSubmission`.
+- **Portal banner:** `components/portal/tax-banner.tsx` has 7 client-facing states keyed by `review_status` (null=amber action-required, submitted/resubmitted=blue+Edit, under_review=blue locked, revision_requested=amber+Edit, approved=green+Confirm+Edit, confirmed=blue locked, reopened=amber+Edit). Legacy path for pre-Slice-2 submissions uses `dataReceived`/`sentToAccountant` boolean fallback.
+- **New pipeline stages** (migration `20260609-2300-tax-pipeline-renumber-review-stages.sql`):
+  - Existing stages ×10 (stage_order -10…90 with gaps)
+  - New: `2nd Installment Paid (35)`, `Data Submitted (45)`, `Under Review (46)`, `Revision Requested (47)`, `Approved (48)`, `Confirmed (49)`
+- **`getPortalTaxReturns`** (`lib/portal/queries.ts`) now joins the latest submission per account and returns `review_status` + `submission_id` alongside the tax return row.
 
 ## The accountant hand-off
 - `tax_send_to_accountant` (`lib/mcp/tools/tax.ts`) gathers the document package from Drive `3.Tax/{year}/` — **Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior-year return, bank statements** — and sends one email with all attachments to the accountant (default `tax@adasglobus.com`), then updates the return's status (`status → "Sent to Accountant"`, `accountant_status → "Sent - Pending"`).

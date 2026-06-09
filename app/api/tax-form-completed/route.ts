@@ -31,6 +31,9 @@ import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
+import { emitActionNeeded } from "@/lib/notifications/act-event"
+import { emitClientChatEvent } from "@/lib/portal/chat-events"
+import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     const { data: sub, error: subErr } = await supabaseAdmin
       .from("tax_return_submissions")
-      .select("id, token, account_id, contact_id, tax_year, entity_type, status")
+      .select("id, token, account_id, contact_id, tax_year, entity_type, status, review_status")
       .eq("id", submission_id)
       .eq("token", token)
       .single()
@@ -347,45 +350,20 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
       }
     }
 
-    // ─── 4. UPDATE tax_returns STATUS ───
+    // ─── 4. (DEFERRED) tax_returns advance moved to client Confirm ───
+    // Slice 2 (review workflow): submitting no longer flips tax_returns to
+    // "Data Received". That happens only when the client confirms after staff
+    // review (review_status → confirmed) via the confirm route. The submission
+    // enters the review loop instead (review_status set in STEP 4C below).
     if (sub.account_id) {
-      try {
-        const { data: tr } = await supabaseAdmin
-          .from("tax_returns")
-          .select("id, status")
-          .eq("account_id", sub.account_id)
-          .eq("tax_year", sub.tax_year)
-          .maybeSingle()
-
-        if (tr) {
-          await dbWrite(
-            supabaseAdmin
-              .from("tax_returns")
-              .update({
-                data_received: true,
-                data_received_date: new Date().toISOString().split("T")[0],
-                status: "Data Received",
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", tr.id),
-            "tax_returns.update"
-          )
-          results.push({ step: "tax_return_status", status: "ok", detail: `tax_returns ${tr.id} -> Data Received` })
-        } else {
-          results.push({ step: "tax_return_status", status: "skipped", detail: "No tax_returns record found" })
-        }
-      } catch (e) {
-        results.push({ step: "tax_return_status", status: "error", detail: e instanceof Error ? e.message : String(e) })
-      }
+      results.push({ step: "tax_return_status", status: "skipped", detail: "Deferred to client confirm (review workflow)" })
     }
 
-    // ─── 4B. ADVANCE SD to "Data Received" ───
-    // Uses P1.6 operation layer (advanceStageIfAt). Gate matches legacy
-    // stages "Data Link Sent"/"Activated" that live on existing SD rows
-    // even though they aren't in the current Tax Return pipeline — the
-    // gate check is permissive (string match), the target validation is
-    // strict (must be a real pipeline_stages row). skip_tasks=true
-    // because tax_form review task is created manually in STEP 3 above.
+    // ─── 4B. MOVE SD → "Data Submitted" (review block, not Data Received) ───
+    // The SD parks at the single "Data Submitted" macro stage for the whole
+    // review; review_status tracks the sub-state; only the client's Confirm
+    // releases it forward. Gate stays permissive (legacy + current pre-review
+    // stages); strict target validation lives in advanceStageIfAt.
     if (sub.account_id) {
       try {
         const { data: sd } = await supabaseAdmin
@@ -400,21 +378,71 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
         if (sd) {
           const advanceResult = await advanceStageIfAt({
             delivery_id: sd.id,
-            if_current_stage: ["Data Link Sent", "Activated"],
-            target_stage: "Data Received",
+            if_current_stage: ["Data Link Sent", "Activated", "Wizard Available", "1st Installment Paid", "2nd Installment Paid"],
+            target_stage: "Data Submitted",
             actor: "tax-form-completed",
-            notes: `Tax form submitted by client (${sub.tax_year})`,
+            notes: `Tax form submitted by client (${sub.tax_year}) — entering review`,
             skip_tasks: true,
           })
           if (advanceResult.advanced) {
-            results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Received` })
-          } else if (advanceResult.current_stage && ["Data Link Sent", "Activated"].includes(advanceResult.current_stage)) {
-            results.push({ step: "sd_advance", status: "error", detail: advanceResult.result?.error || advanceResult.reason })
+            results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Submitted` })
+          } else if (advanceResult.current_stage && advanceResult.result?.error) {
+            results.push({ step: "sd_advance", status: "error", detail: advanceResult.result.error })
           }
-          // Otherwise skipped silently (gate not met) — matches prior behavior
+          // Otherwise skipped silently (gate not met)
         }
       } catch (e) {
         results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 4C. SET review_status + notify (Slice 2) ───
+    {
+      try {
+        const prev = sub.review_status ?? null
+        const nextStatus: ReviewStatus = prev === "revision_requested" ? "resubmitted" : "submitted"
+        const { data: curSub } = await supabaseAdmin
+          .from("tax_return_submissions")
+          .select("review_history")
+          .eq("id", submission_id)
+          .single()
+        const reviewHistory = Array.isArray(curSub?.review_history) ? curSub!.review_history : []
+        reviewHistory.push(
+          buildReviewHistoryEntry({
+            from: (prev as ReviewStatus | null),
+            to: nextStatus,
+            at: new Date().toISOString(),
+            by: sub.contact_id ? `client:${sub.contact_id}` : "tax-form",
+          }),
+        )
+        await supabaseAdmin
+          .from("tax_return_submissions")
+          .update({ review_status: nextStatus, review_history: reviewHistory, updated_at: new Date().toISOString() })
+          .eq("id", submission_id)
+        results.push({ step: "review_status", status: "ok", detail: `review_status -> ${nextStatus}` })
+      } catch (e) {
+        results.push({ step: "review_status", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+
+      if (sub.account_id) {
+        const card = await emitActionNeeded({
+          event: "tax_wizard_submitted",
+          account_id: sub.account_id,
+          contact_id: sub.contact_id,
+          source_ref: `tax_submission:${submission_id}`,
+        })
+        results.push({ step: "staff_card", status: card.created ? "ok" : "skipped", detail: card.reason ?? "What's New card created" })
+      }
+      if (sub.contact_id || sub.account_id) {
+        const chat = await emitClientChatEvent({
+          contact_id: sub.contact_id,
+          account_id: sub.account_id,
+          topic: "tax_review",
+          message: `We've received your tax information for ${sub.tax_year}. Our team will review it and let you know if anything needs changing.`,
+          source: { table: "tax_return_submissions", id: submission_id },
+          event_kind: "wizard_submitted",
+        })
+        results.push({ step: "client_notice", status: chat.emitted ? "ok" : "skipped", detail: chat.reason ?? "client chat event emitted" })
       }
     }
 

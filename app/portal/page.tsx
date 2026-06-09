@@ -673,7 +673,13 @@ export default async function PortalDashboardPage() {
           not UI rendering — otherwise One-Time standalone Tax Return
           clients (who are exempt from parking) would see a pause banner
           that doesn't apply to them, and their wizard would be unreachable. */}
-      {taxReturns.filter(tr => tr.status !== 'TR Filed' && !tr.data_received).slice(0, 1).map(tr => {
+      {taxReturns.filter(tr => {
+        // Show banner for any in-flight return. Terminal statuses need no banner.
+        // review_status drives the display; legacy data_received path is handled
+        // inside TaxBanner as a fallback for pre-Slice-2 submissions.
+        const TERMINAL = new Set(['TR Filed', 'TR Completed', 'Cancelled'])
+        return !TERMINAL.has(tr.status ?? '')
+      }).slice(0, 1).map(tr => {
         // Pause banner fires only when the SD is on_hold AND the tax_return
         // is at a pre-data-receipt status. Clients past "Data Received"
         // already submitted their data and are naturally gated by the 2nd
@@ -713,6 +719,8 @@ export default async function PortalDashboardPage() {
             taxYear={tr.tax_year}
             returnType={tr.return_type}
             locale={locale}
+            reviewStatus={(tr.review_status as import('@/lib/tax/review-status').ReviewStatus | null) ?? undefined}
+            submissionId={tr.submission_id ?? null}
             dataReceived={tr.data_received ?? false}
             sentToAccountant={tr.sent_to_accountant ?? false}
           />

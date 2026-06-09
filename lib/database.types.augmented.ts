@@ -28,6 +28,7 @@ type Gen = GeneratedDatabase["public"]
 type Tables = Gen["Tables"]
 type Enums = Gen["Enums"]
 type TaxReturns = Tables["tax_returns"]
+type TaxSubs = Tables["tax_return_submissions"]
 
 export type AccountantStatus = "Not Sent" | "Sent - Pending" | "In Progress" | "Completed" | "Filed"
 
@@ -41,9 +42,17 @@ type NewTaxCols = {
   accountant_follow_up_count: number | null
 }
 
+// Slice 1/2: review-workflow columns on tax_return_submissions (added by
+// 20260609-2015-tax-review-slice1-columns.sql, not yet in generated types).
+// review_history is jsonb (typed `unknown` here — code guards with Array.isArray).
+type NewSubsCols = {
+  review_status: string | null
+  review_history: unknown
+}
+
 export type Database = Omit<GeneratedDatabase, "public"> & {
   public: Omit<Gen, "Tables"> & {
-    Tables: Omit<Tables, "tax_returns"> & {
+    Tables: Omit<Tables, "tax_returns" | "tax_return_submissions"> & {
       tax_returns: Omit<TaxReturns, "Row" | "Insert" | "Update"> & {
         // Row: original (status untouched) + the new columns. No status widening here.
         Row: TaxReturns["Row"] & NewTaxCols
@@ -52,6 +61,11 @@ export type Database = Omit<GeneratedDatabase, "public"> & {
           Partial<NewTaxCols> & { status?: WidenedStatus | null }
         Update: Omit<TaxReturns["Update"], "status"> &
           Partial<NewTaxCols> & { status?: WidenedStatus | null }
+      }
+      tax_return_submissions: Omit<TaxSubs, "Row" | "Insert" | "Update"> & {
+        Row: TaxSubs["Row"] & NewSubsCols
+        Insert: TaxSubs["Insert"] & Partial<NewSubsCols>
+        Update: TaxSubs["Update"] & Partial<NewSubsCols>
       }
     }
   }

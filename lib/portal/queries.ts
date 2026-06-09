@@ -850,7 +850,7 @@ export async function getPortalTaxReturns(accountId: string) {
 
   if (!account?.company_name) return []
 
-  const [taxRes, sdRes] = await Promise.all([
+  const [taxRes, sdRes, subRes] = await Promise.all([
     supabaseAdmin
       .from('tax_returns')
       .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, extension_submission_id, data_received, sent_to_accountant')
@@ -866,11 +866,33 @@ export async function getPortalTaxReturns(accountId: string) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Latest submission per account — review_status drives the portal banner.
+    // Keyed by account_id + most recent created_at; we fetch one row and match
+    // against the banner tax return by tax_year inside the map below.
+    supabaseAdmin
+      .from('tax_return_submissions')
+      .select('id, tax_year, review_status')
+      .eq('account_id', accountId)
+      .order('created_at', { ascending: false })
+      .limit(10),
   ])
 
   const sdStatus = sdRes.data?.status ?? null
   const sdStage = sdRes.data?.stage ?? null
-  return (taxRes.data ?? []).map(tr => ({ ...tr, sd_status: sdStatus, sd_stage: sdStage }))
+  const submissions = subRes.data ?? []
+
+  return (taxRes.data ?? []).map(tr => {
+    // Find the most recent submission for this tax year (submissions are already
+    // ordered newest-first, so `.find` returns the right one).
+    const sub = submissions.find(s => s.tax_year === tr.tax_year) ?? null
+    return {
+      ...tr,
+      sd_status: sdStatus,
+      sd_stage: sdStage,
+      review_status: (sub?.review_status ?? null) as string | null,
+      submission_id: sub?.id ?? null,
+    }
+  })
 }
 
 // ─── Action Items ──────────────────────────────────────

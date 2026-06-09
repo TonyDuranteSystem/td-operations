@@ -26,6 +26,9 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
+import { emitActionNeeded } from "@/lib/notifications/act-event"
+import { emitClientChatEvent } from "@/lib/portal/chat-events"
+import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
 
 interface TaxFormPayload {
   token: string
@@ -50,7 +53,6 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
 async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<JobResult> {
   const result: JobResult = { steps: [] }
   const now = new Date().toISOString()
-  const today = now.slice(0, 10)
   const sd = (p.submitted_data || {}) as Record<string, unknown>
   const entityType = p.entity_type || (sd.entity_type as string) || "SMLLC"
   const uploadPaths = p.upload_paths || []
@@ -130,6 +132,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
         if (Object.keys(updates).length > 0) {
           updates.updated_at = now
+          // eslint-disable-next-line no-restricted-syntax
           await supabaseAdmin.from("contacts").update(updates).eq("id", p.contact_id)
           result.steps.push(step("contact_update", "ok", `Updated: ${Object.keys(updates).filter(k => k !== "updated_at").join(", ")}`))
         } else {
@@ -164,6 +167,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           .single()
 
         if (contact && !contact.passport_on_file) {
+          // eslint-disable-next-line no-restricted-syntax
           await supabaseAdmin.from("tasks").insert({
             task_title: `[MISSING] Request passport from ${contact.full_name || "client"} (${companyName})`,
             description: [
@@ -206,6 +210,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         .maybeSingle()
 
       if (!existing) {
+        // eslint-disable-next-line no-restricted-syntax
         await supabaseAdmin.from("tasks").insert({
           task_title: taskTitle,
           description: [
@@ -232,34 +237,21 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
     }
   }
 
-  // ─── 4. UPDATE TAX RETURN → DATA RECEIVED ───
-  if (taxReturnId) {
-    try {
-      const { error: trErr } = await supabaseAdmin
-        .from("tax_returns")
-        .update({
-          data_received: true,
-          data_received_date: today,
-          status: "Data Received",
-          updated_at: now,
-        })
-        .eq("id", taxReturnId)
-
-      if (trErr) {
-        result.steps.push(step("tax_return_update", "error", trErr.message))
-      } else {
-        result.steps.push(step("tax_return_update", "ok", `tax_returns ${taxReturnId} → Data Received`))
-      }
-    } catch (e) {
-      result.steps.push(step("tax_return_update", "error", e instanceof Error ? e.message : String(e)))
-    }
-  } else {
-    result.steps.push(step("tax_return_update", "skipped", "No tax_return_id resolved"))
-  }
+  // ─── 4. (DEFERRED) tax_returns advance moved to client Confirm ───
+  // Slice 2 (review workflow): on submit we do NOT flip tax_returns to
+  // "Data Received"/data_received=true. That happens only when the client
+  // confirms after staff review (review_status → confirmed) — see the confirm
+  // route + lib/tax/review-status.ts. Leaving tax_returns untouched keeps the
+  // submission inside the review loop and editable.
+  void taxReturnId
+  result.steps.push(step("tax_return_update", "skipped", "Deferred to client confirm (review workflow)"))
 
   await updateJobProgress(job.id, result)
 
-  // ─── 5. ADVANCE SERVICE DELIVERY → DATA RECEIVED ───
+  // ─── 5. MOVE SERVICE DELIVERY → DATA SUBMITTED (review block) ───
+  // Not "Data Received": the SD parks at the single "Data Submitted" macro
+  // stage for the whole review; review_status tracks the sub-state; only the
+  // client's Confirm releases it forward (Slice 2 design decision 2026-06-09).
   if (p.account_id) {
     try {
       const { data: sdRecord } = await supabaseAdmin
@@ -276,16 +268,17 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         history.push({
           event: "tax_form_submitted",
           from_stage: sdRecord.stage,
-          to_stage: "Data Received",
+          to_stage: "Data Submitted",
           advanced_at: now,
-          notes: "Client submitted tax form via portal (auto-advanced by tax_form_setup)",
+          notes: "Client submitted tax form via portal — entering review (review_status=submitted)",
         })
 
+        // eslint-disable-next-line no-restricted-syntax
         const { error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
           .update({
-            stage: "Data Received",
-            stage_order: 5,
+            stage: "Data Submitted",
+            stage_order: 45,
             stage_entered_at: now,
             stage_history: history,
           })
@@ -294,7 +287,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         if (sdErr) {
           result.steps.push(step("sd_advance", "error", sdErr.message))
         } else {
-          result.steps.push(step("sd_advance", "ok", `SD ${sdRecord.id} → Data Received`))
+          result.steps.push(step("sd_advance", "ok", `SD ${sdRecord.id} → Data Submitted`))
         }
       } else {
         result.steps.push(step("sd_advance", "skipped", "No active Tax Return SD found"))
@@ -525,26 +518,64 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
 
   await updateJobProgress(job.id, result)
 
-  // ─── 9. MARK SUBMISSION AS REVIEWED ───
+  // ─── 9. SET review_status (Slice 2 — replaces the old auto "reviewed") ───
+  // First submit → 'submitted'; a re-submit after a revision request →
+  // 'resubmitted'. We no longer set submission.status='reviewed' on submit —
+  // the review state now lives in review_status, and "reviewed" was the old
+  // model's auto-approve. review_history records each round.
   if (p.submission_id) {
     try {
-      const { error: formErr } = await supabaseAdmin
+      const { data: curSub } = await supabaseAdmin
         .from("tax_return_submissions")
-        .update({
-          status: "reviewed",
-          reviewed_at: now,
-          reviewed_by: "portal_auto",
-        })
+        .select("review_status, review_history")
+        .eq("id", p.submission_id)
+        .single()
+
+      const prev = (curSub?.review_status ?? null) as ReviewStatus | null
+      const nextStatus: ReviewStatus = prev === "revision_requested" ? "resubmitted" : "submitted"
+      const reviewHistory = Array.isArray(curSub?.review_history) ? curSub!.review_history : []
+      reviewHistory.push(
+        buildReviewHistoryEntry({
+          from: prev,
+          to: nextStatus,
+          at: now,
+          by: p.contact_id ? `client:${p.contact_id}` : "portal",
+        }),
+      )
+
+      const { error: rsErr } = await supabaseAdmin
+        .from("tax_return_submissions")
+        .update({ review_status: nextStatus, review_history: reviewHistory, updated_at: now })
         .eq("id", p.submission_id)
 
-      if (formErr) {
-        result.steps.push(step("form_reviewed", "error", formErr.message))
-      } else {
-        result.steps.push(step("form_reviewed", "ok", "Submission → reviewed"))
-      }
+      if (rsErr) result.steps.push(step("review_status", "error", rsErr.message))
+      else result.steps.push(step("review_status", "ok", `review_status → ${nextStatus}`))
     } catch (e) {
-      result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))
+      result.steps.push(step("review_status", "error", e instanceof Error ? e.message : String(e)))
     }
+  }
+
+  // ─── 10. NOTIFY — staff "What's New" card + client portal message ───
+  // Both helpers are non-fatal + idempotent by contract.
+  if (p.account_id && p.submission_id) {
+    const card = await emitActionNeeded({
+      event: "tax_wizard_submitted",
+      account_id: p.account_id,
+      contact_id: p.contact_id,
+      source_ref: `tax_submission:${p.submission_id}`,
+    })
+    result.steps.push(step("staff_card", card.created ? "ok" : "skipped", card.reason ?? "What's New card created"))
+  }
+  if (p.submission_id && (p.contact_id || p.account_id)) {
+    const chat = await emitClientChatEvent({
+      contact_id: p.contact_id,
+      account_id: p.account_id,
+      topic: "tax_review",
+      message: `We've received your tax information${taxYear ? ` for ${taxYear}` : ""}. Our team will review it and let you know if anything needs changing.`,
+      source: { table: "tax_return_submissions", id: p.submission_id },
+      event_kind: "wizard_submitted",
+    })
+    result.steps.push(step("client_notice", chat.emitted ? "ok" : "skipped", chat.reason ?? "client chat event emitted"))
   }
 
   const okCount = result.steps.filter(s => s.status === "ok").length
@@ -590,6 +621,7 @@ async function handleMcpApplyChanges(job: Job, p: TaxFormPayload): Promise<JobRe
       }
 
       if (Object.keys(contactUpdates).length > 0) {
+        // eslint-disable-next-line no-restricted-syntax
         const { error: upErr } = await supabaseAdmin
           .from("contacts")
           .update({ ...contactUpdates, updated_at: now })
@@ -621,6 +653,7 @@ async function handleMcpApplyChanges(job: Job, p: TaxFormPayload): Promise<JobRe
       }
 
       if (Object.keys(accountUpdates).length > 0) {
+        // eslint-disable-next-line no-restricted-syntax
         const { error: upErr } = await supabaseAdmin
           .from("accounts")
           .update({ ...accountUpdates, updated_at: now })
@@ -691,6 +724,7 @@ async function handleMcpApplyChanges(job: Job, p: TaxFormPayload): Promise<JobRe
           notes: "Client submitted tax form (auto-advanced by tax_form_setup)",
         })
 
+        // eslint-disable-next-line no-restricted-syntax
         const { error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
           .update({
