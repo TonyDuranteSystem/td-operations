@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, CheckCircle, AlertCircle, Info } from 'lucide-react'
+import { Loader2, CheckCircle, AlertCircle, Info, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface FieldConfig {
@@ -39,9 +39,9 @@ function formatEINInput(raw: string): string {
 
 interface WizardFieldProps {
   field: FieldConfig
-  value: string | boolean | number
-  onChange: (name: string, value: string | boolean | number) => void
-  onFileUpload?: (name: string, file: File) => Promise<string | null> // returns storage path or null on error
+  value: string | string[] | boolean | number
+  onChange: (name: string, value: string | string[] | boolean | number) => void
+  onFileUpload?: (name: string, file: File, onProgress?: (pct: number) => void) => Promise<string | null> // returns storage path or null on error
   locale: 'en' | 'it'
   error?: string
 }
@@ -73,6 +73,7 @@ const COUNTRIES = [
 export function WizardField({ field, value, onChange, onFileUpload, locale, error }: WizardFieldProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadStatus, setUploadStatus] = useState<{ name: string; index: number; total: number; pct: number } | null>(null)
   const [showHint, setShowHint] = useState(false)
   const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
   const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
@@ -157,53 +158,108 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
           <span className="text-sm text-zinc-600">{hint}</span>
         </label>
       ) : field.type === 'file' ? (
-        <div className="space-y-1">
-          <input
-            type="file"
-            onChange={async e => {
-              const file = e.target.files?.[0]
-              if (!file) return
-              if (file.size > 10 * 1024 * 1024) {
-                setUploadError(locale === 'it' ? 'File troppo grande (max 10MB)' : 'File too large (max 10MB)')
-                return
-              }
-              setUploadError(null)
-              if (onFileUpload) {
-                setUploading(true)
-                const path = await onFileUpload(field.name, file)
-                setUploading(false)
-                if (path) {
-                  onChange(field.name, path)
-                } else {
-                  setUploadError(locale === 'it' ? 'Upload fallito' : 'Upload failed')
-                }
-              } else {
-                onChange(field.name, file.name)
-              }
-            }}
-            disabled={uploading}
-            accept={field.accept ?? '.pdf,.jpg,.jpeg,.png'}
-            className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
-          />
-          {uploading && (
-            <div className="flex items-center gap-2 text-xs text-blue-600">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {locale === 'it' ? 'Caricamento...' : 'Uploading...'}
+        (() => {
+          // File fields store an ARRAY of storage paths (multi-file). Legacy
+          // single-string values are coerced to a one-element list so old
+          // in-flight drafts still render. dev_task 64bfcdd9.
+          const paths = Array.isArray(value) ? value : (value ? [String(value)] : [])
+          // Strip the storage prefix + the {fieldName}_{unique}_ segment so the
+          // client sees their original filename.
+          const displayName = (p: string) => {
+            const base = p.split('/').pop() || p
+            return base.replace(new RegExp(`^${field.name}_[a-z0-9]{8}_`), '')
+          }
+          return (
+            <div className="space-y-1.5">
+              <input
+                type="file"
+                multiple
+                onChange={async e => {
+                  const selected = Array.from(e.target.files ?? [])
+                  // Reset so picking the same file again (or adding more) re-fires onChange.
+                  e.target.value = ''
+                  if (selected.length === 0) return
+                  setUploadError(null)
+                  if (!onFileUpload) {
+                    onChange(field.name, [...paths, ...selected.map(f => f.name)])
+                    return
+                  }
+                  setUploading(true)
+                  const uploaded: string[] = []
+                  const failed: string[] = []
+                  for (let i = 0; i < selected.length; i++) {
+                    const f = selected[i]
+                    setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct: 0 })
+                    const path = await onFileUpload(field.name, f, pct =>
+                      setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct }),
+                    )
+                    if (path) uploaded.push(path)
+                    else failed.push(f.name)
+                  }
+                  setUploading(false)
+                  setUploadStatus(null)
+                  if (uploaded.length > 0) onChange(field.name, [...paths, ...uploaded])
+                  if (failed.length > 0) {
+                    setUploadError(
+                      locale === 'it'
+                        ? `Caricamento fallito: ${failed.join(', ')}`
+                        : `Upload failed: ${failed.join(', ')}`,
+                    )
+                  }
+                }}
+                disabled={uploading}
+                accept={field.accept}
+                className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
+              />
+              {uploading && (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-blue-600">
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                    <span className="truncate">
+                      {uploadStatus
+                        ? `${locale === 'it' ? 'Caricamento' : 'Uploading'} ${uploadStatus.name}${uploadStatus.total > 1 ? ` (${uploadStatus.index}/${uploadStatus.total})` : ''} — ${uploadStatus.pct}%`
+                        : (locale === 'it' ? 'Caricamento...' : 'Uploading...')}
+                    </span>
+                  </div>
+                  {uploadStatus && (
+                    <div className="h-1 w-full rounded bg-blue-100 overflow-hidden">
+                      <div className="h-full bg-blue-500 transition-all" style={{ width: `${uploadStatus.pct}%` }} />
+                    </div>
+                  )}
+                </div>
+              )}
+              {paths.length > 0 && (
+                <ul className="space-y-1">
+                  {paths.map((p, i) => (
+                    <li
+                      key={`${p}-${i}`}
+                      className="flex items-center justify-between gap-2 text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1"
+                    >
+                      <span className="flex items-center gap-1 min-w-0">
+                        <CheckCircle className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{displayName(p)}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onChange(field.name, paths.filter((_, j) => j !== i))}
+                        className="text-zinc-400 hover:text-red-500 shrink-0"
+                        aria-label={locale === 'it' ? 'Rimuovi file' : 'Remove file'}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {uploadError && (
+                <div className="flex items-center gap-1 text-xs text-red-500">
+                  <AlertCircle className="h-3 w-3" />
+                  {uploadError}
+                </div>
+              )}
             </div>
-          )}
-          {value && !uploading && !uploadError && (
-            <div className="flex items-center gap-1 text-xs text-green-600">
-              <CheckCircle className="h-3 w-3" />
-              {locale === 'it' ? 'File caricato' : 'File uploaded'}
-            </div>
-          )}
-          {uploadError && (
-            <div className="flex items-center gap-1 text-xs text-red-500">
-              <AlertCircle className="h-3 w-3" />
-              {uploadError}
-            </div>
-          )}
-        </div>
+          )
+        })()
       ) : (
         <input
           type={field.type}

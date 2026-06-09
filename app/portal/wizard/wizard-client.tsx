@@ -5,7 +5,10 @@ import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
 import { WizardField } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
+import { createClient } from '@/lib/supabase/client'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
+
+const UPLOAD_BUCKET = 'onboarding-uploads'
 
 interface FieldError {
   field: string
@@ -72,7 +75,7 @@ export function WizardClient({
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
-  const [formData, setFormData] = useState<Record<string, string | boolean | number>>(initialData)
+  const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
   const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
   // Track row counts for inline repeater fields (e.g., related_party_transactions)
   const [repeaterCounts, setRepeaterCounts] = useState<Record<string, number>>(() => {
@@ -90,44 +93,75 @@ export function WizardClient({
   const [currentProgressId, setCurrentProgressId] = useState(progressId)
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([])
 
-  const handleFieldChange = useCallback((name: string, value: string | boolean | number) => {
+  const handleFieldChange = useCallback((name: string, value: string | string[] | boolean | number) => {
     setFormData(prev => ({ ...prev, [name]: value }))
     // Clear any server-side validation error for this field when the user edits it
     setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
   }, [])
 
-  // File upload handler — uploads to Supabase Storage, returns path
-  const handleFileUpload = useCallback(async (fieldName: string, file: File): Promise<string | null> => {
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('field_name', fieldName)
-      fd.append('wizard_type', wizardType)
-      // Prefer leadId so a new-company formation's uploads stay in their own
-      // folder (not co-mingled with an existing account or contact).
-      fd.append('identifier', leadId || accountId || contactId || 'unknown')
-      if (leadId) fd.append('lead_id', leadId)
+  // File upload handler — uploads the file DIRECTLY to Supabase Storage with a
+  // RESUMABLE (TUS) upload: 6MB chunks, auto-retry on network blips, progress
+  // reporting, no ~4.5MB serverless body cap. Returns the storage path, or null
+  // on failure. dev_task 64bfcdd9.
+  const handleFileUpload = useCallback(
+    async (fieldName: string, file: File, onProgress?: (pct: number) => void): Promise<string | null> => {
+      try {
+        // 1. Ask the server to mint the storage path (it owns the path scheme).
+        const res = await fetch('/api/portal/wizard-upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            field_name: fieldName,
+            file_name: file.name,
+            wizard_type: wizardType,
+            // Prefer leadId so a new-company formation's uploads stay in their own
+            // folder (not co-mingled with an existing account or contact).
+            identifier: leadId || accountId || contactId || 'unknown',
+          }),
+        })
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '')
+          console.error('[wizard-upload] mint-path failed', { status: res.status, error: errText, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+          return null
+        }
+        const { path } = await res.json()
+        if (!path) return null
 
-      const res = await fetch('/api/portal/wizard-upload', {
-        method: 'POST',
-        body: fd,
-      })
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '')
-        console.error('[wizard-upload] failed', { status: res.status, error: errText, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+        // 2. Resumable upload straight to storage with the client's session token.
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session?.access_token) {
+          console.error('[wizard-upload] no session token', { fieldName, fileName: file.name })
+          return null
+        }
+        const { uploadResumable } = await import('@/lib/portal/resumable-upload')
+        await uploadResumable({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          accessToken: session.access_token,
+          bucket: UPLOAD_BUCKET,
+          path,
+          file,
+          onProgress,
+        })
+        return path as string
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[wizard-upload] upload failed', { error: msg, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
         return null
       }
-      const { path } = await res.json()
-      return path
-    } catch (err) {
-      console.error('[wizard-upload] network error', { err, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
-      return null
-    }
-  }, [wizardType, accountId, contactId, leadId])
+    },
+    [wizardType, accountId, contactId, leadId],
+  )
 
-  const isEmptyValue = (val: unknown) =>
-    val === undefined || val === null || val === false || val === '' || (typeof val === 'string' && !val.trim())
+  // A file field is empty when its array of paths is empty. Other field types
+  // keep the original string/boolean/number emptiness rules.
+  const isEmptyValue = (val: unknown) => {
+    if (val === undefined || val === null || val === false) return true
+    if (Array.isArray(val)) return val.length === 0
+    if (typeof val === 'string') return !val.trim()
+    return false
+  }
 
   // Validate current step
   const validateStep = useCallback(() => {
@@ -465,7 +499,7 @@ export function WizardClient({
                         field={field}
                         value={formData[`member_${idx}_${field.name}`] ?? ''}
                         onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
-                        onFileUpload={(name, file) => handleFileUpload(`member_${idx}_${name}`, file)}
+                        onFileUpload={(name, file, onProgress) => handleFileUpload(`member_${idx}_${name}`, file, onProgress)}
                         locale={locale}
                       />
                     </div>

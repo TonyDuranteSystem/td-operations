@@ -21,20 +21,15 @@ import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
+import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
 
 /** Extract file upload paths from wizard data.
- * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{filename}
- * stored in the "onboarding-uploads" bucket (see wizard-upload/route.ts:35).
- * Instead of a brittle whitelist of field names, detect any value that looks like a storage path. */
+ * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
+ * stored in the "onboarding-uploads" bucket. Detects any value that looks like a
+ * storage path. File fields now store an ARRAY of paths (multi-file); the helper
+ * flattens both legacy single-string and new array shapes. dev_task 64bfcdd9. */
 function extractUploadPaths(data: Record<string, unknown>): string[] {
-  const WIZARD_PREFIXES = ['formation/', 'onboarding/', 'tax/', 'tax_return/', 'banking/', 'banking_payset/', 'banking_relay/', 'itin/', 'closure/', 'company_info/']
-  const paths: string[] = []
-  for (const val of Object.values(data)) {
-    if (typeof val === 'string' && WIZARD_PREFIXES.some(p => val.startsWith(p))) {
-      paths.push(val)
-    }
-  }
-  return paths
+  return collectUploadPaths(data)
 }
 
 // Wizard-map imports moved to lib/portal/wizard-map.ts (P1.7) so the
