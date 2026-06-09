@@ -24,6 +24,7 @@ import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
+import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -70,6 +71,31 @@ export async function POST(req: NextRequest) {
   const identity = await resolvePortalIdentity(user)
   if (!canSubmitWizard(identity, account_id, contact_id ?? null)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  // ─── 0b. FORMATION LEAD OWNERSHIP (default-deny) ───
+  // A formation submit is lead-scoped (account_id null). Re-prove the lead
+  // belongs to the logged-in person — same check the wizard page uses to gate
+  // ?lead= — so a member can't tamper lead_id and submit a formation tied to
+  // someone else's new company. dev_task b41cc66f.
+  if (lead_id && wizard_type === 'formation') {
+    const ctcId = identity.kind === 'contact' ? identity.contactId : null
+    const ownerEmails = new Set<string>()
+    if (user.email) ownerEmails.add(user.email.toLowerCase())
+    if (ctcId) {
+      const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', ctcId).maybeSingle()
+      if (c?.email) ownerEmails.add(String(c.email).toLowerCase())
+    }
+    const { data: leadOffer } = await supabaseAdmin
+      .from('offers')
+      .select('client_email, contract_type, contact_id')
+      .eq('lead_id', lead_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!formationLeadOwned(leadOffer, ctcId, ownerEmails)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
   }
 
   // ─── 0. SYNCHRONOUS VALIDATION ───
