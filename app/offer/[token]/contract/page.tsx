@@ -410,7 +410,17 @@ export default function ContractPage() {
     }
     if (!installments) installments = 'As specified in the offer'
 
-    if (services.length > 0) {
+    // LLC type — prefer offer.entity_type (canonical source). Previously this
+    // ONLY scanned service names and defaulted to Single-Member, so every
+    // formation offer (service "Company Formation" has no "llc" in the name)
+    // wrongly rendered "Single-Member LLC" regardless of the real entity type —
+    // the bug Michele Cotti reported for his MMLLC. Fall back to the service
+    // scan only for legacy offers created before entity_type existed. dev_task 262be11c.
+    if ((o as any).entity_type === 'Multi Member LLC') {
+      llcType = 'Multi-Member LLC'
+    } else if ((o as any).entity_type === 'Single Member LLC') {
+      llcType = 'Single-Member LLC'
+    } else if (services.length > 0) {
       const svc = services.find(x => (x.name || '').toLowerCase().includes('llc'))
       if (svc) llcType = svc.name || ''
     }

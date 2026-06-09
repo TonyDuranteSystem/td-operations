@@ -176,6 +176,18 @@ export function CreateOfferDialog({
   // Empty string = not set → consumers fall back to legacy derivation.
   const [entityType, setEntityType] = useState<'' | 'SMLLC' | 'MMLLC' | 'Corp'>('')
 
+  // Subject of the offer — does it attach to an EXISTING company, or is it a
+  // NEW company / standalone (no account)? Previously inferred silently from the
+  // launch context, which let a new-company offer for an existing client inherit
+  // that client's first company. Now an explicit, visible choice. dev_task
+  // 262be11c. Default: link to the account when launched with one; otherwise new.
+  const [subjectMode, setSubjectMode] = useState<'existing_company' | 'new_company'>(
+    accountId ? 'existing_company' : 'new_company',
+  )
+  useEffect(() => {
+    if (open) setSubjectMode(accountId ? 'existing_company' : 'new_company')
+  }, [open, accountId])
+
   // Selected services with prices
   const [selected, setSelected] = useState<SelectedService[]>([])
 
@@ -562,7 +574,10 @@ export function CreateOfferDialog({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             lead_id: leadId || null,
-            account_id: accountId || null,
+            // Only attach the account when the offer is explicitly for an
+            // existing company. A new-company/standalone offer never carries it
+            // (the server also enforces this for formations). dev_task 262be11c.
+            account_id: subjectMode === 'existing_company' ? (accountId || null) : null,
             contact_id: contactId || null,
             client_name: clientNameValue,
             client_email: clientEmail,
@@ -633,6 +648,46 @@ export function CreateOfferDialog({
         </div>
 
         <div className="p-5 space-y-5">
+          {/* Who is this offer for? — explicit subject choice so a new-company
+              offer never silently inherits an existing client's company. dev_task 262be11c */}
+          <div className="rounded-lg border border-zinc-200 p-3 space-y-2">
+            <label className="text-xs font-medium text-zinc-600 block">Who is this offer for?</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => accountId && setSubjectMode('existing_company')}
+                disabled={!accountId}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  subjectMode === 'existing_company'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-zinc-200 hover:bg-zinc-50'
+                } ${!accountId ? 'opacity-40 cursor-not-allowed' : ''}`}
+              >
+                <div className="text-sm font-medium text-zinc-800">Existing company</div>
+                <div className="text-xs text-zinc-500 truncate">
+                  {accountId ? clientName : 'No company in context'}
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubjectMode('new_company')}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  subjectMode === 'new_company'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-zinc-200 hover:bg-zinc-50'
+                }`}
+              >
+                <div className="text-sm font-medium text-zinc-800">New company / standalone</div>
+                <div className="text-xs text-zinc-500">Not linked to an existing company</div>
+              </button>
+            </div>
+            {subjectMode === 'new_company' && accountId && (
+              <p className="text-xs text-amber-600">
+                This offer will NOT be linked to {clientName} — it&apos;s for a brand-new company.
+              </p>
+            )}
+          </div>
+
           {/* Client info — name is editable so staff can correct it before creating */}
           <div className="bg-zinc-50 rounded-lg p-3 space-y-1.5">
             <div>
