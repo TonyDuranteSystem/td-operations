@@ -27,6 +27,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { createSD } from "@/lib/operations/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
+import { firstUploadPath } from "@/lib/portal/wizard-uploads"
 
 interface FormationPayload {
   token: string
@@ -92,8 +93,9 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         contactUpdates.residency = String(submitted.owner_country).trim()
       }
 
-      // Mark passport as on file if uploaded
-      if (submitted.passport_owner) {
+      // Mark passport as on file if uploaded (value may be a single path or an
+      // array of paths — firstUploadPath handles both; empty array = none).
+      if (firstUploadPath(submitted.passport_owner)) {
         contactUpdates.passport_on_file = true
       }
 
@@ -157,8 +159,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("drive_folder", "skipped", "Already exists"))
       }
 
-      // Copy passport from Supabase Storage to Drive
-      const passportPath = submitted.passport_owner as string | undefined
+      // Copy passport from Supabase Storage to Drive. File fields may now hold
+      // multiple paths; the owner-passport OCR/Drive flow acts on the first one
+      // (any extras remain in storage + upload_paths). dev_task 64bfcdd9.
+      const passportPath = firstUploadPath(submitted.passport_owner)
       if (passportPath && contactDriveFolderId) {
         try {
           const contactsSubfolder = folderResult.subfolders["2. Contacts"]
