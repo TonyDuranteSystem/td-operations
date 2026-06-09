@@ -41,7 +41,7 @@ interface WizardFieldProps {
   field: FieldConfig
   value: string | string[] | boolean | number
   onChange: (name: string, value: string | string[] | boolean | number) => void
-  onFileUpload?: (name: string, file: File) => Promise<string | null> // returns storage path or null on error
+  onFileUpload?: (name: string, file: File, onProgress?: (pct: number) => void) => Promise<string | null> // returns storage path or null on error
   locale: 'en' | 'it'
   error?: string
 }
@@ -73,6 +73,7 @@ const COUNTRIES = [
 export function WizardField({ field, value, onChange, onFileUpload, locale, error }: WizardFieldProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadStatus, setUploadStatus] = useState<{ name: string; index: number; total: number; pct: number } | null>(null)
   const [showHint, setShowHint] = useState(false)
   const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
   const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
@@ -186,12 +187,17 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
                   setUploading(true)
                   const uploaded: string[] = []
                   const failed: string[] = []
-                  for (const f of selected) {
-                    const path = await onFileUpload(field.name, f)
+                  for (let i = 0; i < selected.length; i++) {
+                    const f = selected[i]
+                    setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct: 0 })
+                    const path = await onFileUpload(field.name, f, pct =>
+                      setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct }),
+                    )
                     if (path) uploaded.push(path)
                     else failed.push(f.name)
                   }
                   setUploading(false)
+                  setUploadStatus(null)
                   if (uploaded.length > 0) onChange(field.name, [...paths, ...uploaded])
                   if (failed.length > 0) {
                     setUploadError(
@@ -206,9 +212,20 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
                 className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
               />
               {uploading && (
-                <div className="flex items-center gap-2 text-xs text-blue-600">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {locale === 'it' ? 'Caricamento...' : 'Uploading...'}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-blue-600">
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                    <span className="truncate">
+                      {uploadStatus
+                        ? `${locale === 'it' ? 'Caricamento' : 'Uploading'} ${uploadStatus.name}${uploadStatus.total > 1 ? ` (${uploadStatus.index}/${uploadStatus.total})` : ''} — ${uploadStatus.pct}%`
+                        : (locale === 'it' ? 'Caricamento...' : 'Uploading...')}
+                    </span>
+                  </div>
+                  {uploadStatus && (
+                    <div className="h-1 w-full rounded bg-blue-100 overflow-hidden">
+                      <div className="h-full bg-blue-500 transition-all" style={{ width: `${uploadStatus.pct}%` }} />
+                    </div>
+                  )}
                 </div>
               )}
               {paths.length > 0 && (

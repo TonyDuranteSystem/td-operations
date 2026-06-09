@@ -99,47 +99,60 @@ export function WizardClient({
     setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
   }, [])
 
-  // File upload handler — uploads the file DIRECTLY to Supabase Storage via a
-  // short-lived signed URL, bypassing the Vercel function (no ~4.5MB body cap).
-  // Returns the storage path, or null on failure. dev_task 64bfcdd9.
-  const handleFileUpload = useCallback(async (fieldName: string, file: File): Promise<string | null> => {
-    try {
-      // 1. Ask the server for a signed upload URL (it owns the path scheme).
-      const res = await fetch('/api/portal/wizard-upload-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          field_name: fieldName,
-          file_name: file.name,
-          wizard_type: wizardType,
-          // Prefer leadId so a new-company formation's uploads stay in their own
-          // folder (not co-mingled with an existing account or contact).
-          identifier: leadId || accountId || contactId || 'unknown',
-        }),
-      })
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '')
-        console.error('[wizard-upload] signed-url failed', { status: res.status, error: errText, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
-        return null
-      }
-      const { path, token } = await res.json()
-      if (!path || !token) return null
+  // File upload handler — uploads the file DIRECTLY to Supabase Storage with a
+  // RESUMABLE (TUS) upload: 6MB chunks, auto-retry on network blips, progress
+  // reporting, no ~4.5MB serverless body cap. Returns the storage path, or null
+  // on failure. dev_task 64bfcdd9.
+  const handleFileUpload = useCallback(
+    async (fieldName: string, file: File, onProgress?: (pct: number) => void): Promise<string | null> => {
+      try {
+        // 1. Ask the server to mint the storage path (it owns the path scheme).
+        const res = await fetch('/api/portal/wizard-upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            field_name: fieldName,
+            file_name: file.name,
+            wizard_type: wizardType,
+            // Prefer leadId so a new-company formation's uploads stay in their own
+            // folder (not co-mingled with an existing account or contact).
+            identifier: leadId || accountId || contactId || 'unknown',
+          }),
+        })
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '')
+          console.error('[wizard-upload] mint-path failed', { status: res.status, error: errText, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+          return null
+        }
+        const { path } = await res.json()
+        if (!path) return null
 
-      // 2. Upload straight to storage with the signed token.
-      const supabase = createClient()
-      const { error } = await supabase.storage
-        .from(UPLOAD_BUCKET)
-        .uploadToSignedUrl(path, token, file, { contentType: file.type || undefined })
-      if (error) {
-        console.error('[wizard-upload] storage upload failed', { error: error.message, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+        // 2. Resumable upload straight to storage with the client's session token.
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session?.access_token) {
+          console.error('[wizard-upload] no session token', { fieldName, fileName: file.name })
+          return null
+        }
+        const { uploadResumable } = await import('@/lib/portal/resumable-upload')
+        await uploadResumable({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          accessToken: session.access_token,
+          bucket: UPLOAD_BUCKET,
+          path,
+          file,
+          onProgress,
+        })
+        return path as string
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[wizard-upload] upload failed', { error: msg, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
         return null
       }
-      return path as string
-    } catch (err) {
-      console.error('[wizard-upload] network error', { err, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
-      return null
-    }
-  }, [wizardType, accountId, contactId, leadId])
+    },
+    [wizardType, accountId, contactId, leadId],
+  )
 
   // A file field is empty when its array of paths is empty. Other field types
   // keep the original string/boolean/number emptiness rules.
@@ -486,7 +499,7 @@ export function WizardClient({
                         field={field}
                         value={formData[`member_${idx}_${field.name}`] ?? ''}
                         onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
-                        onFileUpload={(name, file) => handleFileUpload(`member_${idx}_${name}`, file)}
+                        onFileUpload={(name, file, onProgress) => handleFileUpload(`member_${idx}_${name}`, file, onProgress)}
                         locale={locale}
                       />
                     </div>
