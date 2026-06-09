@@ -243,11 +243,51 @@ describe("createOffer — existence checks", () => {
       client_name: "Test",
       language: "en",
       payment_type: "bank_transfer",
+      // Non-formation so the account_id is kept and its existence is checked.
+      contract_type: "renewal",
       services: [{ name: "X", price: "$100" }],
       cost_summary: [{ label: "Total", total: "$100" }],
       account_id: "nonexistent-account",
     })
     expect(result.outcome).toBe("not_found")
+  })
+})
+
+describe("createOffer — formation account guard (dev_task 262be11c)", () => {
+  it("strips account_id from a formation offer (new company has no account)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "New Co Owner",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$500" }],
+      cost_summary: [{ label: "Total", total: "$500" }],
+      token: "test-formation-strip",
+      account_id: "existing-account-123",
+      contact_id: "contact-1",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-formation-strip")
+    expect(insert?.account_id).toBeNull()
+    expect(insert?.contact_id).toBe("contact-1")
+  })
+
+  it("keeps account_id for a non-formation (renewal) offer", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Existing Co",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "renewal",
+      services: [{ name: "Annual Renewal", price: "$500" }],
+      cost_summary: [{ label: "Total", total: "$500" }],
+      token: "test-renewal-keep",
+      account_id: "existing-account-123",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-renewal-keep")
+    expect(insert?.account_id).toBe("existing-account-123")
   })
 })
 
