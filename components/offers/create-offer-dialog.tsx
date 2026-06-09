@@ -683,7 +683,7 @@ export function CreateOfferDialog({
             </div>
             {subjectMode === 'new_company' && accountId && (
               <p className="text-xs text-amber-600">
-                This offer will NOT be linked to {clientName} — it&apos;s for a brand-new company.
+                This is for a <strong>brand-new company</strong>, so it won&apos;t be attached to any of the client&apos;s existing companies. The client still receives and signs it, and the new company appears in their portal switcher once it&apos;s formed.
               </p>
             )}
           </div>
