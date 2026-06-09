@@ -19,6 +19,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
+import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import type { Json } from "@/lib/database.types"
 
 // ─── JSONB validation ───────────────────────────────────────
@@ -324,6 +325,18 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       return { success: false, outcome: "validation_error", error: "services and cost_summary are required" }
     }
 
+    // 2b. Formation guard — a formation offer is for a NEW company and must
+    // never carry an existing account_id. Server backstop mirroring
+    // accountIdForWizardSubmission, so no caller (CRM dialog or MCP) can attach
+    // a formation offer to an existing account. dev_task 262be11c.
+    const effectiveAccountId = accountIdForOffer(params.contract_type, params.account_id)
+    if (params.account_id && !effectiveAccountId) {
+      console.warn(
+        `[createOffer] Stripped account_id ${params.account_id} from a formation offer ` +
+        `(formation = new company, no existing account). client=${params.client_name}`,
+      )
+    }
+
     // 3. Validate lead/account existence (when provided)
     if (params.lead_id) {
       const { data: lead, error: leadErr } = await supabaseAdmin
@@ -335,14 +348,14 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         return { success: false, outcome: "not_found", error: `Lead not found: ${params.lead_id}` }
       }
     }
-    if (params.account_id) {
+    if (effectiveAccountId) {
       const { data: acct, error: acctErr } = await supabaseAdmin
         .from("accounts")
         .select("id")
-        .eq("id", params.account_id)
+        .eq("id", effectiveAccountId)
         .maybeSingle()
       if (acctErr || !acct) {
-        return { success: false, outcome: "not_found", error: `Account not found: ${params.account_id}` }
+        return { success: false, outcome: "not_found", error: `Account not found: ${effectiveAccountId}` }
       }
     }
 
@@ -351,7 +364,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // Precedence: lead_id > account_id > contact_id. Contact-only path also
     // filters by contract_type so a contact can have separate active offers
     // for different individual services (ITIN vs Banking Physical).
-    if (params.lead_id || params.account_id || params.contact_id) {
+    if (params.lead_id || effectiveAccountId || params.contact_id) {
       const dupQuery = supabaseAdmin
         .from("offers")
         .select("token, status, contract_type")
@@ -360,8 +373,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         .limit(1)
       if (params.lead_id) {
         dupQuery.eq("lead_id", params.lead_id)
-      } else if (params.account_id) {
-        dupQuery.eq("account_id", params.account_id)
+      } else if (effectiveAccountId) {
+        dupQuery.eq("account_id", effectiveAccountId)
       } else if (params.contact_id) {
         dupQuery.eq("contact_id", params.contact_id)
         if (params.contract_type) dupQuery.eq("contract_type", params.contract_type)
@@ -449,7 +462,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         expires_at: params.expires_at ?? null,
         currency,
         lead_id: params.lead_id ?? null,
-        account_id: params.account_id ?? null,
+        account_id: effectiveAccountId,
         deal_id: params.deal_id ?? null,
         contact_id: params.contact_id ?? null,
         partner_id: params.partner_id ?? null,
@@ -512,7 +525,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       summary: `Offer created: ${params.client_name} (${offer.token})${refName ? ` — referral: ${refName}` : ""}`,
       details: {
         lead_id: params.lead_id,
-        account_id: params.account_id,
+        account_id: effectiveAccountId,
         contract_type: params.contract_type,
         entity_type: normalizeEntityType(params.entity_type),
         payment_type: params.payment_type,
