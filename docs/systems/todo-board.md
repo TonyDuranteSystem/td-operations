@@ -1,5 +1,5 @@
 # To-Do Board — "TO DO — FROM CHATS" (staff action cards)
-_Last verified against code: 2026-05-29 — Claude (during the "Follow up → [object Object]" bugfix)_
+_Last verified against code: 2026-06-09 — Claude (Slice 4: TaxReviewActions sub-component for tax_submission:* source_ref cards)_
 
 ## What it is
 A staff-only kanban board on the CRM dashboard ("TO DO — FROM CHATS"). Each card is

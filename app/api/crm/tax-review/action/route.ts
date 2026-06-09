@@ -1,4 +1,5 @@
 /**
+ * GET  /api/crm/tax-review/action?submission_id=... — current review_status (Slice 4).
  * POST /api/crm/tax-review/action — staff review actions (Slice 2 piece 4).
  *
  * Staff-only. Drives the review state machine from the staff side. The What's
@@ -42,6 +43,27 @@ function clientNotice(action: Action, note: string | undefined): string | null {
     default:
       return null
   }
+}
+
+export async function GET(req: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (!isDashboardUser(user)) return NextResponse.json({ error: "Staff only" }, { status: 403 })
+
+  const submissionId = req.nextUrl.searchParams.get("submission_id")
+  if (!submissionId) return NextResponse.json({ error: "submission_id required" }, { status: 400 })
+
+  const { data: sub, error } = await supabaseAdmin
+    .from("tax_return_submissions")
+    .select("id, review_status")
+    .eq("id", submissionId)
+    .maybeSingle()
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!sub) return NextResponse.json({ error: "Submission not found" }, { status: 404 })
+
+  return NextResponse.json({ submission_id: sub.id, review_status: sub.review_status })
 }
 
 export async function POST(req: NextRequest) {

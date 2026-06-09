@@ -43,6 +43,7 @@ interface Card {
   message_id: string | null
   account_id: string | null
   contact_id: string | null
+  source_ref: string | null
   accounts: { company_name: string } | null
   contacts: { full_name: string } | null
 }
@@ -93,6 +94,136 @@ function defaultFollowUpText(clientName: string, label: string | null): string {
 }
 
 const API = '/api/crm/admin-actions/message-actions'
+
+// ─── TaxReviewActions ─────────────────────────────────────────────────────────
+// Rendered on What's New cards where source_ref starts with "tax_submission:".
+// Fetches the current review_status and exposes the appropriate staff actions:
+//   submitted/resubmitted → Start Review
+//   under_review          → Approve | Request Changes (note required)
+//   confirmed             → Reopen
+// After each action the parent board reloads (onDone) and the component re-fetches
+// its own status so buttons update immediately even for non-terminal actions.
+function TaxReviewActions({ submissionId, onDone }: { submissionId: string; onDone: () => void }) {
+  const [reviewStatus, setReviewStatus] = useState<string | null>('__loading__')
+  const [noteMode, setNoteMode] = useState(false)
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/crm/tax-review/action?submission_id=${encodeURIComponent(submissionId)}`)
+      const d = await res.json().catch(() => ({}))
+      setReviewStatus((d.review_status as string | null) ?? null)
+    } catch {
+      setReviewStatus(null)
+    }
+  }, [submissionId])
+
+  useEffect(() => { fetchStatus() }, [fetchStatus])
+
+  const doAction = useCallback(async (action: string, actionNote?: string) => {
+    setSaving(true)
+    setErr(null)
+    try {
+      const res = await fetch('/api/crm/tax-review/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submission_id: submissionId, action, note: actionNote }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error((d as { error?: string }).error || 'Action failed')
+      }
+      await fetchStatus()
+      setNoteMode(false)
+      setNote('')
+      onDone()
+    } catch (e) {
+      setErr(e instanceof Error && e.message ? e.message : 'Action failed')
+    } finally {
+      setSaving(false)
+    }
+  }, [submissionId, fetchStatus, onDone])
+
+  // Still loading or no actionable state — render nothing.
+  if (reviewStatus === '__loading__') return null
+  const showButtons = reviewStatus === 'submitted' || reviewStatus === 'resubmitted' ||
+    reviewStatus === 'under_review' || reviewStatus === 'confirmed'
+  if (!showButtons) return null
+
+  return (
+    <div className="mt-2 pt-1.5 border-t border-blue-100">
+      {noteMode ? (
+        <div className="space-y-1">
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            autoFocus
+            placeholder="Required: describe the changes needed…"
+            className="w-full text-xs border rounded px-1.5 py-1 resize-none"
+          />
+          <div className="flex gap-1">
+            <button
+              disabled={!note.trim() || saving}
+              onClick={() => doAction('request_changes', note)}
+              className="flex-1 text-[11px] text-white bg-amber-600 hover:bg-amber-700 rounded px-2 py-1 disabled:opacity-40"
+            >
+              {saving ? 'Sending…' : 'Send Request'}
+            </button>
+            <button
+              onClick={() => { setNoteMode(false); setNote('') }}
+              className="text-[11px] text-zinc-500 border rounded px-2 py-1"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {(reviewStatus === 'submitted' || reviewStatus === 'resubmitted') && (
+            <button
+              disabled={saving}
+              onClick={() => doAction('start_review')}
+              className="text-[11px] text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-2 py-1 disabled:opacity-40"
+            >
+              {saving ? '…' : 'Start Review'}
+            </button>
+          )}
+          {reviewStatus === 'under_review' && (
+            <>
+              <button
+                disabled={saving}
+                onClick={() => doAction('approve')}
+                className="text-[11px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded px-2 py-1 disabled:opacity-40"
+              >
+                {saving ? '…' : 'Approve'}
+              </button>
+              <button
+                disabled={saving}
+                onClick={() => setNoteMode(true)}
+                className="text-[11px] text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded px-2 py-1 disabled:opacity-40"
+              >
+                Request Changes
+              </button>
+            </>
+          )}
+          {reviewStatus === 'confirmed' && (
+            <button
+              disabled={saving}
+              onClick={() => doAction('reopen')}
+              className="text-[11px] text-zinc-600 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded px-2 py-1 disabled:opacity-40"
+            >
+              {saving ? '…' : 'Reopen'}
+            </button>
+          )}
+        </div>
+      )}
+      {err && <p className="text-[10px] text-red-600 mt-1">{err}</p>}
+    </div>
+  )
+}
 
 export function ActionBoard() {
   const [columns, setColumns] = useState<Column[]>([])
@@ -432,6 +563,12 @@ export function ActionBoard() {
                               <Pencil className="h-3 w-3" />
                             </button>
                           </div>
+                        )}
+                        {card.source_ref?.startsWith('tax_submission:') && (
+                          <TaxReviewActions
+                            submissionId={card.source_ref.slice('tax_submission:'.length)}
+                            onDone={load}
+                          />
                         )}
                         <div className="flex items-center justify-between mt-2 gap-1">
                           {card.remind_at ? (
