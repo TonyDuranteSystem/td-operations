@@ -178,15 +178,10 @@ export function CreateOfferDialog({
 
   // Subject of the offer — does it attach to an EXISTING company, or is it a
   // NEW company / standalone (no account)? Previously inferred silently from the
-  // launch context, which let a new-company offer for an existing client inherit
-  // that client's first company. Now an explicit, visible choice. dev_task
-  // 262be11c. Default: link to the account when launched with one; otherwise new.
-  const [subjectMode, setSubjectMode] = useState<'existing_company' | 'new_company'>(
-    accountId ? 'existing_company' : 'new_company',
-  )
-  useEffect(() => {
-    if (open) setSubjectMode(accountId ? 'existing_company' : 'new_company')
-  }, [open, accountId])
+  // The offer's subject is the launch CONTEXT, not a choice in the dialog:
+  // opened from an account page → for that company (accountId set); opened from
+  // a contact page → for the person (accountId null, contactId set). The dialog
+  // just honors the props it's given. dev_task 262be11c.
 
   // Selected services with prices
   const [selected, setSelected] = useState<SelectedService[]>([])
@@ -577,7 +572,10 @@ export function CreateOfferDialog({
             // Only attach the account when the offer is explicitly for an
             // existing company. A new-company/standalone offer never carries it
             // (the server also enforces this for formations). dev_task 262be11c.
-            account_id: subjectMode === 'existing_company' ? (accountId || null) : null,
+            // Subject = launch context: account page → that company; contact
+            // page → person (accountId is null). The server also strips the
+            // account for a formation (new company) as a backstop. dev_task 262be11c.
+            account_id: accountId || null,
             contact_id: contactId || null,
             client_name: clientNameValue,
             client_email: clientEmail,
@@ -648,46 +646,6 @@ export function CreateOfferDialog({
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Who is this offer for? — explicit subject choice so a new-company
-              offer never silently inherits an existing client's company. dev_task 262be11c */}
-          <div className="rounded-lg border border-zinc-200 p-3 space-y-2">
-            <label className="text-xs font-medium text-zinc-600 block">Who is this offer for?</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => accountId && setSubjectMode('existing_company')}
-                disabled={!accountId}
-                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                  subjectMode === 'existing_company'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-zinc-200 hover:bg-zinc-50'
-                } ${!accountId ? 'opacity-40 cursor-not-allowed' : ''}`}
-              >
-                <div className="text-sm font-medium text-zinc-800">Existing company</div>
-                <div className="text-xs text-zinc-500 truncate">
-                  {accountId ? clientName : 'No company in context'}
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setSubjectMode('new_company')}
-                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                  subjectMode === 'new_company'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-zinc-200 hover:bg-zinc-50'
-                }`}
-              >
-                <div className="text-sm font-medium text-zinc-800">New company / standalone</div>
-                <div className="text-xs text-zinc-500">Not linked to an existing company</div>
-              </button>
-            </div>
-            {subjectMode === 'new_company' && accountId && (
-              <p className="text-xs text-amber-600">
-                This is for a <strong>brand-new company</strong>, so it won&apos;t be attached to any of the client&apos;s existing companies. The client still receives and signs it, and the new company appears in their portal switcher once it&apos;s formed.
-              </p>
-            )}
-          </div>
-
           {/* Client info — name is editable so staff can correct it before creating */}
           <div className="bg-zinc-50 rounded-lg p-3 space-y-1.5">
             <div>
