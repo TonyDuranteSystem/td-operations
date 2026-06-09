@@ -707,7 +707,6 @@ function OverviewTab({
       {/* Offer Status Card */}
       <OfferStatusCard
         offers={offers}
-        accounts={accounts}
         contactId={contact.id}
         contactName={contact.full_name ?? ''}
         contactEmail={contact.email ?? ''}
@@ -1255,7 +1254,6 @@ function JourneyTracker({
 
 function OfferStatusCard({
   offers,
-  accounts,
   contactId,
   contactName,
   contactEmail,
@@ -1263,15 +1261,12 @@ function OfferStatusCard({
   pendingActivations = [],
 }: {
   offers: OfferRecord[]
-  accounts: LinkedAccount[]
   contactId: string
   contactName: string
   contactEmail: string
   contactLanguage?: string | null
   pendingActivations?: PendingActivationRecord[]
 }) {
-  const [selectedAccountId, setSelectedAccountId] = useState<string>(accounts[0]?.id ?? '')
-
   const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
 
   const offerData: OfferData | null = primaryOffer ? {
@@ -1289,7 +1284,11 @@ function OfferStatusCard({
   // Always pre-populate with the person's name — staff can edit it in the dialog
   // before creating. The company name is irrelevant for individual services (ITIN etc.)
   const companyName = contactName
-  const accountId = selectedAccountId || null
+  // Offers created from a CONTACT page are for the PERSON — never attached to one
+  // of their companies. To sell a service for a specific company, create the offer
+  // from that company's page. (Antonio's model: the launch context is the subject.)
+  // dev_task 262be11c.
+  const accountId = null
 
   // Match this offer's activation (by offer token) so the panel can show
   // "Activate now" vs the persistent "Activated · payment pending" reminder.
@@ -1299,17 +1298,6 @@ function OfferStatusCard({
 
   return (
     <div className="space-y-2">
-      {accounts.length > 1 && (
-        <select
-          value={selectedAccountId}
-          onChange={e => setSelectedAccountId(e.target.value)}
-          className="text-sm border rounded-md px-2 py-1.5 w-full"
-        >
-          {accounts.map(a => (
-            <option key={a.id} value={a.id}>{a.company_name}</option>
-          ))}
-        </select>
-      )}
       <AccountOfferPanel
         accountId={accountId}
         companyName={companyName}

@@ -27,6 +27,7 @@ let tokenCollision = false
 let insertSucceeds = true
 
 const offerInserts: Array<Record<string, unknown>> = []
+const leadInserts: Array<Record<string, unknown>> = []
 const leadUpdates: Array<Record<string, unknown>> = []
 const actionLogCalls: Array<Record<string, unknown>> = []
 const whopCalls: Array<Record<string, unknown>> = []
@@ -39,8 +40,13 @@ vi.mock("@/lib/supabase-admin", () => ({
       if (table === "leads") {
         const chain: Record<string, unknown> = {}
         let pendingUpdate: Record<string, unknown> | null = null
+        let pendingLeadInsert: Record<string, unknown> | null = null
         Object.assign(chain, {
           select: vi.fn().mockReturnValue(chain),
+          insert: vi.fn((payload: Record<string, unknown>) => {
+            pendingLeadInsert = payload
+            return chain
+          }),
           update: vi.fn((payload: Record<string, unknown>) => {
             pendingUpdate = payload
             return chain
@@ -53,7 +59,14 @@ vi.mock("@/lib/supabase-admin", () => ({
             return chain
           }),
           maybeSingle: vi.fn(() => Promise.resolve({ data: leadFixture, error: null })),
-          single: vi.fn(() => Promise.resolve({ data: leadFixture, error: null })),
+          single: vi.fn(() => {
+            if (pendingLeadInsert) {
+              leadInserts.push(pendingLeadInsert)
+              pendingLeadInsert = null
+              return Promise.resolve({ data: { id: "auto-lead-1" }, error: null })
+            }
+            return Promise.resolve({ data: leadFixture, error: null })
+          }),
           then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
         })
         return chain
@@ -187,6 +200,7 @@ beforeEach(() => {
   tokenCollision = false
   insertSucceeds = true
   offerInserts.length = 0
+  leadInserts.length = 0
   leadUpdates.length = 0
   actionLogCalls.length = 0
   whopCalls.length = 0
@@ -288,6 +302,71 @@ describe("createOffer — formation account guard (dev_task 262be11c)", () => {
     })
     const insert = offerInserts.find((o) => !o.__update && o.token === "test-renewal-keep")
     expect(insert?.account_id).toBe("existing-account-123")
+  })
+})
+
+describe("createOffer — auto-anchor lead for new-company formation (dev_task 262be11c)", () => {
+  it("auto-creates a lead and attaches it when a formation offer has a contact but no lead", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Michele Cotti",
+      client_email: "cotti@example.com",
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "€2300" }],
+      cost_summary: [{ label: "Total", total: "€2300" }],
+      token: "test-autolead",
+      contact_id: "existing-contact-1",
+    })
+    // A lead row was inserted, tagged as an existing-client new company
+    expect(leadInserts).toHaveLength(1)
+    expect(leadInserts[0].source).toBe("Existing client — new company")
+    // The offer carries the new lead AND the existing contact, no account
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-autolead")
+    expect(insert?.lead_id).toBe("auto-lead-1")
+    expect(insert?.contact_id).toBe("existing-contact-1")
+    expect(insert?.account_id).toBeNull()
+  })
+
+  it("does NOT auto-create a lead for a non-formation contact-only offer (e.g. ITIN)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Solo Person",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "itin",
+      services: [{ name: "ITIN Application", price: "$300" }],
+      cost_summary: [{ label: "Total", total: "$300" }],
+      token: "test-itin-nolead",
+      contact_id: "existing-contact-2",
+    })
+    expect(leadInserts).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-itin-nolead")
+    expect(insert?.lead_id).toBeNull()
+    expect(insert?.contact_id).toBe("existing-contact-2")
+  })
+
+  it("does NOT auto-create a lead when a lead_id is already provided", async () => {
+    accountExists = true
+    leadFixture = { id: "lead-provided", referrer_name: null, referrer_partner_id: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "From Lead Page",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "€2300" }],
+      cost_summary: [{ label: "Total", total: "€2300" }],
+      token: "test-haslead",
+      lead_id: "lead-provided",
+      contact_id: "existing-contact-3",
+    })
+    expect(leadInserts).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-haslead")
+    expect(insert?.lead_id).toBe("lead-provided")
   })
 })
 
