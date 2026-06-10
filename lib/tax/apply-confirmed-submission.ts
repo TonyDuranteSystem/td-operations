@@ -68,6 +68,8 @@ export async function applyConfirmedTaxSubmission(p: ApplyConfirmedParams): Prom
       .eq("account_id", p.account_id)
       .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
       .eq("status", "active")
+      .lt("stage_order", 50)  // only SDs still in the review loop (< Data Received)
+      .order("stage_order", { ascending: false })
       .limit(1)
       .maybeSingle()
 
