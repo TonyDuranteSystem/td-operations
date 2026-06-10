@@ -38,6 +38,24 @@ export interface ParseResult {
   account_holder: string
   period: string
   errors: string[]
+  /** How the transactions were extracted. Absent for legacy hand-coded parsers. */
+  extraction_method?: "wise_csv" | "wise_pdf" | "ai" | "unknown"
+  /**
+   * Balance reconciliation guard (set by AI extraction). When a statement
+   * reports opening + closing balances, we verify opening + Σamounts ≈ closing.
+   * `reconciled === false` means the extracted transactions do NOT add up to the
+   * statement's own ending balance — the numbers are suspect and MUST be reviewed
+   * by a human before they feed a tax return. Never silently file unreconciled data.
+   * `reconciled === null` means reconciliation could not be checked (e.g. the
+   * statement didn't state balances, or it's multi-currency).
+   */
+  reconciliation?: {
+    opening_balance: number | null
+    closing_balance: number | null
+    computed_closing: number | null
+    reconciled: boolean | null
+    note: string
+  }
 }
 
 // ─── Categorization Rules ────────────────────────────────────
@@ -607,34 +625,16 @@ function parseItalianDate(dateStr: string): string {
  * Auto-detect file type and parse accordingly.
  * CSV = primary, PDF = fallback.
  */
-export async function parseBankStatement(
-  fileBuffer: Buffer,
-  fileName: string,
-  mimeType: string,
-): Promise<ParseResult> {
-  const lowerName = fileName.toLowerCase()
+export interface ParseOptions {
+  /** Injected fetch (tests only). */
+  fetchImpl?: typeof fetch
+  /** Override the AI model (tests / tuning). */
+  aiModel?: string
+}
 
-  // CSV files
-  if (mimeType === "text/csv" || lowerName.endsWith(".csv")) {
-    const content = fileBuffer.toString("utf-8")
-    if (/wise/i.test(lowerName) || /transferwise/i.test(content)) {
-      return parseWiseCSV(content, fileName)
-    }
-    // Future: Mercury, Relay CSV parsers
-    // For now, try Wise parser as it's the most common
-    return parseWiseCSV(content, fileName)
-  }
+const aiDisabled = () => process.env.BANK_STATEMENT_AI_DISABLED === "true"
 
-  // PDF files
-  if (mimeType === "application/pdf" || lowerName.endsWith(".pdf")) {
-    if (/wise/i.test(lowerName)) {
-      return parseWisePDF(fileBuffer, fileName)
-    }
-    // Future: Mercury, Relay PDF parsers
-    // Try Wise parser as default
-    return parseWisePDF(fileBuffer, fileName)
-  }
-
+function unsupportedResult(fileName: string, mimeType: string): ParseResult {
   return {
     transactions: [],
     bank_name: "unknown",
@@ -642,5 +642,103 @@ export async function parseBankStatement(
     account_holder: "",
     period: "",
     errors: [`Unsupported file type: ${mimeType} (${fileName})`],
+    extraction_method: "unknown",
   }
+}
+
+/**
+ * Unpack a .zip archive (e.g. a year of monthly statements) and parse every
+ * PDF/CSV inside, merging the transactions. Reconciliation is aggregated: the
+ * archive fails reconciliation if ANY inner statement fails.
+ */
+async function parseZipArchive(zipBuffer: Buffer, zipName: string, opts?: ParseOptions): Promise<ParseResult> {
+  const merged: ParseResult = {
+    transactions: [], bank_name: "unknown", currency: "USD",
+    account_holder: "", period: "", errors: [], extraction_method: "ai",
+  }
+
+  let entries: Record<string, Uint8Array>
+  try {
+    const { unzipSync } = await import("fflate")
+    entries = unzipSync(new Uint8Array(zipBuffer))
+  } catch (e) {
+    merged.errors.push(`${zipName}: failed to unzip — ${e instanceof Error ? e.message : String(e)}`)
+    return merged
+  }
+
+  const innerReconciliations: Array<boolean | null> = []
+  for (const [name, bytes] of Object.entries(entries)) {
+    if (name.endsWith("/") || name.includes("__MACOSX/")) continue
+    const lower = name.toLowerCase()
+    const isPdf = lower.endsWith(".pdf")
+    const isCsv = lower.endsWith(".csv")
+    if (!isPdf && !isCsv) continue
+
+    const innerName = name.split("/").pop() || name
+    const r = await parseBankStatement(Buffer.from(bytes), innerName, isPdf ? "application/pdf" : "text/csv", opts)
+    merged.transactions.push(...r.transactions)
+    if (r.bank_name && r.bank_name !== "unknown") merged.bank_name = r.bank_name
+    if (r.errors.length) merged.errors.push(...r.errors.map(e => `${innerName}: ${e}`))
+    if (r.reconciliation) innerReconciliations.push(r.reconciliation.reconciled)
+  }
+
+  if (merged.transactions.length === 0 && merged.errors.length === 0) {
+    merged.errors.push(`${zipName}: no PDF/CSV statements found inside archive`)
+  }
+
+  const anyFalse = innerReconciliations.some(v => v === false)
+  const anyNull = innerReconciliations.some(v => v === null)
+  merged.reconciliation = {
+    opening_balance: null, closing_balance: null, computed_closing: null,
+    reconciled: anyFalse ? false : anyNull ? null : innerReconciliations.length ? true : null,
+    note: `Archive of ${innerReconciliations.length} statement(s): ${anyFalse ? "one or more did NOT reconcile — review" : anyNull ? "some could not be reconciled" : innerReconciliations.length ? "all reconciled" : "no statements parsed"}`,
+  }
+  return merged
+}
+
+export async function parseBankStatement(
+  fileBuffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  opts?: ParseOptions,
+): Promise<ParseResult> {
+  const lowerName = fileName.toLowerCase()
+
+  // ZIP archive — unpack + parse each inner statement, merge.
+  if (mimeType === "application/zip" || mimeType === "application/x-zip-compressed" || lowerName.endsWith(".zip")) {
+    return parseZipArchive(fileBuffer, fileName, opts)
+  }
+
+  const isCsv = mimeType === "text/csv" || lowerName.endsWith(".csv")
+  const isPdf = mimeType === "application/pdf" || lowerName.endsWith(".pdf")
+
+  // Fast path: Wise hand-coded parser (proven + free). Detect by filename or content.
+  if (isCsv) {
+    const content = fileBuffer.toString("utf-8")
+    if (/wise/i.test(lowerName) || /transferwise|wise\.com/i.test(content)) {
+      const r = parseWiseCSV(content, fileName)
+      r.extraction_method = "wise_csv"
+      if (r.transactions.length > 0) return r
+    }
+  } else if (isPdf && /wise/i.test(lowerName)) {
+    const r = await parseWisePDF(fileBuffer, fileName)
+    r.extraction_method = "wise_pdf"
+    if (r.transactions.length > 0) return r
+  }
+
+  // Everything else (Mercury/Relay/Chase/unknown bank) OR a Wise parse that found
+  // 0 rows → bank-agnostic AI extraction with reconciliation guard.
+  if (isCsv || isPdf) {
+    if (aiDisabled()) {
+      return {
+        transactions: [], bank_name: "unknown", currency: "USD", account_holder: "", period: "",
+        errors: [`No transactions parsed and AI extraction disabled (BANK_STATEMENT_AI_DISABLED) for ${fileName}`],
+        extraction_method: "unknown",
+      }
+    }
+    const { aiExtractBankStatement } = await import("./bank-statement-ai-extract")
+    return aiExtractBankStatement(fileBuffer, fileName, mimeType, { fetchImpl: opts?.fetchImpl, model: opts?.aiModel })
+  }
+
+  return unsupportedResult(fileName, mimeType)
 }
