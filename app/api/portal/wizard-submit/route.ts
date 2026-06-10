@@ -328,7 +328,7 @@ export async function POST(req: NextRequest) {
             await supabaseAdmin.from('portal_messages').insert({
               account_id: capturedAccountId,
               sender_type: 'system',
-              sender_id: null,
+              sender_id: '00000000-0000-0000-0000-000000000000',
               message: `Banking application submitted: ${provider}. Our team will review and submit it on your behalf.`,
             })
           } catch (e) {

@@ -131,14 +131,17 @@ export async function POST(req: NextRequest) {
   }
 
   // Client-facing portal notice.
+  // sender_id uses the zero-UUID system placeholder — portal_messages.sender_id
+  // is NOT NULL; see lib/portal/chat-events.ts for the established convention.
   const notice = clientNotice(action, note)
   if (notice && sub.account_id) {
-    await supabaseAdmin.from("portal_messages").insert({
+    const { error: msgErr } = await supabaseAdmin.from("portal_messages").insert({
       account_id: sub.account_id,
       sender_type: "system",
-      sender_id: null,
+      sender_id: "00000000-0000-0000-0000-000000000000",
       message: notice,
     })
+    if (msgErr) console.error("[tax-review] portal_messages insert failed:", msgErr.message)
   }
 
   return NextResponse.json({ success: true, review_status: target })
