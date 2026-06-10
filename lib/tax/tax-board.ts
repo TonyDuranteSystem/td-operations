@@ -59,6 +59,77 @@ export interface BoardColumn extends BoardColumnDef {
 
 export const OTHER_COLUMN_KEY = '__other__'
 
+// ─── Drag-to-advance legality (Slice 7b) ──────────────────────────────
+//
+// The board has two kinds of columns. REAL SD-stage columns are advanced by
+// dragging (→ advanceServiceDelivery, silent). The five REVIEW sub-state
+// columns (Data Submitted / Under Review / Revision Requested / Approved /
+// Confirmed) are NOT drag targets — they're driven by the review state machine
+// (lib/tax/review-status.ts) through the Slice-4 What's New action buttons,
+// which enforce legality, require a note for "request changes", and reserve
+// client-only transitions (Confirmed). Letting drag bypass that would corrupt
+// review state, so 7b deliberately keeps the two paths separate:
+//   • a card IN the review loop (reviewStatus != null) is NOT draggable
+//   • a review sub-state column (or "Other") is NOT a drop target
+// This is a correctness boundary, not a shortcut — see docs/systems/tax-returns.md.
+
+import { REVIEW_STATUS_STAGE } from '@/lib/tax/tax-stage-overlay'
+
+/** The catalog stage_names that represent review sub-states (overlay targets). */
+export const REVIEW_SUBSTATE_STAGE_NAMES: ReadonlySet<string> = new Set(
+  Object.values(REVIEW_STATUS_STAGE),
+)
+
+export function isReviewSubstateColumn(stageName: string): boolean {
+  return REVIEW_SUBSTATE_STAGE_NAMES.has(stageName)
+}
+
+/**
+ * A column accepts drops (and its cards are draggable) only when it is a REAL
+ * SD stage — not a review sub-state, not the synthetic "Other". Draggability is
+ * keyed off the column a card CURRENTLY sits in (its effective stage), NOT raw
+ * review_status: a card past review (client confirmed → SD at "Data Received")
+ * carries review_status='confirmed' yet sits in a real stage and must stay
+ * draggable.
+ */
+export function isDroppableColumn(col: Pick<BoardColumn, 'stage_name' | 'isOther'>): boolean {
+  return !col.isOther && !isReviewSubstateColumn(col.stage_name)
+}
+
+export interface ColumnRef {
+  stage_name: string
+  isOther: boolean
+}
+
+export interface DropDecision {
+  ok: boolean
+  /** Reason a drop is rejected (for a toast); undefined when ok. */
+  reason?: string
+}
+
+/**
+ * Decide whether dragging a card from `source` column onto `target` column is
+ * allowed. Both must be real SD-stage columns and differ. Pure — the server
+ * action re-checks independently from the DB (never trust the drag).
+ */
+export function resolveDrop(source: ColumnRef, target: ColumnRef): DropDecision {
+  if (target.isOther) {
+    return { ok: false, reason: '“Other / Needs Attention” is not a stage — fix the underlying SD stage instead.' }
+  }
+  if (isReviewSubstateColumn(target.stage_name)) {
+    return { ok: false, reason: 'Use the review actions on the What’s New card to move through review.' }
+  }
+  if (!isDroppableColumn(source)) {
+    return source.isOther
+      ? { ok: false, reason: 'This card is off-pipeline — fix its SD stage first.' }
+      : { ok: false, reason: 'This return is in the review loop — use the What’s New review actions.' }
+  }
+  if (source.stage_name === target.stage_name) {
+    return { ok: false, reason: 'Already in this stage.' }
+  }
+  return { ok: true }
+}
+
 /**
  * Whole-day count a card has sat in its current stage. Returns null when no
  * entry timestamp is known (can't compute) — callers render "—".

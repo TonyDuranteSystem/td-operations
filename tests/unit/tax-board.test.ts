@@ -4,6 +4,9 @@ import {
   daysInStage,
   stalenessLevel,
   OTHER_COLUMN_KEY,
+  isReviewSubstateColumn,
+  isDroppableColumn,
+  resolveDrop,
   type BoardColumnDef,
   type BoardCard,
 } from '@/lib/tax/tax-board'
@@ -123,5 +126,60 @@ describe('buildBoardColumns', () => {
     const cols = buildBoardColumns(COLUMNS, [])
     expect(cols.every(c => c.count === 0)).toBe(true)
     expect(cols.some(c => c.stage_name === OTHER_COLUMN_KEY)).toBe(false)
+  })
+})
+
+describe('drag-to-advance legality (Slice 7b)', () => {
+  const realA = { stage_name: 'Extension Filed', isOther: false }
+  const realB = { stage_name: '1st Installment Paid', isOther: false }
+  const dataReceived = { stage_name: 'Data Received', isOther: false }
+  const reviewCol = { stage_name: 'Under Review', isOther: false }
+  const otherCol = { stage_name: OTHER_COLUMN_KEY, isOther: true }
+
+  it('identifies the five review sub-state columns', () => {
+    for (const n of ['Data Submitted', 'Under Review', 'Revision Requested', 'Approved', 'Confirmed']) {
+      expect(isReviewSubstateColumn(n)).toBe(true)
+    }
+    expect(isReviewSubstateColumn('Extension Filed')).toBe(false)
+    expect(isReviewSubstateColumn('Data Received')).toBe(false)
+  })
+
+  it('only real SD-stage columns are droppable/draggable', () => {
+    expect(isDroppableColumn(realA)).toBe(true)
+    expect(isDroppableColumn(dataReceived)).toBe(true) // post-review real stage stays draggable
+    expect(isDroppableColumn(reviewCol)).toBe(false)
+    expect(isDroppableColumn(otherCol)).toBe(false)
+  })
+
+  it('allows a drag between two real different stages', () => {
+    expect(resolveDrop(realB, realA)).toEqual({ ok: true })
+  })
+
+  it('allows dragging a post-review (Data Received) card forward', () => {
+    expect(resolveDrop(dataReceived, { stage_name: 'Preparation', isOther: false })).toEqual({ ok: true })
+  })
+
+  it('rejects dropping onto a review sub-state column', () => {
+    const d = resolveDrop(realA, reviewCol)
+    expect(d.ok).toBe(false)
+    expect(d.reason).toMatch(/review actions/i)
+  })
+
+  it('rejects dropping onto the Other column', () => {
+    const d = resolveDrop(realA, otherCol)
+    expect(d.ok).toBe(false)
+    expect(d.reason).toMatch(/not a stage/i)
+  })
+
+  it('rejects dragging FROM a review sub-state column', () => {
+    const d = resolveDrop(reviewCol, realA)
+    expect(d.ok).toBe(false)
+    expect(d.reason).toMatch(/review loop/i)
+  })
+
+  it('rejects a no-op drop onto the same stage', () => {
+    const d = resolveDrop(realB, { stage_name: '1st Installment Paid', isOther: false })
+    expect(d.ok).toBe(false)
+    expect(d.reason).toMatch(/already/i)
   })
 })

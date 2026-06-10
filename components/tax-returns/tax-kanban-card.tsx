@@ -22,19 +22,40 @@ export function TaxKanbanCard({
   staleDays,
   nowIso,
   onSelect,
+  draggable = false,
+  sourceStage,
 }: {
   card: BoardCard
   staleDays: number | null
   nowIso: string
   onSelect?: (card: BoardCard) => void
+  /** True when the card sits in a real stage column (Slice 7b drag). */
+  draggable?: boolean
+  /** The card's current column stage_name, carried in the drag payload. */
+  sourceStage?: string
 }) {
   const days = daysInStage(card.stageEnteredAt, new Date(nowIso))
   const level = stalenessLevel(days, staleDays)
 
   return (
     <div
+      draggable={draggable}
+      onDragStart={
+        draggable
+          ? (e) => {
+              e.dataTransfer.setData(
+                'application/tax-card',
+                JSON.stringify({ sdId: card.sdId, sourceStage }),
+              )
+              e.dataTransfer.effectAllowed = 'move'
+            }
+          : undefined
+      }
       onClick={() => onSelect?.(card)}
-      className="cursor-pointer rounded-lg border bg-white p-3 shadow-sm hover:shadow transition-shadow"
+      className={cn(
+        'cursor-pointer rounded-lg border bg-white p-3 shadow-sm hover:shadow transition-shadow',
+        draggable && 'active:cursor-grabbing',
+      )}
     >
       <div className="flex items-start justify-between gap-2">
         {card.accountId ? (

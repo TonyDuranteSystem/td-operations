@@ -1,14 +1,19 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
   daysInStage,
   stalenessLevel,
+  isDroppableColumn,
+  resolveDrop,
   OTHER_COLUMN_KEY,
   type BoardColumn,
   type BoardCard,
 } from '@/lib/tax/tax-board'
+import { advanceTaxBoardCard } from '@/app/(dashboard)/tax-returns/board-actions'
 import { TaxKanbanCard } from './tax-kanban-card'
 import { TaxCardDetail } from './tax-card-detail'
 
@@ -55,6 +60,37 @@ export function TaxKanbanBoard({
   const [payFilter, setPayFilter] = useState<PayFilter>('all')
   const [staleOnly, setStaleOnly] = useState(false)
   const [selected, setSelected] = useState<{ card: BoardCard; columnLabel: string; staleDays: number | null } | null>(null)
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null)
+  const [, startDrop] = useTransition()
+  const router = useRouter()
+
+  function handleDrop(targetCol: BoardColumn, e: React.DragEvent) {
+    e.preventDefault()
+    setDragOverCol(null)
+    const raw = e.dataTransfer.getData('application/tax-card')
+    if (!raw) return
+    let payload: { sdId: string; sourceStage?: string }
+    try {
+      payload = JSON.parse(raw)
+    } catch {
+      return
+    }
+    const source = { stage_name: payload.sourceStage ?? '', isOther: false }
+    const decision = resolveDrop(source, { stage_name: targetCol.stage_name, isOther: targetCol.isOther })
+    if (!decision.ok) {
+      if (decision.reason) toast.error(decision.reason)
+      return
+    }
+    startDrop(async () => {
+      const res = await advanceTaxBoardCard(payload.sdId, targetCol.stage_name)
+      if (res.success) {
+        toast.success(`Moved to ${targetCol.client_label ?? targetCol.stage_name}`)
+        router.refresh()
+      } else {
+        toast.error(res.error ?? 'Move failed')
+      }
+    })
+  }
 
   const now = useMemo(() => new Date(nowIso), [nowIso])
 
@@ -123,12 +159,18 @@ export function TaxKanbanBoard({
 
       {/* Columns */}
       <div className="flex gap-3 overflow-x-auto pb-4">
-        {filteredColumns.map(col => (
+        {filteredColumns.map(col => {
+          const droppable = isDroppableColumn(col)
+          return (
           <div
             key={col.stage_name}
+            onDragOver={droppable ? (e) => { e.preventDefault(); if (dragOverCol !== col.stage_name) setDragOverCol(col.stage_name) } : undefined}
+            onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverCol(null) }}
+            onDrop={(e) => handleDrop(col, e)}
             className={cn(
               'flex w-64 shrink-0 flex-col rounded-xl border bg-zinc-50/60',
               col.stage_name === OTHER_COLUMN_KEY && 'border-amber-300 bg-amber-50/40',
+              droppable && dragOverCol === col.stage_name && 'ring-2 ring-blue-400 ring-offset-1',
             )}
           >
             <div className="sticky top-0 flex items-center justify-between gap-2 rounded-t-xl border-b bg-white/80 px-3 py-2 backdrop-blur">
@@ -150,6 +192,8 @@ export function TaxKanbanBoard({
                     card={card}
                     staleDays={col.stale_days}
                     nowIso={nowIso}
+                    draggable={droppable}
+                    sourceStage={col.stage_name}
                     onSelect={c =>
                       setSelected({
                         card: c,
@@ -162,7 +206,8 @@ export function TaxKanbanBoard({
               )}
             </div>
           </div>
-        ))}
+          )
+        })}
       </div>
 
       {selected && (
