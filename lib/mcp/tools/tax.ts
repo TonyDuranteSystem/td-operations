@@ -673,12 +673,21 @@ export function registerTaxTools(server: McpServer) {
               if (acc?.drive_folder_id) {
                 const { saveFormToDrive } = await import("@/lib/form-to-drive")
                 const submitted = sub.submitted_data as Record<string, unknown> || {}
+                const taxUploadPaths = (sub.upload_paths as string[]) || []
+                // The submission's files live in whichever bucket they were
+                // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
+                // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
+                // the "tax-form-uploads" config default with a "{slug}-{year}/..."
+                // scheme. Pick by path prefix so staff review copies from the
+                // right bucket for either source.
+                const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
                 const driveResult = await saveFormToDrive(
                   "tax_return",
                   submitted,
-                  (sub.upload_paths as string[]) || [],
+                  taxUploadPaths,
                   acc.drive_folder_id,
-                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year }
+                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
+                  portalUpload ? { bucket: "onboarding-uploads" } : undefined,
                 )
                 if (driveResult.summaryFileId) lines.push(`✅ Tax data summary saved to Drive (${driveResult.summaryFileId})`)
                 if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)

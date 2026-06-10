@@ -320,7 +320,12 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
             submittedAt: now,
             companyName,
             year: taxYear || new Date().getFullYear() - 1,
-          }
+          },
+          // Portal wizard uploads ALL files to the shared "onboarding-uploads"
+          // bucket (app/api/portal/wizard-upload[-url]/route.ts), NOT the tax
+          // form's "tax-form-uploads" default. Without this the copy read the
+          // wrong bucket and every statement failed (0 files copied → no P&L).
+          { bucket: "onboarding-uploads" },
         )
 
         if (driveResult.summaryFileId) {

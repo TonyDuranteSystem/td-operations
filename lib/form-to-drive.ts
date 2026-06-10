@@ -719,12 +719,26 @@ export async function saveFormToDrive(
   submittedData: Record<string, unknown>,
   uploadPaths: string[],
   driveFolderId: string,
-  meta: { token: string; submittedAt: string; companyName?: string; year?: string | number }
+  meta: { token: string; submittedAt: string; companyName?: string; year?: string | number },
+  /**
+   * Optional override for the Supabase Storage bucket the uploaded files live
+   * in. The per-form-type config default (`config.bucket`) is the bucket the
+   * EXTERNAL public forms upload to (e.g. tax → "tax-form-uploads"). The PORTAL
+   * wizard uploads ALL file fields to the shared "onboarding-uploads" bucket
+   * regardless of wizard type (see app/api/portal/wizard-upload[-url]/route.ts).
+   * So a portal tax submission's files are in "onboarding-uploads", NOT the
+   * config default — without this override copyUploadsToDrive downloaded from
+   * the wrong bucket and EVERY file failed (0 files copied to Drive), which in
+   * turn left step 7's bank-statement parse with nothing to read and produced
+   * no P&L/Balance Sheet. Pass the bucket the files were actually uploaded to.
+   */
+  opts?: { bucket?: string },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }> {
   const config = FORM_CONFIGS[formType]
   if (!config) {
     return { summaryFileId: null, copied: [], failed: [], errors: [`Unknown form type: ${formType}`] }
   }
+  const bucket = opts?.bucket || config.bucket
 
   const { listFolder, createFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
   const errors: string[] = []
@@ -782,10 +796,10 @@ export async function saveFormToDrive(
     errors.push(`Summary PDF error: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  // Copy uploaded files
+  // Copy uploaded files (bucket may be overridden — see opts.bucket docblock)
   const { copied, failed } = await copyUploadsToDrive(
     uploadPaths,
-    config.bucket,
+    bucket,
     targetFolderId
   )
 
