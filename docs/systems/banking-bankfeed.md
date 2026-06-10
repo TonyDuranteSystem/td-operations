@@ -1,5 +1,6 @@
 # Banking & Bank-Feed Reconciliation
-_Last verified against code: 2026-06-08 — Claude (matcher now fires the installment handler on a confirmed installment payment — Tax Return Phase 1)_
+_Last verified against code: 2026-06-10 — Claude (`bank_statement_process` (lib/mcp/tools/bank-statements.ts) now scans the client's `3.Tax/{tax_year}` subfolder first (falls back to the Tax root for legacy uploads), accepts `.zip` archives, and its filename pattern includes `chase`. Statement parsing itself gained an AI fallback + reconciliation guard — that lives in the Tax Returns subsystem; see `docs/systems/tax-returns.md` gotchas before trusting parsed numbers.)_
+_Prior: 2026-06-08 — Claude (matcher now fires the installment handler on a confirmed installment payment — Tax Return Phase 1)_
 
 ## What it is
 Two related-but-separate systems:
