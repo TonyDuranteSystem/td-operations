@@ -7,6 +7,7 @@ import {
   isReviewSubstateColumn,
   isDroppableColumn,
   resolveDrop,
+  summarizeBulkAdvance,
   type BoardColumnDef,
   type BoardCard,
 } from '@/lib/tax/tax-board'
@@ -181,5 +182,46 @@ describe('drag-to-advance legality (Slice 7b)', () => {
     const d = resolveDrop(realB, { stage_name: '1st Installment Paid', isOther: false })
     expect(d.ok).toBe(false)
     expect(d.reason).toMatch(/already/i)
+  })
+})
+
+describe('summarizeBulkAdvance (Slice 7c)', () => {
+  const target = { stage_name: 'Extension Filed', isOther: false }
+
+  it('partitions a mixed selection into eligible vs skipped', () => {
+    const items = [
+      { sdId: 'a', source: { stage_name: '1st Installment Paid', isOther: false } }, // eligible
+      { sdId: 'b', source: { stage_name: 'Wizard Available', isOther: false } },     // eligible
+      { sdId: 'c', source: { stage_name: 'Under Review', isOther: false } },         // review → skip
+      { sdId: 'd', source: { stage_name: 'Extension Filed', isOther: false } },      // same stage → skip
+      { sdId: 'e', source: { stage_name: OTHER_COLUMN_KEY, isOther: true } },        // off-pipeline → skip
+    ]
+    const s = summarizeBulkAdvance(items, target)
+    expect(s.eligible).toEqual(['a', 'b'])
+    expect(s.skipped.map(x => x.sdId)).toEqual(['c', 'd', 'e'])
+    expect(s.skipped.find(x => x.sdId === 'd')!.reason).toMatch(/already/i)
+    expect(s.skipped.find(x => x.sdId === 'c')!.reason).toMatch(/review/i)
+  })
+
+  it('returns all eligible when every card is a different real stage', () => {
+    const items = [
+      { sdId: 'a', source: { stage_name: '1st Installment Paid', isOther: false } },
+      { sdId: 'b', source: { stage_name: 'Data Received', isOther: false } },
+    ]
+    const s = summarizeBulkAdvance(items, target)
+    expect(s.eligible).toEqual(['a', 'b'])
+    expect(s.skipped).toEqual([])
+  })
+
+  it('skips everything when target is a review column', () => {
+    const items = [{ sdId: 'a', source: { stage_name: '1st Installment Paid', isOther: false } }]
+    const s = summarizeBulkAdvance(items, { stage_name: 'Approved', isOther: false })
+    expect(s.eligible).toEqual([])
+    expect(s.skipped).toHaveLength(1)
+  })
+
+  it('handles an empty selection', () => {
+    const s = summarizeBulkAdvance([], target)
+    expect(s).toEqual({ eligible: [], skipped: [] })
   })
 })

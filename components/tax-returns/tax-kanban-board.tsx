@@ -9,11 +9,18 @@ import {
   stalenessLevel,
   isDroppableColumn,
   resolveDrop,
+  summarizeBulkAdvance,
   OTHER_COLUMN_KEY,
+  TAX_BOARD_ASSIGNEES,
   type BoardColumn,
   type BoardCard,
+  type BulkAdvanceItem,
 } from '@/lib/tax/tax-board'
-import { advanceTaxBoardCard } from '@/app/(dashboard)/tax-returns/board-actions'
+import {
+  advanceTaxBoardCard,
+  bulkAssignTaxBoardCards,
+  bulkAdvanceTaxBoardCards,
+} from '@/app/(dashboard)/tax-returns/board-actions'
 import { TaxKanbanCard } from './tax-kanban-card'
 import { TaxCardDetail } from './tax-card-detail'
 
@@ -63,6 +70,33 @@ export function TaxKanbanBoard({
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const [, startDrop] = useTransition()
   const router = useRouter()
+
+  // ─── Slice 7c: bulk selection ───
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkBusy, startBulk] = useTransition()
+  const [advanceConfirm, setAdvanceConfirm] = useState<{
+    target: BoardColumn
+    eligible: string[]
+    skipped: { sdId: string; reason: string }[]
+  } | null>(null)
+
+  function toggleSelect(sdId: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(sdId)) next.delete(sdId)
+      else next.add(sdId)
+      return next
+    })
+  }
+  function clearSelection() {
+    setSelectedIds(new Set())
+  }
+  function exitSelection() {
+    setSelectionMode(false)
+    clearSelection()
+    setAdvanceConfirm(null)
+  }
 
   function handleDrop(targetCol: BoardColumn, e: React.DragEvent) {
     e.preventDefault()
@@ -120,15 +154,136 @@ export function TaxKanbanBoard({
     }
   }, [filteredColumns])
 
+  // sdId → the real-stage column it currently sits in (source for bulk advance).
+  const sourceColBySd = useMemo(() => {
+    const m = new Map<string, BoardColumn>()
+    for (const col of filteredColumns) {
+      if (!isDroppableColumn(col)) continue
+      for (const card of col.cards) m.set(card.sdId, col)
+    }
+    return m
+  }, [filteredColumns])
+
+  function doBulkAssign(assignee: string | null) {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    startBulk(async () => {
+      const res = await bulkAssignTaxBoardCards(ids, assignee)
+      if (res.success) {
+        toast.success(`Assigned ${res.data?.updated ?? ids.length} to ${assignee ?? 'Unassigned'}`)
+        exitSelection()
+        router.refresh()
+      } else {
+        toast.error(res.error ?? 'Bulk assign failed')
+      }
+    })
+  }
+
+  function openAdvanceConfirm(target: BoardColumn) {
+    const ids = Array.from(selectedIds)
+    const items: BulkAdvanceItem[] = ids.map(sdId => {
+      const col = sourceColBySd.get(sdId)
+      return { sdId, source: { stage_name: col?.stage_name ?? '', isOther: col?.isOther ?? true } }
+    })
+    const { eligible, skipped } = summarizeBulkAdvance(items, { stage_name: target.stage_name, isOther: target.isOther })
+    setAdvanceConfirm({ target, eligible, skipped })
+  }
+
+  function doBulkAdvance() {
+    if (!advanceConfirm) return
+    const target = advanceConfirm.target
+    const ids = Array.from(selectedIds)
+    startBulk(async () => {
+      const res = await bulkAdvanceTaxBoardCards(ids, target.stage_name)
+      if (res.success) {
+        const r = res.data!
+        const parts = [`${r.succeeded.length} moved`]
+        if (r.skipped.length) parts.push(`${r.skipped.length} skipped`)
+        if (r.failed.length) parts.push(`${r.failed.length} failed`)
+        toast.success(`${target.client_label ?? target.stage_name}: ${parts.join(', ')} — clients not notified`)
+        exitSelection()
+        router.refresh()
+      } else {
+        toast.error(res.error ?? 'Bulk advance failed')
+      }
+    })
+  }
+
+  const realStageTargets = filteredColumns.filter(c => isDroppableColumn(c))
+
   return (
     <div className="space-y-4">
-      {/* Stats */}
-      <div className="flex flex-wrap gap-3">
-        <Stat label="Showing" value={totals.total} />
-        <Stat label="Paid" value={totals.paid} color="text-emerald-600" />
-        <Stat label="Unpaid" value={totals.unpaid} color="text-amber-600" />
-        <Stat label="Extension" value={totals.extension} color="text-purple-600" />
+      {/* Stats + selection toggle */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-3">
+          <Stat label="Showing" value={totals.total} />
+          <Stat label="Paid" value={totals.paid} color="text-emerald-600" />
+          <Stat label="Unpaid" value={totals.unpaid} color="text-amber-600" />
+          <Stat label="Extension" value={totals.extension} color="text-purple-600" />
+        </div>
+        <button
+          onClick={() => (selectionMode ? exitSelection() : setSelectionMode(true))}
+          className={cn(
+            'rounded-lg px-3 py-2 text-xs font-semibold transition-colors',
+            selectionMode ? 'bg-zinc-800 text-white' : 'border bg-white text-zinc-600 hover:bg-zinc-50',
+          )}
+        >
+          {selectionMode ? 'Done' : 'Select'}
+        </button>
       </div>
+
+      {/* Bulk action bar */}
+      {selectionMode && (
+        <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-blue-200 bg-blue-50/80 px-3 py-2 backdrop-blur">
+          <span className="text-xs font-semibold text-blue-900">{selectedIds.size} selected</span>
+          <span className="mx-1 h-4 w-px bg-blue-200" />
+          <span className="text-[11px] font-medium text-zinc-500">Assign</span>
+          <button
+            disabled={selectedIds.size === 0 || bulkBusy}
+            onClick={() => doBulkAssign(null)}
+            className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+          >
+            Unassigned
+          </button>
+          {TAX_BOARD_ASSIGNEES.map(name => (
+            <button
+              key={name}
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={() => doBulkAssign(name)}
+              className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+            >
+              {name}
+            </button>
+          ))}
+          <span className="mx-1 h-4 w-px bg-blue-200" />
+          <span className="text-[11px] font-medium text-zinc-500">Move to</span>
+          <select
+            disabled={selectedIds.size === 0 || bulkBusy}
+            value=""
+            onChange={(e) => {
+              const col = realStageTargets.find(c => c.stage_name === e.target.value)
+              if (col) openAdvanceConfirm(col)
+              e.target.value = ''
+            }}
+            className="rounded-lg border bg-white px-2 py-1 text-xs text-zinc-700 disabled:opacity-50"
+          >
+            <option value="">Stage…</option>
+            {realStageTargets.map(c => (
+              <option key={c.stage_name} value={c.stage_name}>
+                {c.client_label ?? c.stage_name}
+              </option>
+            ))}
+          </select>
+          <span className="mx-1 h-4 w-px bg-blue-200" />
+          <button
+            disabled={selectedIds.size === 0 || bulkBusy}
+            onClick={clearSelection}
+            className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-500 hover:bg-white disabled:opacity-50"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
@@ -194,6 +349,9 @@ export function TaxKanbanBoard({
                     nowIso={nowIso}
                     draggable={droppable}
                     sourceStage={col.stage_name}
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(card.sdId)}
+                    onToggleSelect={toggleSelect}
                     onSelect={c =>
                       setSelected({
                         card: c,
@@ -218,6 +376,46 @@ export function TaxKanbanBoard({
           nowIso={nowIso}
           onClose={() => setSelected(null)}
         />
+      )}
+
+      {/* Bulk advance confirm dialog */}
+      {advanceConfirm && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setAdvanceConfirm(null)} />
+          <div className="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-5 shadow-xl">
+            <h3 className="text-base font-semibold text-zinc-800">
+              Move to {advanceConfirm.target.client_label ?? advanceConfirm.target.stage_name}?
+            </h3>
+            <p className="mt-2 text-sm text-zinc-600">
+              <span className="font-semibold text-emerald-700">{advanceConfirm.eligible.length}</span> return
+              {advanceConfirm.eligible.length === 1 ? '' : 's'} will advance.
+              {advanceConfirm.skipped.length > 0 && (
+                <>
+                  {' '}
+                  <span className="font-semibold text-amber-700">{advanceConfirm.skipped.length}</span> will be
+                  skipped (in review, off-pipeline, or already there).
+                </>
+              )}
+            </p>
+            <p className="mt-1 text-xs text-zinc-400">Clients are not notified.</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setAdvanceConfirm(null)}
+                disabled={bulkBusy}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doBulkAdvance}
+                disabled={bulkBusy || advanceConfirm.eligible.length === 0}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {bulkBusy ? 'Moving…' : `Move ${advanceConfirm.eligible.length}`}
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   )

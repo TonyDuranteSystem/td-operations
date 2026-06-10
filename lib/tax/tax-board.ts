@@ -130,6 +130,39 @@ export function resolveDrop(source: ColumnRef, target: ColumnRef): DropDecision 
   return { ok: true }
 }
 
+// ─── Bulk advance (Slice 7c) ──────────────────────────────────────────
+//
+// Bulk advance applies the SAME per-card legality as a single drag
+// (resolveDrop). A mixed selection (cards in different stages, or some not
+// eligible) is partitioned into eligible vs skipped so the confirm dialog can
+// show exactly what will and won't move — no silent partial application.
+
+export interface BulkAdvanceItem {
+  sdId: string
+  source: ColumnRef
+}
+
+export interface BulkAdvanceSummary {
+  /** sdIds that will advance to the target. */
+  eligible: string[]
+  /** sdIds that won't, each with the reason. */
+  skipped: { sdId: string; reason: string }[]
+}
+
+export function summarizeBulkAdvance(
+  items: BulkAdvanceItem[],
+  target: ColumnRef,
+): BulkAdvanceSummary {
+  const eligible: string[] = []
+  const skipped: { sdId: string; reason: string }[] = []
+  for (const item of items) {
+    const d = resolveDrop(item.source, target)
+    if (d.ok) eligible.push(item.sdId)
+    else skipped.push({ sdId: item.sdId, reason: d.reason ?? 'Not allowed' })
+  }
+  return { eligible, skipped }
+}
+
 /**
  * Whole-day count a card has sat in its current stage. Returns null when no
  * entry timestamp is known (can't compute) — callers render "—".

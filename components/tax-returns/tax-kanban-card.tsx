@@ -24,6 +24,9 @@ export function TaxKanbanCard({
   onSelect,
   draggable = false,
   sourceStage,
+  selectionMode = false,
+  selected = false,
+  onToggleSelect,
 }: {
   card: BoardCard
   staleDays: number | null
@@ -33,15 +36,22 @@ export function TaxKanbanCard({
   draggable?: boolean
   /** The card's current column stage_name, carried in the drag payload. */
   sourceStage?: string
+  /** Slice 7c: selection mode active board-wide. */
+  selectionMode?: boolean
+  /** Selectable cards are the real-stage (draggable) ones. */
+  selected?: boolean
+  onToggleSelect?: (sdId: string) => void
 }) {
   const days = daysInStage(card.stageEnteredAt, new Date(nowIso))
   const level = stalenessLevel(days, staleDays)
+  // Only real-stage (draggable) cards are selectable for bulk actions.
+  const selectable = selectionMode && draggable
 
   return (
     <div
-      draggable={draggable}
+      draggable={draggable && !selectionMode}
       onDragStart={
-        draggable
+        draggable && !selectionMode
           ? (e) => {
               e.dataTransfer.setData(
                 'application/tax-card',
@@ -51,13 +61,27 @@ export function TaxKanbanCard({
             }
           : undefined
       }
-      onClick={() => onSelect?.(card)}
+      onClick={() => {
+        if (selectable) onToggleSelect?.(card.sdId)
+        else if (!selectionMode) onSelect?.(card)
+      }}
       className={cn(
-        'cursor-pointer rounded-lg border bg-white p-3 shadow-sm hover:shadow transition-shadow',
-        draggable && 'active:cursor-grabbing',
+        'rounded-lg border bg-white p-3 shadow-sm transition-shadow',
+        selectionMode ? (selectable ? 'cursor-pointer' : 'opacity-50') : 'cursor-pointer hover:shadow',
+        draggable && !selectionMode && 'active:cursor-grabbing',
+        selected && 'ring-2 ring-blue-500',
       )}
     >
       <div className="flex items-start justify-between gap-2">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect?.(card.sdId)}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-blue-600"
+          />
+        )}
         {card.accountId ? (
           <Link
             href={`/accounts/${card.accountId}`}
