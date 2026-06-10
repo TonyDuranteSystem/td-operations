@@ -1,5 +1,5 @@
 # Hooks, Guardrails & Safety System
-_Last verified against code: 2026-06-07 — Claude (production-write-guard made connection-name-agnostic: fires on all MCP execute_sql, exempts only sandbox)_
+_Last verified against code: 2026-06-10 — Claude (dev-setup.sh now also wires the Slack MCP server into .mcp.json from SLACK_BOT_TOKEN_CLAUDE)_
 
 ## What it is
 The automated safety net that keeps a session from breaking production or skipping discipline. Three kinds: **Claude Code hooks** (fire on session/tool events), **git pre-push/pre-commit gates**, and **code-level guards**. Plus the 35 policy rules (R-rules) in CLAUDE.md.
@@ -32,6 +32,7 @@ Pre-commit (`lint-staged`) runs ESLint on staged files with zero-warning toleran
 ## Code-level guards
 - `lib/supabase-admin.ts` — `EXPECTED_SUPABASE_REF` assertion: the server refuses to start locally if pointed at the production ref (R104).
 - `.vercel/project.json` — committed with sandbox values; `git pull` resets it every machine (R104). `scripts/dev-setup.sh` is first-time setup.
+- `scripts/dev-setup.sh` also generates `.mcp.json` (gitignored) with TWO MCP servers: `td-ops-sandbox` (HTTP, key `TD_MCP_API_KEY`) and `slack` (stdio `@modelcontextprotocol/server-slack`, token `SLACK_BOT_TOKEN_CLAUDE`, the "Claude" Slack app — identity distinct from Hermes, workspace T0B90TVHA1M). Both secrets live ONLY in the td-operations-sandbox Vercel project's Development env vars and reach machines via `vercel env pull` inside the script. If `SLACK_BOT_TOKEN_CLAUDE` is absent the script warns and skips Slack (does not fail). New/any machine gets Slack by running `bash scripts/dev-setup.sh` — do NOT hand-edit `~/.claude.json` for Slack anymore.
 
 ## Business rules (the policy layer)
 The 35 R-rules in CLAUDE.md are the human-readable policy; the hooks/gates enforce the mechanical subset. Especially: **R104** (sandbox-only dev — 3 structural layers), **R105** (DDL via migration files), **R070** (git pull each session), **R071** (no `git add -A`), **R076** (no force push), **R093** (verify, no assumptions — enforced by the Stop verifier), **R095** (present plainly), **R107** (system docs).

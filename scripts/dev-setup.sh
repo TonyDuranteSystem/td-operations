@@ -7,6 +7,8 @@
 #   1. Links the Vercel CLI to td-operations-sandbox (not production)
 #   2. Pulls sandbox environment variables into .env.local
 #   3. Generates .mcp.json with sandbox MCP connection (Claude Code tool routing)
+#      + the Slack MCP server (Claude bot identity) when SLACK_BOT_TOKEN_CLAUDE
+#      is present in the pulled env (stored in sandbox Vercel dev env vars)
 #   4. Verifies both files point to sandbox before finishing
 #
 # After running this script, the machine is in a safe state:
@@ -34,21 +36,50 @@ echo "2/5 Pulling sandbox environment variables into .env.local..."
 vercel env pull .env.local --yes
 
 # Step 3: Generate .mcp.json with sandbox MCP connection
+# Also wires the Slack MCP server (the "Claude" Slack app, distinct identity
+# from Hermes) when SLACK_BOT_TOKEN_CLAUDE is in the pulled env. The token
+# lives ONLY in the sandbox Vercel project's Development env vars — never in
+# git (.mcp.json is gitignored). Slack workspace: TD Operations (T0B90TVHA1M).
 echo "3/5 Generating .mcp.json for sandbox MCP connection..."
 SANDBOX_MCP_KEY=$(grep 'TD_MCP_API_KEY' .env.local | head -1 | sed 's/TD_MCP_API_KEY="\(.*\)"/\1/')
-cat > .mcp.json << EOF
-{
-  "mcpServers": {
-    "td-ops-sandbox": {
-      "type": "http",
-      "url": "https://td-operations-sandbox.vercel.app/api/mcp",
-      "headers": {
-        "Authorization": "Bearer ${SANDBOX_MCP_KEY}"
-      }
+SLACK_BOT_TOKEN_CLAUDE=$(grep '^SLACK_BOT_TOKEN_CLAUDE' .env.local | head -1 | sed 's/SLACK_BOT_TOKEN_CLAUDE="\(.*\)"/\1/')
+
+export SANDBOX_MCP_KEY SLACK_BOT_TOKEN_CLAUDE
+python3 - <<'PY'
+import json, os
+
+config = {
+    "mcpServers": {
+        "td-ops-sandbox": {
+            "type": "http",
+            "url": "https://td-operations-sandbox.vercel.app/api/mcp",
+            "headers": {
+                "Authorization": "Bearer " + os.environ["SANDBOX_MCP_KEY"]
+            },
+        }
     }
-  }
 }
-EOF
+
+slack_token = os.environ.get("SLACK_BOT_TOKEN_CLAUDE", "").strip()
+if slack_token:
+    config["mcpServers"]["slack"] = {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-slack"],
+        "env": {
+            "SLACK_BOT_TOKEN": slack_token,
+            "SLACK_TEAM_ID": "T0B90TVHA1M",
+        },
+    }
+    print("   Slack MCP server included (Claude bot identity)")
+else:
+    print("   ⚠️  SLACK_BOT_TOKEN_CLAUDE not in .env.local — Slack MCP server SKIPPED.")
+    print("      Fix: add it to the td-operations-sandbox Vercel Development env, then re-run this script.")
+
+with open(".mcp.json", "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+PY
 
 # Step 4: Install user-global Claude Code behavior contract hook
 # Why: rules in CLAUDE.md load once at session start and rot. Re-injecting the
