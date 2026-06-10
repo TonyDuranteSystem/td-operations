@@ -21,20 +21,26 @@ export function TaxKanbanCard({
   card,
   staleDays,
   nowIso,
+  onSelect,
 }: {
   card: BoardCard
   staleDays: number | null
   nowIso: string
+  onSelect?: (card: BoardCard) => void
 }) {
   const days = daysInStage(card.stageEnteredAt, new Date(nowIso))
   const level = stalenessLevel(days, staleDays)
 
   return (
-    <div className="rounded-lg border bg-white p-3 shadow-sm hover:shadow transition-shadow">
+    <div
+      onClick={() => onSelect?.(card)}
+      className="cursor-pointer rounded-lg border bg-white p-3 shadow-sm hover:shadow transition-shadow"
+    >
       <div className="flex items-start justify-between gap-2">
         {card.accountId ? (
           <Link
             href={`/accounts/${card.accountId}`}
+            onClick={(e) => e.stopPropagation()}
             className="flex items-center gap-1.5 text-sm font-semibold text-zinc-800 hover:text-blue-600 hover:underline"
           >
             <Building2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />

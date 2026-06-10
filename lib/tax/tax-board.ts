@@ -16,6 +16,10 @@
 
 import { overlayEffectiveStageName } from '@/lib/tax/tax-stage-overlay'
 
+/** Assignee options for the Tax Board (free-text staff names in the DB today). */
+export const TAX_BOARD_ASSIGNEES = ['Luca', 'Antonio'] as const
+export type TaxBoardAssignee = (typeof TAX_BOARD_ASSIGNEES)[number]
+
 export interface BoardColumnDef {
   stage_name: string
   stage_order: number

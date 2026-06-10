@@ -7,8 +7,10 @@ import {
   stalenessLevel,
   OTHER_COLUMN_KEY,
   type BoardColumn,
+  type BoardCard,
 } from '@/lib/tax/tax-board'
 import { TaxKanbanCard } from './tax-kanban-card'
+import { TaxCardDetail } from './tax-card-detail'
 
 type ReturnFilter = 'all' | string
 type PayFilter = 'all' | 'paid' | 'unpaid'
@@ -52,6 +54,7 @@ export function TaxKanbanBoard({
   const [returnFilter, setReturnFilter] = useState<ReturnFilter>('all')
   const [payFilter, setPayFilter] = useState<PayFilter>('all')
   const [staleOnly, setStaleOnly] = useState(false)
+  const [selected, setSelected] = useState<{ card: BoardCard; columnLabel: string; staleDays: number | null } | null>(null)
 
   const now = useMemo(() => new Date(nowIso), [nowIso])
 
@@ -147,6 +150,13 @@ export function TaxKanbanBoard({
                     card={card}
                     staleDays={col.stale_days}
                     nowIso={nowIso}
+                    onSelect={c =>
+                      setSelected({
+                        card: c,
+                        columnLabel: col.client_label ?? col.stage_name,
+                        staleDays: col.stale_days,
+                      })
+                    }
                   />
                 ))
               )}
@@ -154,6 +164,16 @@ export function TaxKanbanBoard({
           </div>
         ))}
       </div>
+
+      {selected && (
+        <TaxCardDetail
+          card={selected.card}
+          columnLabel={selected.columnLabel}
+          staleDays={selected.staleDays}
+          nowIso={nowIso}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   )
 }
