@@ -12443,6 +12443,10 @@ export type Database = {
           user_id: string
         }[]
       }
+      contact_reference_report: {
+        Args: { p_contact_id: string }
+        Returns: Json
+      }
       merge_contacts: {
         Args: { p_loser: string; p_merged_by?: string; p_winner: string }
         Returns: Json

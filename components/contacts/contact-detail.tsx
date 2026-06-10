@@ -8,7 +8,7 @@ import {
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, EyeOff, X, FolderOpen, CreditCard,
-  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, ScanText,
+  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, ScanText, Trash2,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
   Activity, Plus, GitBranch,
 } from 'lucide-react'
@@ -273,6 +273,7 @@ export function ContactDetail({
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
   const [showChainAudit, setShowChainAudit] = useState(false)
+  const [showDeleteContact, setShowDeleteContact] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
   const makeContactSaver = (field: string) => async (value: string) => {
@@ -356,6 +357,14 @@ export function ContactDetail({
           >
             <Stethoscope className="h-3.5 w-3.5" />
             Lifecycle Audit
+          </button>
+          <button
+            onClick={() => setShowDeleteContact(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
+            title="Delete this contact (orphans with no linked history) or merge it into the real contact."
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete / Merge
           </button>
         </div>
       </div>
@@ -482,6 +491,37 @@ export function ContactDetail({
         onClose={() => setShowChainAudit(false)}
         contactId={contact.id}
         contactName={contact.full_name}
+      />
+
+      <ConfirmDestructiveDialog
+        open={showDeleteContact}
+        onClose={() => setShowDeleteContact(false)}
+        title="Delete contact"
+        description={`Remove "${contact.full_name}" from the CRM. A contact with ANY linked history can't be hard-deleted — the preview below will tell you to merge it into the real contact instead.`}
+        severity="red"
+        requireTypeToConfirm="DELETE"
+        confirmLabel="Delete contact"
+        loadPreview={async () => {
+          const res = await fetch('/api/crm/admin-actions/delete-contact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contact_id: contact.id, dry_run: true }),
+          })
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(data.error || 'Failed to load delete preview')
+          return data.preview
+        }}
+        onConfirm={async () => {
+          const res = await fetch('/api/crm/admin-actions/delete-contact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contact_id: contact.id, mode: 'delete' }),
+          })
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) return { success: false, error: data.error || 'Delete failed' }
+          return { success: true, message: data.message }
+        }}
+        onSuccess={() => router.push('/contacts')}
       />
     </div>
   )
