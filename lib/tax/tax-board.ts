@@ -235,3 +235,47 @@ export function buildBoardColumns(
 
   return other.count > 0 ? [...columns, other] : columns
 }
+
+// ─── Deadline pressure (Slice 8) ──────────────────────────────────────
+//
+// A card's effective filing deadline is the EXTENDED deadline once an
+// extension is filed, otherwise the return's own deadline (falling back to the
+// statutory date computed from return type + tax year — same dates the
+// deadline-reminders cron uses: MMLLC/partnership Mar 15, others Apr 15;
+// extended Sep 15 / Oct 15). The board badges how close that deadline is.
+
+import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
+
+export type DeadlinePressure = 'none' | 'soon' | 'urgent' | 'overdue'
+
+/** Resolve the card's effective filing deadline (ISO date), or null if unknown. */
+export function effectiveTaxDeadline(
+  card: Pick<BoardCard, 'extensionFiled' | 'deadline' | 'returnType' | 'taxYear'>,
+): string | null {
+  if (card.extensionFiled) {
+    return resolveExtensionDeadline(null, card.taxYear, (card.returnType ?? '') as TaxReturnType)
+  }
+  if (card.deadline) return card.deadline
+  if (!card.taxYear) return null
+  const filingYear = card.taxYear + 1
+  const earlier = card.returnType === 'MMLLC' || card.returnType === 'S-Corp'
+  return `${filingYear}-${earlier ? '03' : '04'}-15`
+}
+
+/**
+ * Traffic-light pressure for a filing deadline:
+ *  - past         → 'overdue'
+ *  - ≤ 14 days    → 'urgent'
+ *  - ≤ 30 days    → 'soon'
+ *  - else / null  → 'none'
+ */
+export function deadlinePressure(deadlineIso: string | null, now: Date): DeadlinePressure {
+  if (!deadlineIso) return 'none'
+  const d = new Date(deadlineIso)
+  if (Number.isNaN(d.getTime())) return 'none'
+  const days = Math.floor((d.getTime() - now.getTime()) / 86_400_000)
+  if (days < 0) return 'overdue'
+  if (days <= 14) return 'urgent'
+  if (days <= 30) return 'soon'
+  return 'none'
+}

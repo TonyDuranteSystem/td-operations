@@ -8,6 +8,8 @@ import {
   isDroppableColumn,
   resolveDrop,
   summarizeBulkAdvance,
+  effectiveTaxDeadline,
+  deadlinePressure,
   type BoardColumnDef,
   type BoardCard,
 } from '@/lib/tax/tax-board'
@@ -223,5 +225,36 @@ describe('summarizeBulkAdvance (Slice 7c)', () => {
   it('handles an empty selection', () => {
     const s = summarizeBulkAdvance([], target)
     expect(s).toEqual({ eligible: [], skipped: [] })
+  })
+})
+
+describe('deadline pressure (Slice 8)', () => {
+  const base = { extensionFiled: false as boolean | null, deadline: null as string | null, returnType: 'MMLLC' as string | null, taxYear: 2025 as number | null }
+
+  it('uses the stored deadline when no extension', () => {
+    expect(effectiveTaxDeadline({ ...base, deadline: '2026-04-15' })).toBe('2026-04-15')
+  })
+
+  it('computes the statutory deadline when none stored (MMLLC Mar 15, others Apr 15)', () => {
+    expect(effectiveTaxDeadline({ ...base, returnType: 'MMLLC' })).toBe('2026-03-15')
+    expect(effectiveTaxDeadline({ ...base, returnType: 'SMLLC' })).toBe('2026-04-15')
+  })
+
+  it('uses the extended deadline once an extension is filed (Sep 15 / Oct 15)', () => {
+    expect(effectiveTaxDeadline({ ...base, extensionFiled: true, returnType: 'MMLLC' })).toBe('2026-09-15')
+    expect(effectiveTaxDeadline({ ...base, extensionFiled: true, returnType: 'SMLLC' })).toBe('2026-10-15')
+  })
+
+  it('returns null when it cannot determine a deadline', () => {
+    expect(effectiveTaxDeadline({ ...base, deadline: null, taxYear: null })).toBeNull()
+  })
+
+  it('grades pressure by days remaining', () => {
+    const now = new Date('2026-03-01T12:00:00Z')
+    expect(deadlinePressure('2026-02-01', now)).toBe('overdue')
+    expect(deadlinePressure('2026-03-10', now)).toBe('urgent') // 9 days
+    expect(deadlinePressure('2026-03-20', now)).toBe('soon')   // 19 days
+    expect(deadlinePressure('2026-05-01', now)).toBe('none')   // 61 days
+    expect(deadlinePressure(null, now)).toBe('none')
   })
 })

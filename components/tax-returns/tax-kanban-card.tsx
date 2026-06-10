@@ -1,14 +1,26 @@
 'use client'
 
 import Link from 'next/link'
-import { Building2, Clock, CheckCircle2, CircleDashed } from 'lucide-react'
+import { Building2, Clock, CheckCircle2, CircleDashed, CalendarClock } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { daysInStage, stalenessLevel, type BoardCard } from '@/lib/tax/tax-board'
+import {
+  daysInStage,
+  stalenessLevel,
+  effectiveTaxDeadline,
+  deadlinePressure,
+  type BoardCard,
+} from '@/lib/tax/tax-board'
 
 const STALE_STYLE: Record<string, string> = {
   fresh: 'text-emerald-600',
   warn: 'text-amber-600',
   stale: 'text-red-600 font-semibold',
+}
+
+const DEADLINE_BADGE: Record<string, string> = {
+  soon: 'bg-amber-50 text-amber-700',
+  urgent: 'bg-red-100 text-red-700',
+  overdue: 'bg-red-600 text-white',
 }
 
 /**
@@ -44,6 +56,7 @@ export function TaxKanbanCard({
 }) {
   const days = daysInStage(card.stageEnteredAt, new Date(nowIso))
   const level = stalenessLevel(days, staleDays)
+  const pressure = deadlinePressure(effectiveTaxDeadline(card), new Date(nowIso))
   // Only real-stage (draggable) cards are selectable for bulk actions.
   const selectable = selectionMode && draggable
 
@@ -115,6 +128,15 @@ export function TaxKanbanCard({
         )}
         {card.extensionFiled && (
           <span className="rounded bg-purple-50 px-1.5 py-0.5 font-medium text-purple-700">Ext</span>
+        )}
+        {pressure !== 'none' && (
+          <span
+            className={cn('flex items-center gap-0.5 rounded px-1.5 py-0.5 font-medium', DEADLINE_BADGE[pressure])}
+            title={`Filing deadline ${effectiveTaxDeadline(card) ?? ''}`}
+          >
+            <CalendarClock className="h-3 w-3" />
+            {pressure === 'overdue' ? 'Overdue' : pressure === 'urgent' ? 'Due soon' : 'Upcoming'}
+          </span>
         )}
       </div>
 

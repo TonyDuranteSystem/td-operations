@@ -10,6 +10,8 @@ import {
   isDroppableColumn,
   resolveDrop,
   summarizeBulkAdvance,
+  effectiveTaxDeadline,
+  deadlinePressure,
   OTHER_COLUMN_KEY,
   TAX_BOARD_ASSIGNEES,
   type BoardColumn,
@@ -66,6 +68,7 @@ export function TaxKanbanBoard({
   const [returnFilter, setReturnFilter] = useState<ReturnFilter>('all')
   const [payFilter, setPayFilter] = useState<PayFilter>('all')
   const [staleOnly, setStaleOnly] = useState(false)
+  const [deadlineOnly, setDeadlineOnly] = useState(false)
   const [selected, setSelected] = useState<{ card: BoardCard; columnLabel: string; staleDays: number | null } | null>(null)
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const [, startDrop] = useTransition()
@@ -138,11 +141,12 @@ export function TaxKanbanBoard({
           const days = daysInStage(card.stageEnteredAt, now)
           if (stalenessLevel(days, col.stale_days) !== 'stale') return false
         }
+        if (deadlineOnly && deadlinePressure(effectiveTaxDeadline(card), now) === 'none') return false
         return true
       })
       return { ...col, cards, count: cards.length }
     })
-  }, [columns, returnFilter, payFilter, staleOnly, now])
+  }, [columns, returnFilter, payFilter, staleOnly, deadlineOnly, now])
 
   const totals = useMemo(() => {
     const all = filteredColumns.flatMap(c => c.cards)
@@ -309,6 +313,10 @@ export function TaxKanbanBoard({
         <span className="ml-3 text-xs font-medium text-zinc-400">Stale</span>
         <FilterChip active={staleOnly} onClick={() => setStaleOnly(v => !v)}>
           Stale only
+        </FilterChip>
+        <span className="ml-3 text-xs font-medium text-zinc-400">Deadline</span>
+        <FilterChip active={deadlineOnly} onClick={() => setDeadlineOnly(v => !v)}>
+          Deadline pressure
         </FilterChip>
       </div>
 
