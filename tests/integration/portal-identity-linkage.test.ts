@@ -52,9 +52,29 @@ const writeLog: Array<{ table: string; op: string; payload: unknown; filter?: un
 function buildContactsChain() {
   let filterCol: string | null = null
   let filterVal: string | null = null
+  // findContactIdByEmail (lib/operations/find-contact-by-email.ts) resolves a
+  // contact case-insensitively via `.is('merged_into', null).ilike('email', e)`
+  // then `.contains('alt_emails', [..])`, awaiting the builder as a row ARRAY.
+  // The mock records those filters and returns matching rows via `then`.
+  let ilikeCol: string | null = null
+  let ilikeVal: string | null = null
+  let containsCol: string | null = null
   let selectCols = ""
   let pendingUpdate: Record<string, unknown> | null = null
   let pendingInsert: Record<string, unknown> | null = null
+
+  function listMatches(): ContactRow[] {
+    if (ilikeCol === "email" && ilikeVal != null) {
+      const target = ilikeVal.toLowerCase()
+      return [...contactsById.values()].filter(
+        (c) => (c.email ?? "").toLowerCase() === target,
+      )
+    }
+    if (containsCol === "alt_emails") return [] // fixtures carry no alt_emails
+    const row = resolveContactFilter(filterCol, filterVal)
+    return row ? [row] : []
+  }
+
   const chain = {
     select: vi.fn((cols?: string) => {
       selectCols = cols ?? ""
@@ -82,6 +102,17 @@ function buildContactsChain() {
       }
       return chain
     }),
+    is: vi.fn(() => chain),
+    ilike: vi.fn((col: string, val: string) => {
+      ilikeCol = col
+      ilikeVal = val
+      return chain
+    }),
+    contains: vi.fn((col: string) => {
+      containsCol = col
+      return chain
+    }),
+    order: vi.fn(() => chain),
     limit: vi.fn().mockReturnThis(),
     maybeSingle: vi.fn(() => {
       const row = resolveContactFilter(filterCol, filterVal)
@@ -110,6 +141,10 @@ function buildContactsChain() {
       const row = resolveContactFilter(filterCol, filterVal)
       return Promise.resolve({ data: row, error: null })
     }),
+    // Awaiting the builder directly (no maybeSingle/single) returns a row list —
+    // the terminal shape findContactIdByEmail relies on.
+    then: (resolve: (v: { data: ContactRow[]; error: null }) => unknown) =>
+      resolve({ data: listMatches(), error: null }),
   }
   // Suppress TS unused-var warnings — selectCols reserved for future use.
   void selectCols
