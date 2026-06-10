@@ -375,11 +375,12 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           if (yearFolder) statementFolderId = yearFolder.id
 
           const statementFiles = await listFolder(statementFolderId, 100) as { files?: { id: string; name: string; mimeType: string }[] }
-          const statementPattern = /wise|mercury|relay|statement|bank|estratto/i
+          const statementPattern = /wise|mercury|relay|chase|statement|bank|estratto/i
           const statements = (statementFiles.files || []).filter(f => {
+            const lower = f.name.toLowerCase()
             const isStatement = statementPattern.test(f.name)
             const isSupported = f.mimeType === "application/pdf" || f.mimeType === "text/csv"
-              || f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".pdf")
+              || lower.endsWith(".csv") || lower.endsWith(".pdf") || lower.endsWith(".zip")
             return isStatement && isSupported
           })
 

@@ -17,8 +17,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { downloadFileBinary, listFolder, uploadBinaryToDrive, findTaxFolder } from "@/lib/google-drive"
-import { parseBankStatement, categorizeTransaction } from "@/lib/bank-statement-parser"
-import type { CategorizedTransaction } from "@/lib/bank-statement-parser"
+import { parseBankStatement, categorizeTransaction, type CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -111,27 +110,40 @@ export function registerBankStatementTools(server: McpServer) {
 
         if (file_id) {
           // Process specific file
-          const { buffer, mimeType, fileName } = await downloadFileBinary(file_id)
+          const { mimeType, fileName } = await downloadFileBinary(file_id)
           filesToProcess = [{ id: file_id, name: fileName, mimeType }]
         } else {
-          // Find Tax folder and list files
+          // Find Tax folder
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)
           if (!taxFolderId) {
             return { content: [{ type: "text" as const, text: "❌ No '3. Tax' folder found in client's Drive folder." }] }
           }
 
-          const listing = (await listFolder(taxFolderId, 100)) as {
+          // Prefer the year subfolder (where the portal auto-chain saves statements,
+          // e.g. '3. Tax/2025/'); fall back to the Tax root for legacy uploads.
+          let scanFolderId = taxFolderId
+          const taxContents = (await listFolder(taxFolderId, 100)) as {
+            files?: { id: string; name: string; mimeType: string }[]
+          }
+          const yearFolder = taxContents.files?.find(f =>
+            f.mimeType === "application/vnd.google-apps.folder" && f.name === String(tax_year)
+          )
+          if (yearFolder) scanFolderId = yearFolder.id
+
+          const listing = (await listFolder(scanFolderId, 100)) as {
             files?: { id: string; name: string; mimeType: string }[]
           }
 
-          // Filter for bank statement files
-          const statementPattern = /wise|mercury|relay|statement|bank|estratto/i
+          // Filter for bank statement files (incl. .zip archives of monthly statements)
+          const statementPattern = /wise|mercury|relay|chase|statement|bank|estratto/i
           filesToProcess = (listing.files || []).filter(f => {
+            const lower = f.name.toLowerCase()
             const isStatement = statementPattern.test(f.name)
             const isSupported = f.mimeType === "application/pdf"
               || f.mimeType === "text/csv"
-              || f.name.toLowerCase().endsWith(".csv")
-              || f.name.toLowerCase().endsWith(".pdf")
+              || lower.endsWith(".csv")
+              || lower.endsWith(".pdf")
+              || lower.endsWith(".zip")
             return isStatement && isSupported
           })
         }
@@ -322,7 +334,6 @@ export function registerBankStatementTools(server: McpServer) {
         const cogs = transactions.filter(t => t.category === "cogs")
         const expenses = transactions.filter(t => ["expense", "fee", "refund"].includes(t.category))
         const distributions = transactions.filter(t => t.category === "distribution")
-        const conversions = transactions.filter(t => t.category === "conversion")
         const uncategorized = transactions.filter(t => t.category === "uncategorized")
 
         const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
