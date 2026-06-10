@@ -29,6 +29,7 @@ import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/comp
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
+import { isActivationEffectivelyPaid } from '@/lib/operations/activation-paid'
 import { EditableField } from '@/components/accounts/editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
@@ -1136,9 +1137,14 @@ function deriveJourneySteps({
 
   // 4. Paid step
   let paidStep: JourneyStep
-  if (primaryActivation?.payment_confirmed_at) {
+  if (primaryActivation && isActivationEffectivelyPaid(primaryActivation)) {
+    // Paid iff payment_confirmed_at is set, OR the service is activated and it
+    // was NOT the deliberately payment-decoupled "Activate Now" path. Fixes
+    // activated-but-unstamped rows showing "Awaiting Payment" forever (e.g. a
+    // bank-transfer activation that missed the timestamp — Michele Cotti,
+    // 2026-06-10). Single rule in lib/operations/activation-paid.ts.
     paidStep = { label: 'Paid', status: 'done', detail: primaryActivation.payment_method ?? undefined }
-  } else if (signedStep.status === 'done' && !primaryActivation?.payment_confirmed_at) {
+  } else if (signedStep.status === 'done') {
     // Signed but not paid — check if it's been too long
     const signedDate = primaryActivation?.signed_at ? new Date(primaryActivation.signed_at) : null
     const daysSinceSigned = signedDate ? Math.floor((Date.now() - signedDate.getTime()) / (1000 * 60 * 60 * 24)) : 0

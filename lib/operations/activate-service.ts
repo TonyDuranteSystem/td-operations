@@ -1477,6 +1477,17 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         prepared_steps: preparedSteps.length > 0 ? preparedSteps as unknown as Json : null,
         confirmation_mode: "auto",
         activated_at: new Date().toISOString(),
+        // Stamp payment_confirmed_at if the caller didn't. Stripe/Whop/confirm-
+        // payment/bank-feed all set it BEFORE calling runActivation (the `??`
+        // preserves theirs); but some manual/bank-transfer paths activated
+        // without it, leaving the client journey stuck on "Awaiting Payment"
+        // despite being paid + activated (Michele Cotti, 2026-06-10). An
+        // activation means payment was confirmed — EXCEPT the deliberately
+        // payment-decoupled "Activate Now" path (payment_method='none'), which
+        // must stay unpaid for AR/dunning.
+        payment_confirmed_at:
+          activation.payment_confirmed_at ??
+          (activation.payment_method === "none" ? null : new Date().toISOString()),
         updated_at: new Date().toISOString(),
       })
       .eq("id", pending_activation_id),
