@@ -20,9 +20,15 @@
 --
 -- Consistency view updated:
 --   v_tax_return_data_received_anomalies projected sent_to_india → drop that column
+--
+-- Tracker view updated:
+--   v_tax_return_tracker projected sent_to_india, sent_to_india_date, india_status
+--   → recreated with sent_to_accountant, sent_to_accountant_date, accountant_status
+--   (view exists in production only — not in sandbox; sandbox Phase 2 ran without it)
 
--- 1. Drop view that references sent_to_india (must precede column drop) ------
+-- 1. Drop views that reference legacy columns (must precede column drop) ------
 DROP VIEW IF EXISTS public.v_tax_return_data_received_anomalies;
+DROP VIEW IF EXISTS public.v_tax_return_tracker;
 
 -- 2. Drop legacy columns -----------------------------------------------------
 ALTER TABLE public.tax_returns
@@ -192,3 +198,46 @@ WHERE tr.data_received = true
 
 COMMENT ON VIEW public.v_tax_return_data_received_anomalies IS
   'Rows where tax_returns.data_received=true but the evidence (tax_return_submissions row + submitted_data + data_received_date) does not support it. Use in weekly audit cron. See Titan Real Estate 2026-04-21 incident.';
+
+-- 6. Recreate tracker view (sent_to_india/india_status → sent_to_accountant/accountant_status)
+CREATE OR REPLACE VIEW public.v_tax_return_tracker AS
+SELECT
+  tr.id,
+  tr.account_id,
+  tr.company_name,
+  tr.client_name,
+  tr.return_type,
+  tr.tax_year,
+  tr.deadline,
+  tr.status,
+  tr.paid,
+  tr.deal_created,
+  tr.link_sent,
+  tr.link_sent_date,
+  tr.data_received,
+  tr.data_received_date,
+  tr.sent_to_accountant,
+  tr.sent_to_accountant_date,
+  tr.extension_filed,
+  tr.extension_deadline,
+  tr.accountant_status,
+  tr.special_case,
+  tr.notes,
+  tr.airtable_id,
+  tr.hubspot_id,
+  tr.created_at,
+  tr.updated_at,
+  a.entity_type AS company_type,
+  CASE
+    WHEN tr.return_type = 'MMLLC'::tax_return_type THEN make_date(tr.tax_year + 1, 3, 15)
+    ELSE make_date(tr.tax_year + 1, 4, 15)
+  END AS calculated_deadline,
+  CASE
+    WHEN tr.return_type = 'MMLLC'::tax_return_type THEN make_date(tr.tax_year + 1, 3, 15) - CURRENT_DATE
+    ELSE make_date(tr.tax_year + 1, 4, 15) - CURRENT_DATE
+  END AS days_remaining
+FROM public.tax_returns tr
+JOIN public.accounts a ON tr.account_id = a.id
+ORDER BY
+  CASE WHEN tr.return_type = 'MMLLC'::tax_return_type THEN 0 ELSE 1 END,
+  tr.deadline;
