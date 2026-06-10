@@ -895,6 +895,22 @@ export async function getPortalTaxReturns(accountId: string) {
   })
 }
 
+/**
+ * Catalog stages for the Tax Return client progress tracker (Slice 5).
+ * Account-independent — the catalog defines the journey; the client's SD
+ * stage (from getPortalTaxReturns) marks the position. Membership/labels are
+ * catalog-driven: only stages with a client_label render (see
+ * lib/tax/progress-tracker.ts for the mapping rules).
+ */
+export async function getTaxTrackerCatalogStages() {
+  const { data } = await supabaseAdmin
+    .from('pipeline_stages')
+    .select('stage_name, stage_order, client_label, client_label_it, icon')
+    .eq('service_type', 'Tax Return')
+    .order('stage_order', { ascending: true })
+  return data ?? []
+}
+
 // ─── Action Items ──────────────────────────────────────
 
 export interface ActionItem {

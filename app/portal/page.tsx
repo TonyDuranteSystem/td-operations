@@ -3,7 +3,9 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations, getTaxTrackerCatalogStages } from '@/lib/portal/queries'
+import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
+import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -508,6 +510,14 @@ export default async function PortalDashboardPage() {
           .maybeSingle()
           .then((r: { data: { token: string } | null }) => r.data ?? null) as Promise<{ token: string } | null>,
   ])
+  // Tax progress tracker (Slice 5) — catalog stages fetched only when there is
+  // an in-flight tax return with a known SD stage; buildTrackerSteps decides
+  // visibility (null = hide: pre-installment, terminated, legacy stage names).
+  const trackerTr = taxReturns.find(tr => tr.sd_stage != null) ?? null
+  const trackerSteps = trackerTr
+    ? buildTrackerSteps(await getTaxTrackerCatalogStages(), trackerTr.sd_stage, locale, trackerTr.review_status)
+    : null
+
   // Pending member info request — separate to avoid TypeScript tuple depth limit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: pendingMemberInfoRequest } = await (supabaseAdmin as any)
@@ -726,6 +736,14 @@ export default async function PortalDashboardPage() {
           />
         )
       })}
+
+      {/* Tax progress tracker (Slice 5) — full client-facing journey, only
+          rendered once the SD is at/past 1st Installment Paid. Catalog-driven:
+          steps and labels come from pipeline_stages (client_label /
+          client_label_it), so relabels need no deploy. */}
+      {trackerSteps && trackerTr && (
+        <TaxProgressTracker steps={trackerSteps} taxYear={trackerTr.tax_year} locale={locale} />
+      )}
 
       {/* Action Items Widget */}
       <ActionItems data={actionItems} locale={locale} />

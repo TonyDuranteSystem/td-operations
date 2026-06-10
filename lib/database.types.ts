@@ -8551,8 +8551,14 @@ export type Database = {
           auto_actions: Json | null
           auto_advance: boolean | null
           auto_tasks: Json | null
+          board_visible: boolean
           client_description: string | null
+          client_label: string | null
+          client_label_it: string | null
+          client_visible: boolean
+          color: string | null
           created_at: string | null
+          icon: string | null
           id: string
           notify_client_email: boolean
           requires_approval: boolean | null
@@ -8562,13 +8568,20 @@ export type Database = {
           stage_description: string | null
           stage_name: string
           stage_order: number
+          stale_days: number | null
         }
         Insert: {
           auto_actions?: Json | null
           auto_advance?: boolean | null
           auto_tasks?: Json | null
+          board_visible?: boolean
           client_description?: string | null
+          client_label?: string | null
+          client_label_it?: string | null
+          client_visible?: boolean
+          color?: string | null
           created_at?: string | null
+          icon?: string | null
           id?: string
           notify_client_email?: boolean
           requires_approval?: boolean | null
@@ -8578,13 +8591,20 @@ export type Database = {
           stage_description?: string | null
           stage_name: string
           stage_order: number
+          stale_days?: number | null
         }
         Update: {
           auto_actions?: Json | null
           auto_advance?: boolean | null
           auto_tasks?: Json | null
+          board_visible?: boolean
           client_description?: string | null
+          client_label?: string | null
+          client_label_it?: string | null
+          client_visible?: boolean
+          color?: string | null
           created_at?: string | null
+          icon?: string | null
           id?: string
           notify_client_email?: boolean
           requires_approval?: boolean | null
@@ -8594,6 +8614,7 @@ export type Database = {
           stage_description?: string | null
           stage_name?: string
           stage_order?: number
+          stale_days?: number | null
         }
         Relationships: [
           {
