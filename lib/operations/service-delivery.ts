@@ -90,6 +90,14 @@ export interface CreateSDParams {
    */
   amount?: number
   amount_currency?: string
+  /**
+   * Originating offer token. For contact-scoped "Company Formation" SDs this is
+   * the dedup key enforced by the partial unique index
+   * uq_formation_sd_active_per_offer — set it so a concurrent/retried activation
+   * cannot create a duplicate formation. Harmless (stored, not constrained) for
+   * other service types.
+   */
+  source_offer_token?: string | null
 }
 
 export interface CreateSDResult {
@@ -317,6 +325,7 @@ export async function createSD(
         start_date,
         assigned_to: params.assigned_to || defaultTaskAssignee(),
         notes: params.notes || null,
+        source_offer_token: params.source_offer_token ?? null,
         stage_entered_at: new Date().toISOString(),
         is_test,
         ...(params.amount != null && {

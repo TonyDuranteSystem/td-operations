@@ -526,11 +526,19 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // stays at 'active' (the tier-based wizard fallback in wizard-visibility.ts
     // cannot fire for them). formation-setup.ts dedupes at wizard submit.
     if (contactId) {
+      // Dedup key = the originating offer token, now a first-class column.
+      // The partial unique index uq_formation_sd_active_per_offer is the REAL
+      // guard against the concurrent/retried-activation race (Michele Cotti got
+      // two formation SDs 2s apart, 2026-06-10). The pre-check below is just the
+      // fast path; the catch handles the race when two inserts collide.
       const { data: existingByOffer } = await supabase
         .from("service_deliveries")
         .select("id")
         .eq("service_type", "Company Formation")
-        .ilike("notes", `%${activation.offer_token}%`)
+        .eq("source_offer_token", activation.offer_token)
+        .is("account_id", null)
+        .eq("status", "active")
+        .limit(1)
 
       if ((existingByOffer?.length ?? 0) > 0) {
         sdResults.push({ pipeline: "Company Formation", status: "existing", id: existingByOffer![0]?.id })
@@ -548,6 +556,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             target_stage: "Data Collection",
             target_stage_order: 1,
             notes: `Auto-created from offer ${activation.offer_token}`,
+            source_offer_token: activation.offer_token,
           })
           sdResults.push({ pipeline: "Company Formation", status: "created", id: sd.id })
           steps.push({
@@ -556,11 +565,32 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             detail: `formation — Company Formation SD created (contact-scoped, account_id=null): ${sd.id}`,
           })
         } catch (e) {
-          steps.push({
-            step: "service_deliveries",
-            status: "error",
-            detail: `formation — createSD failed: ${e instanceof Error ? e.message : String(e)}`,
-          })
+          // The DB unique index is the real guard: under a concurrent/retried
+          // activation the losing INSERT throws here. Re-select the winner and
+          // report "existing" instead of a spurious error so the race is silent.
+          const { data: raceWinner } = await supabase
+            .from("service_deliveries")
+            .select("id")
+            .eq("service_type", "Company Formation")
+            .eq("source_offer_token", activation.offer_token)
+            .is("account_id", null)
+            .eq("status", "active")
+            .limit(1)
+            .maybeSingle()
+          if (raceWinner?.id) {
+            sdResults.push({ pipeline: "Company Formation", status: "existing", id: raceWinner.id })
+            steps.push({
+              step: "service_deliveries",
+              status: "skipped",
+              detail: `formation — Company Formation SD already exists (race-deduped) for offer ${activation.offer_token}: ${raceWinner.id}`,
+            })
+          } else {
+            steps.push({
+              step: "service_deliveries",
+              status: "error",
+              detail: `formation — createSD failed: ${e instanceof Error ? e.message : String(e)}`,
+            })
+          }
         }
       }
     } else {
