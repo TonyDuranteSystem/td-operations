@@ -475,7 +475,7 @@ export async function onSecondInstallmentPaid(
         .maybeSingle()
 
       if (existingAccountantTask) {
-        steps.push({ step: "india_task", status: "skipped", detail: "Accountant task already exists for this account/year" })
+        steps.push({ step: "accountant_task", status: "skipped", detail: "Accountant task already exists for this account/year" })
       } else {
         await dbWriteSafe(
           // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
@@ -491,11 +491,11 @@ export async function onSecondInstallmentPaid(
           }),
           "tasks.insert"
         )
-        steps.push({ step: "india_task", status: "ok", detail: "Data ready + paid — task created to send to accountant" })
+        steps.push({ step: "accountant_task", status: "ok", detail: "Data ready + paid — task created to send to accountant" })
       }
     }
   } catch (e) {
-    steps.push({ step: "india_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    steps.push({ step: "accountant_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   return { steps }

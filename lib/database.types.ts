@@ -10736,6 +10736,8 @@ export type Database = {
           sent_at: string | null
           status: string | null
           submitted_data: Json | null
+          review_history: unknown
+          review_status: string | null
           tax_return_id: string | null
           tax_year: number
           token: string
@@ -10759,6 +10761,8 @@ export type Database = {
           language?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
+          review_history?: unknown
+          review_status?: string | null
           reviewed_at?: string | null
           reviewed_by?: string | null
           sent_at?: string | null
@@ -10787,6 +10791,8 @@ export type Database = {
           language?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
+          review_history?: unknown
+          review_status?: string | null
           reviewed_at?: string | null
           reviewed_by?: string | null
           sent_at?: string | null
@@ -10884,15 +10890,15 @@ export type Database = {
           first_year_skip: boolean | null
           hubspot_id: string | null
           id: string
-          india_follow_up_count: number | null
-          india_status: Database["public"]["Enums"]["india_status"] | null
+          accountant_follow_up_count: number | null
+          accountant_status: Database["public"]["Enums"]["accountant_status"] | null
           link_sent: boolean | null
           link_sent_date: string | null
           notes: string | null
           paid: boolean | null
           return_type: Database["public"]["Enums"]["tax_return_type"]
-          sent_to_india: boolean | null
-          sent_to_india_date: string | null
+          sent_to_accountant: boolean | null
+          sent_to_accountant_date: string | null
           special_case: boolean | null
           status: Database["public"]["Enums"]["tax_return_status"] | null
           tax_year: number
@@ -10917,15 +10923,15 @@ export type Database = {
           first_year_skip?: boolean | null
           hubspot_id?: string | null
           id?: string
-          india_follow_up_count?: number | null
-          india_status?: Database["public"]["Enums"]["india_status"] | null
+          accountant_follow_up_count?: number | null
+          accountant_status?: Database["public"]["Enums"]["accountant_status"] | null
           link_sent?: boolean | null
           link_sent_date?: string | null
           notes?: string | null
           paid?: boolean | null
           return_type: Database["public"]["Enums"]["tax_return_type"]
-          sent_to_india?: boolean | null
-          sent_to_india_date?: string | null
+          sent_to_accountant?: boolean | null
+          sent_to_accountant_date?: string | null
           special_case?: boolean | null
           status?: Database["public"]["Enums"]["tax_return_status"] | null
           tax_year: number
@@ -10950,15 +10956,15 @@ export type Database = {
           first_year_skip?: boolean | null
           hubspot_id?: string | null
           id?: string
-          india_follow_up_count?: number | null
-          india_status?: Database["public"]["Enums"]["india_status"] | null
+          accountant_follow_up_count?: number | null
+          accountant_status?: Database["public"]["Enums"]["accountant_status"] | null
           link_sent?: boolean | null
           link_sent_date?: string | null
           notes?: string | null
           paid?: boolean | null
           return_type?: Database["public"]["Enums"]["tax_return_type"]
-          sent_to_india?: boolean | null
-          sent_to_india_date?: string | null
+          sent_to_accountant?: boolean | null
+          sent_to_accountant_date?: string | null
           special_case?: boolean | null
           status?: Database["public"]["Enums"]["tax_return_status"] | null
           tax_year?: number
@@ -12186,7 +12192,7 @@ export type Database = {
           link_sent_date: string | null
           paid: boolean | null
           return_type: Database["public"]["Enums"]["tax_return_type"] | null
-          sent_to_india: boolean | null
+          sent_to_accountant: boolean | null
           status: Database["public"]["Enums"]["tax_return_status"] | null
           submission_completed_at: string | null
           tax_return_id: string | null
@@ -12242,14 +12248,14 @@ export type Database = {
           extension_filed: boolean | null
           hubspot_id: string | null
           id: string | null
-          india_status: Database["public"]["Enums"]["india_status"] | null
+          accountant_status: Database["public"]["Enums"]["accountant_status"] | null
           link_sent: boolean | null
           link_sent_date: string | null
           notes: string | null
           paid: boolean | null
           return_type: Database["public"]["Enums"]["tax_return_type"] | null
-          sent_to_india: boolean | null
-          sent_to_india_date: string | null
+          sent_to_accountant: boolean | null
+          sent_to_accountant_date: string | null
           special_case: boolean | null
           status: Database["public"]["Enums"]["tax_return_status"] | null
           tax_year: number | null
@@ -12490,7 +12496,7 @@ export type Database = {
         | "docs"
         | "infra"
       email_queue_status: "Draft" | "Queued" | "Sent" | "Failed" | "Cancelled"
-      india_status:
+      accountant_status:
         | "Not Sent"
         | "Sent - Pending"
         | "In Progress"
@@ -12594,8 +12600,10 @@ export type Database = {
         | "Activated - Need Link"
         | "Not Invoiced"
         | "Extension Requested"
+        | "2nd Installment Paid"
         | "Wizard Available"
         | "1st Installment Paid"
+        | "Sent to Accountant"
       tax_return_type: "SMLLC" | "MMLLC" | "Corp" | "LSE"
     }
     CompositeTypes: {
@@ -12791,7 +12799,7 @@ export const Constants = {
         "infra",
       ],
       email_queue_status: ["Draft", "Queued", "Sent", "Failed", "Cancelled"],
-      india_status: [
+      accountant_status: [
         "Not Sent",
         "Sent - Pending",
         "In Progress",
@@ -12904,8 +12912,10 @@ export const Constants = {
         "Activated - Need Link",
         "Not Invoiced",
         "Extension Requested",
+        "2nd Installment Paid",
         "Wizard Available",
         "1st Installment Paid",
+        "Sent to Accountant",
       ],
       tax_return_type: ["SMLLC", "MMLLC", "Corp", "LSE"],
     },

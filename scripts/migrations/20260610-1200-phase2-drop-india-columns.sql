@@ -1,32 +1,40 @@
--- =======================================================================
--- Step 5 observability for tax_returns (R093 follow-up to Titan TR incident)
+-- Phase 2: Drop legacy india_* columns from tax_returns
+-- Companion to 20260609-rename-sent-to-india.sql (Phase 1).
 --
--- PROBLEM
---   tax_returns.data_received was flipped to true for TITAN REAL ESTATE (row
---   5b18dfd4) with no matching tax_return_submissions row and no
---   data_received_date. No entry in action_log -> silent drift. Client
---   emailed support 2026-04-18 + 2026-04-21 asking basic tax-liability
---   questions; we thought data was in.
+-- Phase 1 added the new accountant_* columns alongside the old india_* ones,
+-- copied the data, and cut over all code. Phase 2 drops the legacy columns now
+-- that no code path reads or writes them.
 --
--- WHY A DB TRIGGER (not just an MCP wrapper)
---   action_log is populated ONLY by the application path (lib/mcp/action-log.ts)
---   through MCP tools (crm_update_record, execute_sql, ...). Any write from
---   outside that path (Supabase Studio, psql, seed scripts, Edge Functions,
---   future cron jobs, or code that forgets to call logAction) bypasses
---   logging entirely. A DB-level trigger makes audit coverage universal.
+-- Columns dropped:
+--   india_status           (USER-DEFINED / india_status enum)
+--   sent_to_india          (boolean)
+--   sent_to_india_date     (date)
+--   india_follow_up_count  (integer)
 --
--- SCOPE
---   Only the workflow-critical columns are audited to avoid noise:
---     link_sent, data_received, sent_to_accountant, extension_filed, status,
---     paid, deal_created. Timestamp twins (link_sent_date, ...) are implicit.
+-- Enum dropped:
+--   india_status  (values: Not Sent, Sent - Pending, In Progress, Completed, Filed)
+--   (accountant_status enum carries the same values and is kept)
 --
--- CONSISTENCY VIEW
---   v_tax_return_data_received_anomalies surfaces rows where data_received
---   contradicts the evidence (no submission row, no upload, null
---   data_received_date). Intended for a weekly cron / audit dashboard.
--- =======================================================================
+-- Trigger updated:
+--   trg_tax_returns_audit watches sent_to_india → switch to sent_to_accountant
+--
+-- Consistency view updated:
+--   v_tax_return_data_received_anomalies projected sent_to_india → drop that column
 
--- 1. Trigger function -----------------------------------------------------
+-- 1. Drop view that references sent_to_india (must precede column drop) ------
+DROP VIEW IF EXISTS public.v_tax_return_data_received_anomalies;
+
+-- 2. Drop legacy columns -----------------------------------------------------
+ALTER TABLE public.tax_returns
+  DROP COLUMN IF EXISTS india_status,
+  DROP COLUMN IF EXISTS sent_to_india,
+  DROP COLUMN IF EXISTS sent_to_india_date,
+  DROP COLUMN IF EXISTS india_follow_up_count;
+
+-- 3. Drop legacy enum --------------------------------------------------------
+DROP TYPE IF EXISTS public.india_status;
+
+-- 4. Recreate trigger function watching sent_to_accountant instead of sent_to_india
 CREATE OR REPLACE FUNCTION public.trg_tax_returns_audit()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -41,7 +49,6 @@ DECLARE
   v_summary text;
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    -- Log insert with the interesting columns
     v_details := jsonb_build_object(
       'op',                 'insert',
       'account_id',         NEW.account_id,
@@ -65,7 +72,6 @@ BEGIN
     RETURN NEW;
 
   ELSIF TG_OP = 'UPDATE' THEN
-    -- Compare each watched field, record only changes
     IF NEW.link_sent IS DISTINCT FROM OLD.link_sent THEN
       v_changed := array_append(v_changed, 'link_sent');
       v_old := v_old || jsonb_build_object('link_sent', OLD.link_sent);
@@ -102,7 +108,6 @@ BEGIN
       v_new := v_new || jsonb_build_object('deal_created', NEW.deal_created);
     END IF;
 
-    -- Nothing interesting changed — do not log
     IF array_length(v_changed, 1) IS NULL THEN
       RETURN NEW;
     END IF;
@@ -152,18 +157,7 @@ BEGIN
 END;
 $$;
 
--- 2. Triggers -------------------------------------------------------------
-DROP TRIGGER IF EXISTS tax_returns_audit_iud ON public.tax_returns;
-CREATE TRIGGER tax_returns_audit_iud
-AFTER INSERT OR UPDATE OR DELETE ON public.tax_returns
-FOR EACH ROW
-EXECUTE FUNCTION public.trg_tax_returns_audit();
-
--- 3. Consistency view -----------------------------------------------------
--- Rows where data_received=true is not supported by evidence:
---   - no tax_return_submissions row OR no submitted_data, AND
---   - no data_received_date stamped
--- Worth triaging before the next client touches the preparer.
+-- 5. Recreate consistency view (drop sent_to_india projection) ---------------
 CREATE OR REPLACE VIEW public.v_tax_return_data_received_anomalies AS
 SELECT
   tr.id                        AS tax_return_id,
@@ -198,5 +192,3 @@ WHERE tr.data_received = true
 
 COMMENT ON VIEW public.v_tax_return_data_received_anomalies IS
   'Rows where tax_returns.data_received=true but the evidence (tax_return_submissions row + submitted_data + data_received_date) does not support it. Use in weekly audit cron. See Titan Real Estate 2026-04-21 incident.';
-
--- End ---------------------------------------------------------------------

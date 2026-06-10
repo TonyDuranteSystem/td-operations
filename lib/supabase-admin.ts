@@ -7,10 +7,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-// Slice 0 (2026-06-09): augmented Database teaches the typed client about the new
-// "Sent to Accountant" columns/enum during the two-phase rename. Revert to
-// '@/lib/database.types' once database.types.ts is regenerated (Phase 2).
-import type { Database } from '@/lib/database.types.augmented'
+import type { Database } from '@/lib/database.types'
 
 let _supabaseAdmin: SupabaseClient<Database> | null = null
 

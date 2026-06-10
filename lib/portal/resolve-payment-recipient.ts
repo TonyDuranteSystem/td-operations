@@ -1,7 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-// Slice 0 (2026-06-09): augmented Database so the augmented supabaseAdmin is an accepted
-// argument. Revert to "@/lib/database.types" after Phase 2 regen.
-import type { Database } from "@/lib/database.types.augmented"
+import type { Database } from "@/lib/database.types"
 
 export interface PaymentRecipient {
   email: string

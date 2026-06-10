@@ -7,8 +7,8 @@ const currentYear = new Date().getFullYear()
 const SECTION_DEFS = [
   { key: 'pending', title: 'Pending', statuses: ['Payment Pending'], color: 'amber', icon: 'clipboard' },
   { key: 'awaiting_data', title: 'Awaiting Data', statuses: ['Link Sent - Awaiting Data'], color: 'orange', icon: 'clock' },
-  { key: 'ready_india', title: 'Ready for Accountant', statuses: ['Data Received'], color: 'blue', icon: 'send' },
-  { key: 'in_progress_india', title: 'With Accountant', statuses: ['Sent to Accountant'], color: 'indigo', icon: 'loader' },
+  { key: 'ready_accountant', title: 'Ready for Accountant', statuses: ['Data Received'], color: 'blue', icon: 'send' },
+  { key: 'in_progress_accountant', title: 'With Accountant', statuses: ['Sent to Accountant'], color: 'indigo', icon: 'loader' },
   { key: 'extension', title: 'Extension Filed', statuses: ['Extension Filed'], color: 'purple', icon: 'calendar' },
   { key: 'completed', title: 'Completed', statuses: ['TR Completed - Awaiting Signature', 'TR Filed'], color: 'emerald', icon: 'check' },
 ]
