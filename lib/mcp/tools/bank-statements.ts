@@ -329,20 +329,20 @@ export function registerBankStatementTools(server: McpServer) {
           return rate === 1 ? amount : amount / rate
         }
 
-        // Calculate P&L categories
+        // Category detail rows for the sheets
         const income = transactions.filter(t => t.category === "income")
         const cogs = transactions.filter(t => t.category === "cogs")
         const expenses = transactions.filter(t => ["expense", "fee", "refund"].includes(t.category))
         const distributions = transactions.filter(t => t.category === "distribution")
         const uncategorized = transactions.filter(t => t.category === "uncategorized")
 
-        const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
-        const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
-        const grossProfit = totalIncome - totalCogs
-        const totalExpenses = expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
-        const netIncome = grossProfit - totalExpenses
-
-        const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+        // Totals come from the SHARED engine math (lib/pnl-generator) — F1
+        // (signed refunds) and F3 (contributions are equity, not revenue) are
+        // fixed there once instead of this file duplicating the formulas.
+        const { computePnlTotals } = await import("@/lib/pnl-generator")
+        const {
+          totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions,
+        } = computePnlTotals(transactions)
 
         // Get primary currency (most transactions)
         const currencyCounts = transactions.reduce((acc, t) => {
@@ -687,7 +687,7 @@ export function registerBankStatementTools(server: McpServer) {
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
-      category: z.string().optional().describe("Filter by category: income, cogs, expense, distribution, fee, conversion, refund, uncategorized"),
+      category: z.string().optional().describe("Filter by category: income, cogs, expense, distribution, contribution, fee, conversion, refund, uncategorized"),
     },
     async ({ account_id, tax_year, category }) => {
       try {
@@ -746,7 +746,7 @@ export function registerBankStatementTools(server: McpServer) {
     "Update the category and/or subcategory of a bank transaction. Use after bank_statement_review to fix uncategorized or miscategorized transactions before generating P&L.",
     {
       transaction_id: z.string().uuid().describe("Transaction UUID from bank_statement_review"),
-      category: z.enum(["income", "cogs", "expense", "distribution", "fee", "conversion", "refund", "uncategorized"]).describe("New category"),
+      category: z.enum(["income", "cogs", "expense", "distribution", "contribution", "fee", "conversion", "refund", "uncategorized"]).describe("New category ('contribution' = owner capital in — equity, never P&L revenue)"),
       subcategory: z.string().optional().describe("New subcategory (e.g., 'coaching_revenue', 'subcontractor', 'bank_fee')"),
       is_related_party: z.boolean().optional().describe("Mark as related party transaction"),
     },

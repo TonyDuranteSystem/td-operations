@@ -80,20 +80,37 @@ async function getAccountContext(accountId: string): Promise<AccountContext> {
 }
 
 /** Compute P&L totals from a set of transactions (reusable for current + prior year) */
-function computePnlTotals(txs: Array<{ category: string; amount: number | string }>) {
+export function computePnlTotals(txs: Array<{ category: string; amount: number | string }>) {
   const income = txs.filter(t => t.category === "income")
   const cogs = txs.filter(t => t.category === "cogs")
-  const expenses = txs.filter(t => ["expense", "fee", "refund"].includes(t.category))
+  const expenses = txs.filter(t => ["expense", "fee"].includes(t.category))
+  const refunds = txs.filter(t => t.category === "refund")
   const distributions = txs.filter(t => t.category === "distribution")
+  const contributions = txs.filter(t => t.category === "contribution")
+  const uncategorized = txs.filter(t => t.category === "uncategorized")
 
   const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
   const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
   const grossProfit = totalIncome - totalCogs
-  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  // F1 fix: refunds are SIGNED. A refund received (inflow, amount > 0)
+  // REDUCES expenses; a refund paid out (outflow) increases them. The old
+  // Math.abs() made received refunds inflate expenses.
+  const totalExpenses =
+    expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0) +
+    refunds.reduce((s, t) => s - Number(t.amount), 0)
   const netIncome = grossProfit - totalExpenses
   const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  // F3 fix: contributions (owner money in) are equity, never revenue.
+  // Tracked separately for the capital-account roll-forward.
+  const totalContributions = contributions.reduce((s, t) => s + Number(t.amount), 0)
+  // F2 visibility: the document must SHOW what its totals exclude.
+  const uncategorizedCount = uncategorized.length
+  const uncategorizedTotal = uncategorized.reduce((s, t) => s + Number(t.amount), 0)
 
-  return { totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions }
+  return {
+    totalIncome, totalCogs, grossProfit, totalExpenses, netIncome,
+    totalDistributions, totalContributions, uncategorizedCount, uncategorizedTotal,
+  }
 }
 
 /** Compute year-end balances from transactions (last balance_after per bank account) */
@@ -173,7 +190,10 @@ export async function generatePnlExcel(
   const uncategorized = transactions.filter(t => t.category === "uncategorized")
 
   const currentTotals = computePnlTotals(transactions)
-  const { totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions } = currentTotals
+  const {
+    totalIncome, totalCogs, grossProfit, totalExpenses, netIncome,
+    totalDistributions, totalContributions, uncategorizedCount, uncategorizedTotal,
+  } = currentTotals
 
   // Prior year totals
   const priorTotals = hasPriorYear ? computePnlTotals(priorTransactions!) : null
@@ -264,6 +284,21 @@ export async function generatePnlExcel(
   for (const t of distributions) { distByMember[t.counterparty || "Unknown"] = (distByMember[t.counterparty || "Unknown"] || 0) + Math.abs(Number(t.amount)) }
   for (const [name, amt] of Object.entries(distByMember)) addRow(plSheet, name, -amt, false, 1)
   addRow(plSheet, "Total Distributions", -totalDistributions, true)
+  plSheet.addRow({})
+
+  // Capital contributions — equity, shown for the capital account, never in P&L totals (F3)
+  if (totalContributions !== 0) {
+    addRow(plSheet, "CAPITAL CONTRIBUTIONS (equity — not revenue)", totalContributions, true)
+    plSheet.addRow({})
+  }
+
+  // F2 visibility: never let the document pretend to be complete when it isn't.
+  if (uncategorizedCount > 0) {
+    const warnRow = plSheet.addRow({
+      label: `⚠ ${uncategorizedCount} UNCATEGORIZED transactions (net ${uncategorizedTotal.toFixed(2)}) are EXCLUDED from all totals above — review before filing`,
+    })
+    warnRow.font = { bold: true, color: { argb: "FFCC0000" } }
+  }
 
   // ── Sheet 2: Comparative Balance Sheet ──
   const bsSheet = workbook.addWorksheet("Balance Sheet")
@@ -429,18 +464,11 @@ export async function generatePnlCsv(
   ).sort((a, b) => (b[1] as number) - (a[1] as number))[0]?.[0] || "USD"
   const irsRate = rates[primaryCurrency]
 
-  // Categorize
-  const income = transactions.filter(t => t.category === "income")
-  const cogs = transactions.filter(t => t.category === "cogs")
+  // Expense detail rows; totals from the shared math (F1/F3 fixed once)
   const expenses = transactions.filter(t => ["expense", "fee", "refund"].includes(t.category))
-  const distributions = transactions.filter(t => t.category === "distribution")
 
-  const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
-  const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
-  const grossProfit = totalIncome - totalCogs
-  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
-  const netIncome = grossProfit - totalExpenses
-  const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const { totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions } =
+    computePnlTotals(transactions)
 
   // Group expenses by subcategory
   const expBySubcat: Record<string, number> = {}

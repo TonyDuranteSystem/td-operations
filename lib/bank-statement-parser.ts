@@ -25,7 +25,10 @@ export interface ParsedTransaction {
 }
 
 export interface CategorizedTransaction extends ParsedTransaction {
-  category: "income" | "cogs" | "expense" | "distribution" | "fee" | "conversion" | "refund" | "uncategorized"
+  // "contribution" = owner/member money INTO the company (capital contribution).
+  // It feeds the capital account roll-forward, NEVER the P&L — counting it as
+  // income overstates revenue on a tax return (flaw F3, master plan §4).
+  category: "income" | "cogs" | "expense" | "distribution" | "contribution" | "fee" | "conversion" | "refund" | "uncategorized"
   subcategory: string
   is_related_party: boolean
   notes: string
@@ -73,7 +76,10 @@ const CATEGORY_RULES: CategoryRule[] = [
   { pattern: /Ricevuto denaro da/i, category: "income", subcategory: "revenue" },
   { pattern: /Received money from/i, category: "income", subcategory: "revenue" },
   { pattern: /Complaint Compensation/i, category: "income", subcategory: "other_income" },
-  { pattern: /Top Up via/i, category: "income", subcategory: "capital_contribution" },
+
+  // CONTRIBUTIONS — owner money in. NOT income: it belongs to the capital
+  // account, never the P&L (F3 — counting a top-up as revenue overstates the return).
+  { pattern: /Top Up via/i, category: "contribution", subcategory: "capital_contribution" },
 
   // DISTRIBUTIONS — money sent to members
   { pattern: /Dividends|dividend/i, category: "distribution", subcategory: "member_distribution" },

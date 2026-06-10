@@ -117,3 +117,36 @@ describe('collectUploadPaths', () => {
     expect(collectUploadPaths(data)).toHaveLength(11)
   })
 })
+
+describe('repeater-flattened upload fields (pre-flight check, master plan §10.0)', () => {
+  // The wizard's inline repeater FLATTENS sub-field values to top-level keys
+  // ({repeater}_{idx}_{subfield} — wizard-client.tsx). Files inside repeater
+  // rows therefore MUST be collected like any other field. If a repeater ever
+  // stores rows as arrays-of-objects instead, this breaks silently — the same
+  // bug class as the 2026-06-10 bucket incident. This test locks the contract.
+  it('collects files from flattened per-bank repeater keys', () => {
+    const data = {
+      bank_accounts_0_bank_name: 'Mercury',
+      bank_accounts_0_statements: ['tax/acct-1/statements_ab12_mercury.csv'],
+      bank_accounts_1_bank_name: 'Some Unknown Bank',
+      bank_accounts_1_statements: [
+        'tax/acct-1/statements_cd34_unknown1.csv',
+        'tax/acct-1/statements_ef56_unknown2.csv',
+      ],
+    }
+    expect(collectUploadPaths(data)).toEqual([
+      'tax/acct-1/statements_ab12_mercury.csv',
+      'tax/acct-1/statements_cd34_unknown1.csv',
+      'tax/acct-1/statements_ef56_unknown2.csv',
+    ])
+  })
+
+  it('drops files if rows are nested objects (documents the limitation)', () => {
+    // NOT a supported shape — repeaters must flatten. This test documents the
+    // failure mode so a future nested-row design change can't pass unnoticed.
+    const nested = {
+      bank_accounts: [{ statements: ['tax/acct-1/statements_gh78_x.csv'] }],
+    }
+    expect(collectUploadPaths(nested as never)).toEqual([])
+  })
+})
