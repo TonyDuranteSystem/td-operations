@@ -13,6 +13,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { findContactIdByEmail } from '@/lib/operations/find-contact-by-email'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { type PortalTier, maxTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
@@ -91,17 +92,10 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
         .single()
 
       if (lead?.email) {
-        // Find or create contact from lead
-        const { data: existingContact } = await supabaseAdmin
-          .from('contacts')
-          .select('id')
-          .eq('email', lead.email)
-          .limit(1)
-          .maybeSingle()
-
-        if (existingContact) {
-          targetContactId = existingContact.id
-        }
+        // Find or create contact from lead. Case-insensitive + alias-aware so a
+        // differently-cased lead email reuses the existing contact instead of
+        // spawning a duplicate (Michele Cotti orphan, 2026-06-10).
+        targetContactId = (await findContactIdByEmail(lead.email)) ?? undefined
         // If no contact exists yet, we can still create a portal user from the lead email
         if (!targetContactId) {
           return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en', autoCreated, undefined)
@@ -165,14 +159,8 @@ async function createFromEmail(
     }
 
     if (!resolvedContactId) {
-      // Look up contact by email
-      const { data: contactByEmail } = await supabaseAdmin
-        .from('contacts')
-        .select('id')
-        .eq('email', email)
-        .limit(1)
-        .maybeSingle()
-      resolvedContactId = contactByEmail?.id
+      // Look up contact by email (case-insensitive + alias-aware)
+      resolvedContactId = (await findContactIdByEmail(email)) ?? undefined
     }
 
     // If still no contact, create one (same as new-user path)
@@ -225,18 +213,12 @@ async function createFromEmail(
   // Generate temp password
   const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
 
-  // Find or create contact so we can set contact_id in app_metadata
-  let portalContactId: string | undefined
-  const { data: existingContact } = await supabaseAdmin
-    .from('contacts')
-    .select('id')
-    .eq('email', email)
-    .limit(1)
-    .maybeSingle()
+  // Find or create contact so we can set contact_id in app_metadata.
+  // Case-insensitive + alias-aware lookup so we never create a duplicate contact
+  // for a case/alias variant of an existing person (Michele Cotti, 2026-06-10).
+  let portalContactId: string | undefined = (await findContactIdByEmail(email)) ?? undefined
 
-  if (existingContact) {
-    portalContactId = existingContact.id
-  } else {
+  if (!portalContactId) {
     // Create contact from email + name
     // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task 7ebb1e0c
     const { data: newContact } = await supabaseAdmin
