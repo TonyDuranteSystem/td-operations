@@ -126,9 +126,9 @@ function reconcile(stmt: AiStatement, txns: ParsedTransaction[]): NonNullable<Pa
 
   // Multi-currency statements (e.g. Wise EUR+USD) can't be reconciled with a
   // single balance delta — flag as unknown rather than falsely failing.
-  const currencies = new Set(txns.map(t => t.currency).filter(Boolean))
-  if (currencies.size > 1) {
-    return { opening_balance: opening, closing_balance: closing, computed_closing: null, reconciled: null, note: `Multi-currency (${[...currencies].join(", ")}) — balance reconciliation skipped` }
+  const currencies = Array.from(new Set(txns.map(t => t.currency).filter(Boolean)))
+  if (currencies.length > 1) {
+    return { opening_balance: opening, closing_balance: closing, computed_closing: null, reconciled: null, note: `Multi-currency (${currencies.join(", ")}) — balance reconciliation skipped` }
   }
 
   if (opening === null || closing === null) {
