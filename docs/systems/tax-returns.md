@@ -77,6 +77,7 @@ The card now advances to the wizard stage on a **real, bank-confirmed** 2nd-inst
 - **`tax_send_to_accountant` is idempotent + dry-run-first** — check the package before sending; re-send needs `force_resend=true`.
 - **Status (a long string) and the workflow-progress booleans are separate** — update the right one; don't infer one from the other.
 - **Prerequisites for the accountant send**: the tax form must be completed and the documents must already be in the Drive `3.Tax/{year}/` folder, or the package will be incomplete.
+- **`portal_messages.sender_id` is NOT NULL** — any code inserting a system-generated portal message must use the zero-UUID placeholder `"00000000-0000-0000-0000-000000000000"`, not `null`. Passing `null` violates the constraint and the insert silently fails (supabase-js default mode returns an error object, not a thrown exception). Convention documented in `lib/portal/chat-events.ts`. Fixed in `app/api/crm/tax-review/action/route.ts` and `app/api/portal/wizard-submit/route.ts` on 2026-06-10.
 
 ## How to verify current state
 - Read `lib/mcp/tools/tax.ts` — the `tax_search` status list (authoritative status enum) and `tax_send_to_accountant` (package contents + idempotency).
