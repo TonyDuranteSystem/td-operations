@@ -9772,6 +9772,7 @@ export type Database = {
           service_name: string
           service_type: string
           service_type_entry_id: string | null
+          source_offer_token: string | null
           stage: string | null
           stage_entered_at: string | null
           stage_history: Json | null
@@ -9803,6 +9804,7 @@ export type Database = {
           service_name: string
           service_type: string
           service_type_entry_id?: string | null
+          source_offer_token?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
@@ -9834,6 +9836,7 @@ export type Database = {
           service_name?: string
           service_type?: string
           service_type_entry_id?: string | null
+          source_offer_token?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
