@@ -38,12 +38,18 @@ const COPY = {
   en: {
     title: 'New document available',
     body: (name: string) => `${name} has been added to your portal.`,
+    chat: (name: string) => `A new document has been added to your folder: ${name}`,
   },
   it: {
     title: 'Nuovo documento disponibile',
     body: (name: string) => `${name} è stato aggiunto al tuo portale.`,
+    chat: (name: string) => `Un nuovo documento è stato aggiunto alla tua cartella: ${name}`,
   },
 }
+
+// Same admin sender used by the workflow handlers / portal tools for
+// system-authored portal chat messages (support@tonydurante.us auth user).
+const ADMIN_SENDER_ID = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
 
 /** Whether the whole feature is on. Default true; flip off via app_settings. */
 export async function isNewDocumentAlertEnabled(): Promise<boolean> {
@@ -101,7 +107,32 @@ export async function notifyClientsOfNewDocument(documentId: string): Promise<{ 
     return { notified: false, reason: 'no_recipient' }
   }
 
+  // Optional portal chat message (Antonio 2026-06-11: ON for every share path).
+  // Account-scoped — portal chat threads hang on account_id — so personal docs
+  // without an account skip chat (the contact-scoped notification still fires).
+  // Best-effort: a chat failure must never undo the alert above.
+  try {
+    if (doc.account_id && (await isNewDocumentChatEnabled())) {
+      const { error: chatError } = await db.from('portal_messages').insert({
+        account_id: doc.account_id,
+        contact_id: doc.contact_id || null,
+        sender_type: 'admin',
+        sender_id: ADMIN_SENDER_ID,
+        message: c.chat(doc.file_name),
+      })
+      if (chatError) console.warn('[document-alerts] chat message failed:', chatError.message)
+    }
+  } catch (e) {
+    console.warn('[document-alerts] chat message failed:', e instanceof Error ? e.message : String(e))
+  }
+
   return { notified: true }
+}
+
+/** Whether the new-document alert also posts a portal chat message. Default true. */
+export async function isNewDocumentChatEnabled(): Promise<boolean> {
+  const v = await getAppSetting<boolean>('new_document_chat_message_enabled', true)
+  return v !== false
 }
 
 /** Resolve the notification language from the contact, else the account owner, else English. */

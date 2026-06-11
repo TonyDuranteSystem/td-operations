@@ -3,6 +3,8 @@ import { gmailPost } from '@/lib/gmail'
 import { getGreeting } from '@/lib/greeting'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
+import { getAppSetting } from '@/lib/settings'
+import { buildDigestSections, mergeTypeLabels } from '@/lib/portal/digest-render'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
 
@@ -62,9 +64,28 @@ export async function GET(request: NextRequest) {
 
     let emailsSent = 0
     let notificationsProcessed = 0
+    // Recipients we could not resolve to an email (no portal access / no
+    // address on file). Their notifications are marked email_sent_at anyway —
+    // an unreachable notification must not recycle through this query every
+    // 5 minutes forever (the pre-2026-06-11 behavior). Counted per reason for
+    // the cron log so silent skips stay visible.
+    const skipped: Record<string, number> = {}
+    const markSkipped = async (reason: string, notifIds: string[]) => {
+      skipped[reason] = (skipped[reason] ?? 0) + notifIds.length
+      await supabaseAdmin
+        .from('portal_notifications')
+        .update({ email_sent_at: new Date().toISOString() })
+        .in('id', notifIds)
+    }
+
+    // Per-type display config: code defaults + runtime overrides (app_settings).
+    const typeLabels = mergeTypeLabels(
+      await getAppSetting<Record<string, unknown>>('portal_digest_type_labels', {})
+    )
 
     for (const [key, notifications] of Array.from(groups.entries())) {
       const [type, id] = key.split(':')
+      const notifIds = notifications.map(n => n.id)
 
       // Resolve contact email + info
       let contactEmail: string | null = null
@@ -81,9 +102,9 @@ export async function GET(request: NextRequest) {
           .eq('id', id)
           .single()
 
-        if (!contact?.email) continue
+        if (!contact?.email) { await markSkipped('contact_no_email', notifIds); continue }
         // Skip if contact has no portal access
-        if (!contact.portal_tier || contact.portal_tier === 'none') continue
+        if (!contact.portal_tier || contact.portal_tier === 'none') { await markSkipped('contact_no_portal', notifIds); continue }
 
         contactEmail = contact.email
         _contactName = contact.full_name
@@ -108,11 +129,11 @@ export async function GET(request: NextRequest) {
           .select('portal_account')
           .eq('id', id)
           .single()
-        if (!acctCheck?.portal_account) continue
+        if (!acctCheck?.portal_account) { await markSkipped('account_no_portal', notifIds); continue }
 
         // Get company email (communication_email or primary contact fallback)
         const companyEmail = await getCompanyEmail(id)
-        if (!companyEmail) continue
+        if (!companyEmail) { await markSkipped('account_no_email', notifIds); continue }
         contactEmail = companyEmail
 
         // Still need contact details for greeting personalization
@@ -166,46 +187,10 @@ export async function GET(request: NextRequest) {
       }
       const emailNotifs = notifications.filter(n => !(n.type === 'new_document' && hasPush))
 
-      // Group notifications by type
-      const byType = new Map<string, typeof notifications>()
-      for (const n of emailNotifs) {
-        if (!byType.has(n.type)) byType.set(n.type, [])
-        byType.get(n.type)!.push(n)
-      }
-
-      // Build sections
+      // Build per-type sections (pure helper — lib/portal/digest-render.ts).
+      // Types with show_body (documents) render the file name under the title.
       const isItalian = language === 'Italian' || language === 'it'
-      const sections: string[] = []
-
-      const typeLabels: Record<string, { icon: string; label_en: string; label_it: string }> = {
-        chat: { icon: '&#128172;', label_en: 'Messages', label_it: 'Messaggi' },
-        service: { icon: '&#9889;', label_en: 'Service Updates', label_it: 'Aggiornamenti Servizi' },
-        deadline: { icon: '&#128197;', label_en: 'Deadlines', label_it: 'Scadenze' },
-        invoice: { icon: '&#128196;', label_en: 'Invoices', label_it: 'Fatture' },
-        document: { icon: '&#128196;', label_en: 'Documents', label_it: 'Documenti' },
-        sign_document: { icon: '&#9999;', label_en: 'Documents to Sign', label_it: 'Documenti da Firmare' },
-        tax_document_uploaded: { icon: '&#128196;', label_en: 'Tax Documents', label_it: 'Documenti Fiscali' },
-      }
-
-      for (const [nType, items] of Array.from(byType.entries())) {
-        const meta = typeLabels[nType] || { icon: '&#128276;', label_en: nType, label_it: nType }
-        const label = isItalian ? meta.label_it : meta.label_en
-
-        const itemsHtml = items
-          .map(item => `<li style="color: #4b5563; margin: 4px 0;">${item.title}</li>`)
-          .join('')
-
-        sections.push(`
-          <div style="margin-bottom: 16px;">
-            <p style="font-weight: 600; font-size: 14px; color: #111827; margin: 0 0 6px;">
-              ${meta.icon} ${label} (${items.length})
-            </p>
-            <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
-              ${itemsHtml}
-            </ul>
-          </div>
-        `)
-      }
+      const sections = buildDigestSections(emailNotifs, typeLabels, isItalian)
 
       const introText = isItalian
         ? 'Hai nuovi aggiornamenti nel tuo portale:'
@@ -270,7 +255,6 @@ export async function GET(request: NextRequest) {
       }
 
       // Mark all notifications as email-sent (including push-skipped new_document)
-      const notifIds = notifications.map(n => n.id)
       await supabaseAdmin
         .from('portal_notifications')
         .update({ email_sent_at: new Date().toISOString() })
@@ -283,13 +267,14 @@ export async function GET(request: NextRequest) {
       endpoint: '/api/cron/portal-digest',
       status: 'success',
       duration_ms: Date.now() - startTime,
-      details: { emails_sent: emailsSent, notifications_processed: notificationsProcessed },
+      details: { emails_sent: emailsSent, notifications_processed: notificationsProcessed, skipped },
     })
 
     return NextResponse.json({
       message: `Digest sent`,
       emails_sent: emailsSent,
       notifications_processed: notificationsProcessed,
+      skipped,
     })
   } catch (err) {
     console.error('[portal-digest] Error:', err)

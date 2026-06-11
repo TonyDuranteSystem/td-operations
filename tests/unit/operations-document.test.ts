@@ -17,9 +17,13 @@ let updateReturnsRows: Array<{ id: string; drive_file_id: string | null; account
 let bulkUpdateReturnsRows: Array<{ id: string }> = []
 let updateError: { message: string } | null = null
 let expectStaleLockFilter: string | null = null
+// Rows returned by the portal_visible pre-read (new-document alert transition
+// detection). null = pre-read returns no rows (alert never fires).
+let preReadRows: Array<{ id: string; portal_visible: boolean }> | null = null
 
 const updateCalls: Array<{ patch: Record<string, unknown>; filters: Record<string, string | string[]> }> = []
 const actionLogCalls: Array<Record<string, unknown>> = []
+const alertCalls: string[] = []
 
 // ─── Mocks ───────────────────────────────────────────────
 
@@ -83,7 +87,7 @@ vi.mock("@/lib/supabase-admin", () => ({
             resolve({ data: rows, error: updateError })
             return
           }
-          resolve({ data: null, error: null })
+          resolve({ data: preReadRows, error: null })
         },
       })
       return chain
@@ -97,6 +101,16 @@ vi.mock("@/lib/mcp/action-log", () => ({
   }),
 }))
 
+vi.mock("@/lib/portal/document-alerts", () => ({
+  notifyClientsOfNewDocument: vi.fn((id: string) => {
+    alertCalls.push(id)
+    return Promise.resolve({ notified: true })
+  }),
+}))
+
+/** The alert dispatch is fire-and-forget (dynamic import) — flush microtasks. */
+const flushAlerts = () => new Promise((r) => setTimeout(r, 0))
+
 beforeEach(() => {
   existingRow = null
   updateReturnsRows = [
@@ -105,8 +119,10 @@ beforeEach(() => {
   bulkUpdateReturnsRows = [{ id: "doc-1" }, { id: "doc-2" }, { id: "doc-3" }]
   updateError = null
   expectStaleLockFilter = null
+  preReadRows = null
   updateCalls.length = 0
   actionLogCalls.length = 0
+  alertCalls.length = 0
 })
 
 // ─── updateDocument — validation ─────────────────────────
@@ -326,5 +342,96 @@ describe("updateDocumentsBulk — happy path", () => {
     expect(result.success).toBe(false)
     expect(result.outcome).toBe("error")
     expect(result.error).toContain("unique_violation")
+  })
+})
+
+// ─── new-document client alert (2026-06-11) ──────────────
+//
+// updateDocument/updateDocumentsBulk fire the idempotent new-document alert
+// (lib/portal/document-alerts.ts) for rows whose portal_visible actually
+// transitioned false→true. Single update defaults to alerting; bulk defaults
+// to NOT alerting (migration semantics).
+
+describe("updateDocument — new-document alert", () => {
+  it("fires the alert when portal_visible transitions false→true", async () => {
+    preReadRows = [{ id: "doc-1", portal_visible: false }]
+    const { updateDocument } = await import("@/lib/operations/document")
+    await updateDocument({ id: "doc-1", patch: { portal_visible: true } })
+    await flushAlerts()
+    expect(alertCalls).toEqual(["doc-1"])
+  })
+
+  it("does NOT fire when the document was already visible (redundant re-save)", async () => {
+    preReadRows = [{ id: "doc-1", portal_visible: true }]
+    const { updateDocument } = await import("@/lib/operations/document")
+    await updateDocument({ id: "doc-1", patch: { portal_visible: true } })
+    await flushAlerts()
+    expect(alertCalls).toEqual([])
+  })
+
+  it("does NOT fire when hiding a document", async () => {
+    preReadRows = [{ id: "doc-1", portal_visible: true }]
+    const { updateDocument } = await import("@/lib/operations/document")
+    await updateDocument({ id: "doc-1", patch: { portal_visible: false } })
+    await flushAlerts()
+    expect(alertCalls).toEqual([])
+  })
+
+  it("does NOT fire when the patch doesn't touch portal_visible", async () => {
+    preReadRows = [{ id: "doc-1", portal_visible: false }]
+    const { updateDocument } = await import("@/lib/operations/document")
+    await updateDocument({ id: "doc-1", patch: { file_name: "renamed.pdf" } })
+    await flushAlerts()
+    expect(alertCalls).toEqual([])
+  })
+
+  it("honors clientAlert: false (explicit opt-out)", async () => {
+    preReadRows = [{ id: "doc-1", portal_visible: false }]
+    const { updateDocument } = await import("@/lib/operations/document")
+    await updateDocument({ id: "doc-1", patch: { portal_visible: true }, clientAlert: false })
+    await flushAlerts()
+    expect(alertCalls).toEqual([])
+  })
+
+  it("works on the drive_file_id lookup path too", async () => {
+    preReadRows = [{ id: "doc-1", portal_visible: false }]
+    const { updateDocument } = await import("@/lib/operations/document")
+    await updateDocument({
+      drive_file_id: "drv-1",
+      account_id: "acct-1",
+      patch: { portal_visible: true },
+    })
+    await flushAlerts()
+    expect(alertCalls).toEqual(["doc-1"])
+  })
+})
+
+describe("updateDocumentsBulk — new-document alert", () => {
+  it("does NOT alert by default (bulk = migration semantics)", async () => {
+    preReadRows = [
+      { id: "doc-1", portal_visible: false },
+      { id: "doc-2", portal_visible: false },
+    ]
+    const { updateDocumentsBulk } = await import("@/lib/operations/document")
+    await updateDocumentsBulk({ ids: ["doc-1", "doc-2"], patch: { portal_visible: true } })
+    await flushAlerts()
+    expect(alertCalls).toEqual([])
+  })
+
+  it("alerts only transitioned rows when clientAlert: true", async () => {
+    preReadRows = [
+      { id: "doc-1", portal_visible: false },
+      { id: "doc-2", portal_visible: true }, // already visible — no alert
+      { id: "doc-3", portal_visible: false },
+    ]
+    bulkUpdateReturnsRows = [{ id: "doc-1" }, { id: "doc-2" }, { id: "doc-3" }]
+    const { updateDocumentsBulk } = await import("@/lib/operations/document")
+    await updateDocumentsBulk({
+      ids: ["doc-1", "doc-2", "doc-3"],
+      patch: { portal_visible: true },
+      clientAlert: true,
+    })
+    await flushAlerts()
+    expect(alertCalls.sort()).toEqual(["doc-1", "doc-3"])
   })
 })

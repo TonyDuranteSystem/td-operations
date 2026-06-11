@@ -21,6 +21,8 @@ export type AppSettingKey =
   | "auto_activate_confidence_threshold" // 'exact' (default) | 'exact_or_high' — which match confidence levels trigger auto-activation. Anything below threshold goes to the bank-feed review queue.
   | "portal_admin_email_on_client_message" // boolean — when true (default), a client portal chat message emails support@tonydurante.us. Set false to silence those emails (push notifications are unaffected). Toggled in Dev Tools → Maintenance.
   | "new_document_alert_enabled" // boolean — when true (default), making a document client-visible alerts the client (in-portal notification + push; digest email for non-push users) and shows it as "New" until opened. Global kill switch for the new-document alert feature; consumed in lib/portal/document-alerts.ts.
+  | "new_document_chat_message_enabled" // boolean — when true (default, Antonio 2026-06-11), the new-document alert ALSO posts a portal chat message ("A new document has been added to your folder: <name>", localized EN/IT). Unified across all share paths (toggle, process-and-share, uploads, signature webhook); consumed in lib/portal/document-alerts.ts. Set false for notification-only alerts.
+  | "portal_digest_type_labels" // object — per-notification-type display overrides for the digest email, merged over code defaults in lib/portal/digest-render.ts. Shape: { "<type>": { icon?: string, label_en?: string, label_it?: string, show_body?: boolean } }. Lets ops rename sections / toggle item detail lines without a deploy.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,
