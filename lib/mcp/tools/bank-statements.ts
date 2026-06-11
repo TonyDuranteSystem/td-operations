@@ -258,13 +258,27 @@ export function registerBankStatementTools(server: McpServer) {
           }
         }
 
+        // Post-ingest categorization pass: DB rules (global + per-client) +
+        // transfer-pair matching across the WHOLE account-year set — internal
+        // moves between the client's own banks must never count as revenue or
+        // expense (master plan §4). Re-runnable; manual corrections preserved.
+        let recatNote = ""
+        try {
+          const { recategorizeAccountYear } = await import("@/lib/tax/categorization-engine")
+          const recat = await recategorizeAccountYear(account_id, tax_year)
+          uncategorizedCount = recat.uncategorizedRemaining
+          recatNote = `Categorization pass: ${recat.recategorized} updated, ${recat.transferPairs} transfer pairs excluded from P&L`
+        } catch (e) {
+          recatNote = `⚠️ Categorization pass failed (transactions ingested fine): ${e instanceof Error ? e.message : String(e)}`
+        }
+
         // Log action
         logAction({
           action_type: "bank_statement_process",
           table_name: "bank_transactions",
           record_id: account_id,
           summary: `Processed ${filesToProcess.length} files for ${ctx.companyName}: ${totalTransactions} transactions`,
-          details: { files: fileResults, errors: allErrors },
+          details: { files: fileResults, errors: allErrors, recategorization: recatNote },
         })
 
         const summary = [
@@ -276,6 +290,7 @@ export function registerBankStatementTools(server: McpServer) {
           `Total transactions: ${totalTransactions}`,
           `Income: ${totalIncome.toFixed(2)}`,
           `Expenses: ${totalExpenses.toFixed(2)}`,
+          recatNote,
           uncategorizedCount > 0 ? `⚠️ Uncategorized: ${uncategorizedCount} (use bank_statement_review to check)` : "",
           allErrors.length > 0 ? `\nErrors:\n${allErrors.map(e => `  ⚠️ ${e}`).join("\n")}` : "",
         ].filter(Boolean).join("\n")
