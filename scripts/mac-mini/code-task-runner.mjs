@@ -39,7 +39,7 @@
  *   and lib/ai-agent/slack-claude.ts (chat.postMessage shape), 2026-06-11.
  */
 
-import { spawn } from "node:child_process"
+import { spawn, execSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@supabase/supabase-js"
@@ -203,7 +203,33 @@ async function tick(cfg) {
   log("claimed code task", row.id, "—", title)
 
   // 3) Run Claude Code in the repo dir.
-  const { ok, output } = await runClaude(cfg, instructions)
+  let { ok, output } = await runClaude(cfg, instructions)
+
+  // 3b) If the session succeeded and left new local commits, push them so the
+  // change actually reaches production. A single `git push origin main` deploys
+  // it (the repo is wired to both Vercel projects). If the push fails — pre-push
+  // hooks (build, unit tests, ESLint, remote-sync) or a non-fast-forward — surface
+  // the error and mark the task FAILED: the code is committed locally but did NOT
+  // reach production, so it must not look like a success.
+  if (ok) {
+    try {
+      const newCommits = execSync('git log --oneline HEAD...origin/main 2>/dev/null || echo ""', {
+        cwd: cfg.repoDir,
+        encoding: "utf8",
+      }).trim()
+      if (newCommits) {
+        execSync("ALLOW_SYSTEM_DOC_SKIP=1 ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin main", {
+          cwd: cfg.repoDir,
+          timeout: 120000,
+          encoding: "utf8",
+        })
+        output += "\n\n✅ Pushed to production."
+      }
+    } catch (pushErr) {
+      ok = false
+      output += "\n\n⚠️ Code changes committed locally but push failed:\n" + String(pushErr?.message || pushErr).slice(0, 500)
+    }
+  }
 
   // 4) Post the result back to the originating Slack thread.
   const header = ok ? `✅ *${title}* — done` : `⚠️ *${title}* — failed`

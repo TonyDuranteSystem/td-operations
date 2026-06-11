@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-11 (ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback)
+**Last verified against code:** 2026-06-11 (ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -51,6 +51,7 @@ Slack                          Production server              Supabase
 | `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent`, `prepareSlackImages`, `fetchThreadImages` (thread-history image harvest) |
 | `app/api/webhooks/slack-claude/route.ts` | Slack Events API webhook handler |
 | `app/api/cron/slack-claude-worker/route.ts` | Worker cron (direct trigger + scan safety net) |
+| `scripts/mac-mini/code-task-runner.mjs` | Mac Mini launchd daemon: claims `recipient='code_runner'` rows, runs headless `claude --print`, auto-pushes new commits to production, posts result to the Slack thread |
 | `scripts/migrations/20260610-1400-slack-claude-party.sql` | Adds `'slack'` to `agent_message_party` enum |
 | `tests/unit/slack-claude-worker.test.ts` | Unit tests |
 
@@ -153,7 +154,19 @@ The webhook handler skips incoming events (runs **before** the participation que
 - Short, conversational (2–5 lines max)
 - Discuss-before-act: report findings, ask what to do next, never self-approve actions
 - `propose_action` pattern: describe in plain English → wait for explicit approval ("yes", "go", "send it")
+- **CODE TASKS** block: when asked to implement/build/fix/deploy → investigate with read tools, then call `start_code_task` with detailed instructions, then say "I've queued the task — Mac Mini will handle it and report back here"
+- **SHIPPING** block: when Antonio says "ship it"/"deploy it"/"push it" → don't re-queue a done code task (the runner auto-pushes); if a local commit is waiting, say "The code is committed and being pushed to production"; "ship" = push to production, "do it" = implement — don't confuse the two
 - Differs from `WORKER_SYSTEM_PROMPT` (Hermes): less analytical, more interactive
+
+---
+
+## Code-task rail (`start_code_task` → Mac Mini → auto-push)
+
+When the Slack worker calls `start_code_task` it inserts an `agent_messages` row with `recipient='code_runner'`, carrying `context_json.{source,title,slack_channel_id,slack_thread_ts}` so the result can be posted back to the originating thread.
+
+`scripts/mac-mini/code-task-runner.mjs` is a launchd daemon on the Mac Mini that polls every 15 s for the oldest `recipient='code_runner'` + `status='pending'` row, atomically claims it (`status pending → processing`), and runs a headless `claude --print` session in the repo with full access.
+
+**Auto-push (added 2026-06-11):** after a *successful* `claude --print`, the runner checks `git log --oneline HEAD...origin/main`; if the session left new local commits it runs `ALLOW_SYSTEM_DOC_SKIP=1 ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin main` (120 s timeout) and appends "✅ Pushed to production" to the Slack reply. If the push fails (pre-push hooks — build/tests/lint/remote-sync — or a non-fast-forward) the runner appends the error **and marks the task `failed`** (the code is committed locally but did NOT reach production, so it must not report success). The push is gated on the session succeeding; a failed session never pushes. Single `git push origin main` deploys to production (repo wired to both Vercel projects).
 
 ---
 
