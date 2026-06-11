@@ -483,6 +483,7 @@ export async function generateFormSummaryPDF(
           rpt_vat_number: "VAT Number",
           rpt_amount: "Amount",
           rpt_direction: "Direction",
+          rpt_type: "Transaction Type",
           rpt_description: "Description",
         }
 

@@ -196,6 +196,20 @@ export function WizardClient({
         const refValue = formData[field.conditional.field]
         if (String(refValue) !== field.conditional.value) continue
       }
+      // Required repeater (e.g. related-party transactions once the gate is "Yes"):
+      // at least one row, and every required sub-field of every row must be filled.
+      if (field.type === 'repeater') {
+        if (field.required) {
+          const count = Number(formData[`${field.name}_count`]) || 0
+          if (count < 1) return false
+          for (let i = 0; i < count; i++) {
+            for (const rf of field.repeaterFields || []) {
+              if (rf.required && isEmptyValue(formData[`${field.name}_${i}_${rf.name}`])) return false
+            }
+          }
+        }
+        continue
+      }
       if (field.required && isEmptyValue(formData[field.name])) return false
     }
     return true
@@ -547,11 +561,18 @@ export function WizardClient({
                   <div key={field.name} className="md:col-span-2 space-y-3">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-zinc-700">{locale === 'it' && field.labelIt ? field.labelIt : field.label}</span>
-                      <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>
+                      {field.required
+                        ? <span className="text-xs font-semibold text-red-500">{locale === 'it' ? '(obbligatorio)' : '(required)'}</span>
+                        : <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>}
                     </div>
+                    {(locale === 'it' && field.hintIt ? field.hintIt : field.hint) && (
+                      <p className="text-xs text-zinc-500 leading-relaxed">{locale === 'it' && field.hintIt ? field.hintIt : field.hint}</p>
+                    )}
                     {count === 0 && (
-                      <p className="text-xs text-zinc-400 italic">
-                        {locale === 'it' ? 'Nessuna transazione aggiunta.' : 'No entries added yet.'}
+                      <p className={`text-xs italic ${field.required ? 'text-red-500' : 'text-zinc-400'}`}>
+                        {field.required
+                          ? (locale === 'it' ? 'Aggiungi almeno una transazione per continuare.' : 'Add at least one transaction to continue.')
+                          : (locale === 'it' ? 'Nessuna transazione aggiunta.' : 'No entries added yet.')}
                       </p>
                     )}
                     {Array.from({ length: count }).map((_, idx) => (
