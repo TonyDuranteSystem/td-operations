@@ -487,6 +487,27 @@ export async function generateFormSummaryPDF(
           rpt_description: "Description",
         }
 
+        // Human-readable labels for stored option codes (the wizard stores values
+        // like "to_llc" / "services"; show the accountant the readable text).
+        const repeaterValueLabels: Record<string, Record<string, string>> = {
+          rpt_direction: {
+            to_llc: "Money received FROM this party",
+            from_llc: "Money paid TO this party",
+          },
+          rpt_type: {
+            sale_goods: "Sale of goods / products",
+            services: "Services or consulting fee",
+            rent: "Rent (property / equipment)",
+            royalties: "Royalties or license fees",
+            interest: "Interest",
+            loan: "Loan (money lent or borrowed)",
+            capital: "Capital contribution / distribution",
+            management_fee: "Management or commission fee",
+            reimbursement: "Reimbursement of expenses",
+            other: "Other",
+          },
+        }
+
         for (let mi = 0; mi < val.length; mi++) {
           const item = val[mi] as Record<string, unknown>
           ensureSpace(30)
@@ -500,7 +521,8 @@ export async function generateFormSummaryPDF(
             if (itemVal === undefined || itemVal === null || itemVal === "") continue
             ensureSpace(14)
             const itemLabel = memberFieldLabels[itemKey] || itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
-            const itemDisplay = typeof itemVal === "boolean" ? (itemVal ? "Yes" : "No") : String(itemVal)
+            const mappedValue = repeaterValueLabels[itemKey]?.[String(itemVal)]
+            const itemDisplay = mappedValue ?? (typeof itemVal === "boolean" ? (itemVal ? "Yes" : "No") : String(itemVal))
             page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
             page.drawText(itemDisplay, { x: 200, y, size: 10, font, color: black })
             y -= 14
