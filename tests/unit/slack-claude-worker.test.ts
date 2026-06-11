@@ -288,6 +288,7 @@ describe("processSlackEvent", () => {
       threadId: "thread-001",
       messageId: "row-id-001",
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+      enableCodeTasks: true,
     })
 
     // Should have called Slack chat.postMessage

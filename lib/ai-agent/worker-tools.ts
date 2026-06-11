@@ -162,6 +162,25 @@ export const CODEBASE_SEARCH_TOOL: ToolDef = {
 }
 
 /**
+ * start_code_task — queue a code implementation task for the Mac Mini runner.
+ *
+ * Slack-only: surfaced when Antonio asks Claude-in-Slack to implement/build/fix/
+ * deploy code. It does NOT run code in-process — it inserts an agent_messages row
+ * addressed to the 'code_runner' party. The Mac Mini polling runner
+ * (scripts/mac-mini/code-task-runner.mjs) claims the row, runs a Claude Code
+ * session with full repo access, and posts the result back to the originating
+ * Slack thread (channel/thread carried in context_json).
+ */
+export const START_CODE_TASK_TOOL: ToolDef = {
+  name: "start_code_task",
+  description: "Start a code implementation task on the Mac Mini. Use when Antonio asks to implement, build, fix, or deploy code. The task runs as a Claude Code session with full repo access. Results posted back to this Slack thread. Write DETAILED instructions.",
+  parameters: { type: "object", properties: {
+    instructions: { type: "string", description: "Detailed implementation instructions for Claude Code" },
+    title: { type: "string", description: "Short title (3-8 words)" },
+  }, required: ["instructions", "title"] },
+}
+
+/**
  * Tools handed to sonnet at request time: the read-only research subset PLUS
  * propose_action (which only queues, never executes) PLUS the read-only
  * codebase tools (so the worker can trace into source).
@@ -172,6 +191,14 @@ export const WORKER_TOOLS: ToolDef[] = [
   CODEBASE_READ_TOOL,
   CODEBASE_SEARCH_TOOL,
 ]
+
+// NOTE: START_CODE_TASK_TOOL is intentionally NOT in WORKER_TOOLS. WORKER_TOOLS
+// feeds both the default tool list AND getToolsForThreadType() (thread-routing),
+// which the Hermes/Telegram research worker also uses. Thread type cannot
+// distinguish the Slack worker (which may queue code tasks) from the Hermes
+// worker (Phase-1 RESEARCH ONLY — no mutate/execute tools, per R108). So this
+// tool is injected ONLY when CallWorkerOptions.enableCodeTasks is set, which only
+// the Slack worker does. See callWorker() below.
 
 /**
  * Mint a 6-digit confirmation code for a proposal (WP1). Antonio must type this
@@ -379,6 +406,21 @@ interface ApprovalQueueRow {
  * subset delegates to executeTool; everything else is rejected.
  */
 export async function executeWorkerTool(name: string, params: Record<string, unknown>): Promise<string> {
+  if (name === "start_code_task") {
+    const { _currentSlackCtx } = await import("./slack-claude")
+    const instructions = typeof params.instructions === "string" ? params.instructions : ""
+    const title = typeof params.title === "string" ? params.title : "Code task"
+    if (!instructions.trim()) return "instructions required"
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabaseAdmin as any).from("agent_messages").insert({
+      sender: "slack", recipient: "code_runner", subject: title.slice(0, 200), body: instructions,
+      status: "pending", context_json: { source: "slack_code_task", title,
+        slack_channel_id: _currentSlackCtx.channelId ?? null,
+        slack_thread_ts: _currentSlackCtx.threadTs ?? null },
+    }).select("id").single()
+    if (error) return "Failed: " + error.message
+    return "Code task queued (id:" + data.id + "). Mac Mini will implement it and post results back here."
+  }
   if (name === "propose_action") {
     return proposeAction(params)
   }
@@ -498,6 +540,14 @@ export interface CallWorkerOptions {
    * Absent/empty → text-only, identical to every prior caller.
    */
   images?: WorkerImageBlock[]
+  /**
+   * Expose the Slack-only start_code_task tool for this call. Set by the Slack
+   * worker (processSlackEvent). When true, START_CODE_TASK_TOOL is appended to
+   * whatever tool list this call resolves to. The Hermes/Telegram path never sets
+   * this, so its worker stays research-only (R108). Slack scope for the queued
+   * task is read from _currentSlackCtx in executeWorkerTool at call time.
+   */
+  enableCodeTasks?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -670,6 +720,13 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       tools = WORKER_TOOLS
       systemPrompt = WORKER_SYSTEM_PROMPT
     }
+  }
+
+  // Slack-only: append the code-task tool to whatever list we resolved above
+  // (full WORKER_TOOLS or a thread-routed subset). Guarded so it never reaches
+  // the Hermes research worker (R108) and never double-adds.
+  if (opts.enableCodeTasks && !tools.some((t) => t.name === START_CODE_TASK_TOOL.name)) {
+    tools = [...tools, START_CODE_TASK_TOOL]
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send

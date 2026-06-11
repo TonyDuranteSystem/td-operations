@@ -19,6 +19,15 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
 
+/**
+ * Slack context for the event currently being processed. Set by
+ * processSlackEvent() immediately before callWorker(), and read by the
+ * start_code_task worker tool (via dynamic import) so a queued code task carries
+ * the channel + thread to post its result back to. Sequential cron processing
+ * (runScan's for-await loop) keeps this accurate for the in-flight event.
+ */
+export let _currentSlackCtx: { channelId?: string; threadTs?: string } = {}
+
 // Image media types the Anthropic API accepts. Slack can deliver others
 // (image/heic from iPhone photos, image/svg+xml, image/bmp); passing an
 // unsupported type fails the ENTIRE worker call, so we filter to these and
@@ -57,6 +66,12 @@ BEHAVIOR:
 
 TOOLS: Use tools when asked to look something up. One targeted tool call, report back,
 then ask what to do. Do not chain multiple tools speculatively.
+
+CODE TASKS: When Antonio asks you to implement, build, fix, or deploy something:
+1. First investigate with read tools to understand what needs changing
+2. Call start_code_task with detailed instructions
+3. The Mac Mini runs Claude Code with full repo access
+4. Say "I've queued the task — Mac Mini will handle it and report back here"
 
 CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and sometimes Hermes
 (the Telegram AI assistant). Antonio is the decision-maker. You answer, discuss, and
@@ -338,8 +353,13 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     threadId: row.thread_id,
     messageId: row.id,
     systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+    enableCodeTasks: true,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
+
+  // Expose this event's Slack scope to the start_code_task worker tool so a
+  // queued code task knows which channel/thread to report back to.
+  _currentSlackCtx = { channelId, threadTs: replyThreadTs }
 
   // Run the worker. If the call fails specifically because of an image the API
   // rejected (a 400 mentioning "image" — e.g. a corrupt download that slipped
@@ -359,6 +379,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
       threadId: row.thread_id,
       messageId: row.id,
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+      enableCodeTasks: true,
     }
     ;({ reply } = await callWorker(row.body, textOnlyOpts))
   }
