@@ -122,6 +122,19 @@ export function WizardClient({
         if (!res.ok) {
           const errText = await res.text().catch(() => '')
           console.error('[wizard-upload] mint-path failed', { status: res.status, error: errText, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+          // R099: surface the server's guiding message (e.g. the CSV-only
+          // explanation) to the client instead of a generic "Upload failed".
+          // Marked so the outer catch below re-throws it instead of
+          // swallowing it into a silent `null`.
+          let serverError: string | null = null
+          try {
+            serverError = (JSON.parse(errText) as { error?: string })?.error ?? null
+          } catch { /* not JSON */ }
+          if (serverError) {
+            const guided = new Error(serverError) as Error & { isUserMessage?: boolean }
+            guided.isUserMessage = true
+            throw guided
+          }
           return null
         }
         const { path } = await res.json()
@@ -148,6 +161,9 @@ export function WizardClient({
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         console.error('[wizard-upload] upload failed', { error: msg, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+        // Guided server messages (R099) propagate to the field UI; anything
+        // else stays a silent null → generic "Upload failed" fallback.
+        if (err instanceof Error && (err as Error & { isUserMessage?: boolean }).isUserMessage) throw err
         return null
       }
     },

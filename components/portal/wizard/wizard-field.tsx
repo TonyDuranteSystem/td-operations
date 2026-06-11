@@ -167,10 +167,15 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
           // in-flight drafts still render. dev_task 64bfcdd9.
           const paths = Array.isArray(value) ? value : (value ? [String(value)] : [])
           // Strip the storage prefix + the {fieldName}_{unique}_ segment so the
-          // client sees their original filename.
+          // client sees their original filename. Inside repeaters the storage
+          // path uses the FLATTENED name (bank_accounts_0_statements_…) while
+          // field.name is just the sub-field ("statements"), so a name-anchored
+          // regex misses — strip generically through the 8-char unique token.
           const displayName = (p: string) => {
             const base = p.split('/').pop() || p
-            return base.replace(new RegExp(`^${field.name}_[a-z0-9]{8}_`), '')
+            const generic = base.replace(/^.*_[a-z0-9]{8}_/, '')
+            if (generic !== base) return generic
+            return base.replace(new RegExp(`^${field.name}_`), '')
           }
           return (
             <div className="space-y-1.5">
@@ -190,23 +195,33 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
                   setUploading(true)
                   const uploaded: string[] = []
                   const failed: string[] = []
+                  // R099: when the server rejects a file it sends a guiding
+                  // message (e.g. the CSV-only explanation) — show THAT, not a
+                  // generic "Upload failed".
+                  let serverMessage: string | null = null
                   for (let i = 0; i < selected.length; i++) {
                     const f = selected[i]
                     setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct: 0 })
-                    const path = await onFileUpload(field.name, f, pct =>
-                      setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct }),
-                    )
-                    if (path) uploaded.push(path)
-                    else failed.push(f.name)
+                    try {
+                      const path = await onFileUpload(field.name, f, pct =>
+                        setUploadStatus({ name: f.name, index: i + 1, total: selected.length, pct }),
+                      )
+                      if (path) uploaded.push(path)
+                      else failed.push(f.name)
+                    } catch (err) {
+                      failed.push(f.name)
+                      if (err instanceof Error && err.message) serverMessage = err.message
+                    }
                   }
                   setUploading(false)
                   setUploadStatus(null)
                   if (uploaded.length > 0) onChange(field.name, [...paths, ...uploaded])
                   if (failed.length > 0) {
                     setUploadError(
-                      locale === 'it'
-                        ? `Caricamento fallito: ${failed.join(', ')}`
-                        : `Upload failed: ${failed.join(', ')}`,
+                      serverMessage
+                        ?? (locale === 'it'
+                          ? `Caricamento fallito: ${failed.join(', ')}`
+                          : `Upload failed: ${failed.join(', ')}`),
                     )
                   }
                 }}
