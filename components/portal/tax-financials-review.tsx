@@ -29,6 +29,7 @@ interface View {
   canConfirm: boolean
   transactionCount: number
   questions: QuestionGroup[]
+  attested: boolean
   files: FileCard[]
 }
 
@@ -61,7 +62,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile caricare i dati — riprova.' : 'Could not load your financials — please try again.'))
       }
-      setView(await res.json())
+      const v: View = await res.json()
+      setView(v)
+      setAttested(v.attested) // server truth — a data change resets it
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : 'Could not load your financials — please try again.')
     } finally {

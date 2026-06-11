@@ -22,6 +22,14 @@ vi.mock("@/lib/supabase-admin", () => ({
           upsert: (row: unknown) => { upsertCalls.push(row); return Promise.resolve({ error: null }) },
         }
       }
+      if (table === "tax_return_submissions") {
+        // resetFinancialsAttestation lookup — no attested submission in these tests
+        const chain = {
+          select: () => chain, eq: () => chain, order: () => chain, limit: () => chain,
+          maybeSingle: () => Promise.resolve({ data: null }),
+        }
+        return chain
+      }
       throw new Error(`unexpected table ${table}`)
     },
   },

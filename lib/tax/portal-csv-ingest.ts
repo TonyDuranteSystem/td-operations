@@ -135,5 +135,11 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   void recategorizeAccountYear(accountId, taxYear, { aiAssist: true })
     .catch(e => console.error("[portal-csv-ingest] AI categorization pass failed:", e))
 
+  if (inserted > 0) {
+    // The data changed — a prior attestation no longer covers it (QA finding).
+    const { resetFinancialsAttestation } = await import("./attestation")
+    await resetFinancialsAttestation(accountId, taxYear, `new file ingested (${inserted} transactions)`)
+  }
+
   return { ok: true, alert: analysis.alert, inserted, parsed: categorized.length, months, bankDetected, uncategorizedRemaining, sourceFileId }
 }

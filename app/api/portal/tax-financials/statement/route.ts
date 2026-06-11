@@ -35,6 +35,11 @@ export async function DELETE(request: NextRequest) {
     const { deleteStatementRows } = await import('@/lib/tax/statement-uploads')
     const result = await deleteStatementRows(accountId, taxYear, sourceFileId)
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 })
+
+    // The data changed — a prior attestation no longer covers it (QA finding).
+    const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
+    await resetFinancialsAttestation(accountId, taxYear, `file deleted (${result.deleted} transactions)`)
+
     return NextResponse.json({ deleted: result.deleted })
   } catch (err) {
     console.error('[tax-financials] delete failed:', err)

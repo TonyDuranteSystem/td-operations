@@ -64,9 +64,21 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Current attestation state — reset by any data mutation (QA finding).
+    const { data: sub } = await supabaseAdmin
+      .from('tax_return_submissions')
+      .select('confirmation_accepted')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+      .eq('status', 'completed')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
     return NextResponse.json({
       ...view,
       questions,
+      attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
     })
   } catch (err) {

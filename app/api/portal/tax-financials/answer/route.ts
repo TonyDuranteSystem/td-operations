@@ -68,7 +68,14 @@ export async function POST(request: NextRequest) {
       .select('id')
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    return NextResponse.json({ updated: (updated ?? []).length })
+    const changed = (updated ?? []).length
+    if (changed > 0) {
+      // The data changed — a prior attestation no longer covers it (QA finding).
+      const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
+      await resetFinancialsAttestation(accountId, taxYear, `answer applied to ${changed} transactions`)
+    }
+
+    return NextResponse.json({ updated: changed })
   } catch (err) {
     console.error('[tax-financials] answer failed:', err)
     return NextResponse.json({ error: 'Could not save your answer — please try again.' }, { status: 500 })
