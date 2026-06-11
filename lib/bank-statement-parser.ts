@@ -1,14 +1,15 @@
 /**
  * Bank Statement Parser
- * Parses CSV and PDF bank statements from Wise, Mercury, and Relay.
- * CSV-first approach (structured data), PDF as fallback (via pdf-parse).
+ * Parses CSV and PDF bank statements. CSV-first approach (structured data),
+ * AI extraction as the universal fallback.
  *
- * Supported formats:
- *   - Wise CSV (EUR/USD, Italian & English)
- *   - Wise PDF (Italian language, fallback)
- *   - Mercury CSV (future)
- *   - Relay CSV (future)
+ * Hand-coded (exact, free) formats, routed by content signature
+ * (lib/bank-csv-parsers.ts): Wise CSV (EUR/USD, IT & EN), Relay CSV,
+ * Wise PDF (legacy fallback). Everything else → AI extraction with the
+ * reconciliation guard (lib/bank-statement-ai-extract.ts).
  */
+
+import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, stableRowRef } from "./bank-csv-parsers"
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ export interface ParseResult {
   period: string
   errors: string[]
   /** How the transactions were extracted. Absent for legacy hand-coded parsers. */
-  extraction_method?: "wise_csv" | "wise_pdf" | "ai" | "unknown"
+  extraction_method?: "wise_csv" | "relay_csv" | "wise_pdf" | "ai" | "unknown"
   /**
    * Balance reconciliation guard (set by AI extraction). When a statement
    * reports opening + closing balances, we verify opening + Σamounts ≈ closing.
@@ -360,7 +361,11 @@ export function parseWiseCSV(csvContent: string, fileName: string): ParseResult 
         amount,
         currency,
         balance_after: balance === 0 && colMap.balance === undefined ? null : balance,
-        transaction_ref: reference,
+        // refs are the dedup identity and must never be blank (DB CHECK since
+        // 20260611-1400) — rows without a Wise reference get a content hash
+        transaction_ref: reference && reference.trim() !== ""
+          ? reference
+          : stableRowRef([isoDate, amount, description, balance]),
         bank_name: "Wise",
         account_type: currency,
       })
@@ -718,10 +723,21 @@ export async function parseBankStatement(
   const isCsv = mimeType === "text/csv" || lowerName.endsWith(".csv")
   const isPdf = mimeType === "application/pdf" || lowerName.endsWith(".pdf")
 
-  // Fast path: Wise hand-coded parser (proven + free). Detect by filename or content.
+  // Fast path: hand-coded CSV parsers, routed by CONTENT SIGNATURE (header
+  // row) — never by filename or the client's typed bank label (master plan
+  // §2.5; clients mislabel). Known signatures parse deterministically (exact,
+  // instant, free); unknown layouts fall to AI extraction below.
   if (isCsv) {
     const content = fileBuffer.toString("utf-8")
-    if (/wise/i.test(lowerName) || /transferwise|wise\.com/i.test(content)) {
+    const dialect = sniffCsvDialect(content)
+    const headerCells = parseDelimitedRows(content, dialect.delimiter)[0] ?? []
+    const signature = detectCsvSignature(headerCells)
+    if (signature === "relay") {
+      const r = parseRelayCSV(content, fileName)
+      r.extraction_method = "relay_csv"
+      if (r.transactions.length > 0) return r
+    }
+    if (signature === "wise" || /wise/i.test(lowerName) || /transferwise|wise\.com/i.test(content)) {
       const r = parseWiseCSV(content, fileName)
       r.extraction_method = "wise_csv"
       if (r.transactions.length > 0) return r

@@ -18,6 +18,7 @@
  */
 
 import type { ParseResult, ParsedTransaction } from "./bank-statement-parser"
+import { stableRowRef, dedupeRefs } from "./bank-csv-parsers"
 
 // Same model family the in-app AI agent uses (lib/ai-agent/providers.ts).
 const MODEL = "claude-sonnet-4-6"
@@ -211,20 +212,30 @@ export async function aiExtractBankStatement(
   const fallbackCurrency = (stmt.currency || "USD").toUpperCase()
   const transactions: ParsedTransaction[] = rawTxns
     .filter(t => t && typeof t.amount === "number" && t.date)
-    .map((t, i) => {
+    .map(t => {
       const currency = (t.currency || fallbackCurrency).toUpperCase()
+      const date = String(t.date).slice(0, 10)
+      const description = (t.description || "").trim()
       return {
-        transaction_date: String(t.date).slice(0, 10),
-        description: (t.description || "").trim(),
+        transaction_date: date,
+        description,
         counterparty: (t.counterparty || "").trim(),
         amount: t.amount as number,
         currency,
         balance_after: typeof t.balance_after === "number" ? t.balance_after : null,
-        transaction_ref: `ai-${String(t.date).slice(0, 10)}-${i}`,
+        // Deterministic content-hash ref (master plan W3): the same row must
+        // produce the same ref no matter which run, chunk, or ingestion path
+        // extracts it — that's what makes re-ingestion collide harmlessly on
+        // the dedup unique index. The old `ai-<date>-<index>` was order-
+        // dependent and broke that guarantee.
+        transaction_ref: stableRowRef([date, t.amount as number, description, t.balance_after ?? ""]),
         bank_name: stmt.bank_name || "unknown",
         account_type: currency,
       }
     })
+  // Stable -2/-3… suffixes for genuinely identical rows within one statement.
+  const refs = dedupeRefs(transactions.map(t => t.transaction_ref))
+  transactions.forEach((t, i) => { t.transaction_ref = refs[i] })
 
   if (transactions.length === 0 && errors.length === 0) {
     errors.push("AI extraction returned no transactions")
