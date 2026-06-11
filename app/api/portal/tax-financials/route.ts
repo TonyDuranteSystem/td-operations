@@ -34,6 +34,18 @@ export async function GET(request: NextRequest) {
     const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')
     const view = await getFinancialsView(accountId, taxYear)
 
+    // Pattern-grouped questions for what's still uncategorized (Slice 8 —
+    // one answer covers every transaction from the same merchant; the 5b
+    // benchmark showed the top 25 merchant groups cover most of the residual).
+    const { groupUncategorized } = await import('@/lib/tax/question-groups')
+    const { data: uncatRows } = await supabaseAdmin
+      .from('bank_transactions')
+      .select('id, description, counterparty, amount, transaction_date, bank_name')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+      .eq('category', 'uncategorized')
+    const questions = groupUncategorized((uncatRows ?? []).map(r => ({ ...r, amount: Number(r.amount) })))
+
     // Per-file sources for the delete/replace cards (§6).
     const { data: sources } = await supabaseAdmin
       .from('bank_transactions')
@@ -54,6 +66,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       ...view,
+      questions,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
     })
   } catch (err) {
