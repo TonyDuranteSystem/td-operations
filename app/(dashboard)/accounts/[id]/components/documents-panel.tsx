@@ -282,6 +282,20 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                       </button>
                     )}
 
+                    {/* Regenerate button for UNSIGNED SS-4 — opens the dialog,
+                        which offers the in-place refresh (same token/link).
+                        Signed/submitted SS-4s get no button: locked. */}
+                    {doc.key === 'ss4' && doc.onGenerate && (status === 'draft' || status === 'awaiting_signature') && (
+                      <button
+                        onClick={doc.onGenerate}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
+                        title="Regenerate the unsigned SS-4 from the account's current data (entity type, members) — the client's link stays the same"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Regenerate
+                      </button>
+                    )}
+
                     {/* Regen PDF button for signed lease */}
                     {doc.key === 'lease' && status === 'signed' && doc.data && (
                       <button

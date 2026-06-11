@@ -208,6 +208,10 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
 
         // ─── 5. DETERMINE MEMBER COUNT ───
         // Primary source: members table. Fallback: account_contacts (legacy).
+        // Non-SMLLC floor is 2: a multi-member LLC has ≥2 members by
+        // definition, even when only the owner is linked in the CRM so far
+        // (2026-06-11 LUMA case: entity corrected to MMLLC before the second
+        // member was linked, and the count would have come out as 1).
         let memberCount = params.member_count
         if (!memberCount) {
           if (entityType === "SMLLC") {
@@ -217,15 +221,15 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
               .from("members")
               .select("*", { count: "exact", head: true })
               .eq("account_id", params.account_id)
-            if (membersCount && membersCount > 0) {
-              memberCount = membersCount
-            } else {
+            let base = membersCount ?? 0
+            if (base === 0) {
               const { count: acCount } = await supabaseAdmin
                 .from("account_contacts")
                 .select("*", { count: "exact", head: true })
                 .eq("account_id", params.account_id)
-              memberCount = acCount || 2
+              base = acCount ?? 0
             }
+            memberCount = Math.max(base, 2)
           }
         }
 

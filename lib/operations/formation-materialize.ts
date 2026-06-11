@@ -63,6 +63,12 @@ export interface MaterializeFormationParams {
    * does not capture the formation state — only owner residence).
    */
   formation_state?: "NM" | "WY" | "FL" | "DE"
+  /**
+   * Admin-supplied entity type override. Highest-priority source — wins over
+   * the signed contract and form/wizard data. Use when the automatic
+   * resolution (contract → form → wizard) cannot determine the type.
+   */
+  entity_type?: "SMLLC" | "MMLLC"
   actor?: string
 }
 
@@ -80,6 +86,7 @@ export interface MaterializeFormationResult {
     | "missing_chosen_name"
     | "missing_submission"
     | "invalid_state"
+    | "missing_entity_type"
     | "error"
   account_id?: string
   steps: MaterializeStep[]
@@ -135,7 +142,7 @@ export async function materializeFormationCompany(
     // 2. Wizard progress (always read — needed for chosen_name and for fallback data).
     const { data: wp } = await supabaseAdmin
       .from("wizard_progress")
-      .select("id, data")
+      .select("id, data, lead_id")
       .eq("contact_id", params.contact_id)
       .eq("wizard_type", "formation")
       .eq("status", "submitted")
@@ -257,14 +264,44 @@ export async function materializeFormationCompany(
     }
 
     const submitted = submittedData
-    const entityType: "Single Member LLC" | "Multi Member LLC" =
-      submissionEntityType === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
+
+    // 4b. Entity type — resolved from what the client BOUGHT, never defaulted.
+    // Priority: admin override > signed contract (contracts.llc_type via this
+    // formation's lead) > formation form > wizard data. If nothing resolves,
+    // fail loudly with missing_entity_type — the 2026-06-11 LUMA incident was
+    // caused by a silent SMLLC default here while the signed contract said
+    // MMLLC. Resolution logic: lib/portal/entity-type-from-contract.ts.
+    const { resolveEntityTypeForFormation } = await import("@/lib/portal/entity-type-from-contract")
+    const resolution = await resolveEntityTypeForFormation({
+      contactId: params.contact_id,
+      leadId: wp?.lead_id ?? null,
+      adminOverride: params.entity_type ?? null,
+      submissionEntityType,
+      wizardEntityType: (wizardData.entity_type as string | undefined) ?? null,
+    })
+
+    if (resolution.source === "corporation_manual") {
+      return { success: false, outcome: "missing_entity_type", steps, error: resolution.detail }
+    }
+    if (!resolution.wizardCode || !resolution.accountLabel) {
+      return { success: false, outcome: "missing_entity_type", steps, error: resolution.detail }
+    }
+    steps.push({ step: "entity_type_resolution", status: "ok", detail: `${resolution.accountLabel} via ${resolution.source} — ${resolution.detail}` })
+    if (resolution.conflictWarning) {
+      steps.push({ step: "entity_type_conflict", status: "error", detail: resolution.conflictWarning })
+    }
+
+    const resolvedEntityCode = resolution.wizardCode
+    const entityType: "Single Member LLC" | "Multi Member LLC" = resolution.accountLabel
     const isMMLC = entityType === "Multi Member LLC"
 
-    // 5. Create the account.
+    // 5. Create the account. member_structure is kept in lockstep with
+    // entity_type so the two columns can never diverge (the manual LUMA fix
+    // touched only entity_type and left member_structure NULL).
     const accountInsert: Record<string, unknown> = {
       company_name: chosenName,
       entity_type: entityType,
+      member_structure: isMMLC ? "multi_member" : "single_member",
       state_of_formation: stateName,
       formation_date: formationDate,
       filing_id: params.filing_id || null,
@@ -698,7 +735,10 @@ export async function materializeFormationCompany(
           upload_paths: uploadPaths,
           status: "completed",
           state: resolvedStateRaw,
-          entity_type: submissionEntityType || "SMLLC",
+          // The RESOLVED code (contract-first), never a default — the LUMA
+          // incident's self-heal wrote an invented 'SMLLC' here, which made
+          // the wrong value look authoritative to every later reader.
+          entity_type: resolvedEntityCode,
           completed_at: new Date().toISOString(),
         }
         // Plain INSERT — formation_submissions.token has no unique index, so
