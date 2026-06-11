@@ -34,6 +34,7 @@ function chain(opts: { single?: unknown; list?: unknown[]; updated?: unknown }) 
     select: vi.fn(() => c),
     update: vi.fn(() => { isUpdate = true; return c }),
     upsert: vi.fn(() => Promise.resolve({ data: null, error: null })),
+    insert: vi.fn(() => Promise.resolve({ data: null, error: null })),
     eq: vi.fn(() => c),
     is: vi.fn(() => c),
     in: vi.fn(() => c),
@@ -182,5 +183,70 @@ describe('getUnopenedDocsCount', () => {
 
   it('returns 0 for no contact', async () => {
     expect(await getUnopenedDocsCount('', ['acct-1'])).toBe(0)
+  })
+})
+
+// ─── portal chat message on share (2026-06-11, Antonio: ON) ─────────────
+//
+// The alert also posts an account-scoped portal chat message, behind the
+// new_document_chat_message_enabled flag (default true). Chat is best-effort:
+// it must never undo the alert, and personal docs without an account skip it.
+
+describe('notifyClientsOfNewDocument — chat message', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(getAppSetting).mockResolvedValue(true) // alert + chat on
+  })
+
+  const companyDoc = {
+    id: 'd', file_name: 'OA.pdf', account_id: 'acct-1', contact_id: null,
+    category: 1, portal_visible: true, notify_client: true, client_notified_at: null,
+  }
+
+  it('posts an account-scoped chat message with the file name (default ON)', async () => {
+    const messages = chain({})
+    mockTables({ documents: chain({ single: companyDoc, updated: { id: 'd' } }), portal_messages: messages })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: true })
+    expect(messages.insert).toHaveBeenCalledTimes(1)
+    const row = vi.mocked(messages.insert as (r: unknown) => unknown).mock.calls[0][0] as Record<string, unknown>
+    expect(row.account_id).toBe('acct-1')
+    expect(row.sender_type).toBe('admin')
+    expect(String(row.message)).toContain('OA.pdf')
+  })
+
+  it('skips chat when new_document_chat_message_enabled is false (alert still fires)', async () => {
+    vi.mocked(getAppSetting).mockImplementation(async (key: string) =>
+      key === 'new_document_chat_message_enabled' ? false : true)
+    const messages = chain({})
+    mockTables({ documents: chain({ single: companyDoc, updated: { id: 'd' } }), portal_messages: messages })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: true })
+    expect(createPortalNotification).toHaveBeenCalledTimes(1)
+    expect(messages.insert).not.toHaveBeenCalled()
+  })
+
+  it('skips chat for a personal doc with no account (contact notification still fires)', async () => {
+    const messages = chain({})
+    mockTables({
+      documents: chain({
+        single: { ...companyDoc, account_id: null, contact_id: 'c-1', category: 2 },
+        updated: { id: 'd' },
+      }),
+      portal_messages: messages,
+      contacts: chain({ single: { language: 'en' } }),
+    })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: true })
+    expect(createPortalNotification).toHaveBeenCalledTimes(1)
+    expect(messages.insert).not.toHaveBeenCalled()
+  })
+
+  it('still reports notified:true when the chat insert throws (best-effort chat)', async () => {
+    const messages = chain({})
+    ;(messages.insert as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('boom') })
+    mockTables({ documents: chain({ single: companyDoc, updated: { id: 'd' } }), portal_messages: messages })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: true })
   })
 })

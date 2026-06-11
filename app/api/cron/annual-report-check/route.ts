@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
+import { emitActionNeeded } from "@/lib/notifications/act-event"
 
 /**
  * Cron: Annual Report Check
@@ -43,14 +44,6 @@ export async function GET(req: NextRequest) {
     if (qErr) throw qErr
     if (!accounts?.length) {
       return NextResponse.json({ ok: true, message: "No annual reports due", checked: 0, created: 0 })
-    }
-
-    // State portal URLs for task descriptions
-    const statePortals: Record<string, string> = {
-      "Wyoming": "sos.wyo.gov",
-      "Florida": "sunbiz.org",
-      "Delaware": "corp.delaware.gov",
-      "Massachusetts": "sec.state.ma.us",
     }
 
     const stateFees: Record<string, string> = {
@@ -101,7 +94,6 @@ export async function GET(req: NextRequest) {
         .single()
 
       const state = account.state_of_formation || "Unknown"
-      const portal = statePortals[state] || "state portal"
       const fee = stateFees[state] || "TBD"
 
       // Create service delivery
@@ -163,33 +155,17 @@ export async function GET(req: NextRequest) {
         blocked++
         results.push({ company: account.company_name, action: existingTask?.length ? "created SD (BLOCKED) — task already exists" : "created SD (BLOCKED) + task Antonio" })
       } else {
-        // Dedup: check if task already exists for this account
-        const { data: existingTask } = await supabaseAdmin
-          .from("tasks")
-          .select("id")
-          .eq("account_id", account.id)
-          .like("task_title", "File Annual Report for%")
-          .eq("status", "To Do")
-          .limit(1)
-
-        if (!existingTask?.length) {
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert in cron; refactor deferred (dev_task 7ebb1e0c)
-          await supabaseAdmin
-            .from("tasks")
-            .insert({
-              task_title: `File Annual Report for ${account.company_name} — deadline ${account.annual_report_due_date}`,
-              assigned_to: "Luca",
-              status: "To Do",
-              priority: "High",
-              category: "Filing",
-              due_date: account.annual_report_due_date,
-              account_id: account.id,
-              delivery_id: sd?.id,
-              description: `Go to ${portal}, search for ${account.company_name}, complete and submit annual report, pay ${fee}, download receipt, upload to Drive.`,
-            })
-        }
+        // Slice 9 (REV 4.1): a To-Do board card instead of an old-style task.
+        // emitActionNeeded is idempotent per source_ref, so it replaces the
+        // old title-based dedup. SD + email report unchanged; the card's Mark
+        // Done (TaxRenewalActions) calls fileRenewal.
+        await emitActionNeeded({
+          event: "annual_report_upcoming",
+          account_id: account.id,
+          source_ref: `annual_report:${sd?.id}`,
+        })
         created++
-        results.push({ company: account.company_name, action: existingTask?.length ? "created SD — task already exists" : "created SD + task Luca" })
+        results.push({ company: account.company_name, action: "created SD + card" })
       }
     }
 
@@ -206,8 +182,8 @@ export async function GET(req: NextRequest) {
         const { gmailPost } = await import("@/lib/gmail")
 
         const newRows = results
-          .filter(r => r.action.includes("task Luca"))
-          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">✅ SD + Task Luca</td></tr>`)
+          .filter(r => r.action.includes("card"))
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">✅ SD + To-Do card</td></tr>`)
           .join("")
 
         const blockedRows = results

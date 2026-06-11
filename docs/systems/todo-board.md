@@ -1,5 +1,6 @@
 # To-Do Board — "TO DO — FROM CHATS" (staff action cards)
-_Last verified against code: 2026-06-09 — Claude (Slice 4: TaxReviewActions sub-component for tax_submission:* source_ref cards)_
+_Last verified against code: 2026-06-10 — Claude (Slice 9: RA Renewal + Annual Report → To-Do cards. The `ra-renewal-check` / `annual-report-check` crons now emit a card via `emitActionNeeded` (`action_events` rows `ra_renewal_upcoming` / `annual_report_upcoming`, source_ref `ra_renewal:<sd>` / `annual_report:<sd>`) instead of an old `tasks` row — idempotent per source_ref, SD + email + blocked→Antonio-task kept. New `TaxRenewalActions` sub-component in `action-board.tsx` renders on those cards: a primary "Renew on Harbor" link (RA) + "Mark Done" which REQUIRES a receipt upload (REV 4.1) → `POST /api/crm/renewal/file` → existing `fileRenewal` (Drive upload + SD complete + ra_renewal_date/annual_report_due_date +1y) → card resolved to "done". Issue/Blocked = the board's existing move/priority controls.)_
+_Prior: 2026-06-09 — Claude (Slice 4: TaxReviewActions sub-component for tax_submission:* source_ref cards)_
 
 ## What it is
 A staff-only kanban board on the CRM dashboard ("TO DO — FROM CHATS"). Each card is

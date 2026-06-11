@@ -153,6 +153,72 @@ export function validateFormationData(data: Record<string, unknown>): Validation
   }
 }
 
+/** Empty check shared by the tax validator: undefined, null, or blank string. */
+function isBlank(v: unknown): boolean {
+  return v === undefined || v === null || (typeof v === "string" && v.trim() === "")
+}
+
+/**
+ * Server-side backstop for the tax wizard. Deliberately NARROW: it only enforces
+ * the conditional integrity that matters for Form 5472 and that a direct API hit
+ * could otherwise bypass. It does NOT add broad required-field gates (the client
+ * already enforces those), so it can never 400 a legitimate "No" answer or a
+ * MMLLC/Corp tax submission — the checks below only fire on an explicit "Yes".
+ *
+ * Mirrors the client gate in app/portal/wizard/wizard-client.tsx (validateStep).
+ * Repeater rows are stored as FLAT keys: related_party_transactions_{i}_{sub}
+ * plus related_party_transactions_count.
+ */
+export function validateTaxData(data: Record<string, unknown>): ValidationResult {
+  const errors: ValidationError[] = []
+
+  // Related-party transactions: if the client declared "Yes", at least one
+  // complete transaction must be present (Form 5472 Part III/IV data).
+  if (data.has_related_party_transactions === "Yes") {
+    const count = Number(data.related_party_transactions_count) || 0
+    if (count < 1) {
+      errors.push({
+        field: "related_party_transactions",
+        message: 'You answered "Yes" to related-party transactions — add at least one transaction.',
+        severity: "error",
+      })
+    } else {
+      const requiredSub = [
+        "rpt_company_name",
+        "rpt_address",
+        "rpt_country",
+        "rpt_vat_number",
+        "rpt_amount",
+        "rpt_direction",
+        "rpt_type",
+        "rpt_description",
+      ]
+      for (let i = 0; i < count; i++) {
+        for (const sub of requiredSub) {
+          if (isBlank(data[`related_party_transactions_${i}_${sub}`])) {
+            errors.push({
+              field: `related_party_transactions_${i}_${sub}`,
+              message: `Complete all fields for related-party transaction #${i + 1}.`,
+              severity: "error",
+            })
+          }
+        }
+      }
+    }
+  }
+
+  // US business activities: if "Yes", the description detail is required.
+  if (data.has_us_business_activities === "Yes" && isBlank(data.us_business_activities_detail)) {
+    errors.push({
+      field: "us_business_activities_detail",
+      message: "Describe the US business activities your LLC conducted.",
+      severity: "error",
+    })
+  }
+
+  return { valid: errors.length === 0, errors, warnings: [] }
+}
+
 /**
  * Dispatcher: route wizard submissions to the right validator by wizard type.
  *
@@ -162,7 +228,7 @@ export function validateFormationData(data: Record<string, unknown>): Validation
  * own validation as defense-in-depth for direct API hits.
  *
  * Wizard types without a dedicated validator pass through (valid=true). Their
- * validators land in Phase A.1 — tax, itin, closure, banking, company_info.
+ * validators land in Phase A.1 — itin, closure, banking, company_info.
  */
 export function validateWizardData(
   wizardType: string,
@@ -173,6 +239,9 @@ export function validateWizardData(
       return validateOnboardingData(data)
     case "formation":
       return validateFormationData(data)
+    case "tax":
+    case "tax_return":
+      return validateTaxData(data)
     default:
       return { valid: true, errors: [], warnings: [] }
   }

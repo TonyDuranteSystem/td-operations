@@ -49,6 +49,13 @@ export async function POST(req: NextRequest) {
     const formationState = formationStateRaw && VALID_STATES.has(formationStateRaw)
       ? (formationStateRaw as "NM" | "WY" | "FL" | "DE")
       : undefined
+    // Optional admin entity-type override (highest-priority source in the
+    // materializer's resolution chain; normally omitted — the signed contract
+    // resolves it automatically).
+    const entityTypeRaw = (form.get("entity_type") as string | null)?.trim().toUpperCase() || undefined
+    const entityType = entityTypeRaw === "SMLLC" || entityTypeRaw === "MMLLC"
+      ? (entityTypeRaw as "SMLLC" | "MMLLC")
+      : undefined
 
     if (!file || !contactId) {
       return NextResponse.json({ error: "file and contact_id are required" }, { status: 400 })
@@ -56,6 +63,12 @@ export async function POST(req: NextRequest) {
     if (formationStateRaw && !formationState) {
       return NextResponse.json(
         { error: `Invalid formation_state "${formationStateRaw}". Expected NM, WY, FL, or DE.` },
+        { status: 400 },
+      )
+    }
+    if (entityTypeRaw && !entityType) {
+      return NextResponse.json(
+        { error: `Invalid entity_type "${entityTypeRaw}". Expected SMLLC or MMLLC.` },
         { status: 400 },
       )
     }
@@ -140,6 +153,7 @@ export async function POST(req: NextRequest) {
       filing_id: filingId,
       registered_agent_id: registeredAgentId,
       formation_state: formationState,
+      entity_type: entityType,
       actor: `crm-admin:${user?.email ?? "unknown"}`,
     })
 

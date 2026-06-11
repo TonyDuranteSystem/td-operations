@@ -10,6 +10,7 @@ import { handleTaxFormSetup } from "./handlers/tax-form-setup"
 import { handleTaxReturnIntake } from "./handlers/tax-return-intake"
 import { handleWelcomePackagePrepare } from "./handlers/welcome-package-setup"
 import { handleItinWizardSetup } from "./handlers/itin-wizard-setup"
+import { handleDocumentReprocess } from "./handlers/document-reprocess"
 
 type JobHandler = (job: Job) => Promise<JobResult>
 
@@ -21,6 +22,8 @@ const handlers: Record<string, JobHandler> = {
   welcome_package_prepare: handleWelcomePackagePrepare,
   // Added 2026-04-14 P0.5 — portal ITIN wizard auto-chain.
   itin_wizard_setup: handleItinWizardSetup,
+  // Added 2026-06-11 — OCR self-heal for docs shared while processing failed.
+  document_reprocess: handleDocumentReprocess,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

@@ -233,6 +233,20 @@ export function WizardClient({
         const refValue = formData[field.conditional.field]
         if (String(refValue) !== field.conditional.value) continue
       }
+      // Required repeater (e.g. related-party transactions once the gate is "Yes"):
+      // at least one row, and every required sub-field of every row must be filled.
+      if (field.type === 'repeater') {
+        if (field.required) {
+          const count = Number(formData[`${field.name}_count`]) || 0
+          if (count < 1) return false
+          for (let i = 0; i < count; i++) {
+            for (const rf of field.repeaterFields || []) {
+              if (rf.required && isEmptyValue(formData[`${field.name}_${i}_${rf.name}`])) return false
+            }
+          }
+        }
+        continue
+      }
       if (field.required && isEmptyValue(formData[field.name])) return false
     }
     return true
@@ -593,13 +607,17 @@ export function WizardClient({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {stepFields
             .filter(field => {
-              // Repeater fields always render (they have their own visibility logic)
-              if (field.type === 'repeater') return true
-              // Conditional show/hide: only render if the referenced field has the expected value
+              // Conditional show/hide applies to ALL field types, including
+              // repeaters — e.g. related_party_transactions is gated behind the
+              // has_related_party_transactions = 'Yes' answer. (Previously
+              // repeaters short-circuited to always-render, which would have
+              // made that gate inert.)
               if (field.conditional) {
                 const refValue = formData[field.conditional.field]
                 return String(refValue) === field.conditional.value
               }
+              // Repeaters without a conditional always render.
+              if (field.type === 'repeater') return true
               return true
             })
             .map(field => {
@@ -611,19 +629,18 @@ export function WizardClient({
                   <div key={field.name} className="md:col-span-2 space-y-3">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-zinc-700">{locale === 'it' && field.labelIt ? field.labelIt : field.label}</span>
-                      {!field.repeaterRequired && (
-                        <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>
-                      )}
-                      {field.repeaterRequired && <span className="text-xs text-red-500">*</span>}
+                      {(field.required || field.repeaterRequired)
+                        ? <span className="text-xs font-semibold text-red-500">{locale === 'it' ? '(obbligatorio)' : '(required)'}</span>
+                        : <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>}
                     </div>
-                    {(field.hint || field.hintIt) && (
-                      <p className="text-xs text-zinc-500 whitespace-pre-line">
-                        {locale === 'it' && field.hintIt ? field.hintIt : field.hint}
-                      </p>
+                    {(locale === 'it' && field.hintIt ? field.hintIt : field.hint) && (
+                      <p className="text-xs text-zinc-500 leading-relaxed whitespace-pre-line">{locale === 'it' && field.hintIt ? field.hintIt : field.hint}</p>
                     )}
                     {count === 0 && (
-                      <p className="text-xs text-zinc-400 italic">
-                        {locale === 'it' ? 'Nessuna voce aggiunta.' : 'No entries added yet.'}
+                      <p className={`text-xs italic ${(field.required || field.repeaterRequired) ? 'text-red-500' : 'text-zinc-400'}`}>
+                        {(field.required || field.repeaterRequired)
+                          ? (locale === 'it' ? 'Aggiungi almeno una voce per continuare.' : 'Add at least one entry to continue.')
+                          : (locale === 'it' ? 'Nessuna voce aggiunta.' : 'No entries added yet.')}
                       </p>
                     )}
                     {Array.from({ length: count }).map((_, idx) => (
@@ -707,6 +724,15 @@ export function WizardClient({
                     onFileUpload={handleFileUpload}
                     locale={locale}
                   />
+                  {/* High-stakes confirmation: show an amber warning when the
+                      field's value matches its configured warningOnValue (e.g.
+                      a "No" to the related-party question → $25k IRS penalty). */}
+                  {field.warningOnValue && String(formData[field.name] ?? '') === field.warningOnValue.value && (
+                    <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2 text-xs text-amber-800 leading-relaxed">
+                      <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>{locale === 'it' && field.warningOnValue.textIt ? field.warningOnValue.textIt : field.warningOnValue.text}</span>
+                    </div>
+                  )}
                 </div>
               )
             })}

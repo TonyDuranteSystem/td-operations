@@ -225,6 +225,122 @@ function TaxReviewActions({ submissionId, onDone }: { submissionId: string; onDo
   )
 }
 
+// ─── TaxRenewalActions (Slice 9) ──────────────────────────────────────────────
+// Rendered on To-Do cards where source_ref starts with "ra_renewal:" or
+// "annual_report:". Mark Done REQUIRES a receipt upload (REV 4.1) and calls the
+// existing fileRenewal engine (Drive upload + SD complete + date +1y rollover),
+// then resolves the card. Issue/Blocked is covered by the board's normal
+// move / priority / snooze controls.
+function TaxRenewalActions({ sourceRef, accountId, onResolve }: {
+  sourceRef: string
+  accountId: string | null
+  onResolve: () => void | Promise<void>
+}) {
+  const isRa = sourceRef.startsWith('ra_renewal:')
+  const kind: 'ra' | 'ar' = isRa ? 'ra' : 'ar'
+  const sdId = sourceRef.slice(sourceRef.indexOf(':') + 1) || null
+  const [formOpen, setFormOpen] = useState(false)
+  const [filedDate, setFiledDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [file, setFile] = useState<File | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function submit() {
+    if (!accountId) { setErr('No account on this card'); return }
+    if (!file) { setErr('A receipt file is required.'); return }
+    setSaving(true); setErr(null)
+    try {
+      const data_base64 = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(String(r.result).split(',')[1] ?? '')
+        r.onerror = () => reject(new Error('Could not read file'))
+        r.readAsDataURL(file)
+      })
+      const res = await fetch('/api/crm/renewal/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId,
+          delivery_id: sdId,
+          kind,
+          filed_date: filedDate,
+          receipt: { file_name: file.name, mime_type: file.type || 'application/pdf', data_base64 },
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error((d as { error?: string }).error || 'Filing failed')
+      }
+      await onResolve()
+    } catch (e) {
+      setErr(e instanceof Error && e.message ? e.message : 'Filing failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 pt-1.5 border-t border-blue-100 space-y-1.5">
+      {!formOpen ? (
+        <div className="flex flex-wrap gap-1">
+          {isRa && (
+            <a
+              href="https://www.harborcompliance.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-2 py-1"
+            >
+              Renew on Harbor ↗
+            </a>
+          )}
+          <button
+            onClick={() => setFormOpen(true)}
+            className="text-[11px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded px-2 py-1"
+          >
+            Mark Done
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <p className="text-[10px] text-zinc-500">Upload the {isRa ? 'RA renewal' : 'annual report'} receipt (required):</p>
+          <input
+            type="file"
+            accept=".pdf,image/*,application/pdf"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="block w-full text-[11px]"
+          />
+          <div className="flex items-center gap-1">
+            <label className="text-[10px] text-zinc-500">Filed</label>
+            <input
+              type="date"
+              value={filedDate}
+              onChange={(e) => setFiledDate(e.target.value)}
+              className="text-[11px] border rounded px-1 py-0.5"
+            />
+          </div>
+          <div className="flex gap-1">
+            <button
+              disabled={saving || !file}
+              onClick={submit}
+              className="flex-1 text-[11px] text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 disabled:opacity-40"
+            >
+              {saving ? 'Filing…' : 'Upload receipt + file'}
+            </button>
+            <button
+              disabled={saving}
+              onClick={() => { setFormOpen(false); setErr(null) }}
+              className="text-[11px] text-zinc-600 bg-zinc-100 hover:bg-zinc-200 rounded px-2 py-1 disabled:opacity-40"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {err && <p className="text-[10px] text-red-600">{err}</p>}
+    </div>
+  )
+}
+
 export function ActionBoard() {
   const [columns, setColumns] = useState<Column[]>([])
   const [cards, setCards] = useState<Card[]>([])
@@ -568,6 +684,13 @@ export function ActionBoard() {
                           <TaxReviewActions
                             submissionId={card.source_ref.slice('tax_submission:'.length)}
                             onDone={load}
+                          />
+                        )}
+                        {(card.source_ref?.startsWith('ra_renewal:') || card.source_ref?.startsWith('annual_report:')) && (
+                          <TaxRenewalActions
+                            sourceRef={card.source_ref}
+                            accountId={card.account_id}
+                            onResolve={() => move(card.id, 'done')}
                           />
                         )}
                         <div className="flex items-center justify-between mt-2 gap-1">

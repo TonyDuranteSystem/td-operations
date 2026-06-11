@@ -41,6 +41,8 @@ export type ActEvent =
   | "ss4_signed"
   | "tax_return_signed"
   | "itin_number_provided"
+  | "ra_renewal_upcoming"
+  | "annual_report_upcoming"
 
 export interface ActionEventMeta {
   next_step: string

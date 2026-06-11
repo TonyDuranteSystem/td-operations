@@ -328,21 +328,17 @@ export async function toggleDocumentPortalVisibility(
   visible: boolean
 ): Promise<ActionResult> {
   return safeAction(async () => {
-    // Read current doc for portal-notification context. Write goes through
-    // updateDocument() which owns the action_log entry (same contract as
-    // MCP sites) — so safeAction is called without its `audit` config to
-    // avoid a duplicate log row.
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    // Write goes through updateDocument() which owns the action_log entry
+    // (same contract as MCP sites) — so safeAction is called without its
+    // `audit` config to avoid a duplicate log row. Client alerting
+    // (notification + push + chat + "New" badge) is owned by updateDocument
+    // too: it fires the idempotent new-document alert only on the actual
+    // hidden→visible transition (lib/portal/document-alerts.ts), so a
+    // re-show of an already-notified document never double-notifies.
     const { createClient } = await import('@/lib/supabase/server')
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     const actor = `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
-
-    const { data: doc } = await supabaseAdmin
-      .from('documents')
-      .select('id, file_name, account_id, contact_id')
-      .eq('id', documentId)
-      .single()
 
     const { updateDocument } = await import('@/lib/operations/document')
     const result = await updateDocument({
@@ -352,32 +348,6 @@ export async function toggleDocumentPortalVisibility(
       summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
     })
     if (!result.success) throw new Error(result.error || 'Failed to update document visibility')
-
-    // Notify client when document is shared (not when hidden)
-    if (visible && doc) {
-      const { createPortalNotification } = await import('@/lib/portal/notifications')
-      await createPortalNotification({
-        account_id: doc.account_id || undefined,
-        contact_id: doc.contact_id || undefined,
-        type: 'document',
-        title: 'New document available',
-        body: doc.file_name || 'A new document has been shared with you',
-        link: '/portal/documents',
-      })
-
-      // Also send a portal chat message so client sees it in chat
-      if (doc.account_id) {
-        const { supabaseAdmin: adminClient } = await import('@/lib/supabase-admin')
-        const adminUserId = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
-        await adminClient.from('portal_messages').insert({
-          account_id: doc.account_id,
-          contact_id: doc.contact_id || null,
-          sender_type: 'admin',
-          sender_id: adminUserId,
-          message: `A new document has been added to your folder: ${doc.file_name}`,
-        })
-      }
-    }
   })
 }
 

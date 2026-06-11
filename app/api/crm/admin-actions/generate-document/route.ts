@@ -243,7 +243,7 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
 
 // ─── Generate SS-4 ───
 
-async function generateSS4(accountId: string) {
+async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   const result = await fetchAccountAndContact(accountId)
   if ("error" in result) return { error: result.error }
   const { account, contact, contactLinks } = result
@@ -252,24 +252,47 @@ async function generateSS4(accountId: string) {
     return { error: `Account "${account.company_name}" missing state_of_formation.` }
   }
 
-  // Check duplicate
+  // Duplicate / regenerate handling. Without `regenerate`, an existing row
+  // short-circuits (unchanged behavior). With `regenerate: true`, an UNSIGNED
+  // SS-4 (draft / awaiting_signature, never signed) is refreshed IN PLACE from
+  // the account's current state — same token, so the link the client already
+  // has shows the corrected form. A signed/submitted/faxed SS-4 is locked:
+  // the client signed that exact document; it must never be rewritten.
+  // (2026-06-11 LUMA incident: account entity type was corrected after the
+  // SS-4 went out as SMLLC, and there was no way to regenerate from the CRM.)
   const { data: existing } = await supabaseAdmin
     .from("ss4_applications")
-    .select("id, token, status")
+    .select("id, token, access_code, status, signed_at")
     .eq("account_id", accountId)
     .maybeSingle()
 
-  if (existing) {
+  if (existing && !opts?.regenerate) {
     return { exists: true, token: existing.token, status: existing.status }
+  }
+  if (existing && opts?.regenerate) {
+    const unsigned = !existing.signed_at && (existing.status === "draft" || existing.status === "awaiting_signature")
+    if (!unsigned) {
+      return { error: `SS-4 ${existing.token} is "${existing.status}" — a signed or submitted SS-4 cannot be regenerated. Create the correction manually with support.` }
+    }
   }
 
   const rawEntity = (account.entity_type || "").toUpperCase().trim()
   const entityType = ENTITY_MAP[rawEntity] || "SMLLC"
   const state = STATE_MAP[(account.state_of_formation || "").toUpperCase().trim()] || account.state_of_formation
 
+  // Member count: members table first (company members aren't account_contacts),
+  // then contact links — and never below 2 for a non-SMLLC: a multi-member LLC
+  // has ≥2 members by definition, even when only the owner is linked in the
+  // CRM yet (the LUMA case: entity corrected to MMLLC before the second
+  // member was linked).
   let memberCount = 1
   if (entityType !== "SMLLC") {
-    memberCount = contactLinks!.length || 2
+    const { count: membersCount } = await supabaseAdmin
+      .from("members")
+      .select("*", { count: "exact", head: true })
+      .eq("account_id", accountId)
+    const base = membersCount && membersCount > 0 ? membersCount : (contactLinks!.length || 0)
+    memberCount = Math.max(base, 2)
   }
 
   // Resolve Line 6 (county_and_state) from the addresses registry via FK join.
@@ -294,6 +317,54 @@ async function generateSS4(accountId: string) {
   const slug = slugify(account.company_name)
   const token = `ss4-${slug}-${new Date().getFullYear()}`
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
+
+  // Regenerate path: refresh the existing unsigned row in place. Token and
+  // access_code are preserved so the client's existing link stays valid; the
+  // SS-4 page renders live from this row, so the corrected values appear at
+  // the same URL immediately.
+  if (existing && opts?.regenerate) {
+    const { error: updErr } = await supabaseAdmin
+      .from("ss4_applications")
+      .update({
+        company_name: account.company_name,
+        entity_type: entityType,
+        state_of_formation: state,
+        formation_date: account.formation_date || null,
+        member_count: memberCount,
+        responsible_party_name: contact.full_name,
+        responsible_party_itin: contact.itin_number || null,
+        responsible_party_phone: contact.phone || null,
+        responsible_party_title: title,
+        language: contact.language === "Italian" ? "it" : "en",
+        county_and_state: resolvedCountyAndState,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existing.id)
+
+    if (updErr) {
+      return { error: `Regenerate failed: ${updErr.message}` }
+    }
+
+    logAction({
+      actor: "crm-admin",
+      action_type: "update",
+      table_name: "ss4_applications",
+      record_id: existing.id,
+      account_id: accountId,
+      summary: `Regenerated SS-4 for ${account.company_name} (${entityType}, ${state}, ${memberCount} member${memberCount === 1 ? "" : "s"}) — same token, link unchanged`,
+      details: { token: existing.token, entity_type: entityType, state, member_count: memberCount, source: "crm-button-regenerate" },
+    })
+
+    return {
+      success: true,
+      regenerated: true,
+      token: existing.token,
+      access_code: existing.access_code,
+      admin_preview: `${SS4_BASE_URL}/${existing.token}/${existing.access_code}?preview=td`,
+      entity_type: entityType,
+      company_name: account.company_name,
+    }
+  }
 
   const { data: ss4, error: insertErr } = await supabaseAdmin
     .from("ss4_applications")
@@ -478,9 +549,9 @@ export async function POST(request: Request) {
 
       case "generate_ss4": {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
-        const result = await generateSS4(account_id)
+        const result = await generateSS4(account_id, { regenerate: params.regenerate === true })
         if ("error" in result) return NextResponse.json({ error: result.error }, { status: 400 })
-        if ("exists" in result) return NextResponse.json({ error: `SS-4 already exists (token: ${result.token}, status: ${result.status})`, exists: true, token: result.token, status: result.status }, { status: 409 })
+        if ("exists" in result) return NextResponse.json({ error: `SS-4 already exists (token: ${result.token}, status: ${result.status}). Use Regenerate to refresh an unsigned SS-4 from the account's current data.`, exists: true, token: result.token, status: result.status }, { status: 409 })
         return NextResponse.json(result)
       }
 

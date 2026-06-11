@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, CheckCircle, AlertCircle, Info, X } from 'lucide-react'
+import { Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface FieldConfig {
@@ -16,6 +16,10 @@ export interface FieldConfig {
   hint?: string
   hintIt?: string
   conditional?: { field: string; value: string } // only show if another field has this value
+  /** Show an amber warning box below the field when its current value equals
+   *  `value`. Used to make a high-stakes answer explicit to the client (e.g. a
+   *  "No" to the related-party question that carries a $25,000 IRS penalty). */
+  warningOnValue?: { value: string; text: string; textIt?: string }
   prefilled?: boolean
   accept?: string                  // file input accept attribute override
   repeaterFields?: FieldConfig[]   // sub-fields for repeater type
@@ -77,7 +81,6 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<{ name: string; index: number; total: number; pct: number } | null>(null)
-  const [showHint, setShowHint] = useState(false)
   const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
   const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
   const hint = locale === 'it' && field.hintIt ? field.hintIt : field.hint
@@ -103,20 +106,13 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
             </span>
           )}
         </label>
-        {hint && field.type !== 'checkbox' && (
-          <button
-            type="button"
-            onClick={() => setShowHint(s => !s)}
-            className={cn(
-              'ml-0.5 rounded-full transition-colors',
-              showHint ? 'text-blue-600' : 'text-zinc-300 hover:text-zinc-500',
-            )}
-            aria-label="More information"
-          >
-            <Info className="h-3.5 w-3.5" />
-          </button>
-        )}
       </div>
+      {/* Always-visible field explanation — replaces the old click-to-reveal
+          "i" tooltip. People don't click info icons, so guidance that matters
+          (e.g. the $25k related-party question) must be on screen by default. */}
+      {hint && field.type !== 'checkbox' && (
+        <p className="text-xs text-zinc-500 leading-relaxed">{hint}</p>
+      )}
 
       {field.type === 'textarea' ? (
         <textarea
@@ -297,9 +293,6 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
         />
       )}
 
-      {showHint && hint && field.type !== 'checkbox' && (
-        <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1.5 leading-relaxed">{hint}</p>
-      )}
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )

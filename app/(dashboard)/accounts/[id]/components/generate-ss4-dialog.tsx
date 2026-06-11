@@ -27,6 +27,8 @@ export function GenerateSS4Dialog({
     admin_preview?: string
     entity_type?: string
     error?: string
+    /** Set when an unsigned SS-4 already exists — offers in-place regeneration. */
+    canRegenerate?: boolean
   } | null>(null)
 
   if (!open) return null
@@ -35,7 +37,7 @@ export function GenerateSS4Dialog({
     entityType?.includes('Corp') ? 'Corporation' : 'SMLLC'
   const titleLabel = entityLabel === 'SMLLC' ? 'Owner' : entityLabel === 'MMLLC' ? 'Member' : 'President'
 
-  const handleGenerate = () => {
+  const handleGenerate = (regenerate = false) => {
     startTransition(async () => {
       try {
         const res = await fetch('/api/crm/admin-actions/generate-document', {
@@ -44,12 +46,22 @@ export function GenerateSS4Dialog({
           body: JSON.stringify({
             action: 'generate_ss4',
             account_id: accountId,
+            regenerate,
           }),
         })
         const data = await res.json()
 
         if (res.status === 409) {
-          setResult({ success: true, token: data.token, error: `SS-4 already exists (${data.status})` })
+          // Unsigned SS-4s can be refreshed in place from the account's
+          // current data (same token — the client's link stays valid).
+          // The server refuses regeneration for signed/submitted ones.
+          const unsigned = data.status === 'draft' || data.status === 'awaiting_signature'
+          setResult({
+            success: true,
+            token: data.token,
+            error: `SS-4 already exists (${data.status})`,
+            canRegenerate: unsigned,
+          })
           toast.info(`SS-4 already exists for ${companyName}`)
           router.refresh()
           return
@@ -61,7 +73,9 @@ export function GenerateSS4Dialog({
         }
 
         setResult({ success: true, token: data.token, admin_preview: data.admin_preview, entity_type: data.entity_type })
-        toast.success(`SS-4 created for ${companyName}`)
+        toast.success(data.regenerated
+          ? `SS-4 regenerated for ${companyName} — same client link, updated data`
+          : `SS-4 created for ${companyName}`)
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Error')
@@ -162,7 +176,7 @@ export function GenerateSS4Dialog({
                 Cancel
               </button>
               <button
-                onClick={handleGenerate}
+                onClick={() => handleGenerate()}
                 disabled={isPending}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
@@ -171,12 +185,25 @@ export function GenerateSS4Dialog({
               </button>
             </>
           ) : (
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
-            >
-              Done
-            </button>
+            <>
+              {result.canRegenerate && (
+                <button
+                  onClick={() => handleGenerate(true)}
+                  disabled={isPending}
+                  title="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid."
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                  Regenerate from account data
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
+              >
+                Done
+              </button>
+            </>
           )}
         </div>
       </div>

@@ -624,6 +624,25 @@ WITH audit_results AS (
   WHERE d.account_id IS NOT NULL
     AND a.id IS NULL
 
+  UNION ALL
+
+  -- CHECK 40: Recent OCR/processing failures (added 2026-06-11 after the
+  -- Document AI billing outage sat unnoticed for 2 days). Flags documents
+  -- whose processing failed in the last 24h — a cluster means the OCR
+  -- backend (Document AI) is down or misconfigured. Old permanent errors
+  -- (page-limit PDFs) age out of the window naturally.
+  SELECT
+    'recent_document_ocr_errors',
+    'documents',
+    'P1',
+    COUNT(*)::int,
+    LEFT(STRING_AGG(id::text, ', ' ORDER BY processed_at DESC), 200),
+    'Documents with processing errors in the last 24h (OCR backend may be down): ' ||
+      COALESCE(LEFT(STRING_AGG(DISTINCT LEFT(error_message, 80), ' | '), 300), 'N/A')
+  FROM documents
+  WHERE status = 'error'
+    AND processed_at > NOW() - INTERVAL '24 hours'
+
 )
 
 -- =========================================================================
