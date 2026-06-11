@@ -196,6 +196,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!participation?.length) {
       return NextResponse.json({ ok: true }) // Claude wasn't in this thread — ignore
     }
+
+    // Directed-at-other guard: in a thread Claude is part of, a plain `message`
+    // reply that @mentions OTHER users/bots (e.g. Hermes <@U0B9D3MAD9B>) but NOT
+    // Claude is a side conversation — Claude must stay quiet. Plain replies with
+    // no @mention at all still fall through and get answered (they're aimed at
+    // whoever last spoke, which is Claude in its own thread). app_mention events
+    // are never reached here (this block is `isThreadReply && !isAppMention`).
+    const mentions: string[] = text.match(/<@U[A-Z0-9]+>/g) ?? []
+    if (mentions.length > 0 && !mentions.includes(`<@${CLAUDE_BOT_USER_ID}>`)) {
+      return NextResponse.json({ ok: true, skipped: "directed_at_other" })
+    }
   }
 
   // Idempotency: skip duplicate Slack event deliveries
