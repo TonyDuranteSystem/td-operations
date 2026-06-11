@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Check, Loader2, Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -25,6 +24,8 @@ interface WizardShellProps {
   children: React.ReactNode
   /** Override the submit button label (e.g. "Re-submit" for edit mode) */
   submitLabel?: string
+  /** Subtle autosave confirmation shown next to Save draft (e.g. "Saved 14:32") */
+  autosaveStatus?: string | null
 }
 
 export function WizardShell({
@@ -39,6 +40,7 @@ export function WizardShell({
   locale,
   children,
   submitLabel,
+  autosaveStatus,
 }: WizardShellProps) {
   const isLastStep = currentStep === steps.length - 1
   const isFirstStep = currentStep === 0
@@ -130,6 +132,9 @@ export function WizardShell({
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {isSaving ? t.saving : t.save}
             </button>
+          )}
+          {autosaveStatus && !isSaving && (
+            <span className="text-xs text-zinc-400 self-center">{autosaveStatus}</span>
           )}
         </div>
 

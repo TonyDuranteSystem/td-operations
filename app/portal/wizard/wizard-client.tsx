@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
 import { WizardField } from '@/components/portal/wizard/wizard-field'
@@ -93,8 +93,17 @@ export function WizardClient({
   const [currentProgressId, setCurrentProgressId] = useState(progressId)
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([])
 
+  // Autosave machinery: every change funnels through handleFieldChange (typed
+  // fields, repeater rows, uploaded file paths), so one dirty flag + one
+  // debounced effect covers the whole wizard. Uploaded files are the precious
+  // case — losing their reference on an unsaved reload orphans the file.
+  const dirtyRef = useRef(false)
+  const autosaveBusyRef = useRef(false)
+  const [autosavedAt, setAutosavedAt] = useState<Date | null>(null)
+
   const handleFieldChange = useCallback((name: string, value: string | string[] | boolean | number) => {
     setFormData(prev => ({ ...prev, [name]: value }))
+    dirtyRef.current = true
     // Clear any server-side validation error for this field when the user edits it
     setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
   }, [])
@@ -229,9 +238,11 @@ export function WizardClient({
     return true
   }, [currentStep, steps, fields, formData, memberCount, repeaterCounts])
 
-  // Save progress to wizard_progress table
-  const handleSave = useCallback(async () => {
-    setIsSaving(true)
+  // Save progress to wizard_progress table. `silent` = autosave mode: no
+  // toasts (a failed autosave just stays dirty and retries on the next edit;
+  // the manual Save draft button still reports loudly).
+  const saveProgress = useCallback(async (silent: boolean): Promise<boolean> => {
+    if (!silent) setIsSaving(true)
     try {
       const body = {
         wizard_type: wizardType,
@@ -252,16 +263,42 @@ export function WizardClient({
       if (res.ok) {
         const result = await res.json()
         if (result.id) setCurrentProgressId(result.id)
-        toast.success(locale === 'it' ? 'Bozza salvata' : 'Draft saved')
-      } else {
-        toast.error(locale === 'it' ? 'Errore nel salvataggio' : 'Save failed')
+        if (!silent) toast.success(locale === 'it' ? 'Bozza salvata' : 'Draft saved')
+        return true
       }
+      if (!silent) toast.error(locale === 'it' ? 'Errore nel salvataggio' : 'Save failed')
+      return false
     } catch {
-      toast.error(locale === 'it' ? 'Errore nel salvataggio' : 'Save failed')
+      if (!silent) toast.error(locale === 'it' ? 'Errore nel salvataggio' : 'Save failed')
+      return false
     } finally {
-      setIsSaving(false)
+      if (!silent) setIsSaving(false)
     }
   }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, locale])
+
+  const handleSave = useCallback(async () => {
+    dirtyRef.current = false
+    await saveProgress(false)
+  }, [saveProgress])
+
+  // Debounced autosave: 2.5s after the last change. saveProgress is recreated
+  // on every formData change, so the effect re-arms — classic debounce. The
+  // dirty flag stops no-op saves (initial mount, post-save idle); the busy ref
+  // stops overlapping requests; a failed silent save re-marks dirty so the
+  // next edit retries.
+  useEffect(() => {
+    if (!dirtyRef.current || isSubmitted || isSubmitting) return
+    const t = setTimeout(async () => {
+      if (autosaveBusyRef.current || isSubmitting || isSubmitted || !dirtyRef.current) return
+      autosaveBusyRef.current = true
+      dirtyRef.current = false
+      const ok = await saveProgress(true)
+      autosaveBusyRef.current = false
+      if (ok) setAutosavedAt(new Date())
+      else dirtyRef.current = true
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [saveProgress, isSubmitted, isSubmitting])
 
   // Submit wizard
   const handleSubmit = useCallback(async () => {
@@ -444,6 +481,9 @@ export function WizardClient({
       isSaving={isSaving}
       locale={locale}
       submitLabel={isResubmitMode ? (locale === 'it' ? 'Aggiorna invio' : 'Re-submit') : undefined}
+      autosaveStatus={autosavedAt
+        ? `${locale === 'it' ? 'Salvato' : 'Saved'} ${autosavedAt.toLocaleTimeString(locale === 'it' ? 'it-IT' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
+        : null}
     >
       {/* Re-submit mode banner */}
       {isResubmitMode && (
