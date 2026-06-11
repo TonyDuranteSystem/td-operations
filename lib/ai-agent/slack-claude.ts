@@ -199,6 +199,20 @@ export async function prepareSlackImages(images: SlackImageRef[]): Promise<Worke
         continue
       }
       const buffer = Buffer.from(await res.arrayBuffer())
+      // Validate the downloaded bytes are actually an image. Slack's url_private
+      // returns an HTML login page (not an error status) when the bot lacks the
+      // files:read scope — base64-ing that garbage and sending it fails the whole
+      // Anthropic call. Check the magic bytes and skip anything that isn't a real
+      // PNG/JPEG/GIF/WEBP instead.
+      const firstBytes = buffer.slice(0, 4)
+      const isPng = firstBytes[0] === 0x89 && firstBytes[1] === 0x50 // PNG magic bytes
+      const isJpeg = firstBytes[0] === 0xff && firstBytes[1] === 0xd8 // JPEG magic bytes
+      const isGif = firstBytes[0] === 0x47 && firstBytes[1] === 0x49 // GIF magic bytes
+      const isWebp = buffer.length > 12 && buffer.slice(8, 12).toString() === "WEBP"
+      if (!isPng && !isJpeg && !isGif && !isWebp) {
+        console.warn(`[slack-claude] Downloaded file ${img.name ?? "unnamed"} is not a valid image (first bytes: ${firstBytes.toString("hex")}). Likely HTML login page — bot may need files:read scope.`)
+        continue // skip this image, don't crash
+      }
       if (buffer.length > SLACK_MAX_IMAGE_BYTES) {
         console.warn(`[slack-claude] skipping image ${img.name ?? "unnamed"} — ${buffer.length} bytes exceeds ${SLACK_MAX_IMAGE_BYTES}`)
         continue
@@ -327,7 +341,27 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
 
-  const { reply } = await callWorker(row.body, workerOpts)
+  // Run the worker. If the call fails specifically because of an image the API
+  // rejected (a 400 mentioning "image" — e.g. a corrupt download that slipped
+  // past the magic-byte guard, or an edge media type), retry once WITHOUT the
+  // images so Antonio still gets a text answer instead of silent failure. Any
+  // other error (non-image, or no images attached) is re-thrown unchanged so the
+  // cron marks the row failed as before.
+  let reply: string
+  try {
+    ;({ reply } = await callWorker(row.body, workerOpts))
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
+    if (!isImageError) throw err
+    console.warn(`[slack-claude] image-related API error, retrying text-only: ${msg}`)
+    const textOnlyOpts: CallWorkerOptions = {
+      threadId: row.thread_id,
+      messageId: row.id,
+      systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+    }
+    ;({ reply } = await callWorker(row.body, textOnlyOpts))
+  }
 
   // Morph the "On it 👍" acknowledgment into the answer (chat.update) so the
   // thread shows one message that transforms, not two. If there's no ack ts or

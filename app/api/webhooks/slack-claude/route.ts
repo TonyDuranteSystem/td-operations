@@ -203,6 +203,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true })
   }
 
+  // Dedup by message timestamp (catches app_mention + message for the same Slack
+  // message). When Antonio @mentions Claude in a thread Claude already joined,
+  // Slack fires TWO events — app_mention AND message — with DIFFERENT event_ids
+  // but the SAME message ts. The event_id dedup above misses that; this catches
+  // it because both events carry the same event.ts for the one underlying message.
+  const msgTs = eventTs || event.event_ts
+  if (msgTs) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: dupByTs } = await (supabaseAdmin as any)
+      .from("agent_messages")
+      .select("id")
+      .eq("recipient", "claude")
+      .filter("context_json->>slack_event_ts", "eq", msgTs)
+      .filter("context_json->>slack_channel_id", "eq", channelId)
+      .limit(1)
+    if (dupByTs?.length) {
+      return NextResponse.json({ ok: true, dedup: "message_ts" })
+    }
+  }
+
   // Immediate acknowledgment — Antonio sees this within 1-2s
   // Reply anchored to the message's ts so it opens (or continues) a thread.
   // Capture the ack message ts so the worker can morph it (chat.update) into

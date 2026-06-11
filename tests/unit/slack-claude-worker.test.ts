@@ -416,7 +416,7 @@ describe("processSlackEvent", () => {
     mockFetch.mockImplementation((url: string) =>
       String(url).includes("/api/")
         ? Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "3.3" }) })
-        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([1, 2, 3, 4]).buffer) }),
+        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer) }),
     )
 
     const updateChain = {
@@ -444,8 +444,76 @@ describe("processSlackEvent", () => {
     expect(opts.images.length).toBe(1)
     expect(opts.images[0]).toEqual({
       type: "image",
-      source: { type: "base64", media_type: "image/png", data: Buffer.from([1, 2, 3, 4]).toString("base64") },
+      source: { type: "base64", media_type: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64") },
     })
+  })
+
+  it("retries text-only when the API rejects an image (400) and still posts a reply", async () => {
+    // First call (with images) fails with an image-related 400; the worker must
+    // retry WITHOUT images so Antonio still gets a text answer.
+    ;(callWorker as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(
+        new Error('Claude API error 400: {"type":"error","error":{"message":"messages.0.content.1.image.source: invalid base64 data"}}'),
+      )
+      .mockResolvedValueOnce({ reply: "text-only answer", toolsUsed: [] })
+    mockFetch.mockImplementation((url: string) =>
+      String(url).includes("/api/")
+        ? Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer) }),
+    )
+
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+
+    const row = {
+      id: "row-img-400",
+      body: "look at this",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_images: [{ url: "https://files.slack.com/img.png", name: "img.png", mimetype: "image/png" }],
+      },
+    }
+
+    const reply = await processSlackEvent(row)
+
+    expect(reply).toBe("text-only answer")
+    // callWorker invoked twice: first WITH images, retry WITHOUT
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2)
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls[0][1].images).toBeDefined()
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls[1][1].images).toBeUndefined()
+  })
+
+  it("does NOT retry (re-throws) on a non-image API error", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Claude API error 529: {"type":"error","error":{"message":"overloaded"}}'),
+    )
+    mockFetch.mockImplementation((url: string) =>
+      String(url).includes("/api/")
+        ? Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer) }),
+    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue({ update: vi.fn().mockReturnThis(), eq: vi.fn().mockResolvedValue({ error: null }) })
+
+    const row = {
+      id: "row-529",
+      body: "look at this",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_images: [{ url: "https://files.slack.com/img.png", name: "img.png", mimetype: "image/png" }],
+      },
+    }
+
+    await expect(processSlackEvent(row)).rejects.toThrow("529")
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
   })
 
   it("falls back to thread-history images when the current message has none (thread reply)", async () => {
@@ -468,8 +536,8 @@ describe("processSlackEvent", () => {
       if (u.includes("/api/") || u.includes("chat.")) {
         return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "4.4" }) })
       }
-      // image download (url_private)
-      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([9, 8, 7]).buffer) })
+      // image download (url_private) — valid PNG magic bytes
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x9, 0x8, 0x7]).buffer) })
     })
 
     const updateChain = {
@@ -502,7 +570,7 @@ describe("processSlackEvent", () => {
     const opts = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][1]
     expect(opts.images).toBeDefined()
     expect(opts.images.length).toBe(1)
-    expect(opts.images[0].source.data).toBe(Buffer.from([9, 8, 7]).toString("base64"))
+    expect(opts.images[0].source.data).toBe(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x9, 0x8, 0x7]).toString("base64"))
   })
 
   it("does NOT fetch thread history when the message is not in a thread", async () => {
@@ -575,7 +643,7 @@ describe("prepareSlackImages", () => {
   it("downloads a supported image and returns a base64 block", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(Uint8Array.from([10, 20, 30]).buffer),
+      arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 10, 20, 30]).buffer),
     })
     const blocks = await prepareSlackImages([
       { url: "https://files.slack.com/a.png", name: "a.png", mimetype: "image/png" },
@@ -583,9 +651,20 @@ describe("prepareSlackImages", () => {
     expect(blocks).toEqual([
       {
         type: "image",
-        source: { type: "base64", media_type: "image/png", data: Buffer.from([10, 20, 30]).toString("base64") },
+        source: { type: "base64", media_type: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 10, 20, 30]).toString("base64") },
       },
     ])
+  })
+
+  it("skips a download whose body is not a valid image (HTML login page)", async () => {
+    // url_private returns an HTML login page (not an error status) when the bot
+    // lacks files:read — the magic-byte guard must skip it, not base64 garbage.
+    const html = Buffer.from("<!DOCTYPE html><html><body>Sign in</body></html>", "utf8")
+    mockFetch.mockResolvedValue({ ok: true, arrayBuffer: () => Promise.resolve(html.buffer.slice(html.byteOffset, html.byteOffset + html.byteLength)) })
+    const blocks = await prepareSlackImages([
+      { url: "https://files.slack.com/login.png", name: "login.png", mimetype: "image/png" },
+    ])
+    expect(blocks).toEqual([])
   })
 
   it("skips unsupported media types without downloading", async () => {
@@ -598,6 +677,9 @@ describe("prepareSlackImages", () => {
 
   it("skips an image whose downloaded body exceeds the 5MB cap", async () => {
     const tooBig = new Uint8Array(5 * 1024 * 1024 + 1)
+    // Valid PNG magic so it passes the image-validity guard and is rejected by the size cap (the path under test)
+    tooBig[0] = 0x89
+    tooBig[1] = 0x50
     mockFetch.mockResolvedValue({ ok: true, arrayBuffer: () => Promise.resolve(tooBig.buffer) })
     const blocks = await prepareSlackImages([
       { url: "https://files.slack.com/big.png", name: "big.png", mimetype: "image/png" },
