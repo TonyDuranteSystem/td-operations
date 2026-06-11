@@ -41,6 +41,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'field_name and file_name are required' }, { status: 400 })
     }
 
+    // CSV-only guard for the tax per-bank statement sections (master plan
+    // b2115fd3 §2.1). The client input filters via accept=".csv", but the
+    // server must not trust it. A renamed PDF with a .csv name is rejected
+    // later at parse time; this stops the obvious case with a guiding message.
+    if (/^bank_accounts_\d+_statements$/.test(fieldName) && !/\.csv$/i.test(fileName)) {
+      return NextResponse.json(
+        { error: 'Please upload only CSV files. Open your online banking, export this account\'s transactions for the entire year, and choose CSV as the format.' },
+        { status: 400 },
+      )
+    }
+
     const sanitizedId = String(identifier).replace(/[^a-zA-Z0-9@._-]/g, '_')
     const sanitizedFile = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')
     const unique = randomUUID().slice(0, 8)

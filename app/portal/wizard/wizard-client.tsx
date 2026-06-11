@@ -191,6 +191,18 @@ export function WizardClient({
     }
 
     for (const field of stepFields) {
+      // Repeater gate: a required repeater needs ≥1 row, and every row must
+      // fill its required sub-fields (mirrors the members logic above).
+      if (field.type === 'repeater') {
+        const count = repeaterCounts[field.name] ?? 0
+        if (field.repeaterRequired && count === 0) return false
+        for (let idx = 0; idx < count; idx++) {
+          for (const rf of field.repeaterFields ?? []) {
+            if (rf.required && isEmptyValue(formData[`${field.name}_${idx}_${rf.name}`])) return false
+          }
+        }
+        continue
+      }
       // Skip validation for hidden conditional fields
       if (field.conditional) {
         const refValue = formData[field.conditional.field]
@@ -199,7 +211,7 @@ export function WizardClient({
       if (field.required && isEmptyValue(formData[field.name])) return false
     }
     return true
-  }, [currentStep, steps, fields, formData, memberCount])
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts])
 
   // Save progress to wizard_progress table
   const handleSave = useCallback(async () => {
@@ -543,11 +555,19 @@ export function WizardClient({
                   <div key={field.name} className="md:col-span-2 space-y-3">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-zinc-700">{locale === 'it' && field.labelIt ? field.labelIt : field.label}</span>
-                      <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>
+                      {!field.repeaterRequired && (
+                        <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>
+                      )}
+                      {field.repeaterRequired && <span className="text-xs text-red-500">*</span>}
                     </div>
+                    {(field.hint || field.hintIt) && (
+                      <p className="text-xs text-zinc-500 whitespace-pre-line">
+                        {locale === 'it' && field.hintIt ? field.hintIt : field.hint}
+                      </p>
+                    )}
                     {count === 0 && (
                       <p className="text-xs text-zinc-400 italic">
-                        {locale === 'it' ? 'Nessuna transazione aggiunta.' : 'No entries added yet.'}
+                        {locale === 'it' ? 'Nessuna voce aggiunta.' : 'No entries added yet.'}
                       </p>
                     )}
                     {Array.from({ length: count }).map((_, idx) => (
@@ -561,8 +581,21 @@ export function WizardClient({
                               setRepeaterCounts(prev => ({ ...prev, [field.name]: newCount }))
                               handleFieldChange(`${field.name}_count`, newCount)
                               setFormData(prev => {
+                                // Shift every row ABOVE the removed one down a
+                                // slot, then drop the last row's keys. Without
+                                // the reindex, removing row 0 of 2 orphaned row
+                                // 1's data under keys the renderer never reads
+                                // (the orphan-upload-paths hazard, master plan §9).
                                 const next = { ...prev }
-                                field.repeaterFields?.forEach(rf => { delete next[`${field.name}_${idx}_${rf.name}`] })
+                                for (let j = idx; j < newCount; j++) {
+                                  field.repeaterFields?.forEach(rf => {
+                                    const from = `${field.name}_${j + 1}_${rf.name}`
+                                    const to = `${field.name}_${j}_${rf.name}`
+                                    if (from in next) next[to] = next[from]
+                                    else delete next[to]
+                                  })
+                                }
+                                field.repeaterFields?.forEach(rf => { delete next[`${field.name}_${newCount}_${rf.name}`] })
                                 return next
                               })
                             }}
@@ -573,11 +606,19 @@ export function WizardClient({
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           {field.repeaterFields?.map(rf => (
-                            <div key={rf.name} className={rf.type === 'textarea' ? 'md:col-span-2' : ''}>
+                            <div key={rf.name} className={rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''}>
                               <WizardField
                                 field={rf}
                                 value={formData[`${field.name}_${idx}_${rf.name}`] ?? ''}
                                 onChange={(name, value) => handleFieldChange(`${field.name}_${idx}_${name}`, value)}
+                                // Without the upload callback a file sub-field
+                                // silently stores raw FILENAMES instead of
+                                // storage paths (wizard-field.tsx fallback) —
+                                // the third variant of the silent-file-loss bug
+                                // class. The flattened name keeps the storage
+                                // path scheme per-row unique.
+                                onFileUpload={(name, file, onProgress) =>
+                                  handleFileUpload(`${field.name}_${idx}_${name}`, file, onProgress)}
                                 locale={locale}
                               />
                             </div>

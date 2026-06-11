@@ -30,6 +30,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'file and field_name required' }, { status: 400 })
     }
 
+    // CSV-only guard for the tax per-bank statement sections (master plan
+    // b2115fd3 §2.1) — same rule as wizard-upload-url.
+    if (/^bank_accounts_\d+_statements$/.test(fieldName) && !/\.csv$/i.test(file.name)) {
+      return NextResponse.json(
+        { error: 'Please upload only CSV files. Open your online banking, export this account\'s transactions for the entire year, and choose CSV as the format.' },
+        { status: 400 },
+      )
+    }
+
     // Build storage path: {wizard_type}/{identifier}/{fieldName}_{filename}
     const sanitizedId = identifier.replace(/[^a-zA-Z0-9@._-]/g, '_')
     const storagePath = `${wizardType || 'wizard'}/${sanitizedId}/${fieldName}_${file.name}`

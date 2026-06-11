@@ -240,9 +240,34 @@ const TAX_COMPANY_BASE: FieldConfig[] = [
   { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
 ]
 
-// Shared document fields for MMLLC / Corp (bank statements required)
+// Shared document fields for MMLLC / Corp.
+// CSV-ONLY per-bank sections (master plan: sysdoc tax-financials-self-service-
+// master-plan §2-3). Bank name is FREE TEXT — never a list, never a gate. The
+// CSV requirement is framed as a service/gift: it is what lets us prepare the
+// client's P&L + Balance Sheet accurately at no extra cost. Old in-flight
+// drafts may still carry the legacy single `bank_statements` field — readers
+// (collectUploadPaths, tax-form-setup) accept both shapes.
 const TAX_DOCUMENTS_BASE: FieldConfig[] = [
-  { name: 'bank_statements', label: 'Bank Statements (CSV preferred)', labelIt: 'Estratti Conto (CSV preferito)', type: 'file', required: true, hint: 'Upload all bank statements for the tax year', hintIt: 'Carica tutti gli estratti conto dell\'anno fiscale' },
+  {
+    name: 'bank_accounts',
+    label: 'Your bank accounts — upload the CSV export for the entire year',
+    labelIt: 'I tuoi conti bancari — carica l\'export CSV dell\'intero anno',
+    type: 'repeater',
+    repeaterRequired: true,
+    hint: 'Please upload ONLY CSV files, and the ENTIRE year (January 1 – December 31), not a piece of it. This file lets us prepare your Profit & Loss and Balance Sheet for you — accurately and at no extra cost. Every bank lets you export it: in your online banking, open the account, choose Export/Download, set the dates to the full year, and pick CSV. Add one section per bank account.',
+    hintIt: 'Carica SOLO file CSV, e l\'INTERO anno (1 gennaio – 31 dicembre), non una parte. Questo file ci permette di preparare per te il Conto Economico e lo Stato Patrimoniale — con precisione e senza costi aggiuntivi. Ogni banca permette di esportarlo: nell\'online banking, apri il conto, scegli Esporta/Scarica, imposta le date sull\'anno intero e seleziona CSV. Aggiungi una sezione per ogni conto bancario.',
+    repeaterAddLabel: 'Add a bank account',
+    repeaterAddLabelIt: 'Aggiungi un conto bancario',
+    repeaterFields: [
+      { name: 'bank_name', label: 'Bank name', labelIt: 'Nome della banca', type: 'text', required: true, placeholder: 'e.g. Mercury, Wise, Chase…', placeholderIt: 'es. Mercury, Wise, Chase…' },
+      { name: 'account_label', label: 'Account nickname / last 4 digits (if you have more than one account at this bank)', labelIt: 'Nome conto / ultime 4 cifre (se hai più conti nella stessa banca)', type: 'text', required: false },
+      { name: 'account_kind', label: 'Account type', labelIt: 'Tipo di conto', type: 'select', required: true, options: [
+        { value: 'checking', label: 'Bank account (checking)', labelIt: 'Conto corrente' },
+        { value: 'credit_card', label: 'Credit card', labelIt: 'Carta di credito' },
+      ] },
+      { name: 'statements', label: 'CSV export — entire year', labelIt: 'Export CSV — anno intero', type: 'file', required: true, accept: '.csv,text/csv', hint: 'Only CSV. The entire year, not a piece of it.', hintIt: 'Solo CSV. L\'anno intero, non una parte.' },
+    ],
+  },
   { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false },
   { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false },
   { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },

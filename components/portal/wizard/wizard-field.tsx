@@ -21,6 +21,9 @@ export interface FieldConfig {
   repeaterFields?: FieldConfig[]   // sub-fields for repeater type
   repeaterAddLabel?: string
   repeaterAddLabelIt?: string
+  /** Repeater must have at least one row to pass the step gate (e.g. the tax
+   *  per-bank CSV sections — master plan b2115fd3). Default false = optional. */
+  repeaterRequired?: boolean
   /** Live-format the input as the user types. `ein` strips non-digits and
    *  auto-inserts the dash after the second digit, capped at 9 digits.
    *  Display always ends up in canonical XX-XXXXXXX regardless of what the
