@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-10
+**Last verified against code:** 2026-06-11
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -15,7 +15,7 @@ Always-on Claude presence in Slack. When Antonio writes `@Claude` in any Slack c
 - AI reply 8–15 s later via the worker cron
 - Conversational tone (2–5 lines), discuss-before-act, never unilaterally mutates
 - Conversation continuity: same channel/thread within 30 min → same `thread_id`
-- Phase 1: `app_mention` events only
+- Accepts `app_mention` events **and** plain thread-reply `message` events in a thread Claude already participated in (no @mention needed to keep a conversation going)
 
 ---
 
@@ -90,10 +90,18 @@ Slack                          Production server              Supabase
 
 ---
 
+## Accepted events
+
+The webhook processes:
+- `app_mention` — Antonio @mentions Claude (any channel/context)
+- `message` events that are (a) inside a thread (`thread_ts` set), (b) have **no** `subtype` (genuine human message — excludes `bot_message`, `message_changed`, `message_deleted`, joins), and (c) belong to a thread where Claude already participated (an `agent_messages` row exists with `context_json.source='slack'` and matching thread-level **or** channel-level `slack_scope_key`). Without the participation check Claude would answer every message in every thread in the channel.
+
+All other event types are ACK'd with `{ ok: true }` and ignored.
+
 ## Loop protection
 
-The webhook handler skips incoming events when:
-- `event.bot_id` is set (any bot)
+The webhook handler skips incoming events (runs **before** the participation query and insert) when:
+- `event.bot_id` is set (any bot) — this is what stops Claude's own posted replies (which carry `bot_id`) from re-triggering
 - `event.user === "U0B9S675WTT"` (Claude's own user ID)
 - `event.subtype === "bot_message"`
 
@@ -107,9 +115,12 @@ The webhook handler skips incoming events when:
 
 `findOrCreateConversationThread(channelId, threadTs)`:
 1. Query `agent_messages` where `created_at > now - 30 min` AND `thread_id IS NOT NULL`
-2. Loop to find a row with matching `context_json.slack_scope_key`
-3. If found → reuse that `thread_id` (conversation continuity)
-4. If not → generate new UUID, call `createThreadSummary`, return it
+2. **First pass** — exact match on `context_json.slack_scope_key`
+3. **Second pass** (only when `threadTs` is set) — match the channel-level scope (`channelId` with no thread_ts) that started the conversation. This is the fix for the channel→thread key drift: a channel-level mention stores `scope_key = channelId`, but its follow-up reply arrives with `thread_ts` set (`scope_key = channelId:thread_ts`). Prefer the channel-level row whose `slack_event_ts === threadTs` (exact thread-origin link); otherwise fall back to the most recent channel-level row in the window.
+4. If found in either pass → reuse that `thread_id` (conversation continuity)
+5. If not → generate new UUID, call `createThreadSummary`, return it
+
+> **Edge case:** the channel-only fallback (no exact ts match) picks the *most recent* channel-level row. Two separate channel-level conversations in the same channel within 30 min, then a reply in the older one with no precise ts match, could attach to the newer conversation's memory. Bounded by the 30-min window and serial 1:1 usage.
 
 ---
 
@@ -139,7 +150,7 @@ curl -X POST "https://td-operations-sandbox.vercel.app/api/cron/slack-claude-wor
 1. Go to api.slack.com/apps → `A0B9LUJRLMB` (Claude)
 2. **Basic Information → Signing Secret** → copy → add as `SLACK_SIGNING_SECRET_CLAUDE` in Vercel
 3. **Event Subscriptions** → enable → Request URL: `https://td-operations.vercel.app/api/webhooks/slack-claude`
-4. Subscribe to bot event: `app_mention`
+4. Subscribe to bot events: `app_mention` **and** `message.channels` (the latter is required for thread-reply follow-ups without an @mention)
 5. Save and reinstall app if prompted
 
 ---

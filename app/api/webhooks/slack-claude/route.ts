@@ -1,9 +1,13 @@
 /**
  * Slack Events API webhook — Claude bot (app A0B9LUJRLMB)
  *
- * Receives app_mention events from Slack, immediately posts "On it 👍" so
- * Antonio has instant acknowledgment (< 2s), then queues the message for
- * the Slack worker cron to process with the full Claude AI response.
+ * Receives app_mention events (and follow-up thread-reply `message` events in
+ * threads Claude already participated in) from Slack, immediately posts
+ * "On it 👍" so Antonio has instant acknowledgment (< 2s), then queues the
+ * message for the Slack worker cron to process with the full Claude AI response.
+ *
+ * NOTE: thread-reply support requires the Slack app to subscribe to the
+ * `message.channels` bot event in addition to `app_mention`.
  *
  * Flow:
  *   1. Verify Slack signing secret (HMAC-SHA256)
@@ -118,12 +122,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const event = payload.event ?? {}
   const eventId: string = payload.event_id ?? ""
 
-  // Only process app_mention events
-  if (event.type !== "app_mention") {
+  // Accept two kinds of events:
+  //  1. app_mention — Antonio @mentions Claude (any channel, any context)
+  //  2. message in a thread — a plain follow-up reply (no @mention) in a thread
+  //     Claude already participated in. `!event.subtype` keeps this to genuine
+  //     human messages: it excludes bot_message AND message_changed /
+  //     message_deleted / channel_join etc., so edits and deletes don't re-trigger.
+  const isAppMention = event.type === "app_mention"
+  const isThreadReply = event.type === "message" && !!event.thread_ts && !event.subtype
+
+  if (!isAppMention && !isThreadReply) {
     return NextResponse.json({ ok: true })
   }
 
-  // Loop protection: skip messages from bots (including ourselves)
+  // Loop protection: skip messages from bots (including ourselves). MUST run
+  // before the participation query/insert — every reply Claude posts fires a
+  // `message` event carrying bot_id, and this is what stops the infinite loop.
   if (event.bot_id || event.user === CLAUDE_BOT_USER_ID || event.subtype === "bot_message") {
     return NextResponse.json({ ok: true })
   }
@@ -136,6 +150,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!channelId || !eventTs || !text) {
     return NextResponse.json({ ok: true })
+  }
+
+  // For thread replies (no @mention), only respond if Claude already participated
+  // in this thread — otherwise we'd answer every message in every thread in the
+  // channel. Match either the thread scope or the channel-level scope that may
+  // have started the conversation (see findOrCreateConversationThread).
+  if (isThreadReply && !isAppMention) {
+    const threadScopeKey = slackScopeKey(channelId, threadTs)
+    const channelScopeKey = channelId
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: participation } = await (supabaseAdmin as any)
+      .from("agent_messages")
+      .select("id")
+      .filter("context_json->>source", "eq", "slack")
+      .or(
+        `context_json->>slack_scope_key.eq.${threadScopeKey},context_json->>slack_scope_key.eq.${channelScopeKey}`,
+      )
+      .limit(1)
+
+    if (!participation?.length) {
+      return NextResponse.json({ ok: true }) // Claude wasn't in this thread — ignore
+    }
   }
 
   // Idempotency: skip duplicate Slack event deliveries

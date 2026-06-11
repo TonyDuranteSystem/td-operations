@@ -157,6 +157,62 @@ describe("findOrCreateConversationThread", () => {
     )
   })
 
+  it("threaded reply reuses the channel-level thread that started the conversation", async () => {
+    // Bug 1: channel-level mention stored scope_key = channelId (no thread_ts).
+    // The follow-up reply arrives with thread_ts set → scope_key = channelId:thread_ts.
+    // It must still find the channel-level thread_id via the channel-only fallback.
+    const channelThreadId = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    const mockChain = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      gt: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({
+        data: [
+          {
+            thread_id: channelThreadId,
+            context_json: { slack_scope_key: "C123", slack_event_ts: "1781193406.121259" },
+          },
+        ],
+        error: null,
+      }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(mockChain)
+
+    const result = await findOrCreateConversationThread("C123", "1781193406.121259")
+    expect(result).toBe(channelThreadId)
+    expect(createThreadSummary).not.toHaveBeenCalled()
+  })
+
+  it("prefers the channel-level row whose original ts matches the reply thread_ts", async () => {
+    // Two channel-level conversations in the window; the reply belongs to the older one.
+    const olderThreadId = "11111111-1111-1111-1111-111111111111"
+    const newerThreadId = "22222222-2222-2222-2222-222222222222"
+    const mockChain = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      gt: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({
+        data: [
+          // rows are DESC (most recent first)
+          { thread_id: newerThreadId, context_json: { slack_scope_key: "C123", slack_event_ts: "200.000" } },
+          { thread_id: olderThreadId, context_json: { slack_scope_key: "C123", slack_event_ts: "100.000" } },
+        ],
+        error: null,
+      }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(mockChain)
+
+    // Reply in the older thread (thread_ts === older message's event_ts)
+    const result = await findOrCreateConversationThread("C123", "100.000")
+    expect(result).toBe(olderThreadId)
+  })
+
   it("does not reuse a thread from a different scope", async () => {
     const mockChain = {
       from: vi.fn().mockReturnThis(),

@@ -8,8 +8,10 @@
  *   - findOrCreateConversationThread(): maps a Slack scope to a thread_id
  *   - processSlackEvent(): runs callWorker then posts the reply to Slack
  *
- * Phase 1: app_mention events only. Conversation continuity via thread_id
- * scoped to (channel OR channel:thread_ts) within a 30-minute window.
+ * Handles app_mention events plus follow-up thread replies (message events in
+ * a thread Claude already participated in). Conversation continuity via
+ * thread_id scoped to (channel OR channel:thread_ts) within a 30-minute window;
+ * a threaded reply also matches the channel-level mention that started it.
  */
 
 import { randomUUID } from "crypto"
@@ -101,6 +103,7 @@ export async function findOrCreateConversationThread(
   threadTs: string | null | undefined,
 ): Promise<string> {
   const scopeKey = slackScopeKey(channelId, threadTs)
+  const channelOnlyKey = channelId // the key WITHOUT thread_ts (channel-level mention)
   const cutoff = new Date(Date.now() - SCOPE_WINDOW_MS).toISOString()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -112,11 +115,33 @@ export async function findOrCreateConversationThread(
     .order("created_at", { ascending: false })
     .limit(50)
 
-  for (const row of (data ?? []) as Array<{ thread_id: string | null; context_json: unknown }>) {
+  const rows = (data ?? []) as Array<{ thread_id: string | null; context_json: unknown }>
+
+  // First pass: exact scope match (channel-level ↔ channel-level, thread ↔ thread)
+  for (const row of rows) {
     const ctx = row.context_json as Record<string, unknown> | null
     if (ctx?.slack_scope_key === scopeKey && typeof row.thread_id === "string") {
       return row.thread_id
     }
+  }
+
+  // Second pass: a threaded reply whose parent was a channel-level mention.
+  // The channel-level row stored scope_key = channelId (no thread_ts), so the
+  // exact match above misses it. Prefer the row whose original message ts equals
+  // this reply's thread_ts (precise thread-origin link); otherwise fall back to
+  // the most recent channel-level row in the window.
+  if (threadTs) {
+    let channelLevelFallback: string | null = null
+    for (const row of rows) {
+      const ctx = row.context_json as Record<string, unknown> | null
+      if (ctx?.slack_scope_key === channelOnlyKey && typeof row.thread_id === "string") {
+        if (ctx?.slack_event_ts === threadTs) {
+          return row.thread_id // exact thread-origin match — most precise
+        }
+        if (!channelLevelFallback) channelLevelFallback = row.thread_id // most recent (rows are DESC)
+      }
+    }
+    if (channelLevelFallback) return channelLevelFallback
   }
 
   // New scope — create a thread_summaries row for conversation memory
