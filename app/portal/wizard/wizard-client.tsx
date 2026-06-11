@@ -525,13 +525,17 @@ export function WizardClient({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {stepFields
             .filter(field => {
-              // Repeater fields always render (they have their own visibility logic)
-              if (field.type === 'repeater') return true
-              // Conditional show/hide: only render if the referenced field has the expected value
+              // Conditional show/hide applies to ALL field types, including
+              // repeaters — e.g. related_party_transactions is gated behind the
+              // has_related_party_transactions = 'Yes' answer. (Previously
+              // repeaters short-circuited to always-render, which would have
+              // made that gate inert.)
               if (field.conditional) {
                 const refValue = formData[field.conditional.field]
                 return String(refValue) === field.conditional.value
               }
+              // Repeaters without a conditional always render.
+              if (field.type === 'repeater') return true
               return true
             })
             .map(field => {
@@ -610,6 +614,15 @@ export function WizardClient({
                     onFileUpload={handleFileUpload}
                     locale={locale}
                   />
+                  {/* High-stakes confirmation: show an amber warning when the
+                      field's value matches its configured warningOnValue (e.g.
+                      a "No" to the related-party question → $25k IRS penalty). */}
+                  {field.warningOnValue && String(formData[field.name] ?? '') === field.warningOnValue.value && (
+                    <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2 text-xs text-amber-800 leading-relaxed">
+                      <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>{locale === 'it' && field.warningOnValue.textIt ? field.warningOnValue.textIt : field.warningOnValue.text}</span>
+                    </div>
+                  )}
                 </div>
               )
             })}

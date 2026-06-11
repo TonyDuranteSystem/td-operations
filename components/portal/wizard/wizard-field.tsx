@@ -16,6 +16,10 @@ export interface FieldConfig {
   hint?: string
   hintIt?: string
   conditional?: { field: string; value: string } // only show if another field has this value
+  /** Show an amber warning box below the field when its current value equals
+   *  `value`. Used to make a high-stakes answer explicit to the client (e.g. a
+   *  "No" to the related-party question that carries a $25,000 IRS penalty). */
+  warningOnValue?: { value: string; text: string; textIt?: string }
   prefilled?: boolean
   accept?: string                  // file input accept attribute override
   repeaterFields?: FieldConfig[]   // sub-fields for repeater type
