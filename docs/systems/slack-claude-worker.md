@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-11
+**Last verified against code:** 2026-06-11 (ack-collapse + image support)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -12,7 +12,8 @@ Always-on Claude presence in Slack. When Antonio writes `@Claude` in any Slack c
 
 **Key behaviors:**
 - Immediate "On it 👍" ACK within 1–2 s (Slack's 3-second requirement met every time)
-- AI reply 8–15 s later via the worker cron
+- AI reply 8–15 s later via the worker cron — the worker **morphs the "On it 👍" message in place** (`chat.update`) into the real answer instead of posting a second message, so the thread shows one message that transforms. Falls back to a fresh post if the ack ts is missing or the update fails (message too old/deleted).
+- **Image attachments**: screenshots attached to a mention are downloaded by the worker (bot token) and passed to sonnet as base64 image blocks (vision). An image-only message (no caption) is accepted. Unsupported media types (HEIC/SVG/BMP) and files >5 MB are skipped; text still answered. See "Image attachments" below.
 - Conversational tone (2–5 lines), discuss-before-act, never unilaterally mutates
 - Conversation continuity: same channel/thread within 30 min → same `thread_id`
 - Accepts `app_mention` events **and** plain thread-reply `message` events in a thread Claude already participated in (no @mention needed to keep a conversation going)
@@ -72,9 +73,14 @@ Slack                          Production server              Supabase
   "slack_thread_ts": "1234567890.000100",
   "slack_event_ts": "1234567890.000200",
   "slack_scope_key": "C0BAB08DSDN:1234567890.000100",
-  "slack_user_id": "U0ANTONIO"
+  "slack_user_id": "U0ANTONIO",
+  "slack_ack_ts": "1234567890.000300",
+  "slack_images": [{ "url": "https://files.slack.com/…", "name": "screenshot.png", "mimetype": "image/png", "size": 84211 }]
 }
 ```
+
+- `slack_ack_ts` — ts of the "On it 👍" message; the worker `chat.update`s this into the final answer. `null` if the ack post failed → worker posts a fresh reply.
+- `slack_images` — supported image attachments (filtered to `image/jpeg|png|gif|webp`, ≤5 MB) the webhook saw. `url` is Slack's `url_private`, fetched by the worker with the bot token (NOT in the webhook — downloading there risks the 3 s ACK). `[]` when none.
 
 ---
 
@@ -97,6 +103,13 @@ The webhook processes:
 - `message` events that are (a) inside a thread (`thread_ts` set), (b) have **no** `subtype` (genuine human message — excludes `bot_message`, `message_changed`, `message_deleted`, joins), and (c) belong to a thread where Claude already participated (an `agent_messages` row exists with `context_json.source='slack'` and matching thread-level **or** channel-level `slack_scope_key`). Without the participation check Claude would answer every message in every thread in the channel.
 
 All other event types are ACK'd with `{ ok: true }` and ignored.
+
+## Image attachments
+
+- **Webhook** (`route.ts`): reads `event.files`, keeps only `image/jpeg|png|gif|webp` within the 5 MB cap (`SLACK_SUPPORTED_IMAGE_TYPES` / `SLACK_MAX_IMAGE_BYTES` in `slack-claude.ts`), stores `{url,name,mimetype,size}[]` as `context_json.slack_images`. The text guard is relaxed to accept a message with **text OR ≥1 image**, so an image-only screenshot isn't dropped. Image-only body falls back to `"(image attached — no caption)"`.
+- **Worker** (`prepareSlackImages` in `slack-claude.ts`): downloads each url_private with `SLACK_BOT_TOKEN_CLAUDE`, re-checks the 5 MB cap on the actual bytes, base64-encodes, returns `WorkerImageBlock[]`. Best-effort: a bad type / oversize / 401 / missing token skips that one image (logged), the reply still goes out.
+- **callWorker** (`worker-tools.ts`): `opts.images` is optional. When non-empty the user turn is sent as `[{type:"text",…}, …imageBlocks]`; otherwise a plain string — identical to the Hermes/Telegram path. `runWorkerLoop` accepts `string | content[]`.
+- **Known limitation:** a thread reply that is a *pure file upload* may arrive with `subtype:"file_share"`, which the `!event.subtype` filter rejects — so images work on `app_mention` and on no-subtype thread replies, not file-share-subtype replies. Verify the exact file-share event shape via prod E2E if that path is needed.
 
 ## Loop protection
 

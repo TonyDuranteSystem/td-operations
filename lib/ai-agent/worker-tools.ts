@@ -445,6 +445,25 @@ interface WorkerResponse {
   toolsUsed: string[]
 }
 
+/**
+ * A base64 image content block in the Anthropic Messages format. The Slack
+ * worker downloads attached screenshots and hands them to callWorker as these
+ * blocks so sonnet can actually see them (vision). media_type must be one the
+ * Anthropic API accepts (image/jpeg|png|gif|webp) — the caller is responsible
+ * for filtering, an unsupported type fails the whole request.
+ */
+export interface WorkerImageBlock {
+  type: "image"
+  source: { type: "base64"; media_type: string; data: string }
+}
+
+/**
+ * The user turn handed to the model: either a plain string (text-only — the
+ * Hermes/Telegram path and every legacy caller) or an array of content blocks
+ * (text + images — the Slack screenshot path).
+ */
+type WorkerUserContent = string | Array<{ type: "text"; text: string } | WorkerImageBlock>
+
 // Default max tool-use iterations. Configurable via AGENT_MAX_TOOL_LOOPS env var
 // (shared with the in-dashboard provider in providers.ts); callWorker callers may
 // also override per-request (e.g. agent_messages.context_json.max_iterations).
@@ -472,6 +491,13 @@ export interface CallWorkerOptions {
    * Used by the Slack worker to inject a conversational, discuss-first prompt.
    */
   systemPromptOverride?: string
+  /**
+   * Optional image content blocks to attach to the user turn (Slack screenshot
+   * support). When present and non-empty, the user message is sent as a
+   * multimodal content array ([{text}, ...images]) instead of a plain string.
+   * Absent/empty → text-only, identical to every prior caller.
+   */
+  images?: WorkerImageBlock[]
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -501,7 +527,7 @@ export function oneParagraphSummary(reply: string): string {
  * when the loop is exhausted without a final answer.
  */
 async function runWorkerLoop(
-  userBody: string,
+  userContent: WorkerUserContent,
   tools: ToolDef[],
   systemPrompt: string,
   maxIterations?: number,
@@ -520,7 +546,7 @@ async function runWorkerLoop(
 
   const toolsUsed: string[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let currentMessages: any[] = [{ role: "user", content: userBody }]
+  let currentMessages: any[] = [{ role: "user", content: userContent }]
 
   for (let i = 0; i < maxLoops; i++) {
     const controller = new AbortController()
@@ -646,7 +672,14 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     }
   }
 
-  const result = await runWorkerLoop(userBody, tools, systemPrompt, opts.maxIterations)
+  // Multimodal user turn: when images are attached (Slack screenshots), send
+  // [{text}, ...images]; otherwise the plain string — identical to every prior
+  // caller. deriveThreadTitle / thread context above still use the string body.
+  const images = Array.isArray(opts.images) ? opts.images : []
+  const userContent: WorkerUserContent =
+    images.length > 0 ? [{ type: "text", text: userBody }, ...images] : userBody
+
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations)
 
   if (threadId) {
     try {

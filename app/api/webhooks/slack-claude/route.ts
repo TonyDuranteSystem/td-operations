@@ -37,6 +37,8 @@ import {
   postSlackMessage,
   findOrCreateConversationThread,
   slackScopeKey,
+  SLACK_SUPPORTED_IMAGE_TYPES,
+  SLACK_MAX_IMAGE_BYTES,
 } from "@/lib/ai-agent/slack-claude"
 import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
 
@@ -148,7 +150,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const text: string = event.text ?? ""
   const userId: string = event.user ?? ""
 
-  if (!channelId || !eventTs || !text) {
+  // Image attachments (Feature 2). Keep only Anthropic-supported image types
+  // within the size cap; url_private is fetched later (with the bot token) by
+  // the worker, NOT here — downloading during the ACK window risks the 3s SLA.
+  const slackImages = ((event.files ?? []) as Array<Record<string, unknown>>)
+    .filter((f) => typeof f?.mimetype === "string" && SLACK_SUPPORTED_IMAGE_TYPES.has(f.mimetype))
+    .filter((f) => typeof f?.size !== "number" || (f.size as number) <= SLACK_MAX_IMAGE_BYTES)
+    .map((f) => ({
+      url: f.url_private as string,
+      name: f.name as string | undefined,
+      mimetype: f.mimetype as string,
+      size: typeof f.size === "number" ? (f.size as number) : undefined,
+    }))
+    .filter((f) => typeof f.url === "string" && f.url.length > 0)
+
+  // Proceed if there's text OR at least one usable image — an image-only
+  // message (a screenshot dropped with no caption) must not be dropped here.
+  if (!channelId || !eventTs || (!text && slackImages.length === 0)) {
     return NextResponse.json({ ok: true })
   }
 
@@ -180,10 +198,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Immediate acknowledgment — Antonio sees this within 1-2s
-  // Reply anchored to the message's ts so it opens (or continues) a thread
+  // Reply anchored to the message's ts so it opens (or continues) a thread.
+  // Capture the ack message ts so the worker can morph it (chat.update) into
+  // the real answer instead of posting a second message.
   const ackThreadTs = threadTs ?? eventTs
-  await postSlackMessage(channelId, "On it 👍", ackThreadTs).catch((err) => {
+  const ackTs = await postSlackMessage(channelId, "On it 👍", ackThreadTs).catch((err) => {
     console.error("[slack-claude-webhook] ACK post failed:", err)
+    return null
   })
 
   // Scope → thread_id mapping for conversation continuity
@@ -197,6 +218,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // Strip bot mention tokens from the message body so the worker sees clean text
   const cleanText = text.replace(/<@[A-Z0-9]+>/g, "").trim()
+  // Image-only message (no caption): give the worker a non-empty text turn so
+  // the model knows to look at the attached image(s).
+  const body = cleanText || text || (slackImages.length > 0 ? "(image attached — no caption)" : "")
 
   // INSERT agent_messages row
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -206,7 +230,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       sender: "slack",
       recipient: "claude",
       subject: `Slack mention in ${channelId}`,
-      body: cleanText || text,
+      body,
       status: "pending",
       thread_id: threadId,
       context_json: {
@@ -217,6 +241,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         slack_event_ts: eventTs,
         slack_scope_key: scopeKey,
         slack_user_id: userId,
+        slack_ack_ts: ackTs, // null if the ack post failed → worker posts fresh
+        slack_images: slackImages, // [] when no usable images
       },
     })
     .select("id")

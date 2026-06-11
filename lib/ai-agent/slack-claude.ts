@@ -16,8 +16,24 @@
 
 import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { callWorker } from "@/lib/ai-agent/worker-tools"
+import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
+
+// Image media types the Anthropic API accepts. Slack can deliver others
+// (image/heic from iPhone photos, image/svg+xml, image/bmp); passing an
+// unsupported type fails the ENTIRE worker call, so we filter to these and
+// silently skip the rest — the text reply still goes through.
+export const SLACK_SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+])
+
+// Per-image size ceiling. base64 inflates ~33%, and very large images blow up
+// the API payload, so skip anything over this both at the Slack-event filter
+// (file.size) and after download (buffer length).
+export const SLACK_MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
 
 // ---------------------------------------------------------------------------
 // System prompt — conversational, discuss-first, Slack-native
@@ -85,6 +101,79 @@ export async function postSlackMessage(
   const r = await slackApiCall("chat.postMessage", payload)
   if (!r.ok) console.error(`[slack-claude] chat.postMessage failed: ${r.error}`)
   return r.ts ?? null
+}
+
+/**
+ * Replace the text of an already-posted message in place (chat.update). Used to
+ * morph the "On it 👍" acknowledgment into the real answer so the thread isn't
+ * cluttered with two messages. Returns false when the update fails (message too
+ * old, deleted, not found, etc.) so the caller can fall back to a fresh post.
+ */
+export async function updateSlackMessage(
+  channelId: string,
+  messageTs: string,
+  text: string,
+): Promise<boolean> {
+  const r = await slackApiCall("chat.update", { channel: channelId, ts: messageTs, text })
+  if (!r.ok) console.error(`[slack-claude] chat.update failed: ${r.error}`)
+  return r.ok
+}
+
+// ---------------------------------------------------------------------------
+// Image attachments (Slack screenshots → multimodal content)
+// ---------------------------------------------------------------------------
+
+/** A Slack image reference stored on the agent_messages row by the webhook. */
+export interface SlackImageRef {
+  url: string // Slack's url_private — requires the bot token to fetch
+  name?: string
+  mimetype: string
+  size?: number
+}
+
+/**
+ * Download Slack image attachments using the Claude bot token and convert them
+ * to base64 Anthropic image blocks. Best-effort and resilient: an unsupported
+ * media type, an oversized file, a 401/network failure, or a missing token all
+ * skip that one image (logged) — the worker still answers with the remaining
+ * images + text. Returns only the blocks that downloaded cleanly.
+ */
+export async function prepareSlackImages(images: SlackImageRef[]): Promise<WorkerImageBlock[]> {
+  const blocks: WorkerImageBlock[] = []
+  if (!images.length) return blocks
+
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) {
+    console.warn("[slack-claude] SLACK_BOT_TOKEN_CLAUDE not set — skipping image attachments")
+    return blocks
+  }
+
+  for (const img of images) {
+    if (!SLACK_SUPPORTED_IMAGE_TYPES.has(img.mimetype)) {
+      console.warn(`[slack-claude] skipping unsupported image type ${img.mimetype} (${img.name ?? "unnamed"})`)
+      continue
+    }
+    try {
+      const res = await fetch(img.url, { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) {
+        console.warn(`[slack-claude] image download failed (${res.status}) for ${img.name ?? img.url}`)
+        continue
+      }
+      const buffer = Buffer.from(await res.arrayBuffer())
+      if (buffer.length > SLACK_MAX_IMAGE_BYTES) {
+        console.warn(`[slack-claude] skipping image ${img.name ?? "unnamed"} — ${buffer.length} bytes exceeds ${SLACK_MAX_IMAGE_BYTES}`)
+        continue
+      }
+      blocks.push({
+        type: "image",
+        source: { type: "base64", media_type: img.mimetype, data: buffer.toString("base64") },
+      })
+    } catch (e) {
+      console.warn(`[slack-claude] failed to download image ${img.name ?? img.url}:`, e)
+    }
+  }
+
+  return blocks
 }
 
 // ---------------------------------------------------------------------------
@@ -169,19 +258,37 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   const ctx = row.context_json ?? {}
   const channelId = ctx.slack_channel_id as string | undefined
   const replyThreadTs = (ctx.slack_thread_ts ?? ctx.slack_event_ts) as string | undefined
+  const ackTs = ctx.slack_ack_ts as string | undefined
 
   if (!channelId) {
     throw new Error(`agent_messages row ${row.id} missing slack_channel_id in context_json`)
   }
 
-  const { reply } = await callWorker(row.body, {
+  // Download any attached screenshots → base64 image blocks (best-effort).
+  const imageRefs = (Array.isArray(ctx.slack_images) ? ctx.slack_images : []) as SlackImageRef[]
+  const imageBlocks = imageRefs.length > 0 ? await prepareSlackImages(imageRefs) : []
+
+  // Only add `images` to the opts when there are blocks — keeps the text-only
+  // call shape identical to before (and to the Hermes/Telegram path).
+  const workerOpts: CallWorkerOptions = {
     threadId: row.thread_id,
     messageId: row.id,
     systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
-  })
+  }
+  if (imageBlocks.length > 0) workerOpts.images = imageBlocks
 
-  // Post the reply to Slack first, then persist
-  await postSlackMessage(channelId, reply, replyThreadTs)
+  const { reply } = await callWorker(row.body, workerOpts)
+
+  // Morph the "On it 👍" acknowledgment into the answer (chat.update) so the
+  // thread shows one message that transforms, not two. If there's no ack ts or
+  // the update fails (message too old/deleted), fall back to a fresh post.
+  let posted = false
+  if (ackTs) {
+    posted = await updateSlackMessage(channelId, ackTs, reply)
+  }
+  if (!posted) {
+    await postSlackMessage(channelId, reply, replyThreadTs)
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabaseAdmin as any)
