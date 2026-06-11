@@ -466,6 +466,12 @@ export interface CallWorkerOptions {
    * message's context_json.max_iterations.
    */
   maxIterations?: number
+  /**
+   * Replace the base WORKER_SYSTEM_PROMPT for this call. Thread context and
+   * type-specific addenda are still appended when a threadId is provided.
+   * Used by the Slack worker to inject a conversational, discuss-first prompt.
+   */
+  systemPromptOverride?: string
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -607,7 +613,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   const threadId = typeof opts.threadId === "string" && opts.threadId.length > 0 ? opts.threadId : null
 
   let tools: ToolDef[] = WORKER_TOOLS
-  let systemPrompt = WORKER_SYSTEM_PROMPT
+  let systemPrompt = opts.systemPromptOverride ?? WORKER_SYSTEM_PROMPT
   let threadType: ThreadType = DEFAULT_THREAD_TYPE
   let rowEnsured = false
 
@@ -624,7 +630,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       })
       const addendum = getPromptAddendumForThreadType(threadType)
       systemPrompt = [
-        WORKER_SYSTEM_PROMPT,
+        systemPrompt,
         addendum ? `\n${addendum}` : "",
         ctx.text
           ? `\nCONVERSATION SO FAR (for reference — the current request follows as the user turn):\n${ctx.text}`

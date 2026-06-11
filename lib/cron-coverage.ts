@@ -51,6 +51,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/stripe-sync": "0 */6 * * *",
   "/api/cron/itin-processing-check": "0 9 * * 1",
   "/api/cron/workflow-sla-check": "0 * * * *",
+  "/api/cron/slack-claude-worker": "*/2 * * * *",
 }
 
 /**
