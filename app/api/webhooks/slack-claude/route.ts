@@ -126,12 +126,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // Accept two kinds of events:
   //  1. app_mention — Antonio @mentions Claude (any channel, any context)
-  //  2. message in a thread — a plain follow-up reply (no @mention) in a thread
-  //     Claude already participated in. `!event.subtype` keeps this to genuine
-  //     human messages: it excludes bot_message AND message_changed /
-  //     message_deleted / channel_join etc., so edits and deletes don't re-trigger.
+  //  2. message in a thread — a follow-up reply in a thread Claude already
+  //     participated in. We allow no-subtype (genuine human text) AND
+  //     subtype="file_share" (a screenshot dropped into the thread with no
+  //     @mention — Slack tags pure file uploads with this subtype). All other
+  //     subtypes (message_changed, message_deleted, channel_join, bot_message…)
+  //     are still excluded, so edits/deletes/joins don't re-trigger. Bot loop
+  //     protection below (event.bot_id) still rejects file_shares from any bot.
   const isAppMention = event.type === "app_mention"
-  const isThreadReply = event.type === "message" && !!event.thread_ts && !event.subtype
+  const isThreadReply =
+    event.type === "message" &&
+    !!event.thread_ts &&
+    (!event.subtype || event.subtype === "file_share")
 
   if (!isAppMention && !isThreadReply) {
     return NextResponse.json({ ok: true })

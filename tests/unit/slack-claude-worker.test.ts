@@ -39,6 +39,7 @@ import {
   processSlackEvent,
   updateSlackMessage,
   prepareSlackImages,
+  fetchThreadImages,
 } from "@/lib/ai-agent/slack-claude"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker } from "@/lib/ai-agent/worker-tools"
@@ -446,6 +447,93 @@ describe("processSlackEvent", () => {
       source: { type: "base64", media_type: "image/png", data: Buffer.from([1, 2, 3, 4]).toString("base64") },
     })
   })
+
+  it("falls back to thread-history images when the current message has none (thread reply)", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes("conversations.replies")) {
+        // Thread history holds a screenshot from an earlier message
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              messages: [
+                { files: [{ url_private: "https://files.slack.com/old.png", name: "old.png", mimetype: "image/png", size: 1234 }] },
+                {}, // the @mention reply itself — no files
+              ],
+            }),
+        })
+      }
+      if (u.includes("/api/") || u.includes("chat.")) {
+        return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "4.4" }) })
+      }
+      // image download (url_private)
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([9, 8, 7]).buffer) })
+    })
+
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+
+    const row = {
+      id: "row-thread-img",
+      body: "read the screenshot",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_thread_ts: "100.000", // in a thread
+        slack_event_ts: "200.000",
+        slack_images: [], // current message carried none
+      },
+    }
+
+    await processSlackEvent(row)
+
+    // conversations.replies must have been queried for the thread root ts
+    const repliesCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("conversations.replies"))
+    expect(repliesCall).toBeDefined()
+    expect(String(repliesCall![0])).toContain("ts=100.000")
+
+    // and the harvested image reached callWorker as a base64 block
+    const opts = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][1]
+    expect(opts.images).toBeDefined()
+    expect(opts.images.length).toBe(1)
+    expect(opts.images[0].source.data).toBe(Buffer.from([9, 8, 7]).toString("base64"))
+  })
+
+  it("does NOT fetch thread history when the message is not in a thread", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "5.5" }) })
+
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+
+    const row = {
+      id: "row-no-thread",
+      body: "just a channel-level mention",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "300.000",
+        // no slack_thread_ts → not in a thread
+        slack_images: [],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("conversations.replies"))).toBeUndefined()
+    const opts = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][1]
+    expect(opts.images).toBeUndefined()
+  })
 })
 
 // -------------------------------------------------------------------------
@@ -532,5 +620,76 @@ describe("prepareSlackImages", () => {
     ])
     expect(blocks).toEqual([])
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+// -------------------------------------------------------------------------
+// fetchThreadImages
+// -------------------------------------------------------------------------
+
+describe("fetchThreadImages", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("returns supported images found across thread messages", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { files: [{ url_private: "https://files.slack.com/a.png", name: "a.png", mimetype: "image/png", size: 1000 }] },
+            { text: "no files here" },
+            { files: [{ url_private: "https://files.slack.com/b.jpg", name: "b.jpg", mimetype: "image/jpeg", size: 2000 }] },
+          ],
+        }),
+    })
+    const imgs = await fetchThreadImages("C123", "100.000")
+    expect(imgs).toEqual([
+      { url: "https://files.slack.com/a.png", name: "a.png", mimetype: "image/png" },
+      { url: "https://files.slack.com/b.jpg", name: "b.jpg", mimetype: "image/jpeg" },
+    ])
+    // calls conversations.replies with the thread root ts
+    expect(String(mockFetch.mock.calls[0][0])).toContain("conversations.replies")
+    expect(String(mockFetch.mock.calls[0][0])).toContain("channel=C123")
+    expect(String(mockFetch.mock.calls[0][0])).toContain("ts=100.000")
+  })
+
+  it("skips unsupported types and oversize files", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { files: [{ url_private: "u1", name: "heic", mimetype: "image/heic", size: 1000 }] }, // unsupported
+            { files: [{ url_private: "u2", name: "big", mimetype: "image/png", size: 5 * 1024 * 1024 + 1 }] }, // oversize
+            { files: [{ url_private: "u3", name: "ok", mimetype: "image/png", size: 500 }] }, // keep
+          ],
+        }),
+    })
+    const imgs = await fetchThreadImages("C123", "100.000")
+    expect(imgs).toEqual([{ url: "u3", name: "ok", mimetype: "image/png" }])
+  })
+
+  it("returns [] when the Slack API responds not-ok (e.g. missing scope)", async () => {
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: false, error: "missing_scope" }),
+    })
+    const imgs = await fetchThreadImages("C123", "100.000")
+    expect(imgs).toEqual([])
+  })
+
+  it("returns [] (and does not fetch) when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const imgs = await fetchThreadImages("C123", "100.000")
+    expect(imgs).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("returns [] when fetch throws", async () => {
+    mockFetch.mockRejectedValue(new Error("network down"))
+    const imgs = await fetchThreadImages("C123", "100.000")
+    expect(imgs).toEqual([])
   })
 })

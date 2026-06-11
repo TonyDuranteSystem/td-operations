@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-11 (ack-collapse + image support)
+**Last verified against code:** 2026-06-11 (ack-collapse + image support + thread-history images + file_share thread replies)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -13,7 +13,7 @@ Always-on Claude presence in Slack. When Antonio writes `@Claude` in any Slack c
 **Key behaviors:**
 - Immediate "On it 👍" ACK within 1–2 s (Slack's 3-second requirement met every time)
 - AI reply 8–15 s later via the worker cron — the worker **morphs the "On it 👍" message in place** (`chat.update`) into the real answer instead of posting a second message, so the thread shows one message that transforms. Falls back to a fresh post if the ack ts is missing or the update fails (message too old/deleted).
-- **Image attachments**: screenshots attached to a mention are downloaded by the worker (bot token) and passed to sonnet as base64 image blocks (vision). An image-only message (no caption) is accepted. Unsupported media types (HEIC/SVG/BMP) and files >5 MB are skipped; text still answered. See "Image attachments" below.
+- **Image attachments**: screenshots attached to a mention are downloaded by the worker (bot token) and passed to sonnet as base64 image blocks (vision). An image-only message (no caption) is accepted. If the current message carries no image but it's a **thread reply**, the worker pulls images from recent **thread history** (`conversations.replies`) — so "read the screenshot" works when the screenshot was posted earlier in the thread. Unsupported media types (HEIC/SVG/BMP) and files >5 MB are skipped; text still answered. See "Image attachments" below.
 - Conversational tone (2–5 lines), discuss-before-act, never unilaterally mutates
 - Conversation continuity: same channel/thread within 30 min → same `thread_id`
 - Accepts `app_mention` events **and** plain thread-reply `message` events in a thread Claude already participated in (no @mention needed to keep a conversation going)
@@ -48,7 +48,7 @@ Slack                          Production server              Supabase
 
 | File | Role |
 |------|------|
-| `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent` |
+| `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent`, `prepareSlackImages`, `fetchThreadImages` (thread-history image harvest) |
 | `app/api/webhooks/slack-claude/route.ts` | Slack Events API webhook handler |
 | `app/api/cron/slack-claude-worker/route.ts` | Worker cron (direct trigger + scan safety net) |
 | `scripts/migrations/20260610-1400-slack-claude-party.sql` | Adds `'slack'` to `agent_message_party` enum |
@@ -100,16 +100,16 @@ Slack                          Production server              Supabase
 
 The webhook processes:
 - `app_mention` — Antonio @mentions Claude (any channel/context)
-- `message` events that are (a) inside a thread (`thread_ts` set), (b) have **no** `subtype` (genuine human message — excludes `bot_message`, `message_changed`, `message_deleted`, joins), and (c) belong to a thread where Claude already participated (an `agent_messages` row exists with `context_json.source='slack'` and matching thread-level **or** channel-level `slack_scope_key`). Without the participation check Claude would answer every message in every thread in the channel.
+- `message` events that are (a) inside a thread (`thread_ts` set), (b) have **no** `subtype` **or** `subtype="file_share"` (genuine human text, or a pure screenshot drop with no @mention — Slack tags file uploads as `file_share`; all other subtypes `bot_message`/`message_changed`/`message_deleted`/joins are still excluded so edits/deletes/joins don't re-trigger), and (c) belong to a thread where Claude already participated (an `agent_messages` row exists with `context_json.source='slack'` and matching thread-level **or** channel-level `slack_scope_key`). Without the participation check Claude would answer every message in every thread in the channel.
 
 All other event types are ACK'd with `{ ok: true }` and ignored.
 
 ## Image attachments
 
-- **Webhook** (`route.ts`): reads `event.files`, keeps only `image/jpeg|png|gif|webp` within the 5 MB cap (`SLACK_SUPPORTED_IMAGE_TYPES` / `SLACK_MAX_IMAGE_BYTES` in `slack-claude.ts`), stores `{url,name,mimetype,size}[]` as `context_json.slack_images`. The text guard is relaxed to accept a message with **text OR ≥1 image**, so an image-only screenshot isn't dropped. Image-only body falls back to `"(image attached — no caption)"`.
-- **Worker** (`prepareSlackImages` in `slack-claude.ts`): downloads each url_private with `SLACK_BOT_TOKEN_CLAUDE`, re-checks the 5 MB cap on the actual bytes, base64-encodes, returns `WorkerImageBlock[]`. Best-effort: a bad type / oversize / 401 / missing token skips that one image (logged), the reply still goes out.
+- **Webhook** (`route.ts`): reads `event.files`, keeps only `image/jpeg|png|gif|webp` within the 5 MB cap (`SLACK_SUPPORTED_IMAGE_TYPES` / `SLACK_MAX_IMAGE_BYTES` in `slack-claude.ts`), stores `{url,name,mimetype,size}[]` as `context_json.slack_images`. The text guard is relaxed to accept a message with **text OR ≥1 image**, so an image-only screenshot isn't dropped. Image-only body falls back to `"(image attached — no caption)"`. The thread-reply gate accepts `subtype="file_share"` so a pure screenshot dropped into a thread (no @mention) is processed rather than silently ignored.
+- **Worker — current message** (`prepareSlackImages` in `slack-claude.ts`): downloads each url_private with `SLACK_BOT_TOKEN_CLAUDE`, re-checks the 5 MB cap on the actual bytes, base64-encodes, returns `WorkerImageBlock[]`. Best-effort: a bad type / oversize / 401 / missing token skips that one image (logged), the reply still goes out.
+- **Worker — thread history fallback** (`fetchThreadImages` in `slack-claude.ts`): when `context_json.slack_images` is empty **and** the row is a thread reply (`slack_thread_ts` set), the worker calls `conversations.replies` (≤20 messages) and harvests any supported images from earlier in the thread, then feeds them through `prepareSlackImages`. This is what makes "read the screenshot" work when the screenshot was posted in a prior message. Best-effort: missing token / non-ok response (e.g. missing `channels:history` scope) / network error returns `[]` and the worker answers text-only. **Requires the bot to hold `channels:history` (and `groups:history` for private channels) read scope** — verify in prod E2E.
 - **callWorker** (`worker-tools.ts`): `opts.images` is optional. When non-empty the user turn is sent as `[{type:"text",…}, …imageBlocks]`; otherwise a plain string — identical to the Hermes/Telegram path. `runWorkerLoop` accepts `string | content[]`.
-- **Known limitation:** a thread reply that is a *pure file upload* may arrive with `subtype:"file_share"`, which the `!event.subtype` filter rejects — so images work on `app_mention` and on no-subtype thread replies, not file-share-subtype replies. Verify the exact file-share event shape via prod E2E if that path is needed.
 
 ## Loop protection
 

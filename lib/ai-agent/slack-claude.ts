@@ -132,6 +132,45 @@ export interface SlackImageRef {
 }
 
 /**
+ * Read recent messages in a Slack thread (conversations.replies) and extract
+ * any image attachments. Used when the message that mentioned Claude carries no
+ * image of its own but refers to a screenshot posted EARLIER in the thread
+ * ("read the screenshot"). Filters to Anthropic-supported types within the size
+ * cap, same as the webhook's current-message filter. Best-effort: a missing
+ * token, a non-ok response (e.g. missing `channels:history` scope), or a network
+ * error returns [] (logged) so the worker still answers with text.
+ */
+export async function fetchThreadImages(
+  channelId: string,
+  threadTs: string,
+  limit: number = 20,
+): Promise<Array<{ url: string; name: string; mimetype: string }>> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) return []
+
+  try {
+    const res = await fetch(`https://slack.com/api/conversations.replies?channel=${channelId}&ts=${threadTs}&limit=${limit}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const data = await res.json() as { ok: boolean; messages?: Array<{ files?: Array<{ url_private: string; name: string; mimetype: string; size: number }> }> }
+    if (!data.ok || !data.messages) return []
+
+    const images: Array<{ url: string; name: string; mimetype: string }> = []
+    for (const msg of data.messages) {
+      for (const file of (msg.files || [])) {
+        if (SLACK_SUPPORTED_IMAGE_TYPES.has(file.mimetype) && file.size <= SLACK_MAX_IMAGE_BYTES) {
+          images.push({ url: file.url_private, name: file.name, mimetype: file.mimetype })
+        }
+      }
+    }
+    return images
+  } catch (err) {
+    console.warn('[slack-claude] fetchThreadImages failed:', err)
+    return []
+  }
+}
+
+/**
  * Download Slack image attachments using the Claude bot token and convert them
  * to base64 Anthropic image blocks. Best-effort and resilient: an unsupported
  * media type, an oversized file, a 401/network failure, or a missing token all
@@ -265,7 +304,18 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   }
 
   // Download any attached screenshots → base64 image blocks (best-effort).
-  const imageRefs = (Array.isArray(ctx.slack_images) ? ctx.slack_images : []) as SlackImageRef[]
+  let imageRefs = (Array.isArray(ctx.slack_images) ? ctx.slack_images : []) as SlackImageRef[]
+
+  // No image on the current message but we're in a thread? The referenced
+  // screenshot may live in an EARLIER thread message ("read the screenshot"
+  // posted before the @mention). Pull images from thread history. Best-effort.
+  if (imageRefs.length === 0) {
+    const threadTs = ctx.slack_thread_ts as string | undefined
+    if (threadTs) {
+      imageRefs = await fetchThreadImages(channelId, threadTs)
+    }
+  }
+
   const imageBlocks = imageRefs.length > 0 ? await prepareSlackImages(imageRefs) : []
 
   // Only add `images` to the opts when there are blocks — keeps the text-only
