@@ -216,33 +216,22 @@ export function WizardClient({
     }
 
     for (const field of stepFields) {
-      // Repeater gate: a required repeater needs ≥1 row, and every row must
-      // fill its required sub-fields (mirrors the members logic above).
-      if (field.type === 'repeater') {
-        const count = repeaterCounts[field.name] ?? 0
-        if (field.repeaterRequired && count === 0) return false
-        for (let idx = 0; idx < count; idx++) {
-          for (const rf of field.repeaterFields ?? []) {
-            if (rf.required && isEmptyValue(formData[`${field.name}_${idx}_${rf.name}`])) return false
-          }
-        }
-        continue
-      }
-      // Skip validation for hidden conditional fields
+      // Skip validation for hidden conditional fields (applies to repeaters
+      // too — e.g. the related-party repeater only when its gate is "Yes")
       if (field.conditional) {
         const refValue = formData[field.conditional.field]
         if (String(refValue) !== field.conditional.value) continue
       }
-      // Required repeater (e.g. related-party transactions once the gate is "Yes"):
-      // at least one row, and every required sub-field of every row must be filled.
+      // Repeater gate (merged from both wizard features 2026-06-11): a
+      // required repeater (`required` — SMLLC related-party — OR
+      // `repeaterRequired` — MMLLC bank accounts) needs ≥1 row, and every
+      // row must fill its required sub-fields (mirrors the members logic).
       if (field.type === 'repeater') {
-        if (field.required) {
-          const count = Number(formData[`${field.name}_count`]) || 0
-          if (count < 1) return false
-          for (let i = 0; i < count; i++) {
-            for (const rf of field.repeaterFields || []) {
-              if (rf.required && isEmptyValue(formData[`${field.name}_${i}_${rf.name}`])) return false
-            }
+        const count = repeaterCounts[field.name] ?? (Number(formData[`${field.name}_count`]) || 0)
+        if ((field.required || field.repeaterRequired) && count < 1) return false
+        for (let idx = 0; idx < count; idx++) {
+          for (const rf of field.repeaterFields ?? []) {
+            if (rf.required && isEmptyValue(formData[`${field.name}_${idx}_${rf.name}`])) return false
           }
         }
         continue
