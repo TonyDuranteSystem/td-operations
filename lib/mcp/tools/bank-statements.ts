@@ -265,9 +265,10 @@ export function registerBankStatementTools(server: McpServer) {
         let recatNote = ""
         try {
           const { recategorizeAccountYear } = await import("@/lib/tax/categorization-engine")
-          const recat = await recategorizeAccountYear(account_id, tax_year)
+          const recat = await recategorizeAccountYear(account_id, tax_year, { aiAssist: true })
           uncategorizedCount = recat.uncategorizedRemaining
-          recatNote = `Categorization pass: ${recat.recategorized} updated, ${recat.transferPairs} transfer pairs excluded from P&L`
+          recatNote = `Categorization pass: ${recat.recategorized} updated (${recat.aiCategorized} by AI, tagged ai:high), ${recat.transferPairs} transfer pairs excluded from P&L`
+          if (recat.aiErrors.length > 0) recatNote += ` — AI assist notes: ${recat.aiErrors.join("; ")}`
         } catch (e) {
           recatNote = `⚠️ Categorization pass failed (transactions ingested fine): ${e instanceof Error ? e.message : String(e)}`
         }
@@ -770,6 +771,9 @@ export function registerBankStatementTools(server: McpServer) {
         const updates: Record<string, any> = { category }
         if (subcategory !== undefined) updates.subcategory = subcategory
         if (is_related_party !== undefined) updates.is_related_party = is_related_party
+        // "manual:" marks a human correction — recategorizeAccountYear (rules +
+        // transfer + AI passes) will never overwrite a row carrying this marker.
+        updates.notes = `manual: ${category}${subcategory ? `/${subcategory}` : ""} via recategorize tool`
 
         const { data, error } = await supabaseAdmin
           .from("bank_transactions")

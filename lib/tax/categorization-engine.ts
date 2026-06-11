@@ -24,6 +24,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 const db = supabaseAdmin as any
 import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, type TransferCandidate } from "./transfer-matcher"
+import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions } from "./ai-categorizer"
 
 export interface CategorizationRule {
   id: string
@@ -98,25 +99,41 @@ export interface RecategorizeResult {
   scanned: number
   recategorized: number
   transferPairs: number
+  aiCategorized: number
+  aiErrors: string[]
   uncategorizedRemaining: number
+}
+
+export interface RecategorizeOptions {
+  /** Run the AI-assist pass (Slice 5b) on whatever the deterministic passes
+   *  left uncategorized. Only HIGH-confidence suggestions are applied, tagged
+   *  "ai:high" in notes. Off by default (costs API calls). */
+  aiAssist?: boolean
+  aiOptions?: AiCategorizeOptions
 }
 
 /**
  * Re-categorize an account's tax-year transactions: rules pass + transfer-pair
- * pass, persisting only changed rows. Run after ingest, and re-runnable any
- * time staff edit rules (idempotent).
+ * pass (+ optional AI-assist pass), persisting only changed rows. Run after
+ * ingest, and re-runnable any time staff edit rules (idempotent).
  *
- * Guard: rows a human already corrected (notes starting "manual:") are never
- * overwritten by the engine.
+ * Precedence: manual ("manual:" notes) > rules > AI. Guards:
+ * - rows a human corrected are never overwritten by ANY pass
+ * - rules may recategorize an AI-tagged row (rule wins, "ai:" tag cleared),
+ *   but a re-run never downgrades an AI-categorized row back to uncategorized
  */
-export async function recategorizeAccountYear(accountId: string, taxYear: number): Promise<RecategorizeResult> {
+export async function recategorizeAccountYear(
+  accountId: string,
+  taxYear: number,
+  opts?: RecategorizeOptions,
+): Promise<RecategorizeResult> {
   const { data: rows, error } = await supabaseAdmin
     .from("bank_transactions")
     .select("id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes")
     .eq("account_id", accountId)
     .eq("tax_year", taxYear)
   if (error) throw new Error(`Failed to load transactions: ${error.message}`)
-  if (!rows || rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, uncategorizedRemaining: 0 }
+  if (!rows || rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
 
   const rules = await getCategorizationRules(accountId)
 
@@ -134,9 +151,14 @@ export async function recategorizeAccountYear(accountId: string, taxYear: number
   const updates = new Map<string, { category: string; subcategory: string; notes?: string }>()
   for (const row of rows) {
     if ((row.notes ?? "").startsWith("manual:")) continue // human corrections win, always
+    const isAiTagged = (row.notes ?? "").startsWith("ai:")
     const next = applyRules(row as unknown as ParsedTransaction, rules, memberNames)
+    // A re-run must never downgrade an AI-categorized row back to uncategorized
+    // just because no deterministic rule covers it.
+    if (isAiTagged && next.category === "uncategorized") continue
     if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
-      updates.set(row.id as string, { category: next.category, subcategory: next.subcategory })
+      // When a rule overrides an AI suggestion, the "ai:" tag no longer applies.
+      updates.set(row.id as string, { category: next.category, subcategory: next.subcategory, ...(isAiTagged ? { notes: "" } : {}) })
     }
   }
 
@@ -155,6 +177,61 @@ export async function recategorizeAccountYear(accountId: string, taxYear: number
   for (const p of pairs) {
     updates.set(p.outflowId, { category: "conversion", subcategory: "internal_transfer", notes: `transfer-pair → ${p.inflowId}` })
     updates.set(p.inflowId, { category: "conversion", subcategory: "internal_transfer", notes: `transfer-pair → ${p.outflowId}` })
+  }
+
+  // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
+  // the deterministic passes. Only high-confidence suggestions are applied,
+  // tagged "ai:high" so staff and the review screen can always tell them apart.
+  let aiCategorized = 0
+  let aiErrors: string[] = []
+  if (opts?.aiAssist) {
+    const residual = rows.filter(r => {
+      if ((r.notes ?? "").startsWith("manual:")) return false
+      const u = updates.get(r.id as string)
+      return (u?.category ?? r.category) === "uncategorized"
+    })
+    if (residual.length > 0) {
+      const { data: acct } = await supabaseAdmin
+        .from("accounts")
+        .select("company_name")
+        .eq("id", accountId)
+        .single()
+      // The client's own business-activity description (tax form) — lets the
+      // AI mark business tools high-confidence instead of hedging. Note:
+      // completed_at can be NULL on completed rows; select by status.
+      const { data: sub } = await supabaseAdmin
+        .from("tax_return_submissions")
+        .select("submitted_data")
+        .eq("account_id", accountId)
+        .eq("tax_year", taxYear)
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const businessDescription =
+        (sub?.submitted_data as Record<string, unknown> | null)?.["us_business_activities"] as string | undefined
+      const bankNames = Array.from(new Set(rows.map(r => (r.bank_name as string) ?? "").filter(Boolean)))
+      const txs: AiCategorizableTx[] = residual.map(r => ({
+        id: r.id as string,
+        transaction_date: r.transaction_date as string,
+        description: (r.description as string) ?? "",
+        counterparty: (r.counterparty as string) ?? "",
+        amount: Number(r.amount),
+        currency: (r.currency as string) ?? "USD",
+        bank_name: (r.bank_name as string) ?? "",
+      }))
+      const ai = await aiSuggestCategories(
+        txs,
+        { companyName: acct?.company_name ?? "the company", memberNames, bankNames, businessDescription },
+        opts.aiOptions,
+      )
+      aiErrors = ai.errors
+      for (const s of ai.suggestions) {
+        if (s.confidence !== "high") continue
+        updates.set(s.id, { category: s.category, subcategory: s.subcategory, notes: "ai:high" })
+        aiCategorized++
+      }
+    }
   }
 
   // Persist changed rows
@@ -176,5 +253,5 @@ export async function recategorizeAccountYear(accountId: string, taxYear: number
     return (u?.category ?? r.category) === "uncategorized"
   }).length
 
-  return { scanned: rows.length, recategorized, transferPairs: pairs.length, uncategorizedRemaining }
+  return { scanned: rows.length, recategorized, transferPairs: pairs.length, aiCategorized, aiErrors, uncategorizedRemaining }
 }
