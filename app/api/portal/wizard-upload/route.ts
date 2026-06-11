@@ -39,6 +39,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // PDF-only guard for the prior-year return (master plan §5 Case B) —
+    // same rule as wizard-upload-url.
+    if (fieldName === 'prior_year_return' && !/\.pdf$/i.test(file.name)) {
+      return NextResponse.json(
+        { error: 'Please upload the filed tax return as a PDF — the complete document with all pages, including Schedule L and every K-1.' },
+        { status: 400 },
+      )
+    }
+
     // Build storage path: {wizard_type}/{identifier}/{fieldName}_{filename}
     const sanitizedId = identifier.replace(/[^a-zA-Z0-9@._-]/g, '_')
     const storagePath = `${wizardType || 'wizard'}/${sanitizedId}/${fieldName}_${file.name}`

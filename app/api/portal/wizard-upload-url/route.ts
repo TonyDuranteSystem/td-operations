@@ -52,6 +52,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // PDF-only guard for the prior-year return (master plan §5 Case B) — a
+    // filed return is a PDF; anything else cannot be read for Schedule L.
+    if (fieldName === 'prior_year_return' && !/\.pdf$/i.test(fileName)) {
+      return NextResponse.json(
+        { error: 'Please upload the filed tax return as a PDF — the complete document with all pages, including Schedule L and every K-1.' },
+        { status: 400 },
+      )
+    }
+
     const sanitizedId = String(identifier).replace(/[^a-zA-Z0-9@._-]/g, '_')
     const sanitizedFile = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')
     const unique = randomUUID().slice(0, 8)

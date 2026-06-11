@@ -256,6 +256,29 @@ export async function POST(req: NextRequest) {
         )
       }
       submissionId = (sub as Record<string, unknown> | null)?.id as string || null
+
+      // Prior-year return matrix (tax wizard, master plan §5): resolve the
+      // client's answer — verify Case A against our records, extract+validate
+      // a Case-B upload, cross-check Case C vs formation date, store the
+      // Case-D declaration / spawn the back-filing quote task. Fire-and-forget:
+      // a failure here never blocks the submission.
+      if (
+        (wizard_type === 'tax' || wizard_type === 'tax_return') &&
+        submissionId && account_id && taxYear !== null &&
+        data.prior_return_case
+      ) {
+        const capturedSubmissionId = submissionId
+        const capturedTaxYear = taxYear
+        void import('@/lib/tax/prior-return-case')
+          .then(({ processPriorReturnCase }) => processPriorReturnCase({
+            submissionId: capturedSubmissionId,
+            accountId: account_id,
+            taxYear: capturedTaxYear,
+            submittedData: data,
+            uploadPaths,
+          }))
+          .catch(e => console.error('[wizard-submit] Prior-return case processing failed:', e))
+      }
     }
 
     // ─── 4b. BANKING WIZARD — fire-and-forget background work, return immediately ───

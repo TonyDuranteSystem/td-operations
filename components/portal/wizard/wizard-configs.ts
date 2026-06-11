@@ -269,7 +269,31 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
     ],
   },
   { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false },
-  { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false },
+  // ── Prior-year return decision matrix (master plan §5). We need last year's
+  // balance sheet to start this year's books from the right numbers.
+  { name: 'prior_return_case', label: 'Last year\'s tax return', labelIt: 'Dichiarazione dei redditi dell\'anno scorso', type: 'select', required: true,
+    hint: 'We use last year\'s return to start this year\'s books from the right numbers. Pick the situation that applies — if Tony Durante filed it for you, there is nothing to upload.',
+    hintIt: 'Usiamo la dichiarazione dell\'anno scorso per partire dai numeri giusti. Scegli la situazione che si applica — se l\'ha presentata Tony Durante per te, non c\'è nulla da caricare.',
+    options: [
+      { value: 'we_filed', label: 'Tony Durante filed it for us', labelIt: 'L\'ha presentata Tony Durante per noi' },
+      { value: 'filed_elsewhere', label: 'It was filed by another accountant', labelIt: 'L\'ha presentata un altro commercialista' },
+      { value: 'first_year', label: 'This is our first year — the company was formed this tax year', labelIt: 'È il nostro primo anno — la società è stata costituita quest\'anno fiscale' },
+      { value: 'never_filed', label: 'The company existed before, but no return was ever filed', labelIt: 'La società esisteva già, ma non è mai stata presentata una dichiarazione' },
+    ] },
+  { name: 'prior_year_return', label: 'Last year\'s filed tax return (PDF)', labelIt: 'Dichiarazione presentata l\'anno scorso (PDF)', type: 'file', required: true, accept: '.pdf,application/pdf',
+    conditional: { field: 'prior_return_case', value: 'filed_elsewhere' },
+    hint: 'Please upload the COMPLETE filed return as a PDF — all pages, including Schedule L (the balance sheet) and every K-1. A partial copy means we cannot verify your beginning balances and we will have to come back to you.',
+    hintIt: 'Carica la dichiarazione COMPLETA in PDF — tutte le pagine, inclusi lo Schedule L (stato patrimoniale) e tutti i K-1. Una copia parziale non ci permette di verificare i saldi iniziali e dovremo ricontattarti.' },
+  { name: 'prior_cleanup_interest', label: 'Would you like us to fix this with a back-filing?', labelIt: 'Vuoi che sistemiamo la situazione con una dichiarazione tardiva?', type: 'select', required: true,
+    conditional: { field: 'prior_return_case', value: 'never_filed' },
+    hint: 'A missing prior-year return can be filed late ("back-filing") to clean up the company\'s position with the IRS. If you are interested, we will prepare a quote — no commitment yet.',
+    hintIt: 'Una dichiarazione mancante può essere presentata in ritardo ("back-filing") per regolarizzare la posizione con l\'IRS. Se ti interessa, prepariamo un preventivo — nessun impegno per ora.',
+    options: [
+      { value: 'Yes', label: 'Yes — send me a quote for the back-filing', labelIt: 'Sì — inviatemi un preventivo per il back-filing' },
+      { value: 'No', label: 'No — continue with this year only', labelIt: 'No — proseguite solo con quest\'anno' },
+    ] },
+  { name: 'prior_never_filed_declaration', label: 'I declare, under my own responsibility, that no federal tax return was ever filed for this company for prior years, and I ask Tony Durante LLC to prepare this year\'s return without prior-year records.', labelIt: 'Dichiaro, sotto la mia responsabilità, che per questa società non è mai stata presentata alcuna dichiarazione federale per gli anni precedenti, e chiedo a Tony Durante LLC di preparare la dichiarazione di quest\'anno senza i dati degli anni precedenti.', type: 'checkbox', required: true,
+    conditional: { field: 'prior_cleanup_interest', value: 'No' } },
   { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
 ]
 

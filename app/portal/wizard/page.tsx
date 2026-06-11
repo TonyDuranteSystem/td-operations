@@ -461,6 +461,36 @@ export default async function WizardPage({
     prefillData.previous_itin = contact.itin_number
   }
 
+  // Tax wizard — prior-return matrix Case A (master plan §5): when WE filed
+  // the prior-year return ('TR Filed' on record), preselect "Tony Durante
+  // filed it for us" so the client doesn't have to know or upload anything.
+  // The submit route re-verifies the claim regardless of this preselection.
+  if (wizardType === 'tax' && accountId) {
+    try {
+      const { data: pendingTr } = await supabaseAdmin
+        .from('tax_returns')
+        .select('tax_year')
+        .eq('account_id', accountId)
+        .eq('data_received', false)
+        .order('tax_year', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (pendingTr?.tax_year) {
+        const { data: priorFiled } = await supabaseAdmin
+          .from('tax_returns')
+          .select('id')
+          .eq('account_id', accountId)
+          .eq('tax_year', pendingTr.tax_year - 1)
+          .eq('status', 'TR Filed')
+          .limit(1)
+          .maybeSingle()
+        if (priorFiled) prefillData.prior_return_case = 'we_filed'
+      }
+    } catch (e) {
+      console.error('[wizard] Prior-return Case A prefill failed (non-blocking):', e)
+    }
+  }
+
   // Normalize entity type so the wizard config turns on the right steps. The
   // MMLLC "add members" step only renders for 'MMLLC'; the stored value is
   // "Multi Member LLC" (space), which the old exact-string check missed —
