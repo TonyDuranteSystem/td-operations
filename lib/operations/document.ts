@@ -60,6 +60,18 @@ export interface UpdateDocumentParams {
   summary?: string
   /** Free-form details logged to action_log.details. */
   details?: Record<string, unknown>
+  /**
+   * Client-facing new-document alert on a portal_visible false→true
+   * transition (notification + push + optional chat + "New" badge via
+   * lib/portal/document-alerts.ts). Default TRUE — every path that makes a
+   * document client-visible alerts the client unless it opts out. The alert
+   * module itself is idempotent (documents.client_notified_at), feature-
+   * flagged (new_document_alert_enabled) and honors documents.notify_client,
+   * so callers normally don't need to think about this. Set false for flows
+   * where visibility flips are migration plumbing, not a "we shared a
+   * document with you" event.
+   */
+  clientAlert?: boolean
 }
 
 export interface UpdateDocumentResult {
@@ -84,6 +96,14 @@ export interface UpdateDocumentsBulkParams {
    * portal-transition), pass it so the log row is scoped.
    */
   account_id?: string
+  /**
+   * Client-facing new-document alert on portal_visible false→true
+   * transitions. Default FALSE for bulk — the known bulk callers are
+   * portal-transition migration flows where alerting a client about dozens
+   * of pre-existing documents at once would be noise. Opt in explicitly if
+   * a future bulk flow is a genuine "we shared these with you" event.
+   */
+  clientAlert?: boolean
 }
 
 export interface UpdateDocumentsBulkResult {
@@ -108,6 +128,26 @@ export async function updateDocument(
 
     const nowIso = new Date().toISOString()
     const updates: DocumentUpdate = { ...params.patch, updated_at: nowIso }
+
+    // New-document alert needs the BEFORE state: only an actual false→true
+    // portal_visible transition is a share event. A redundant re-save of
+    // visible=true (e.g. process-and-share retried on an already-shared doc)
+    // must NOT alert. The pre-read/update race window is benign — the alert
+    // module's client_notified_at TOCTOU guard blocks a double-send.
+    const wantsVisible = params.clientAlert !== false && params.patch.portal_visible === true
+    const wasHiddenIds = new Set<string>()
+    if (wantsVisible) {
+      let preRead = supabaseAdmin.from("documents").select("id, portal_visible")
+      if (params.id) preRead = preRead.eq("id", params.id)
+      else {
+        preRead = preRead.eq("drive_file_id", params.drive_file_id!)
+        if (params.account_id) preRead = preRead.eq("account_id", params.account_id)
+      }
+      const { data: beforeRows } = await preRead
+      for (const r of beforeRows ?? []) {
+        if (!r.portal_visible) wasHiddenIds.add(r.id)
+      }
+    }
 
     let query = supabaseAdmin.from("documents").update(updates)
 
@@ -159,6 +199,10 @@ export async function updateDocument(
       details: params.details || { fields: changedFields, patch: params.patch },
     })
 
+    // Fire the client alert for rows that actually transitioned hidden→visible.
+    // Fire-and-forget: alert delivery must never fail the document write.
+    fireNewDocumentAlerts(data.map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
+
     return {
       success: true,
       outcome: "updated",
@@ -197,6 +241,19 @@ export async function updateDocumentsBulk(
     const nowIso = new Date().toISOString()
     const updates: DocumentUpdate = { ...params.patch, updated_at: nowIso }
 
+    // Bulk default is NO client alert (migration semantics) — see param doc.
+    const wantsVisible = params.clientAlert === true && params.patch.portal_visible === true
+    const wasHiddenIds = new Set<string>()
+    if (wantsVisible) {
+      const { data: beforeRows } = await supabaseAdmin
+        .from("documents")
+        .select("id, portal_visible")
+        .in("id", params.ids)
+      for (const r of beforeRows ?? []) {
+        if (!r.portal_visible) wasHiddenIds.add(r.id)
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from("documents")
       .update(updates)
@@ -224,6 +281,9 @@ export async function updateDocumentsBulk(
       },
     })
 
+    // Alert only rows that actually transitioned hidden→visible (opt-in).
+    fireNewDocumentAlerts((data ?? []).map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
+
     return { success: true, outcome: "updated", count }
   } catch (err) {
     return {
@@ -232,4 +292,37 @@ export async function updateDocumentsBulk(
       error: err instanceof Error ? err.message : String(err),
     }
   }
+}
+
+// ─── New-document client alert dispatch ────────────────────
+
+/**
+ * Fire-and-forget dispatch of the new-document client alert for documents
+ * that just became portal-visible. Lazy import keeps the operations layer
+ * free of a hard dependency on the portal alert stack; the alert module
+ * owns idempotency (client_notified_at), the feature flag, per-doc
+ * notify_client, locale, push, digest eligibility, and the optional chat
+ * message. Never throws.
+ */
+function fireNewDocumentAlerts(documentIds: string[]): void {
+  if (documentIds.length === 0) return
+  import("@/lib/portal/document-alerts")
+    .then(({ notifyClientsOfNewDocument }) =>
+      Promise.all(
+        documentIds.map((id) =>
+          notifyClientsOfNewDocument(id).catch((e) =>
+            console.warn(
+              `[operations/document] new-document alert failed for ${id}:`,
+              e instanceof Error ? e.message : String(e)
+            )
+          )
+        )
+      )
+    )
+    .catch((e) =>
+      console.warn(
+        "[operations/document] new-document alert dispatch failed:",
+        e instanceof Error ? e.message : String(e)
+      )
+    )
 }
