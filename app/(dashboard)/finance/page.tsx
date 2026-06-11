@@ -80,7 +80,7 @@ export default async function FinancePage({
   // ── Fetch ALL invoices for flat list view (from payments) ──
   const { data: allPaymentsFlat } = await supabaseAdmin
     .from('payments')
-    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
     .not('invoice_status', 'is', null)
     .not('invoice_status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
@@ -99,6 +99,7 @@ export default async function FinancePage({
     due_date: p.due_date,
     paid_date: p.paid_date,
     notes: p.notes,
+    description: p.description ?? null,
     account_id: p.account_id,
     contact_id: p.contact_id,
     accounts: p.accounts as unknown as { company_name: string } | null,

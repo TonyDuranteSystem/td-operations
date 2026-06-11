@@ -38,6 +38,7 @@ export interface InvoiceRecord {
   due_date: string | null
   paid_date: string | null
   notes: string | null
+  description: string | null
   account_id: string | null
   contact_id: string | null
   accounts: { company_name: string } | null
@@ -290,8 +291,8 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    <span className="truncate block max-w-[200px]" title={inv.notes ?? ''}>
-                      {inv.notes ? (inv.notes.length > 50 ? inv.notes.slice(0, 50) + '...' : inv.notes) : '—'}
+                    <span className="truncate block max-w-[200px]" title={inv.description ?? ''}>
+                      {inv.description ? (inv.description.length > 60 ? inv.description.slice(0, 60) + '...' : inv.description) : '—'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right font-medium tabular-nums">
