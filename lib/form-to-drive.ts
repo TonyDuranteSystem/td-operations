@@ -51,6 +51,12 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
           { key: "date_of_incorporation", label: "Formation Date" },
           { key: "principal_product_service", label: "Principal Product/Service" },
           { key: "us_business_activities", label: "US Business Activities" },
+          // SMLLC wizard (2026-06-11) replaced the free-text us_business_activities
+          // with a yes/no gate + conditional detail. Keep the old key (MMLLC/Corp
+          // still use it) and add the two new SMLLC keys so the accountant's
+          // package still shows the answer.
+          { key: "has_us_business_activities", label: "Conducted US Business Activities? (SMLLC)" },
+          { key: "us_business_activities_detail", label: "US Business Activities — Details (SMLLC)" },
           { key: "website_url", label: "Website" },
           { key: "state_revenue_breakdown", label: "Revenue Breakdown by State (Corp)" },
           { key: "new_activities_markets", label: "New Activities/Markets (Corp)" },
@@ -96,6 +102,7 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
       {
         title: "Related Party Transactions (SMLLC)",
         fields: [
+          { key: "has_related_party_transactions", label: "Had Related Party Transactions?" },
           { key: "related_party_transactions", label: "Related Party Transactions (see details below)" },
         ],
       },
@@ -475,6 +482,8 @@ export async function generateFormSummaryPDF(
           rpt_country: "Country",
           rpt_vat_number: "VAT Number",
           rpt_amount: "Amount",
+          rpt_direction: "Direction",
+          rpt_type: "Transaction Type",
           rpt_description: "Description",
         }
 

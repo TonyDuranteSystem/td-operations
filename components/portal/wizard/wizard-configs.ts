@@ -220,11 +220,11 @@ const TAX_OWNER_BASE: FieldConfig[] = [
   { name: 'owner_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
   { name: 'owner_email', label: 'Email', type: 'email', required: true },
   { name: 'owner_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
-  { name: 'owner_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
-  { name: 'owner_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
-  { name: 'owner_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true },
-  { name: 'owner_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
-  { name: 'owner_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+  { name: 'owner_street', label: 'Personal Home Address — where you physically live', labelIt: 'Indirizzo di Residenza Personale — dove vivi fisicamente', type: 'text', required: true, hint: 'Enter the address of the home where you actually live right now. This is your PERSONAL address, NOT your company\'s address — and NOT necessarily your country of citizenship. Example: if you are an Italian citizen but you currently live in Dubai or Portugal, enter your Dubai or Portugal address.', hintIt: 'Inserisci l\'indirizzo della casa in cui vivi effettivamente in questo momento. È il tuo indirizzo PERSONALE, NON quello della società — e NON necessariamente il tuo paese di cittadinanza. Esempio: se sei cittadino italiano ma vivi a Dubai o in Portogallo, inserisci l\'indirizzo di Dubai o del Portogallo.' },
+  { name: 'owner_city', label: 'City (where you live)', labelIt: 'Città (dove vivi)', type: 'text', required: true },
+  { name: 'owner_state_province', label: 'State/Province (where you live)', labelIt: 'Stato/Provincia (dove vivi)', type: 'text', required: true },
+  { name: 'owner_zip', label: 'ZIP/Postal Code (where you live)', labelIt: 'CAP (dove vivi)', type: 'text', required: true },
+  { name: 'owner_country', label: 'Country (where you physically live)', labelIt: 'Paese (dove vivi fisicamente)', type: 'country', required: true, hint: 'The country where you physically live right now — not your country of citizenship.', hintIt: 'Il paese in cui vivi fisicamente in questo momento — non la cittadinanza.' },
   { name: 'owner_tax_residency', label: 'Tax Residency Country', labelIt: 'Residenza Fiscale', type: 'country', required: true },
   { name: 'owner_local_tax_number', label: 'Local Tax ID (VAT/Codice Fiscale)', labelIt: 'Codice Fiscale / P.IVA', type: 'text', required: true },
 ]
@@ -237,6 +237,24 @@ const TAX_COMPANY_BASE: FieldConfig[] = [
   { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato Costituzione', type: 'text', required: true },
   { name: 'principal_product_service', label: 'Principal Product/Service', labelIt: 'Prodotto/Servizio Principale', type: 'textarea', required: true },
   { name: 'us_business_activities', label: 'US Business Activities', labelIt: 'Attività Commerciali USA', type: 'textarea', required: true },
+  { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
+]
+
+// SMLLC company fields — its OWN array (not TAX_COMPANY_BASE) so the clarity
+// tweaks below apply ONLY to the SMLLC wizard, not MMLLC/Corp:
+//  • improved principal_product_service hint
+//  • US-activities split into a yes/no gate + conditional detail textarea
+const TAX_SMLLC_COMPANY: FieldConfig[] = [
+  { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
+  { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein' },
+  { name: 'date_of_incorporation', label: 'Date of Incorporation', labelIt: 'Data Costituzione', type: 'date', required: true },
+  { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato Costituzione', type: 'text', required: true },
+  { name: 'principal_product_service', label: 'Principal Product/Service', labelIt: 'Prodotto/Servizio Principale', type: 'textarea', required: true, hint: 'Describe what your LLC actually does. Be specific — for example: "Online sale of digital courses about personal finance" is better than "Consulting." The more specific, the better for your tax filing.', hintIt: 'Descrivi cosa fa effettivamente la tua LLC. Sii specifico — per esempio: "Vendita online di corsi digitali sulla finanza personale" è meglio di "Consulenza." Più sei specifico, meglio è per la tua dichiarazione.' },
+  { name: 'has_us_business_activities', label: 'Did your LLC conduct any business activities physically inside the United States during the year?', labelIt: 'La tua LLC ha svolto attività commerciali fisicamente negli Stati Uniti durante l\'anno?', type: 'select', required: true, options: [
+    { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    { value: 'No', label: 'No', labelIt: 'No' },
+  ], hint: 'This means physical offices, employees, inventory, or equipment located in the US. Online sales to US customers from outside the US does NOT count as US business activity.', hintIt: 'Questo significa uffici fisici, dipendenti, inventario o attrezzature negli USA. Le vendite online a clienti USA dall\'estero NON contano come attività commerciale USA.' },
+  { name: 'us_business_activities_detail', label: 'Describe the US activities', labelIt: 'Descrivi le attività negli USA', type: 'textarea', required: true, conditional: { field: 'has_us_business_activities', value: 'Yes' }, hint: 'Describe what your LLC does inside the US and where.', hintIt: 'Descrivi cosa fa la tua LLC negli USA e dove.' },
   { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
 ]
 
@@ -269,39 +287,57 @@ export const TAX_STEPS: WizardStep[] = [
 export const TAX_FIELDS: Record<string, FieldConfig[]> = {
   owner: [
     ...TAX_OWNER_BASE,
-    // SMLLC-specific: 5472 ownership questions
-    { name: 'owner_direct_100_pct', label: 'Are you the 100% direct owner?', labelIt: 'Sei il proprietario diretto al 100%?', type: 'select', required: true, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ], hint: 'Answer "Yes" if you personally own 100% of this LLC with no other owner or holding company above you. Answer "No" if another company or person also holds an ownership interest.', hintIt: 'Rispondi "Sì" se possiedi personalmente il 100% di questa LLC. Rispondi "No" se un\'altra società o persona detiene anche una quota.' },
-    { name: 'owner_ultimate_25_pct', label: 'Is there an ultimate owner with more than 25% interest?', labelIt: 'C\'è un proprietario finale con più del 25% di interesse?', type: 'select', required: true, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ], hint: 'The "ultimate beneficial owner" is the real person (not a company) at the top of the ownership chain who owns or controls the LLC. Answer "Yes" if that person holds more than 25%.', hintIt: 'Il "proprietario finale" è la persona fisica (non una società) in cima alla catena proprietaria. Rispondi "Sì" se quella persona detiene più del 25%.' },
-    { name: 'ultimate_owner_name', label: 'Ultimate Owner Name', labelIt: 'Nome Proprietario Finale', type: 'text', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' }, hint: 'Full legal name of the ultimate beneficial owner (the real person at the top of the ownership chain).', hintIt: 'Nome legale completo del proprietario finale (la persona fisica in cima alla catena proprietaria).' },
-    { name: 'ultimate_owner_address', label: 'Ultimate Owner Address', labelIt: 'Indirizzo Proprietario Finale', type: 'text', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' }, hint: 'Full residential or registered address of the ultimate beneficial owner.', hintIt: 'Indirizzo residenziale o registrato completo del proprietario finale.' },
-    { name: 'ultimate_owner_country', label: 'Ultimate Owner Country', labelIt: 'Paese Proprietario Finale', type: 'country', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' } },
-    { name: 'ultimate_owner_tax_id', label: 'Ultimate Owner Tax ID', labelIt: 'Codice Fiscale Proprietario Finale', type: 'text', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' }, hint: 'Tax identification number in the owner\'s country of residence (e.g., Codice Fiscale for Italy, NIF for Spain).', hintIt: 'Codice fiscale nel paese di residenza del proprietario (es. Codice Fiscale per l\'Italia).' },
+    // SMLLC beneficial-owner questions removed (2026-06-11): a single-member LLC
+    // is always one person with no holding company above it, so the 100%-direct
+    // and ultimate-owner fields only caused confusion — 8 clients entered
+    // themselves as the "ultimate owner". The 5472 still treats the sole member
+    // as the reporting/related party; no extra ownership input is needed here.
   ],
-  company: TAX_COMPANY_BASE,
+  company: TAX_SMLLC_COMPANY,
   financials: [
-    { name: 'formation_costs', label: 'Formation Costs ($)', labelIt: 'Costi di Costituzione ($)', type: 'number', required: true, hint: 'Total amount paid to form the LLC: state filing fees, registered agent fees, attorney/service fees. Enter 0 if already deducted in a prior year.', hintIt: 'Importo totale pagato per costituire la LLC: tasse statali, agente registrato, avvocato/servizio. Inserisci 0 se già dedotto in un anno precedente.' },
-    { name: 'bank_contributions', label: 'Bank Contributions ($)', labelIt: 'Conferimenti Bancari ($)', type: 'number', required: true, hint: 'Total money you personally deposited or wired INTO the LLC bank account during the year (capital contributions, not revenue).', hintIt: 'Denaro totale che hai depositato o trasferito SUL conto bancario della LLC durante l\'anno (conferimenti di capitale, non ricavi).' },
-    { name: 'distributions_withdrawals', label: 'Distributions / Withdrawals ($)', labelIt: 'Distribuzioni / Prelievi ($)', type: 'number', required: true, hint: 'Total money you took OUT of the LLC bank account for personal use during the year.', hintIt: 'Denaro totale che hai prelevato dal conto bancario della LLC per uso personale durante l\'anno.' },
+    { name: 'formation_costs', label: 'Formation Costs ($)', labelIt: 'Costi di Costituzione ($)', type: 'number', required: true, hint: 'Total amount paid to form the LLC: state filing fees, registered agent fees, attorney/service fees. Enter 0 if already deducted in a prior year. If your LLC was formed before the tax year (e.g., formed in 2023 for a 2025 return), enter 0. Only enter costs if you formed the LLC during this tax year.', hintIt: 'Importo totale pagato per costituire la LLC: tasse statali, agente registrato, avvocato/servizio. Inserisci 0 se già dedotto in un anno precedente. Se la tua LLC è stata costituita prima dell\'anno fiscale (es. costituita nel 2023 per una dichiarazione 2025), inserisci 0. Inserisci i costi solo se hai costituito la LLC durante questo anno fiscale.' },
+    { name: 'bank_contributions', label: 'Bank Contributions ($)', labelIt: 'Conferimenti Bancari ($)', type: 'number', required: true, hint: 'Total money you personally deposited or wired INTO the LLC bank account during the year (capital contributions, not revenue). For example: if you transferred $5,000 from your personal bank account to your LLC\'s Mercury or Relay account, enter 5000.', hintIt: 'Denaro totale che hai depositato o trasferito SUL conto bancario della LLC durante l\'anno (conferimenti di capitale, non ricavi). Per esempio: se hai trasferito $5.000 dal tuo conto bancario personale al conto Mercury o Relay della tua LLC, inserisci 5000.' },
+    { name: 'distributions_withdrawals', label: 'Distributions / Withdrawals ($)', labelIt: 'Distribuzioni / Prelievi ($)', type: 'number', required: true, hint: 'Total money you took OUT of the LLC bank account for personal use during the year. For example: if you transferred $3,000 from your LLC\'s account to your personal account, enter 3000.', hintIt: 'Denaro totale che hai prelevato dal conto bancario della LLC per uso personale durante l\'anno. Per esempio: se hai trasferito $3.000 dal conto della tua LLC al tuo conto personale, inserisci 3000.' },
     { name: 'personal_expenses', label: 'Personal Expenses Paid by LLC ($)', labelIt: 'Spese Personali Pagate dalla LLC ($)', type: 'number', required: true, hint: 'Total personal (non-business) expenses paid from the LLC account. Examples: personal travel, personal subscriptions, gifts. Enter 0 if none.', hintIt: 'Spese personali (non aziendali) pagate dal conto della LLC. Esempi: viaggi personali, abbonamenti personali, regali. Inserisci 0 se nessuna.' },
+    { name: 'has_related_party_transactions', label: 'Did your LLC have any transactions with other companies that you own, that your family members own, or that own your LLC?', labelIt: 'La tua LLC ha avuto transazioni con altre società di tua proprietà, di proprietà di familiari, o che possiedono la tua LLC?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+      { value: 'No', label: 'No', labelIt: 'No' },
+    ], hint: 'This is one of the most important questions for your tax filing. "Related party" means ANY company connected to you or your family — including companies you own in other countries, companies that paid your LLC, or companies your LLC paid. If your LLC received money from or sent money to ANY company connected to you, the answer is YES.', hintIt: 'Questa è una delle domande più importanti per la tua dichiarazione. "Parte correlata" significa QUALSIASI società collegata a te o alla tua famiglia — incluse società che possiedi in altri paesi, società che hanno pagato la tua LLC, o società a cui la tua LLC ha pagato. Se la tua LLC ha ricevuto o inviato denaro a QUALSIASI società collegata a te, la risposta è SÌ.', warningOnValue: { value: 'No', text: 'You are declaring that your LLC had NO transactions with any company owned by you, your family members, or any entity connected to you. If this is incorrect, the IRS may apply a $25,000 penalty. Please review carefully before proceeding.', textIt: 'Stai dichiarando che la tua LLC NON ha avuto transazioni con nessuna società di tua proprietà, dei tuoi familiari, o collegata a te. Se questo non è corretto, l\'IRS può applicare una sanzione di $25.000. Verifica attentamente prima di procedere.' } },
     {
       name: 'related_party_transactions',
       label: 'Related Party Transactions',
       labelIt: 'Transazioni con Parti Correlate',
       type: 'repeater',
-      required: false,
-      hint: 'Required for Form 5472: list any transactions between your LLC and a related foreign person or entity (e.g., payments to/from a foreign company you own, or that owns you). Leave empty if none.',
-      hintIt: 'Obbligatorio per il Modulo 5472: elenca le transazioni tra la tua LLC e una persona o entità straniera correlata. Lascia vuoto se nessuna.',
+      // Required because this only appears after the client answered "Yes" to the
+      // gate above — at that point at least one transaction MUST be listed
+      // (validated in wizard-client validateStep). Hidden when the gate is "No".
+      required: true,
+      conditional: { field: 'has_related_party_transactions', value: 'Yes' },
+      hint: 'Since you answered "Yes", list every transaction between your LLC and a related party (any company connected to you, your family, or your LLC). Add one entry per party — at least one is required, and all fields in each entry must be completed.',
+      hintIt: 'Poiché hai risposto "Sì", elenca ogni transazione tra la tua LLC e una parte correlata (qualsiasi società collegata a te, alla tua famiglia o alla tua LLC). Aggiungi una voce per ciascuna parte — almeno una è obbligatoria e tutti i campi di ogni voce devono essere compilati.',
       repeaterFields: [
         { name: 'rpt_company_name', label: 'Company / Person Name', labelIt: 'Nome Società / Persona', type: 'text', required: true, hint: 'Legal name of the related foreign company or person.', hintIt: 'Nome legale della società o persona straniera correlata.' },
-        { name: 'rpt_address', label: 'Address', labelIt: 'Indirizzo', type: 'text', required: true },
+        { name: 'rpt_address', label: 'Party Address', labelIt: 'Indirizzo della Parte', type: 'text', required: true, hint: 'Full address including city, country (e.g., "30 N Gould St, Sheridan, WY 82801, USA")', hintIt: 'Indirizzo completo con città e paese' },
         { name: 'rpt_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
-        { name: 'rpt_vat_number', label: 'VAT / Foreign Tax ID', labelIt: 'P.IVA / Codice Fiscale Estero', type: 'text', required: false, hint: 'Tax identification number in the other party\'s country. Optional but recommended.', hintIt: 'Numero di identificazione fiscale nel paese della controparte. Facoltativo ma consigliato.' },
+        { name: 'rpt_vat_number', label: 'Foreign Tax ID / VAT of this party', labelIt: 'Codice Fiscale / P.IVA Estero della parte', type: 'text', required: true, hint: 'Required by the IRS on Form 5472. Enter this party\'s tax identification number in its own country (VAT number, Codice Fiscale, NIF, EIN, etc.). If this party genuinely has no tax ID, type "None".', hintIt: 'Richiesto dall\'IRS nel Modulo 5472. Inserisci il numero di identificazione fiscale di questa parte nel suo paese (P.IVA, Codice Fiscale, NIF, EIN, ecc.). Se questa parte non ha alcun codice fiscale, scrivi "None".' },
         { name: 'rpt_amount', label: 'Transaction Amount ($)', labelIt: 'Importo Transazione ($)', type: 'number', required: true, hint: 'Total USD value of transactions with this party for the year. Use the exchange rate at the time of the transaction.', hintIt: 'Valore totale in USD delle transazioni con questa parte per l\'anno.' },
-        { name: 'rpt_description', label: 'Description', labelIt: 'Descrizione', type: 'textarea', required: false, hint: 'Describe the nature of the transaction (e.g., "Service fee paid for consulting", "Loan from parent company", "Royalty payment").', hintIt: 'Descrivi la natura della transazione (es. "Commissione di servizio per consulenza", "Prestito dalla società madre").' },
+        { name: 'rpt_direction', label: 'Transaction Direction', labelIt: 'Direzione della Transazione', type: 'select', required: true, options: [
+          { value: 'to_llc', label: 'Money FROM this party TO your LLC', labelIt: 'Denaro DA questa parte ALLA tua LLC' },
+          { value: 'from_llc', label: 'Money FROM your LLC TO this party', labelIt: 'Denaro DALLA tua LLC A questa parte' },
+        ], hint: 'Did your LLC receive the money, or pay the money?', hintIt: 'La tua LLC ha ricevuto il denaro, o lo ha pagato?' },
+        { name: 'rpt_type', label: 'Type of Transaction', labelIt: 'Tipo di Transazione', type: 'select', required: true, options: [
+          { value: 'sale_goods', label: 'Sale of goods / products', labelIt: 'Vendita di beni / prodotti' },
+          { value: 'services', label: 'Services or consulting fee', labelIt: 'Servizi o consulenza' },
+          { value: 'rent', label: 'Rent (property / equipment)', labelIt: 'Affitto (immobili / attrezzature)' },
+          { value: 'royalties', label: 'Royalties or license fees', labelIt: 'Royalty o licenze' },
+          { value: 'interest', label: 'Interest', labelIt: 'Interessi' },
+          { value: 'loan', label: 'Loan (money lent or borrowed)', labelIt: 'Prestito (denaro prestato o ricevuto)' },
+          { value: 'capital', label: 'Capital contribution / distribution', labelIt: 'Conferimento di capitale / distribuzione' },
+          { value: 'management_fee', label: 'Management or commission fee', labelIt: 'Compenso di gestione o commissione' },
+          { value: 'reimbursement', label: 'Reimbursement of expenses', labelIt: 'Rimborso spese' },
+          { value: 'other', label: 'Other', labelIt: 'Altro' },
+        ], hint: 'What kind of transaction was it? The IRS requires each related-party transaction to be reported by type on Form 5472 — pick the closest match (use the Description below for details). If unsure, choose "Other" and explain below.', hintIt: 'Di che tipo di transazione si tratta? L\'IRS richiede che ogni transazione con parti correlate sia riportata per tipo nel Modulo 5472 — scegli la voce più simile (usa la Descrizione qui sotto per i dettagli). Se non sei sicuro, scegli "Altro" e spiega sotto.' },
+        { name: 'rpt_description', label: 'Description', labelIt: 'Descrizione', type: 'textarea', required: true, hint: 'Describe the nature of the transaction (e.g., "Service fee paid for consulting", "Loan from parent company", "Royalty payment").', hintIt: 'Descrivi la natura della transazione (es. "Commissione di servizio per consulenza", "Prestito dalla società madre").' },
       ],
       repeaterAddLabel: 'Add related party transaction',
       repeaterAddLabelIt: 'Aggiungi transazione con parte correlata',
