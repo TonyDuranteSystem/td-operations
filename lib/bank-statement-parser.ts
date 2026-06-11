@@ -9,7 +9,7 @@
  * reconciliation guard (lib/bank-statement-ai-extract.ts).
  */
 
-import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, stableRowRef } from "./bank-csv-parsers"
+import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, stableRowRef } from "./bank-csv-parsers"
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ export interface ParseResult {
   period: string
   errors: string[]
   /** How the transactions were extracted. Absent for legacy hand-coded parsers. */
-  extraction_method?: "wise_csv" | "relay_csv" | "wise_pdf" | "ai" | "unknown"
+  extraction_method?: "wise_csv" | "relay_csv" | "mercury_csv" | "revolut_csv" | "slash_csv" | "wise_pdf" | "ai" | "unknown"
   /**
    * Balance reconciliation guard (set by AI extraction). When a statement
    * reports opening + closing balances, we verify opening + Σamounts ≈ closing.
@@ -641,6 +641,9 @@ export interface ParseOptions {
   fetchImpl?: typeof fetch
   /** Override the AI model (tests / tuning). */
   aiModel?: string
+  /** Tax year being processed — the year anchor for exports whose dates
+   *  carry no year (Slash: "Dec 30"). */
+  taxYear?: number
 }
 
 const aiDisabled = () => process.env.BANK_STATEMENT_AI_DISABLED === "true"
@@ -735,6 +738,21 @@ export async function parseBankStatement(
     if (signature === "relay") {
       const r = parseRelayCSV(content, fileName)
       r.extraction_method = "relay_csv"
+      if (r.transactions.length > 0) return r
+    }
+    if (signature === "mercury") {
+      const r = parseMercuryCSV(content, fileName)
+      r.extraction_method = "mercury_csv"
+      if (r.transactions.length > 0) return r
+    }
+    if (signature === "revolut") {
+      const r = parseRevolutCSV(content, fileName)
+      r.extraction_method = "revolut_csv"
+      if (r.transactions.length > 0) return r
+    }
+    if (signature === "slash") {
+      const r = parseSlashCSV(content, fileName, { fallbackYear: opts?.taxYear })
+      r.extraction_method = "slash_csv"
       if (r.transactions.length > 0) return r
     }
     if (signature === "wise" || /wise/i.test(lowerName) || /transferwise|wise\.com/i.test(content)) {
