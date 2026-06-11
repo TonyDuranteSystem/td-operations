@@ -733,6 +733,7 @@ export default async function PortalDashboardPage() {
             submissionId={tr.submission_id ?? null}
             dataReceived={tr.data_received ?? false}
             sentToAccountant={tr.sent_to_accountant ?? false}
+            showFinancialsLink={(tr.return_type === 'MMLLC' || tr.return_type === 'Corp') && tr.submission_id != null}
           />
         )
       })}

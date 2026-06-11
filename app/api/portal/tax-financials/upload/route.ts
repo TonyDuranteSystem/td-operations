@@ -56,6 +56,18 @@ export async function POST(request: NextRequest) {
     const result = await ingestPortalCsv({ accountId, taxYear, bankLabel, accountKind, buffer, fileName: file.name })
 
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 422 })
+
+    // Keep the raw CSV (content-hash named) so the accountant package can
+    // archive the original exports — fire-and-forget, ingestion already done.
+    if (result.inserted > 0) {
+      const { supabaseAdmin } = await import('@/lib/supabase-admin')
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      void supabaseAdmin.storage
+        .from('onboarding-uploads')
+        .upload(`tax/${accountId}/financials_${result.sourceFileId.replace('upload:', '')}_${safeName}`, buffer, { contentType: 'text/csv', upsert: true })
+        .then(({ error }) => { if (error) console.error('[tax-financials] raw CSV archive failed:', error.message) })
+    }
+
     return NextResponse.json(result)
   } catch (err) {
     console.error('[tax-financials] upload failed:', err)

@@ -14,7 +14,10 @@ interface Member { name: string; pct: number; beginning_capital: number; contrib
 interface QuestionGroup { group_key: string; label: string; count: number; total: number; direction: 'in' | 'out' | 'mixed'; transaction_ids: string[]; sample: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 
+interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
+
 interface View {
+  coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
   draft: {
     pnl: { totalIncome: number; totalCogs: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number }
     members: Member[]
@@ -105,6 +108,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile eliminare il file — riprova.' : 'Could not delete the file — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const answerCoverage = async (q: CoverageQuestion, value: 'no_activity' | 'had_activity') => {
+    setBusy(q.key)
+    try {
+      const res = await fetch('/api/portal/tax-financials/coverage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, question_key: q.key, answer: value }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
       }
       await load()
     } catch (e) {
@@ -265,6 +288,51 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             </section>
           )}
 
+          {/* Coverage questions (§3.4) — what the exports don't span */}
+          {view.coverage.questions.length > 0 && (
+            <section className="rounded-xl border border-sky-200 bg-sky-50/50 p-4 sm:p-5">
+              <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Copertura dell\'anno' : 'Year coverage'}</h2>
+              <p className="text-xs text-zinc-500 mt-1 mb-4">
+                {it
+                  ? 'Alcuni conti non coprono tutto l\'anno. Dicci se in quei mesi c\'era attività — se sì, ricarica l\'export completo.'
+                  : 'Some accounts don\'t span the whole year. Tell us whether there was activity in those months — if yes, re-upload the complete export.'}
+              </p>
+              <div className="space-y-3">
+                {view.coverage.questions.map(q => (
+                  <div key={q.key} className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4">
+                    <div className="text-sm text-zinc-800">{q.question}</div>
+                    {q.answer === 'no_activity' ? (
+                      <div className="mt-2 text-xs text-emerald-700">{it ? '✓ Nessuna attività — registrato.' : '✓ No activity — recorded.'}</div>
+                    ) : q.answer === 'had_activity' ? (
+                      <div className="mt-2 text-xs text-amber-700">
+                        {it
+                          ? 'Hai indicato che c\'era attività: elimina il file qui sotto e carica l\'export dell\'intero anno.'
+                          : 'You said there was activity: delete the file below and upload the entire-year export.'}
+                      </div>
+                    ) : (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          disabled={busy !== null}
+                          onClick={() => void answerCoverage(q, 'no_activity')}
+                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                        >
+                          {it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months'}
+                        </button>
+                        <button
+                          disabled={busy !== null}
+                          onClick={() => void answerCoverage(q, 'had_activity')}
+                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                        >
+                          {it ? 'Sì — c\'era attività (devo ricaricare)' : 'Yes — there was activity (I need to re-upload)'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Files */}
           {view.files.length > 0 && (
             <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
@@ -313,15 +381,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.canConfirm || busy !== null}
+                  disabled={!attestChecked || !view.canConfirm || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || busy !== null}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >
                   {it ? 'Confermo i numeri' : 'Confirm the numbers'}
                 </button>
-                {!view.canConfirm && (
+                {(!view.canConfirm || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
                   <p className="text-xs text-amber-700">
-                    {it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.'}
+                    {view.coverage.incomplete > 0
+                      ? (it ? 'Hai indicato che un export è incompleto — sostituisci il file, poi potrai confermare.' : 'You marked an export as incomplete — replace the file, then you can confirm.')
+                      : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
                   </p>
                 )}
               </div>

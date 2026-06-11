@@ -46,9 +46,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: blocked || 'Not everything is verified yet.' }, { status: 422 })
     }
 
-    const { data: sub } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
+    const { data: sub } = await db
       .from('tax_return_submissions')
-      .select('id, review_history, confirmation_accepted')
+      .select('id, review_history, confirmation_accepted, financials_meta')
       .eq('account_id', accountId)
       .eq('tax_year', taxYear)
       .eq('status', 'completed')
@@ -56,6 +58,25 @@ export async function POST(request: NextRequest) {
       .limit(1)
       .maybeSingle()
     if (!sub) return NextResponse.json({ error: 'No submission found for this year.' }, { status: 404 })
+
+    // Coverage must be resolved too (§3.4) — gate 1 can't see what an export
+    // left out; the client's answers are the completeness guarantee.
+    const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
+    const { data: covRows } = await supabaseAdmin
+      .from('bank_transactions')
+      .select('bank_name, account_type, transaction_date')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+    const covQs = coverageQuestions(covRows ?? [], taxYear)
+    const covAnswers = (sub.financials_meta?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
+    const unanswered = unansweredCoverage(covQs, covAnswers)
+    const incomplete = incompleteCoverage(covQs, covAnswers)
+    if (unanswered.length > 0) {
+      return NextResponse.json({ error: `Please answer the remaining coverage question(s) first: ${unanswered.map(q => q.question).join(' ')}` }, { status: 422 })
+    }
+    if (incomplete.length > 0) {
+      return NextResponse.json({ error: `You told us these exports are incomplete — please delete the file and upload the entire period: ${incomplete.map(q => q.bank_key).join(', ')}.` }, { status: 422 })
+    }
 
     const history = Array.isArray(sub.review_history) ? sub.review_history : []
     const entry = {
@@ -74,6 +95,14 @@ export async function POST(request: NextRequest) {
       })
       .eq('id', sub.id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Handoff (Slice 9 §3.7, fire-and-forget — the response never waits):
+    // archive the confirmed Excel to Drive 3.Tax/{year} + create the staff
+    // final-pass task. Failures are logged; staff still see the attestation
+    // on the submission either way.
+    void import('@/lib/tax/attest-handoff')
+      .then(({ runAttestHandoff }) => runAttestHandoff(accountId, taxYear))
+      .catch(e => console.error('[tax-financials] attest handoff failed:', e))
 
     return NextResponse.json({ attested: true, already: sub.confirmation_accepted === true })
   } catch (err) {

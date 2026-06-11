@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     // Per-file sources for the delete/replace cards (§6).
     const { data: sources } = await supabaseAdmin
       .from('bank_transactions')
-      .select('source_file_id, bank_name, transaction_date')
+      .select('source_file_id, bank_name, account_type, transaction_date')
       .eq('account_id', accountId)
       .eq('tax_year', taxYear)
     const bySource = new Map<string, { bank_name: string; count: number; from: string; to: string }>()
@@ -64,10 +64,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Current attestation state — reset by any data mutation (QA finding).
-    const { data: sub } = await supabaseAdmin
+    // Current attestation state — reset by any data mutation (QA finding) —
+    // and the coverage answers (financials_meta, Slice 9).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
+    const { data: sub } = await db
       .from('tax_return_submissions')
-      .select('confirmation_accepted')
+      .select('confirmation_accepted, financials_meta')
       .eq('account_id', accountId)
       .eq('tax_year', taxYear)
       .eq('status', 'completed')
@@ -75,9 +78,21 @@ export async function GET(request: NextRequest) {
       .limit(1)
       .maybeSingle()
 
+    // Coverage questions (§3.4): the months an export doesn't span — gate 1
+    // can't see what a file left out; the client's answer closes the hole.
+    const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
+    const answers = (sub?.financials_meta?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
+    const covQs = coverageQuestions((sources ?? []).map(r => ({ bank_name: r.bank_name, account_type: r.account_type, transaction_date: r.transaction_date })), taxYear)
+    const coverage = {
+      questions: covQs.map(q => ({ ...q, answer: answers[q.key]?.answer ?? null })),
+      unanswered: unansweredCoverage(covQs, answers).length,
+      incomplete: incompleteCoverage(covQs, answers).length,
+    }
+
     return NextResponse.json({
       ...view,
       questions,
+      coverage,
       attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
     })

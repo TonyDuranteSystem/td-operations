@@ -16,6 +16,8 @@ interface TaxBannerProps {
   /** Legacy fallback for pre-Slice-2 submissions */
   dataReceived?: boolean
   sentToAccountant?: boolean
+  /** MMLLC/Corp financials flow (Slice 9): link to the generated P&L + BS review screen. */
+  showFinancialsLink?: boolean
 }
 
 const editHref = '/portal/wizard?type=tax'
@@ -93,9 +95,18 @@ export function TaxBanner({
   submissionId,
   dataReceived = false,
   sentToAccountant = false,
+  showFinancialsLink = false,
 }: TaxBannerProps) {
   const router = useRouter()
   const returnLabel = returnType || 'Tax Return'
+
+  // MMLLC/Corp: after submission the generated P&L + Balance Sheet live on
+  // their own review screen (Slice 9) — surface the path from the banner.
+  const financialsLink = showFinancialsLink ? (
+    <a href="/portal/tax-financials" className="mt-2 inline-block text-xs font-semibold text-blue-700 underline hover:text-blue-900">
+      {locale === 'it' ? 'Controlla e conferma il tuo Conto Economico e Stato Patrimoniale →' : 'Check and confirm your Profit & Loss and Balance Sheet →'}
+    </a>
+  ) : null
 
   // ─── New review-status states ───
   if (reviewStatus !== undefined && reviewStatus !== null) {
@@ -118,6 +129,7 @@ export function TaxBanner({
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-blue-900 text-sm sm:text-base">{title}</p>
                 <p className="text-blue-700 text-xs sm:text-sm mt-1">{desc}</p>
+                {financialsLink}
               </div>
               <EditButton cta={cta} />
             </div>
