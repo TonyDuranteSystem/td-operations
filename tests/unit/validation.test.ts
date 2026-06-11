@@ -7,6 +7,7 @@ import {
   validateRequiredFields,
   validateOnboardingData,
   validateFormationData,
+  validateTaxData,
   validateWizardData,
 } from '../../lib/jobs/validation'
 
@@ -271,5 +272,78 @@ describe('validateWizardData (dispatcher)', () => {
     expect(result.errors.length).toBeGreaterThan(0)
     expect(result.errors.some(e => e.field === 'owner_first_name')).toBe(true)
     expect(result.errors.some(e => e.field === 'owner_last_name')).toBe(true)
+  })
+})
+
+describe('validateTaxData', () => {
+  const completeTxn = (i: number) => ({
+    [`related_party_transactions_${i}_rpt_company_name`]: 'Acme Srl',
+    [`related_party_transactions_${i}_rpt_address`]: 'Via Roma 1, Milano, Italy',
+    [`related_party_transactions_${i}_rpt_country`]: 'Italy',
+    [`related_party_transactions_${i}_rpt_vat_number`]: 'IT12345678901',
+    [`related_party_transactions_${i}_rpt_amount`]: 5000,
+    [`related_party_transactions_${i}_rpt_direction`]: 'to_llc',
+    [`related_party_transactions_${i}_rpt_type`]: 'services',
+    [`related_party_transactions_${i}_rpt_description`]: 'Consulting fee',
+  })
+
+  it('passes when related-party gate is "No"', () => {
+    const r = validateTaxData({ has_related_party_transactions: 'No' })
+    expect(r.valid).toBe(true)
+  })
+
+  it('passes for a non-SMLLC tax submission (no SMLLC-specific keys)', () => {
+    const r = validateTaxData({ llc_name: 'Multi LLC', ein_number: '30-1482516' })
+    expect(r.valid).toBe(true)
+  })
+
+  it('fails when "Yes" but no transactions added', () => {
+    const r = validateTaxData({ has_related_party_transactions: 'Yes', related_party_transactions_count: 0 })
+    expect(r.valid).toBe(false)
+    expect(r.errors.some(e => e.field === 'related_party_transactions')).toBe(true)
+  })
+
+  it('passes when "Yes" with one fully-completed transaction', () => {
+    const r = validateTaxData({
+      has_related_party_transactions: 'Yes',
+      related_party_transactions_count: 1,
+      ...completeTxn(0),
+    })
+    expect(r.valid).toBe(true)
+    expect(r.errors).toHaveLength(0)
+  })
+
+  it('fails when a "Yes" transaction is missing a required sub-field (e.g. type)', () => {
+    const txn = completeTxn(0)
+    delete (txn as Record<string, unknown>)['related_party_transactions_0_rpt_type']
+    const r = validateTaxData({
+      has_related_party_transactions: 'Yes',
+      related_party_transactions_count: 1,
+      ...txn,
+    })
+    expect(r.valid).toBe(false)
+    expect(r.errors.some(e => e.field === 'related_party_transactions_0_rpt_type')).toBe(true)
+  })
+
+  it('fails when a "Yes" transaction is missing the foreign tax ID', () => {
+    const txn = completeTxn(0)
+    delete (txn as Record<string, unknown>)['related_party_transactions_0_rpt_vat_number']
+    const r = validateTaxData({
+      has_related_party_transactions: 'Yes',
+      related_party_transactions_count: 1,
+      ...txn,
+    })
+    expect(r.valid).toBe(false)
+    expect(r.errors.some(e => e.field === 'related_party_transactions_0_rpt_vat_number')).toBe(true)
+  })
+
+  it('requires US activities detail when has_us_business_activities is "Yes"', () => {
+    expect(validateTaxData({ has_us_business_activities: 'Yes' }).valid).toBe(false)
+    expect(validateTaxData({ has_us_business_activities: 'Yes', us_business_activities_detail: 'Warehouse in TX' }).valid).toBe(true)
+  })
+
+  it('routes "tax" / "tax_return" through the dispatcher', () => {
+    expect(validateWizardData('tax', { has_related_party_transactions: 'Yes', related_party_transactions_count: 0 }).valid).toBe(false)
+    expect(validateWizardData('tax_return', { has_related_party_transactions: 'No' }).valid).toBe(true)
   })
 })
