@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
+import { emitActionNeeded } from "@/lib/notifications/act-event"
 
 /**
  * Cron: RA Renewal Check
@@ -164,24 +165,20 @@ export async function GET(req: NextRequest) {
         blocked++
         results.push({ company: account.company_name, action: existingTask?.length ? "created SD (BLOCKED) — task already exists" : "created SD (BLOCKED) + task Antonio" })
       } else {
-        // Create task for Luca
-        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert in cron; refactor deferred (dev_task 7ebb1e0c)
-        await supabaseAdmin
-          .from("tasks")
-          .insert({
-            task_title: `Renew RA on Harbor for ${account.company_name} — deadline ${account.ra_renewal_date}`,
-            assigned_to: "Luca",
-            status: "To Do",
-            priority: "High",
-            category: "Filing",
-            due_date: account.ra_renewal_date,
-            account_id: account.id,
-            delivery_id: sd?.id,
-            description: `Go to Harbor Compliance, search for ${account.company_name}, authorize renewal, pay $35, download confirmation, upload to Drive.`,
-          })
+        // Slice 9 (REV 4.1): a To-Do board card instead of an old-style task.
+        // emitActionNeeded inserts a staff message_actions card from the
+        // `ra_renewal_upcoming` action_events row (next_step + default_assignee),
+        // idempotent per source_ref so a daily re-run never duplicates it. The
+        // card's Mark Done (TaxRenewalActions) calls fileRenewal. SD + email
+        // report are unchanged.
+        await emitActionNeeded({
+          event: "ra_renewal_upcoming",
+          account_id: account.id,
+          source_ref: `ra_renewal:${sd?.id}`,
+        })
 
         created++
-        results.push({ company: account.company_name, action: "created SD + task" })
+        results.push({ company: account.company_name, action: "created SD + card" })
       }
     }
 
@@ -198,7 +195,7 @@ export async function GET(req: NextRequest) {
         const { gmailPost } = await import("@/lib/gmail")
 
         const renewalRows = results
-          .filter(r => r.action === "created SD + task")
+          .filter(r => r.action === "created SD + card")
           .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">✅ SD + Task Luca</td></tr>`)
           .join("")
 
