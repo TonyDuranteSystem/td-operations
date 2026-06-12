@@ -124,6 +124,73 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const event = payload.event ?? {}
   const eventId: string = payload.event_id ?? ""
 
+  // ── Decision Memory Phase 7: 🧠 reaction → save the message as a memory ──
+  // Slack delivers reaction_added as an event_callback. The app must subscribe
+  // to the `reaction_added` bot event for these to arrive (admin config — noted
+  // in the deploy report). When someone reacts with 🧠, persist the reacted
+  // message as an explicit decision memory.
+  if (event.type === "reaction_added" && event.reaction === "brain") {
+    // Ignore the bot reacting to itself (loop / accidental self-mark).
+    if (event.user === CLAUDE_BOT_USER_ID) {
+      return NextResponse.json({ ok: true })
+    }
+    const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (!token || !itemChannel || !itemTs) {
+      return NextResponse.json({ ok: true })
+    }
+
+    const sourceRef = `${itemChannel}:${itemTs}`
+    // Idempotency: a user can react / un-react / re-react, and Slack retries
+    // deliveries. Skip if this exact message was already saved.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existing } = await (supabaseAdmin as any)
+      .from("decision_memory")
+      .select("id")
+      .eq("source_ref", sourceRef)
+      .eq("source_type", "slack_reaction")
+      .limit(1)
+    if (existing?.length) {
+      return NextResponse.json({ ok: true, dedup: "already_saved" })
+    }
+
+    // Fetch the reacted message text (single message at item.ts).
+    const msgRes = await fetch(
+      `https://slack.com/api/conversations.history?channel=${itemChannel}&latest=${itemTs}&inclusive=true&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const msgData = (await msgRes.json().catch(() => ({}))) as {
+      ok?: boolean
+      messages?: Array<{ text?: string }>
+    }
+    const msgText = msgData.messages?.[0]?.text?.trim()
+    if (!msgText) {
+      return NextResponse.json({ ok: true, skipped: "no_text" })
+    }
+
+    const decision = msgText.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, "").trim()
+    if (!decision) {
+      return NextResponse.json({ ok: true, skipped: "empty_after_strip" })
+    }
+
+    try {
+      const { saveDecisionMemory } = await import("@/lib/ai-agent/decision-memory")
+      await saveDecisionMemory({
+        situation: "Explicitly marked important by Antonio via 🧠 reaction in Slack",
+        decision,
+        sourceType: "slack_reaction",
+        sourceRef,
+        actors: ["antonio"],
+        tags: ["explicit_save"],
+      })
+    } catch (err) {
+      console.warn("[slack-claude-webhook] brain reaction save failed:", err)
+      return NextResponse.json({ ok: true, saved: false })
+    }
+    return NextResponse.json({ ok: true, saved: true })
+  }
+
   // Accept two kinds of events:
   //  1. app_mention — Antonio @mentions Claude (any channel, any context)
   //  2. message in a thread — a follow-up reply in a thread Claude already

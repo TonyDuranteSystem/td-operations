@@ -278,6 +278,66 @@ export async function fetchThreadHistory(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Auto-detection of corrections (Decision Memory — Phase 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Heuristic patterns that signal Antonio is correcting a prior bot proposal.
+ * Bilingual (EN + the IT phrases Antonio uses), word-boundary anchored so
+ * "another" doesn't match "no". Kept deliberately broad — a false positive is
+ * cheap (one stray memory) while a false negative loses a real lesson.
+ */
+const CORRECTION_PATTERNS =
+  /\b(no|not correct|wrong|instead|should be|actually|it'?s not|that'?s not|change|fix|don'?t|isn'?t right|is not right|non è|sbagliato|invece|cambia|correggi)\b/i
+
+/**
+ * When Antonio's latest message reads like a correction of a prior bot proposal,
+ * persist it as a decision memory so the lesson is recalled next time a similar
+ * situation comes up. Best-effort and fully non-fatal: any failure (missing
+ * OpenAI key, embedding error, insert error) is swallowed with a warn so it can
+ * never break the Slack/Hermes reply path.
+ *
+ * Mapping onto saveDecisionMemory: `currentMessage` (Antonio's words) → the new
+ * decision; `botSaid` (the prior bot turn being corrected) → bot_said;
+ * `situation` (thread context) → the embedded situation used for recall.
+ *
+ * Note: saveDecisionMemory uses the camelCase param shape (botSaid/correctionType/
+ * sourceType/sourceRef) — verified against lib/ai-agent/decision-memory.ts.
+ */
+export async function detectAndSaveCorrection(params: {
+  situation: string
+  currentMessage: string
+  botSaid: string
+  sourceType: string
+  sourceRef: string
+  actors?: string[]
+}): Promise<void> {
+  const { situation, currentMessage, botSaid, sourceType, sourceRef } = params
+
+  // A bare "no" is too ambiguous to be a useful lesson; require some substance.
+  if (!currentMessage || currentMessage.trim().length < 15) return
+  if (!CORRECTION_PATTERNS.test(currentMessage)) return
+  // Nothing to correct if there's no prior bot proposal in context.
+  if (!botSaid?.trim()) return
+
+  try {
+    const { saveDecisionMemory } = await import("./decision-memory")
+    await saveDecisionMemory({
+      situation: (situation || currentMessage).slice(-500),
+      decision: currentMessage.trim(),
+      botSaid: botSaid.slice(0, 300),
+      correctionType: "auto_detected",
+      sourceType,
+      sourceRef,
+      actors: params.actors ?? ["antonio", "claude"],
+      tags: ["auto_correction"],
+    })
+  } catch (err) {
+    console.warn("[slack-claude] auto-save correction failed (non-fatal):", err)
+  }
+}
+
 /**
  * Download Slack image attachments using the Claude bot token and convert them
  * to base64 Anthropic image blocks. Best-effort and resilient: an unsupported
@@ -514,6 +574,38 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
       updated_at: new Date().toISOString(),
     })
     .eq("id", row.id)
+
+  // Phase 5 (Decision Memory): if Antonio's message corrects a prior Claude
+  // proposal in this thread, persist the lesson. Runs AFTER the reply is posted
+  // and the row marked done, so the embedding/OpenAI round-trip never delays
+  // Antonio's answer. Fully best-effort — never throws into the worker path.
+  try {
+    if (row.thread_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: priorRows } = await (supabaseAdmin as any)
+        .from("agent_messages")
+        .select("reply")
+        .eq("thread_id", row.thread_id)
+        .eq("status", "done")
+        .not("reply", "is", null)
+        .neq("id", row.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+      const priorBotSaid = priorRows?.[0]?.reply as string | undefined
+      if (priorBotSaid) {
+        await detectAndSaveCorrection({
+          situation: enrichedBody,
+          currentMessage: row.body,
+          botSaid: priorBotSaid,
+          sourceType: "slack",
+          sourceRef: `${channelId}:${replyThreadTs ?? row.id}`,
+          actors: ["antonio", "claude"],
+        })
+      }
+    }
+  } catch (err) {
+    console.warn("[slack-claude] correction auto-detect failed (non-fatal):", err)
+  }
 
   return reply
 }

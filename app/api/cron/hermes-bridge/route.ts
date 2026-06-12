@@ -38,6 +38,7 @@ export const maxDuration = 300
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker } from "@/lib/ai-agent/worker-tools"
+import { detectAndSaveCorrection } from "@/lib/ai-agent/slack-claude"
 import { logCron } from "@/lib/cron-log"
 
 const ENDPOINT = "/api/cron/hermes-bridge"
@@ -157,6 +158,38 @@ async function processOne(row: AgentMessageRow): Promise<{ id: string; ok: boole
       .eq("id", row.id)
 
     if (error) throw error
+
+    // Phase 5 (Decision Memory): persist a relayed correction if this message
+    // corrects a prior bot proposal in the same thread. Best-effort — a failure
+    // here must not flip a successfully-answered row to failed.
+    try {
+      if (row.thread_id) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: priorRows } = await (supabaseAdmin as any)
+          .from("agent_messages")
+          .select("reply")
+          .eq("thread_id", row.thread_id)
+          .eq("status", "done")
+          .not("reply", "is", null)
+          .neq("id", row.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+        const priorBotSaid = priorRows?.[0]?.reply as string | undefined
+        if (priorBotSaid) {
+          await detectAndSaveCorrection({
+            situation: row.body,
+            currentMessage: row.body,
+            botSaid: priorBotSaid,
+            sourceType: "hermes",
+            sourceRef: `hermes:${row.id}`,
+            actors: ["antonio", "claude"],
+          })
+        }
+      }
+    } catch (err) {
+      console.warn("[hermes-bridge] correction auto-detect failed (non-fatal):", err)
+    }
+
     return { id: row.id, ok: true }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
