@@ -999,10 +999,18 @@ export default function PortalChatsPage() {
     if ((!selectedAccountId && !selectedContactId) || aiLoading) return
     setAiLoading(true)
     setAiSuggestion('')
+    // Pass BOTH IDs when available so the route can union account- and contact-
+    // scoped messages (same resolution the send mutation uses). Some messages are
+    // stored under account_id, some under contact_id only — sending one misses half.
+    const suggestBody: { account_id?: string; contact_id?: string } = {}
+    const suggestAccountId = selectedAccountId || selectedCompanyId
+    const suggestContactId = selectedContactId || selectedThreadContactId
+    if (suggestAccountId) suggestBody.account_id = suggestAccountId
+    if (suggestContactId) suggestBody.contact_id = suggestContactId
     fetch('/api/portal/chat/suggest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }),
+      body: JSON.stringify(suggestBody),
     })
       .then(r => r.json())
       .then(data => {
@@ -1427,10 +1435,15 @@ export default function PortalChatsPage() {
     if (!replyText.trim() || polishing) return
     setPolishing(true)
     try {
+      const polishIds: { account_id?: string; contact_id?: string } = {}
+      const polishAccountId = selectedAccountId || selectedCompanyId
+      const polishContactId = selectedContactId || selectedThreadContactId
+      if (polishAccountId) polishIds.account_id = polishAccountId
+      if (polishContactId) polishIds.contact_id = polishContactId
       const res = await fetch('/api/portal/chat/polish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: replyText, ...(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }) }),
+        body: JSON.stringify({ message: replyText, ...polishIds }),
       })
       const data = await res.json()
       if (data.polished) setReplyText(data.polished)

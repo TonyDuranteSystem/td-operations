@@ -96,18 +96,30 @@ export async function POST(request: NextRequest) {
       contactInfo = ct
     }
 
-    // 5. Get this conversation (last 20 messages)
+    // 5. Get this conversation (last 20 messages).
+    // Threading model (matches the portal chat GET route): messages live under
+    // BOTH account_id and contact_id — admin replies are account-scoped, "person"-
+    // tagged client messages are contact-scoped with account_id NULL. When we have
+    // both IDs, union the two scopes so the AI sees the FULL thread, not half of it.
     let conversationQuery = supabaseAdmin
       .from('portal_messages')
       .select('sender_type, message, created_at')
       .order('created_at', { ascending: false })
       .limit(20)
 
-    if (account_id) {
+    if (account_id && contact_id) {
+      conversationQuery = conversationQuery.or(
+        `account_id.eq.${account_id},and(contact_id.eq.${contact_id},account_id.is.null)`
+      )
+    } else if (account_id) {
       conversationQuery = conversationQuery.eq('account_id', account_id)
     } else {
       conversationQuery = conversationQuery.eq('contact_id', contact_id).is('account_id', null)
     }
+
+    // Filter out internal chat-event system notes (the `<!-- chat-event: -->`
+    // marker) — they are written ABOUT the client for staff and are noise for the AI.
+    conversationQuery = conversationQuery.not('message', 'ilike', '%<!-- chat-event:%')
 
     const { data: conversation } = await conversationQuery
     const conversationHistory = (conversation ?? []).reverse()

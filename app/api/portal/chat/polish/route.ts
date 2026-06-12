@@ -99,17 +99,25 @@ export async function POST(request: NextRequest) {
       deadlines = dl ?? []
     }
 
-    // 4. Conversation history (last 15 messages) — critical for context
+    // 4. Conversation history (last 15 messages) — critical for context.
+    // Same unified threading as the portal chat GET route: union account- and
+    // contact-scoped messages when both IDs are present, and drop internal
+    // chat-event system notes so the rewrite isn't polluted by staff-facing noise.
     let conversationQuery = supabaseAdmin
       .from('portal_messages')
       .select('sender_type, message, created_at')
       .order('created_at', { ascending: false })
       .limit(15)
-    if (account_id) {
+    if (account_id && contact_id) {
+      conversationQuery = conversationQuery.or(
+        `account_id.eq.${account_id},and(contact_id.eq.${contact_id},account_id.is.null)`
+      )
+    } else if (account_id) {
       conversationQuery = conversationQuery.eq('account_id', account_id)
     } else {
       conversationQuery = conversationQuery.eq('contact_id', contact_id).is('account_id', null)
     }
+    conversationQuery = conversationQuery.not('message', 'ilike', '%<!-- chat-event:%')
     const { data: conversation } = await conversationQuery
     const conversationHistory = (conversation ?? []).reverse()
 
