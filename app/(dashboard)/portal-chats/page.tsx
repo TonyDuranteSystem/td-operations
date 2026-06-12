@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -207,9 +207,6 @@ export default function PortalChatsPage() {
   // "To Do" quick action opens this small dialog (pre-filled with the message
   // text) so staff can write/trim the note before the card is created.
   const [todoNote, setTodoNote] = useState<{ messageId: string; note: string } | null>(null)
-  const [saveTemplate, setSaveTemplate] = useState<{ messageText: string; title: string } | null>(null)
-  const [saveTemplateLoading, setSaveTemplateLoading] = useState(false)
-  const [saveTemplatePrompt, setSaveTemplatePrompt] = useState<string | null>(null)
   const [pendingAdminFiles, setPendingAdminFiles] = useState<PendingAdminFile[]>([])
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
@@ -263,8 +260,6 @@ export default function PortalChatsPage() {
   const [editDraft, setEditDraft] = useState('')
   const [editSaving, setEditSaving] = useState(false)
   const prevTotalUnreadRef = useRef(-1)
-  const lastSuggestedMsgRef = useRef<string | null>(null)
-  const lastSentTextRef = useRef<string>('')
   const queryClient = useQueryClient()
   // Topic-as-thread state for admin
   const [adminActiveTopic, setAdminActiveTopic] = useState<string | null>(null)
@@ -971,7 +966,6 @@ export default function PortalChatsPage() {
     if (!selectedAccountId && !selectedContactId) return
     setAiSuggestion('')
     setReplyToMsg(null)
-    lastSuggestedMsgRef.current = null
     const readBody = selectedAccountId
       ? { account_id: selectedAccountId, topic: null }
       : { contact_id: selectedContactId, topic: null }
@@ -1000,15 +994,9 @@ export default function PortalChatsPage() {
     }).catch(() => {})
   }, [adminActiveTopic, selectedAccountId, selectedContactId, queryClient])
 
-  // Auto-suggest reply when last message is from client
-  useEffect(() => {
-    if (!messages?.length || (!selectedAccountId && !selectedContactId)) return
-    const lastMsg = messages[messages.length - 1]
-    if (lastMsg.sender_type !== 'client') return
-    // Don't re-suggest for the same message
-    if (lastSuggestedMsgRef.current === lastMsg.id) return
-    lastSuggestedMsgRef.current = lastMsg.id
-
+  // On-demand AI reply suggestion — triggered by the AI Suggest button (no longer auto-fires)
+  const handleSuggest = () => {
+    if ((!selectedAccountId && !selectedContactId) || aiLoading) return
     setAiLoading(true)
     setAiSuggestion('')
     fetch('/api/portal/chat/suggest', {
@@ -1022,7 +1010,7 @@ export default function PortalChatsPage() {
       })
       .catch(() => {})
       .finally(() => setAiLoading(false))
-  }, [messages, selectedAccountId, selectedContactId])
+  }
 
   // Internal team threads
   interface InternalThread {
@@ -1308,12 +1296,9 @@ export default function PortalChatsPage() {
       return res.json()
     },
     onSuccess: async () => {
-      const sentText = lastSentTextRef.current
       setReplyText('')
       setReplyToMsg(null)
       setPendingAdminFiles([])
-      // Prompt to save as template only for substantive replies (>40 chars)
-      if (sentText.trim().length > 40) setSaveTemplatePrompt(sentText.trim())
       const readBody = selectedAccountId
         ? { account_id: selectedAccountId }
         : { contact_id: selectedContactId }
@@ -1416,7 +1401,6 @@ export default function PortalChatsPage() {
     if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
-    lastSentTextRef.current = replyText.trim()
 
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
@@ -1464,34 +1448,6 @@ export default function PortalChatsPage() {
       body: JSON.stringify(body),
     })
     queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
-  }
-
-  const handleSaveTemplate = async () => {
-    if (!saveTemplate || saveTemplateLoading) return
-    setSaveTemplateLoading(true)
-    try {
-      const body: Record<string, string> = { message_text: saveTemplate.messageText, title: saveTemplate.title }
-      if (selectedAccountId) body.account_id = selectedAccountId
-      else if (selectedContactId) body.contact_id = selectedContactId
-      const res = await fetch('/api/portal/chat/save-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (res.status === 409) {
-        toast.error(`Already saved as "${data.existing_title}"`)
-      } else if (!res.ok) {
-        toast.error(data.error || 'Failed to save template')
-      } else {
-        toast.success('Saved to AI knowledge base')
-        setSaveTemplate(null)
-      }
-    } catch {
-      toast.error('Failed to save template')
-    } finally {
-      setSaveTemplateLoading(false)
-    }
   }
 
   const markAsRead = async (thread: { account_id: string | null; contact_id: string | null }) => {
@@ -3326,6 +3282,15 @@ export default function PortalChatsPage() {
                     onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleAdminFileSelect(f)) }}
                     className="hidden"
                   />
+                  {/* AI Suggest — on-demand reply suggestion */}
+                  <button
+                    onClick={handleSuggest}
+                    disabled={aiLoading || (!selectedAccountId && !selectedContactId)}
+                    className="p-2 rounded-full text-violet-500 hover:text-violet-600 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
+                    title="AI Suggest"
+                  >
+                    {aiLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+                  </button>
                   {/* Textarea */}
                   <textarea
                     ref={inputRef}
@@ -3529,73 +3494,6 @@ export default function PortalChatsPage() {
                 </div>
               </>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Save-as-template prompt banner — appears after sending a substantive reply */}
-      {saveTemplatePrompt && !saveTemplate && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-zinc-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg animate-in slide-in-from-bottom-2">
-          <BookmarkPlus className="h-4 w-4 text-violet-400 shrink-0" />
-          <span>Save this reply as an AI template?</span>
-          <button
-            onClick={() => {
-              const firstLine = saveTemplatePrompt.split('\n').find(l => l.trim()) ?? saveTemplatePrompt
-              setSaveTemplate({ messageText: saveTemplatePrompt, title: firstLine.trim().slice(0, 80) })
-              setSaveTemplatePrompt(null)
-            }}
-            className="px-3 py-1 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium transition-colors"
-          >
-            Yes
-          </button>
-          <button
-            onClick={() => setSaveTemplatePrompt(null)}
-            className="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 rounded-lg transition-colors"
-          >
-            No
-          </button>
-        </div>
-      )}
-
-      {/* Save-as-template title-edit modal — opened from the prompt banner */}
-      {saveTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4">
-            <div className="flex items-center gap-2">
-              <BookmarkPlus className="h-5 w-5 text-violet-600 shrink-0" />
-              <h2 className="text-base font-semibold text-zinc-900">Save as AI Template</h2>
-            </div>
-            <p className="text-xs text-zinc-500">Give this reply a short title so the AI can find it when a similar question comes up.</p>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-700">Title</label>
-              <input
-                type="text"
-                value={saveTemplate.title}
-                onChange={e => setSaveTemplate(t => t ? { ...t, title: e.target.value } : null)}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
-                maxLength={120}
-                autoFocus
-              />
-            </div>
-            <div className="bg-zinc-50 rounded-lg p-3 max-h-32 overflow-y-auto">
-              <p className="text-xs text-zinc-600 whitespace-pre-wrap">{saveTemplate.messageText}</p>
-            </div>
-            <div className="flex gap-2 justify-end pt-1">
-              <button
-                onClick={() => setSaveTemplate(null)}
-                className="px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveTemplate}
-                disabled={saveTemplateLoading || !saveTemplate.title.trim()}
-                className="px-4 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 transition-colors flex items-center gap-2"
-              >
-                {saveTemplateLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
-                Save
-              </button>
-            </div>
           </div>
         </div>
       )}
