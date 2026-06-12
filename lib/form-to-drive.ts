@@ -120,6 +120,8 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
           { key: "us_rental_property", label: "US Rental Real Estate" },
           { key: "us_inventory_stored", label: "Inventory in US Warehouses (FBA/3PL)" },
           { key: "comp_foreign_accounts", label: "Non-US Bank/Financial Accounts" },
+          { key: "comp_foreign_accounts_country", label: "Foreign Account Country" },
+          { key: "comp_foreign_accounts_over_10k", label: "Foreign Accounts Ever Over $10,000 (FBAR)" },
           { key: "comp_foreign_subsidiaries", label: "Owns Other Companies" },
           { key: "comp_foreign_trusts", label: "Foreign Trust Transactions" },
           { key: "comp_digital_assets", label: "Digital Assets / Crypto" },
