@@ -96,10 +96,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
   })
 
   it("is shorter than the Hermes research prompt (conversational bias)", () => {
-    // The Slack prompt should stay concise. Ceiling bumped 2000 → 2600 when the
-    // SHARED THREADS block was added (multi-bot thread awareness); still far below
-    // a multi-thousand-char research prompt, so the conversational-bias guard holds.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(2600)
+    // The Slack prompt should stay concise. Ceiling history: 2000 → 2600 (SHARED
+    // THREADS block) → 3200 (LANGUAGE/plain-English block, commit 954e4949). Still
+    // far below the multi-thousand-char Hermes research prompt, so the
+    // conversational-bias guard holds.
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(3200)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {

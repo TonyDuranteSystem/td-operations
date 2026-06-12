@@ -75,6 +75,7 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Knowledge & SOP
   "search_kb",
   "get_sop",
+  "search_templates",
   // Gmail read tools
   "gmail_search",
   "gmail_read",

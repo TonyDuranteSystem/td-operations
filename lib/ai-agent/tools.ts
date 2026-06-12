@@ -5,6 +5,7 @@
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
+import { searchTemplates } from './templates'
 import {
   normalizeTaskPriority,
   normalizeTaskStatus,
@@ -304,6 +305,19 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['service_type'],
     },
   },
+  {
+    name: 'search_templates',
+    description: 'Search the firm\'s APPROVED message + email templates (banking, ITIN, formation, tax, billing, etc.) for the situation at hand. Returns up to a few ranked templates with their approved copy. PREFER an approved template as the base for any client-facing reply — adapt placeholders to the client but keep the structure and key information. Matched on trigger keywords/category/name.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The client message or topic to find a template for (e.g. "how do I open a bank account", "ITIN required documents")' },
+        category: { type: 'string', description: 'Optional category filter (e.g. "banking", "tax", "formation")' },
+        language: { type: 'string', description: 'Optional preferred language (e.g. "English", "Italian") — soft-boosts same-language templates' },
+      },
+      required: ['query'],
+    },
+  },
   // ── Google Drive Tools ──
   {
     name: 'drive_search',
@@ -543,6 +557,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'run_sql_query': return await runSqlQuery(params)
       case 'search_kb': return await searchKb(params)
       case 'get_sop': return await getSop(params)
+      case 'search_templates': return await searchTemplatesTool(params)
       case 'drive_search': return await driveSearchTool(params)
       case 'drive_list_folder': return await driveListFolderTool(params)
       case 'drive_move': return await driveMoveTool(params)
@@ -1199,6 +1214,30 @@ async function searchKb(p: any) {
   }))
 
   return JSON.stringify({ results, total: results.length })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function searchTemplatesTool(p: any) {
+  const results = await searchTemplates({
+    query: typeof p.query === 'string' ? p.query : '',
+    category: typeof p.category === 'string' ? p.category : null,
+    language: typeof p.language === 'string' ? p.language : null,
+    limit: 3,
+  })
+  if (!results.length) {
+    return JSON.stringify({ results: [], message: 'No matching approved templates. Draft from scratch, following the SOPs and tone.' })
+  }
+  return JSON.stringify({
+    results: results.map((t) => ({
+      template_name: t.template_name,
+      category: t.category,
+      language: t.language,
+      source: t.source,
+      text: t.text,
+    })),
+    total: results.length,
+    note: 'Prefer one of these approved templates as the base — adapt placeholders, keep structure.',
+  })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

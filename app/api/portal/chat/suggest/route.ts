@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callWorker } from '@/lib/ai-agent/worker-tools'
+import { loadRelevantTemplates, formatTemplatesForPrompt } from '@/lib/ai-agent/templates'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -140,11 +141,27 @@ export async function POST(request: NextRequest) {
       .map(m => `${m.sender_type === 'admin' ? 'Admin' : 'Client'}: ${m.message}`)
       .join('\n')
 
-    // 7. Generate the suggestion via the agent worker. callWorker gives the model
+    // 7. Load relevant approved CRM templates for the client's latest message so
+    // the draft is GROUNDED in approved copy instead of invented from scratch.
+    // Keyword-matched against the templates / email_templates libraries; best-effort
+    // (returns [] on no match). Language soft-boosts a same-language template.
+    const lastClientMessage = [...conversationHistory]
+      .reverse()
+      .find((m) => m.sender_type !== 'admin')?.message
+    const clientLanguage = contactInfo?.language ?? null
+    const relevantTemplates = await loadRelevantTemplates(
+      lastClientMessage || conversationText,
+      { language: clientLanguage, limit: 3 },
+    )
+    const templatesBlock = formatTemplatesForPrompt(relevantTemplates)
+
+    // 8. Generate the suggestion via the agent worker. callWorker gives the model
     // the read-only research tools (memory_recall, get_sop, CRM/Gmail/Drive search)
     // so it pulls past decisions + SOPs ON DEMAND instead of us pre-loading them.
-    const systemPromptOverride =
-      "You are drafting a reply for Antonio to a client's portal message. Before drafting: 1) Call memory_recall with the topic to check relevant past decisions 2) Analyze context triggers (Wise payment → Wise policy, email instead of portal → redirect to portal). Draft in the client's language. Be Antonio — warm, professional, direct. Max 300 words."
+    const systemPromptOverride = [
+      "You are drafting a reply for Antonio to a client's portal message. Before drafting: 1) Call memory_recall with the topic to check relevant past decisions 2) Analyze context triggers (Wise payment → Wise policy, email instead of portal → redirect to portal). Draft in the client's language. Be Antonio — warm, professional, direct. Max 300 words.",
+      templatesBlock ? `\n${templatesBlock}` : "",
+    ].join("")
 
     const userMessage = `CLIENT ACCOUNT CONTEXT:\n${clientContext}\n\nCONVERSATION:\n${conversationText}\n\nThe client just sent the last message. Write Antonio's reply:`
 

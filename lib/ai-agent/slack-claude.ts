@@ -18,6 +18,7 @@ import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
+import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
 import { callAI } from "@/lib/portal/ai-provider"
 
 /**
@@ -519,12 +520,24 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
 
   const imageBlocks = imageRefs.length > 0 ? await prepareSlackImages(imageRefs) : []
 
+  // Ground the reply in approved CRM templates when the message matches one.
+  // Keyword-matched against the templates / email_templates libraries; best-effort
+  // (returns "" on no match), so the system prompt is unchanged when nothing fits.
+  let slackSystemPrompt = SLACK_WORKER_SYSTEM_PROMPT
+  try {
+    const relevantTemplates = await loadRelevantTemplates(row.body, { limit: 3 })
+    const templatesBlock = formatTemplatesForPrompt(relevantTemplates)
+    if (templatesBlock) slackSystemPrompt = `${SLACK_WORKER_SYSTEM_PROMPT}\n\n${templatesBlock}`
+  } catch (err) {
+    console.warn("[slack-claude] template load failed (non-fatal):", err)
+  }
+
   // Only add `images` to the opts when there are blocks — keeps the text-only
   // call shape identical to before (and to the Hermes/Telegram path).
   const workerOpts: CallWorkerOptions = {
     threadId: row.thread_id,
     messageId: row.id,
-    systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+    systemPromptOverride: slackSystemPrompt,
     enableCodeTasks: true,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
@@ -566,7 +579,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     const textOnlyOpts: CallWorkerOptions = {
       threadId: row.thread_id,
       messageId: row.id,
-      systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+      systemPromptOverride: slackSystemPrompt,
       enableCodeTasks: true,
     }
     ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))

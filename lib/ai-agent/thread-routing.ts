@@ -68,8 +68,8 @@ export const CRM_READ_TOOL_NAMES = [
   "get_dashboard_stats",
 ] as const
 
-/** Knowledge base + SOP lookups — system knowledge, not client data. */
-export const KB_SOP_TOOL_NAMES = ["search_kb", "get_sop"] as const
+/** Knowledge base + SOP + approved-template lookups — system knowledge, not client data. */
+export const KB_SOP_TOOL_NAMES = ["search_kb", "get_sop", "search_templates"] as const
 
 /** Gmail read tools — client communications (client data). */
 export const GMAIL_TOOL_NAMES = ["gmail_search", "gmail_read", "gmail_read_thread"] as const
