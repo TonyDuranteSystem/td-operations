@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from 'next/server'
  * 2. Loads admin's past replies across ALL clients (style examples)
  * 3. Loads this client's account context (services, deadlines, payments)
  * 4. Loads conversation history with this client
- * 5. Generates a reply via Claude Haiku (primary) or GPT-4o-mini (fallback)
+ * 5. Generates a reply via Claude Sonnet (primary) or GPT-4o-mini (fallback)
  */
 export async function POST(request: NextRequest) {
   // Rate limit: max 6 suggestions per minute (AI calls)
@@ -196,6 +196,39 @@ export async function POST(request: NextRequest) {
       .map(m => `${m.sender_type === 'admin' ? 'Admin' : 'Client'}: ${m.message}`)
       .join('\n')
 
+    // 8c. Load relevant SOPs (Standard Operating Procedures) for technical
+    // accuracy. SOPs live in `sop_runbooks` (verified via the sop_search tool):
+    // columns title / content / service_type — there is no `category` column, so
+    // we match the conversation topic against the SOP title/service_type instead.
+    // Best-effort: any failure must NEVER block a suggestion.
+    let sopContext = ''
+    try {
+      const conversationLower = conversationText.toLowerCase()
+      // Topic → does the conversation mention it. Keeps the prompt focused so we
+      // don't dump every SOP into the context window.
+      const topics = ['tax', 'banking', 'formation', 'itin', 'renewal', 'closure', 'onboarding', 'ein', 'lease']
+      const activeTopics = topics.filter(t => conversationLower.includes(t))
+
+      if (activeTopics.length) {
+        const orFilter = activeTopics
+          .map(t => `title.ilike.%${t}%,content.ilike.%${t}%,service_type.ilike.%${t}%`)
+          .join(',')
+        const { data: sops } = await supabaseAdmin
+          .from('sop_runbooks')
+          .select('title, content, service_type')
+          .or(orFilter)
+          .limit(5)
+
+        if (sops?.length) {
+          sopContext = `\nBUSINESS RULES & PROCEDURES (from our SOPs — use these for technical accuracy):\n${sops
+            .map(s => `### ${s.title}${s.service_type ? ` (${s.service_type})` : ''}\n${(s.content || '').slice(0, 1000)}`)
+            .join('\n\n')}`
+        }
+      }
+    } catch (err) {
+      console.warn('[suggest] SOP load failed (non-fatal):', err instanceof Error ? err.message : err)
+    }
+
     const systemPrompt = `You are an AI assistant that helps Antonio (admin of Tony Durante LLC, a US business formation and tax consulting company) draft replies to client portal messages.
 
 YOUR JOB: Generate a reply that sounds EXACTLY like Antonio would write it. Match his tone, style, and level of detail.
@@ -209,14 +242,16 @@ CLIENT ACCOUNT CONTEXT:
 ${clientContext}
 
 ${kbContext ? `\n${kbContext}` : ''}
+${sopContext}
 
 RULES:
 - Write the reply as if you ARE Antonio. Don't say "I suggest..." — just write the actual reply.
 - ALWAYS reply in the SAME LANGUAGE the client is using. If the client writes in Italian, reply in Italian. If in English, reply in English. Match their language automatically.
 - Be specific — reference their actual services, deadlines, or payments when relevant.
 - Keep it concise but helpful. Don't over-explain.
-- If the client is asking something you don't have data for, acknowledge it and say you'll check and get back to them.
-- Don't make up information that's not in the context.
+- For TECHNICAL tax and legal questions (sales tax, profit distribution, filing requirements, IRS rules): USE your built-in knowledge of US tax law. You know about Form 5472, Form 1120, SMLLC/MMLLC taxation, sales tax nexus, Shopify tax collection, profit distribution rules. Answer with confidence when you know the answer. Only say "I'll check and get back to you" for very specific/unusual questions.
+- When answering technical questions, be accurate but practical — explain what applies to THIS client's specific entity type and state.
+- Don't invent CLIENT-SPECIFIC facts (dates, amounts, account/service details, what was filed) that aren't in the context above — if you lack a client-specific detail, say you'll check and get back to them. This does NOT restrict using your general knowledge of US tax/legal rules.
 - Be warm but professional — this is a premium service.`
 
     const userPrompt = `Here is the conversation:\n\n${conversationText}\n\nThe client just sent the last message. Write Antonio's reply:`
@@ -224,8 +259,9 @@ RULES:
     const result = await callAI({
       systemPrompt,
       userPrompt,
-      maxTokens: 500,
-      temperature: 0.7,
+      maxTokens: 1000,    // more room for detailed technical answers
+      temperature: 0.5,   // lower = more accurate technical content
+      model: 'sonnet',    // deeper knowledge than Haiku for tax/legal questions
     })
 
     return NextResponse.json({ suggestion: result.text, provider: result.provider })
