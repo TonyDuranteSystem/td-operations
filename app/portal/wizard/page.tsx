@@ -526,6 +526,35 @@ export default async function WizardPage({
     }
   }
 
+  // Bank CSV-export guides (catalog 'bank_export_guides', §3.1/§8): shown
+  // under each bank upload card when the typed bank name matches. Staff
+  // add/edit banks in the catalog — no deploy. Failure = no guides, never
+  // a blocked wizard.
+  let bankGuides: Array<{ name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }> = []
+  if (wizardType === 'tax') {
+    try {
+      const { data: guideRows } = await supabaseAdmin
+        .from('catalog_entries')
+        .select('display_name, metadata')
+        .eq('catalog_id', 'bank_export_guides')
+        .eq('status', 'active')
+      bankGuides = (guideRows ?? []).map(r => {
+        const m = (r.metadata ?? {}) as Record<string, unknown>
+        const arr = (v: unknown) => (Array.isArray(v) ? v.map(String) : [])
+        return {
+          name: r.display_name,
+          matchTerms: arr(m.match_terms),
+          stepsEn: arr(m.steps_en),
+          stepsIt: arr(m.steps_it),
+          noteEn: typeof m.note_en === 'string' ? m.note_en : '',
+          noteIt: typeof m.note_it === 'string' ? m.note_it : '',
+        }
+      }).filter(g => g.matchTerms.length > 0 && g.stepsEn.length > 0)
+    } catch (e) {
+      console.error('[wizard] Bank guides load failed (non-blocking):', e)
+    }
+  }
+
   // Normalize entity type so the wizard config turns on the right steps. The
   // MMLLC "add members" step only renders for 'MMLLC'; the stored value is
   // "Multi Member LLC" (space), which the old exact-string check missed —
@@ -757,6 +786,7 @@ export default async function WizardPage({
           initialSubmitStatus={wizardSubmitStatus}
           isLocked={isLocked}
           itinCount={itinCount}
+          bankGuides={bankGuides}
         />
       )}
 

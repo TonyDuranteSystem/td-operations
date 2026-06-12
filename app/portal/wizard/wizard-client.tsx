@@ -34,6 +34,9 @@ interface WizardClientProps {
   /** How many ITINs the offer bundled (start-at-wizard). 0 = no ITIN question.
    * When > 0 the wizard asks who applies and requires exactly this many "Yes". */
   itinCount?: number
+  /** Bank CSV-export guides (catalog-driven, §3.1/§8): shown under a bank
+   * upload card when the typed bank name matches a guide's match terms. */
+  bankGuides?: Array<{ name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }>
 }
 
 // A conditional field is visible only if its condition matches AND its parent
@@ -63,6 +66,7 @@ export function WizardClient({
   initialSubmitStatus,
   isLocked,
   itinCount = 0,
+  bankGuides = [],
 }: WizardClientProps) {
   const { steps, fields: baseFields } = getWizardConfig(wizardType, entityType)
 
@@ -706,6 +710,28 @@ export function WizardClient({
                             </div>
                           ))}
                         </div>
+                        {/* Bank CSV-export guide (catalog-driven): appears when
+                            the typed bank name matches a guide — step-by-step
+                            download help right under this bank's upload. */}
+                        {(() => {
+                          const typedBank = String(formData[`${field.name}_${idx}_bank_name`] ?? '').toLowerCase().trim()
+                          if (typedBank.length < 3) return null
+                          const guide = bankGuides.find(g => g.matchTerms.some(t => typedBank.includes(t)))
+                          if (!guide) return null
+                          const steps = locale === 'it' && guide.stepsIt.length > 0 ? guide.stepsIt : guide.stepsEn
+                          const note = locale === 'it' && guide.noteIt ? guide.noteIt : guide.noteEn
+                          return (
+                            <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+                              <p className="text-xs font-semibold text-emerald-900">
+                                {locale === 'it' ? `Come scaricare il CSV da ${guide.name}:` : `How to download the CSV from ${guide.name}:`}
+                              </p>
+                              <ol className="mt-1 list-decimal pl-4 space-y-0.5 text-xs leading-relaxed text-emerald-900/90">
+                                {steps.map((s, i) => <li key={i}>{s}</li>)}
+                              </ol>
+                              {note && <p className="mt-1.5 text-[11px] text-emerald-800/80">{note}</p>}
+                            </div>
+                          )
+                        })()}
                       </div>
                     ))}
                     <button
