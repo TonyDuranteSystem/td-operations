@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-12 (answer now posts as a NEW thread message for a Slack push notification — ack collapses to "✅" instead of morphing in place; Stop button: "On it 👍" ack now carries a "⏹ Stop" button; new `/api/webhooks/slack-interactions` route cancels the in-flight message; + thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
+**Last verified against code:** 2026-06-12 (animated "thinking" indicator: the "On it 👍" ack cycles "🔍 Looking into it…" every 3 s while the worker runs, preserving the Stop button, stopping the moment the row leaves `processing`; answer now posts as a NEW thread message for a Slack push notification — ack collapses to "✅" instead of morphing in place; Stop button: "On it 👍" ack now carries a "⏹ Stop" button; new `/api/webhooks/slack-interactions` route cancels the in-flight message; + thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -260,6 +260,17 @@ Lets Antonio cancel a message after the "On it 👍" ack but before the worker p
 **Setup (one-time, admin):** Slack app `A0B9LUJRLMB` → **Interactivity & Shortcuts** → enable → Request URL `https://td-operations.vercel.app/api/webhooks/slack-interactions`. Production-only (`SANDBOX_MODE=1` blocks `/api/webhooks/*`).
 
 ---
+
+## Animated "thinking" indicator
+
+While the worker runs `callWorker` (one non-interruptible API call, ~8–15 s), the "On it 👍" ack visibly animates so Antonio sees Claude is actively working.
+
+- **Where:** `processSlackEvent` in `slack-claude.ts` starts a `setInterval` (`THINKING_TICK_MS = 3000`) right before the `callWorker` try-block and clears it in a `finally`, so the timer stops on success, image-retry, or rethrow alike. Node's event loop runs the timer during the `await` (Vercel Fluid Compute is plain Node).
+- **What it shows:** `thinkingIndicatorText(tick)` (pure, unit-tested) cycles ascending-dot frames "🔍 Looking into it." → ".." → "..." and wraps. Each tick `chat.update`s the **same ack message** (`slack_ack_ts`) with `buildThinkingBlocks(frame)` so the "⏹ Stop" button is re-attached and stays clickable.
+- **Only when there's an ack:** skipped entirely if `slack_ack_ts` is null (the ack post failed).
+- **Stop-safe:** each tick re-reads the live row status and **stops the moment status ≠ `processing`** (Stop click → `cancelled`). This prevents a stray tick from clobbering the interactions webhook's "⏹ Stopped — go ahead with your update" notice or re-adding the Stop button. An in-flight flag also skips a tick while the previous `chat.update` is still pending.
+- **Residual race (cosmetic only):** a sub-millisecond TOCTOU window exists — a tick can read `processing`, the Stop webhook then cancels + morphs, and the tick's already-issued `chat.update` lands after. Outcome: the ack briefly shows a "Looking into it" frame instead of "Stopped"; the worker still skips posting the answer (the post-`callWorker` cancellation re-read at `processEvent` returns early). Not worth a lock given best-effort cleanup.
+- **Rate limit:** 1 `chat.update` / 3 s = 20/min, well under Slack's Tier 3 (~50/min).
 
 ## Related subsystems
 

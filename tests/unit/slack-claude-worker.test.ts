@@ -42,6 +42,7 @@ import {
   fetchThreadImages,
   fetchThreadHistory,
   buildThinkingBlocks,
+  thinkingIndicatorText,
   verifySlackSignature,
   parseSlackInteraction,
   STOP_THINKING_ACTION_ID,
@@ -1023,6 +1024,28 @@ describe("buildThinkingBlocks", () => {
     expect(button.action_id).toBe(STOP_THINKING_ACTION_ID)
     expect(button.style).toBe("danger")
     expect((button.text as { text: string }).text).toContain("Stop")
+  })
+})
+
+// -------------------------------------------------------------------------
+// thinkingIndicatorText
+// -------------------------------------------------------------------------
+
+describe("thinkingIndicatorText", () => {
+  it("cycles through ascending-dot frames", () => {
+    expect(thinkingIndicatorText(0)).toBe("🔍 Looking into it.")
+    expect(thinkingIndicatorText(1)).toBe("🔍 Looking into it..")
+    expect(thinkingIndicatorText(2)).toBe("🔍 Looking into it...")
+  })
+
+  it("wraps around so a long-running call keeps looping", () => {
+    expect(thinkingIndicatorText(3)).toBe(thinkingIndicatorText(0))
+    expect(thinkingIndicatorText(4)).toBe(thinkingIndicatorText(1))
+    expect(thinkingIndicatorText(99)).toBe(thinkingIndicatorText(99 % 3))
+  })
+
+  it("never returns undefined, even for a negative tick", () => {
+    expect(thinkingIndicatorText(-1)).toContain("Looking into it")
   })
 })
 

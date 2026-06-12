@@ -176,6 +176,30 @@ export function buildThinkingBlocks(text: string): Array<Record<string, unknown>
   ]
 }
 
+// "Thinking" animation shown on the "On it 👍" ack while callWorker runs. Each
+// tick chat.update's the ack with the next frame (and re-attaches the Stop
+// button via buildThinkingBlocks). 3 s cadence keeps well under Slack's
+// chat.update rate limit (Tier 3 ~50/min) and matches the ~8-15 s worker time.
+export const THINKING_TICK_MS = 3000
+
+// Ascending-dot frames so the indicator reads as "building". Cycled by tick
+// count modulo length, so a long-running call loops .→..→...→.→…
+const THINKING_FRAMES = [
+  "🔍 Looking into it.",
+  "🔍 Looking into it..",
+  "🔍 Looking into it...",
+]
+
+/**
+ * Frame text for the "thinking" animation at a given tick (0-based). Pure so the
+ * cycling logic is unit-testable without driving a real timer. Wraps around the
+ * frame list, so any tick (including 0 or a negative) returns a valid frame.
+ */
+export function thinkingIndicatorText(tick: number): string {
+  const len = THINKING_FRAMES.length
+  return THINKING_FRAMES[((tick % len) + len) % len]
+}
+
 /**
  * Verify a Slack request signature (HMAC-SHA256 over `v0:timestamp:body`). Same
  * scheme Slack uses for both the Events API and interactive components, so the
@@ -678,27 +702,74 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     }
   }
 
+  // Animated "thinking" indicator. While callWorker runs (a single, non-
+  // interruptible API call lasting ~8-15s), cycle the "On it 👍" ack through a
+  // "🔍 Looking into it…" animation so Antonio sees Claude is actively working.
+  // Each tick chat.update's the SAME ack message (ackTs) and re-attaches the
+  // Stop button via buildThinkingBlocks so it stays clickable. Guards:
+  //   - only runs when the ack exists (ackTs set; null if the ack post failed)
+  //   - re-reads the live row status each tick and stops the moment it leaves
+  //     'processing' (Stop clicked → 'cancelled'), so it never clobbers the
+  //     interactions webhook's "⏹ Stopped" notice nor re-adds the button
+  //   - an in-flight flag skips a tick while the previous chat.update is pending
+  //   - cleared in a finally so a thrown worker call can never leak the timer
+  let thinkingTimer: ReturnType<typeof setInterval> | null = null
+  if (ackTs) {
+    let tick = 0
+    let updating = false
+    thinkingTimer = setInterval(() => {
+      if (updating) return
+      updating = true
+      void (async () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: live } = await (supabaseAdmin as any)
+            .from("agent_messages")
+            .select("status")
+            .eq("id", row.id)
+            .maybeSingle()
+          if (live?.status !== "processing") {
+            if (thinkingTimer) clearInterval(thinkingTimer)
+            return
+          }
+          tick += 1
+          const frame = thinkingIndicatorText(tick)
+          await updateSlackMessage(channelId, ackTs, frame, buildThinkingBlocks(frame))
+        } catch (err) {
+          console.warn("[slack-claude] thinking animation tick failed (non-fatal):", err)
+        } finally {
+          updating = false
+        }
+      })()
+    }, THINKING_TICK_MS)
+  }
+
   // Run the worker. If the call fails specifically because of an image the API
   // rejected (a 400 mentioning "image" — e.g. a corrupt download that slipped
   // past the magic-byte guard, or an edge media type), retry once WITHOUT the
   // images so Antonio still gets a text answer instead of silent failure. Any
   // other error (non-image, or no images attached) is re-thrown unchanged so the
-  // cron marks the row failed as before.
+  // cron marks the row failed as before. The thinking timer is cleared in the
+  // finally so it stops regardless of success, image-retry, or rethrow.
   let reply: string
   try {
-    ;({ reply } = await callWorker(enrichedBody, workerOpts))
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
-    if (!isImageError) throw err
-    console.warn(`[slack-claude] image-related API error, retrying text-only: ${msg}`)
-    const textOnlyOpts: CallWorkerOptions = {
-      threadId: row.thread_id,
-      messageId: row.id,
-      systemPromptOverride: slackSystemPrompt,
-      enableCodeTasks: true,
+    try {
+      ;({ reply } = await callWorker(enrichedBody, workerOpts))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
+      if (!isImageError) throw err
+      console.warn(`[slack-claude] image-related API error, retrying text-only: ${msg}`)
+      const textOnlyOpts: CallWorkerOptions = {
+        threadId: row.thread_id,
+        messageId: row.id,
+        systemPromptOverride: slackSystemPrompt,
+        enableCodeTasks: true,
+      }
+      ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
     }
-    ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
+  } finally {
+    if (thinkingTimer) clearInterval(thinkingTimer)
   }
 
   // Cancellation check (Stop button). While callWorker was running, Antonio may
