@@ -8,9 +8,13 @@
  *   2. Atomically CLAIMS it (status pending -> processing, guarded by
  *      .eq('status','pending') so two runners never double-claim).
  *   3. Runs a headless Claude Code session in the repo dir:
- *        claude --print "<instructions>"
+ *        claude --print --output-format stream-json --verbose "<instructions>"
  *      with full repo access. The implementation, build, and any edits happen
- *      inside that session.
+ *      inside that session. The stream-json events are parsed in real time
+ *      (code-task-progress.mjs) so coarse milestones ("✏️ Editing code…",
+ *      "🔨 Building…", "🧪 Running tests…", "💾 Committing…") are posted to the
+ *      Slack thread as the work happens, and the final answer is read from the
+ *      terminal `result` event (with stream-json, stdout is the event stream).
  *   4. Posts the session output back to the originating Slack thread
  *      (channel + thread carried on context_json by the Slack worker's
  *      start_code_task tool).
@@ -43,6 +47,7 @@ import { spawn, execSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@supabase/supabase-js"
+import { parseStreamLine, milestoneFromEvent, finalResultFromEvent } from "./code-task-progress.mjs"
 
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
@@ -106,18 +111,35 @@ async function postToSlack(token, channelId, threadTs, text) {
 }
 
 /**
- * Run a headless Claude Code session. Resolves with { ok, output } — never
- * rejects (a non-zero exit or spawn failure becomes ok=false with the captured
- * stderr/stdout so the caller can report it and mark the row failed).
+ * Run a headless Claude Code session with stream-json output. Resolves with
+ * { ok, output } — never rejects (a non-zero exit, an is_error result, or a
+ * spawn failure becomes ok=false with the captured detail so the caller can
+ * report it and mark the row failed).
+ *
+ * stream-json emits newline-delimited JSON events in real time. We buffer stdout
+ * on newlines and parse each line:
+ *   - assistant tool_use events → a coarse progress milestone (deduped against
+ *     the last posted one) handed to onMilestone(text) so the runner can post it
+ *     to the Slack thread as the work happens.
+ *   - the terminal `result` event → the final answer text + is_error flag. With
+ *     stream-json the reply is HERE, not raw stdout, so we resolve from it (and
+ *     fall back to stderr only if the session crashed before emitting a result).
+ *
+ * onMilestone is best-effort: it's wrapped so a Slack post failure can never
+ * break parsing or the session.
  */
-function runClaude(cfg, instructions) {
+function runClaude(cfg, instructions, onMilestone) {
   return new Promise((resolve) => {
-    const args = ["--print"]
+    const args = ["--print", "--output-format", "stream-json", "--verbose"]
     if (cfg.extraArgs) args.push(...cfg.extraArgs.split(/\s+/))
     args.push(instructions)
 
-    let stdout = ""
+    let lineBuf = ""        // NDJSON line buffer (a chunk may split a JSON line)
+    let rawStdout = ""      // full raw stdout, kept only for crash diagnostics
     let stderr = ""
+    let finalText = ""      // from the `result` event
+    let finalIsError = null // null = no result event seen yet
+    let lastMilestoneKey = null
     let settled = false
 
     let child
@@ -134,11 +156,37 @@ function runClaude(cfg, instructions) {
       try { child.kill("SIGKILL") } catch { /* ignore */ }
       resolve({
         ok: false,
-        output: `Code task timed out after ${Math.round(cfg.timeoutMs / 60000)} min.\n\nPartial output:\n${(stdout || stderr).slice(-4000)}`,
+        output: `Code task timed out after ${Math.round(cfg.timeoutMs / 60000)} min.\n\nPartial output:\n${(finalText || stderr || rawStdout).slice(-4000)}`,
       })
     }, cfg.timeoutMs)
 
-    child.stdout?.on("data", (d) => { stdout += d.toString() })
+    // Parse one NDJSON line: surface a milestone (deduped) and/or capture the
+    // final result. Pure helpers (code-task-progress.mjs) do the shape-matching.
+    function handleLine(line) {
+      const ev = parseStreamLine(line)
+      if (!ev) return
+      const m = milestoneFromEvent(ev)
+      if (m && m.key !== lastMilestoneKey) {
+        lastMilestoneKey = m.key
+        if (typeof onMilestone === "function") {
+          try { onMilestone(m.text) } catch { /* best-effort — never break parsing */ }
+        }
+      }
+      const f = finalResultFromEvent(ev)
+      if (f) { finalText = f.text; finalIsError = f.isError }
+    }
+
+    child.stdout?.on("data", (d) => {
+      const s = d.toString()
+      rawStdout += s
+      lineBuf += s
+      let idx
+      while ((idx = lineBuf.indexOf("\n")) >= 0) {
+        const line = lineBuf.slice(0, idx)
+        lineBuf = lineBuf.slice(idx + 1)
+        handleLine(line)
+      }
+    })
     child.stderr?.on("data", (d) => { stderr += d.toString() })
 
     child.on("error", (e) => {
@@ -152,8 +200,16 @@ function runClaude(cfg, instructions) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      const output = stdout.trim() || stderr.trim() || "(no output)"
-      resolve({ ok: code === 0, output: code === 0 ? output : `Claude exited ${code}.\n${output}` })
+      // Flush a trailing line (the last JSON object may arrive without a newline).
+      if (lineBuf.trim()) handleLine(lineBuf)
+      // Final answer comes from the `result` event; fall back to stderr / raw
+      // stdout only if the session crashed before emitting one.
+      const body = finalText.trim() || stderr.trim() || rawStdout.trim() || "(no output)"
+      // Fail on a non-zero exit OR a result event that flagged is_error (e.g. an
+      // auth 401 or max-turns can exit 0 yet be a genuine failure).
+      const ok = code === 0 && finalIsError !== true
+      const output = ok ? body : finalIsError === true ? body : `Claude exited ${code}.\n${body}`
+      resolve({ ok, output })
     })
   })
 }
@@ -228,10 +284,16 @@ async function tick(cfg) {
     }, hb.ms),
   )
 
-  // 3) Run Claude Code in the repo dir.
+  // 3) Run Claude Code in the repo dir. The onMilestone callback posts coarse
+  // progress lines ("✏️ Editing code…", "🔨 Building…", "🧪 Running tests…",
+  // "💾 Committing…") to the Slack thread as the session works — deduped against
+  // the previous milestone inside runClaude, so a burst of reads/edits is one
+  // line. Best-effort: postToSlack never throws.
   let result
   try {
-    result = await runClaude(cfg, instructions)
+    result = await runClaude(cfg, instructions, (text) => {
+      void postToSlack(cfg.slackToken, channelId, threadTs, `${text} _${title}_`)
+    })
   } finally {
     for (const t of heartbeatTimers) clearTimeout(t)
   }
@@ -250,6 +312,11 @@ async function tick(cfg) {
         encoding: "utf8",
       }).trim()
       if (newCommits) {
+        // Narrate the push phase — the runner's own milestone (the session's
+        // git-push tool_use is intentionally suppressed in code-task-progress.mjs
+        // so this is the single source of the "pushing" signal). The pre-push
+        // hooks (build, unit tests, ESLint, remote-sync) run inside this step.
+        await postToSlack(cfg.slackToken, channelId, threadTs, `📦 Pushing to production… _${title}_`)
         execSync("ALLOW_SYSTEM_DOC_SKIP=1 ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin main", {
           cwd: cfg.repoDir,
           timeout: 120000,
