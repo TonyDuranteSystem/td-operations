@@ -754,22 +754,54 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   let reply: string
   try {
     try {
-      ;({ reply } = await callWorker(enrichedBody, workerOpts))
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
-      if (!isImageError) throw err
-      console.warn(`[slack-claude] image-related API error, retrying text-only: ${msg}`)
-      const textOnlyOpts: CallWorkerOptions = {
-        threadId: row.thread_id,
-        messageId: row.id,
-        systemPromptOverride: slackSystemPrompt,
-        enableCodeTasks: true,
+      try {
+        ;({ reply } = await callWorker(enrichedBody, workerOpts))
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
+        if (!isImageError) throw err
+        console.warn(`[slack-claude] image-related API error, retrying text-only: ${msg}`)
+        const textOnlyOpts: CallWorkerOptions = {
+          threadId: row.thread_id,
+          messageId: row.id,
+          systemPromptOverride: slackSystemPrompt,
+          enableCodeTasks: true,
+        }
+        ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
       }
-      ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
+    } finally {
+      if (thinkingTimer) clearInterval(thinkingTimer)
     }
-  } finally {
-    if (thinkingTimer) clearInterval(thinkingTimer)
+  } catch (err) {
+    // The worker genuinely failed (a non-image error, or the text-only retry
+    // also threw). The thinking animation has been cleared by the finally above,
+    // but the ack is frozen on its last "🔍 Looking into it…" frame — to Antonio
+    // it looks like Claude is still working forever. Replace it with a clear
+    // error notice and drop the "⏹ Stop" button so he knows it failed and can
+    // retry. Skip if he already clicked Stop ('cancelled') so we don't clobber
+    // the "⏹ Stopped" notice. Fully best-effort — then re-throw so the cron still
+    // marks the row 'failed' exactly as before.
+    if (ackTs) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: liveOnError } = await (supabaseAdmin as any)
+          .from("agent_messages")
+          .select("status")
+          .eq("id", row.id)
+          .maybeSingle()
+        if (liveOnError?.status !== "cancelled") {
+          await updateSlackMessage(
+            channelId,
+            ackTs,
+            "⚠️ Something went wrong on my end — try again or rephrase.",
+            [],
+          )
+        }
+      } catch (notifyErr) {
+        console.warn("[slack-claude] failed to post error notice to ack (non-fatal):", notifyErr)
+      }
+    }
+    throw err
   }
 
   // Cancellation check (Stop button). While callWorker was running, Antonio may

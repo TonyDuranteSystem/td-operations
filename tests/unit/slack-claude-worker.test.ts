@@ -545,6 +545,69 @@ describe("processSlackEvent", () => {
     expect((callWorker as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
   })
 
+  it("morphs the ack into an error notice when the worker fails (frozen-indicator fix)", async () => {
+    // A genuine worker failure must not leave the ack frozen on the last
+    // "🔍 Looking into it…" animation frame forever. The worker replaces the ack
+    // with an error notice (Stop button dropped) and STILL re-throws so the cron
+    // marks the row failed exactly as before.
+    ;(callWorker as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Claude API error 529: overloaded"),
+    )
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    // Status re-read in the error path returns 'processing' (not cancelled), so
+    // the error notice is allowed to overwrite the frozen ack.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain({ status: "processing" }))
+
+    const row = {
+      id: "row-fail",
+      body: "do something",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_ack_ts: "9.9",
+      },
+    }
+
+    await expect(processSlackEvent(row)).rejects.toThrow("529")
+
+    const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
+    expect(updateCall).toBeDefined()
+    const body = JSON.parse(updateCall![1].body)
+    expect(body.ts).toBe("9.9")
+    expect(body.text).toMatch(/went wrong/i)
+    expect(body.blocks).toEqual([]) // Stop button dropped
+  })
+
+  it("does NOT overwrite the ack on failure when the row was cancelled (Stop owns the message)", async () => {
+    // If Antonio clicked Stop, the interactions webhook already wrote the
+    // "⏹ Stopped" notice. A worker failure must NOT clobber it with the error
+    // notice — the status re-read sees 'cancelled' and leaves the message alone.
+    ;(callWorker as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom 500"))
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain({ status: "cancelled" }))
+
+    const row = {
+      id: "row-fail-cancelled",
+      body: "do something",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_ack_ts: "9.9",
+      },
+    }
+
+    await expect(processSlackEvent(row)).rejects.toThrow("boom")
+
+    const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
+    expect(updateCall).toBeUndefined() // left the "Stopped" notice untouched
+  })
+
   it("falls back to thread-history images when the current message has none (thread reply)", async () => {
     ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
     mockFetch.mockImplementation((url: string) => {
