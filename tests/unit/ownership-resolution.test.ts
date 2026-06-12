@@ -60,6 +60,41 @@ describe("resolveOwnership (W6 precedence)", () => {
     expect(r.complete).toBe(false)
   })
 
+  it("the wizard list IS the roster — a CRM contact not declared never becomes a member (Antonio's 200% case)", () => {
+    const r = resolveOwnership({
+      priorK1s: [],
+      wizardMembers: [{ name: "Sofia Marinoni", pct: 50 }, { name: "Donato Renato Berini", pct: 50 }],
+      accountContacts: [{ name: "Uxio Test", pct: 100, contact_id: "c-uxio" }],
+    })
+    expect(r.members.map(m => m.name).sort()).toEqual(["Donato Renato Berini", "Sofia Marinoni"])
+    expect(r.totalPct).toBe(100)
+    expect(r.complete).toBe(true) // the declared roster is complete — K-1s unblocked
+    // …but the undeclared person is a conflict: staff see it, and the auto
+    // sync-back to the CRM is held (sync requires zero conflicts).
+    expect(r.conflicts.some(c => c.name === "Uxio Test" && c.message.includes("NOT in this year's member list"))).toBe(true)
+  })
+
+  it("a prior-K-1 partner missing from this year's list is flagged (possible exit), never auto-added", () => {
+    const r = resolveOwnership({
+      priorK1s: [{ name: "Old Partner", pct: 30 }, { name: "Sofia Marinoni", pct: 70 }],
+      wizardMembers: [{ name: "Sofia Marinoni", pct: 100 }],
+      accountContacts: [],
+    })
+    expect(r.members.map(m => m.name)).toEqual(["Sofia Marinoni"])
+    expect(r.members[0].pct).toBe(70) // prior K-1 still wins precedence for a DECLARED member
+    expect(r.conflicts.some(c => c.name === "Old Partner" && c.message.includes("exited"))).toBe(true)
+  })
+
+  it("without a wizard list (staff context), all sources merge as before", () => {
+    const r = resolveOwnership({
+      priorK1s: [],
+      wizardMembers: [],
+      accountContacts: [{ name: "Uxio Test", pct: 100, contact_id: "c-uxio" }],
+    })
+    expect(r.members.map(m => m.name)).toEqual(["Uxio Test"])
+    expect(r.complete).toBe(true)
+  })
+
   it("0.5% rounding differences are not conflicts", () => {
     const r = resolveOwnership({
       priorK1s: [{ name: "A B", pct: 33.33 }],

@@ -58,10 +58,11 @@ export function extractWizardMembers(submittedData: Record<string, unknown>): Ow
   return out
 }
 
-/** The submitting owner from the wizard's owner step — pct intentionally null:
- *  the wizard never asks the owner's own %, and we never infer it as the
+/** The submitting owner from the LEGACY wizard's owner step — pct intentionally
+ *  null: that form never asked the owner's own %, and we never infer it as the
  *  remainder (a member's typo would silently shift the owner's share).
- *  Prior K-1s / account_contacts supply it via precedence. Exported for tests. */
+ *  Only consulted when a submission has NO member list (the redesigned wizard
+ *  always emits one and has no owner step). Exported for tests. */
 export function extractWizardOwner(submittedData: Record<string, unknown>): OwnershipSource | null {
   const name = `${submittedData.owner_first_name ?? ""} ${submittedData.owner_last_name ?? ""}`.trim()
   return name ? { name, pct: null } : null
@@ -109,9 +110,15 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
       : []
 
   const wizardMembers = extractWizardMembers(submittedData)
-  const owner = extractWizardOwner(submittedData)
-  if (owner && !wizardMembers.some(m => m.name.toLowerCase() === owner.name.toLowerCase())) {
-    wizardMembers.unshift(owner)
+  // The owner_* keys only seed the roster when there is NO member list at all
+  // (legacy pre-redesign submissions). The redesigned wizard has no owner step
+  // — the filler is one of the members — but a draft reset reuses the same
+  // submission row, so stale owner_* keys can survive next to the fresh
+  // member list. Unshifting the stale owner injected a phantom member on top
+  // of the client's declared 50/50 (2026-06-12, Antonio's catch — % hit 200).
+  if (wizardMembers.length === 0) {
+    const owner = extractWizardOwner(submittedData)
+    if (owner) wizardMembers.unshift(owner)
   }
 
   const ownership = resolveOwnership({ priorK1s, wizardMembers, accountContacts })

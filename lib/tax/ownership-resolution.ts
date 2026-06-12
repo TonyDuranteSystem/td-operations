@@ -82,10 +82,10 @@ export function sameName(a: string, b: string): boolean {
 const CONFLICT_TOLERANCE = 0.5
 
 export function resolveOwnership(input: ResolveOwnershipInput): OwnershipResolution {
-  // Collect every distinct person across all three sources.
   type Entry = { name: string; bySource: Partial<Record<ResolvedMember["source"], number>>; contact_id: string | null }
   const entries: Entry[] = []
   const findEntry = (name: string): Entry | undefined => entries.find(e => sameName(e.name, name))
+  const conflicts: OwnershipConflict[] = []
 
   const add = (src: ResolvedMember["source"], s: OwnershipSource, contactId?: string) => {
     let entry = findEntry(s.name)
@@ -97,13 +97,35 @@ export function resolveOwnership(input: ResolveOwnershipInput): OwnershipResolut
     if (contactId) entry.contact_id = contactId
   }
 
-  for (const k of input.priorK1s) add("prior_k1", k)
+  // THE CLIENT'S DECLARED LIST IS THE ROSTER (2026-06-12, Antonio's catch:
+  // a CRM contact not declared in the wizard became a phantom 100% partner
+  // on top of the declared 50/50 — percentages summed to 200%). When the
+  // wizard declares members, prior K-1s and CRM records only SUPPLY
+  // percentages for declared members; a person they mention who is NOT
+  // declared becomes a staff-review conflict (possible mid-year exit, §706),
+  // never an automatic member. Without a wizard list (staff context, no
+  // submission yet) all sources merge as before.
+  const hasWizardRoster = input.wizardMembers.length > 0
+  const inRoster = (name: string) => input.wizardMembers.some(m => sameName(m.name, name))
+
   for (const m of input.wizardMembers) add("wizard", m)
-  for (const c of input.accountContacts) add("account_contacts", c, c.contact_id)
+  for (const k of input.priorK1s) {
+    if (hasWizardRoster && !inRoster(k.name)) {
+      conflicts.push({ name: k.name, values: k.pct !== null ? [{ source: "prior_k1", pct: k.pct }] : [], message: `${k.name} is on the prior year's K-1s but NOT in this year's member list — confirm whether they exited the company (mid-year changes affect every K-1).` })
+      continue
+    }
+    add("prior_k1", k)
+  }
+  for (const c of input.accountContacts) {
+    if (hasWizardRoster && !inRoster(c.name)) {
+      conflicts.push({ name: c.name, values: c.pct !== null ? [{ source: "account_contacts", pct: c.pct }] : [], message: `${c.name} is linked to the company in our records but NOT in this year's member list — staff should confirm.` })
+      continue
+    }
+    add("account_contacts", c, c.contact_id)
+  }
 
   const PRECEDENCE: ResolvedMember["source"][] = ["prior_k1", "wizard", "account_contacts"]
   const members: ResolvedMember[] = []
-  const conflicts: OwnershipConflict[] = []
   const missing: string[] = []
 
   for (const e of entries) {
