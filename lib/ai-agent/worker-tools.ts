@@ -82,6 +82,8 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Drive read tools
   "drive_search",
   "drive_list_folder",
+  // Decision Memory — semantic recall of past decisions (pure read).
+  "memory_recall",
 ])
 
 /**
@@ -181,15 +183,29 @@ export const START_CODE_TASK_TOOL: ToolDef = {
 }
 
 /**
+ * memory_save — knowledge-only write (Phase 3, Decision Memory). It writes ONLY
+ * to the decision_memory knowledge store (a correction / business decision /
+ * pricing rule the worker learned); it NEVER touches client or business data and
+ * never sends anything. Authorized for the worker by Antonio in Phase 3 as an
+ * explicit, narrow exception to the otherwise read-only Phase 1 contract (R108).
+ * Kept OUT of WORKER_READ_ONLY_TOOL_NAMES (it is a write) and wired as a
+ * standalone, like propose_action. Reuses the AGENT_TOOLS definition so the
+ * description never drifts. memory_recall (a read) lives in the allow-list above.
+ */
+export const MEMORY_SAVE_TOOL: ToolDef = AGENT_TOOLS.find((t) => t.name === "memory_save")!
+
+/**
  * Tools handed to sonnet at request time: the read-only research subset PLUS
  * propose_action (which only queues, never executes) PLUS the read-only
- * codebase tools (so the worker can trace into source).
+ * codebase tools (so the worker can trace into source) PLUS memory_save
+ * (knowledge-only write). memory_recall arrives via the read-only subset.
  */
 export const WORKER_TOOLS: ToolDef[] = [
   ...AGENT_TOOLS.filter((t) => WORKER_READ_ONLY_TOOL_NAMES.has(t.name)),
   PROPOSE_ACTION_TOOL,
   CODEBASE_READ_TOOL,
   CODEBASE_SEARCH_TOOL,
+  MEMORY_SAVE_TOOL,
 ]
 
 // NOTE: START_CODE_TASK_TOOL is intentionally NOT in WORKER_TOOLS. WORKER_TOOLS
@@ -424,6 +440,12 @@ export async function executeWorkerTool(name: string, params: Record<string, unk
   if (name === "propose_action") {
     return proposeAction(params)
   }
+  // memory_save — knowledge-only write (decision_memory), not a business
+  // mutation; delegated to the shared executeTool implementation. memory_recall
+  // is in the read-only allow-list and falls through to executeTool below.
+  if (name === "memory_save") {
+    return executeTool(name, params)
+  }
   // Read-only repo-source tools — dispatched directly (not via executeTool;
   // they're not AGENT_TOOLS). Repo-scoped + env/secrets/deps blocked in
   // lib/mcp/tools/codebase-read.ts.
@@ -456,7 +478,8 @@ export const WORKER_SYSTEM_PROMPT = [
   "  1. Investigate using the read-only tools available to you (CRM search/get, Gmail read, Drive list, KB/SOP search, and codebase_read/codebase_search to trace a question into the actual repo source).",
   "  2. Verify every factual claim against a fresh tool call. NEVER assume column names, schemas, client state, or past actions.",
   "  3. Reply with concise, plain-English findings suitable for Hermes to relay back to Antonio on Telegram.",
-  "  4. When an action is implied (send an email, create/update a record, advance a stage, move/upload a Drive file, log a conversation, save a memory), call propose_action — do NOT describe-only. propose_action does NOT run the action; it queues a pending proposal that does nothing until Antonio approves it on the approval rail. You still cannot execute, send, or mutate anything directly — propose_action is your only non-read tool, and it only queues.",
+  "  4. When an action is implied (send an email, create/update a record, advance a stage, move/upload a Drive file, log a conversation), call propose_action — do NOT describe-only. propose_action does NOT run the action; it queues a pending proposal that does nothing until Antonio approves it on the approval rail. You still cannot execute, send, or mutate business data directly — propose_action only queues.",
+  "  5. Memory: BEFORE deciding how to handle a recurring kind of situation, call memory_recall to see how comparable situations were decided before. AFTER investigating, if you learned something durable from this conversation — a correction, a business decision, a pricing or policy rule — call memory_save to remember it for next time. memory_save writes ONLY to the knowledge store (never to client or business data), so it does not need approval.",
   "",
   "Output discipline:",
   "  - Plain English, no internal jargon.",

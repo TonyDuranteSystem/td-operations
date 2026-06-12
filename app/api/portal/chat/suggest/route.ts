@@ -4,6 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callAI } from '@/lib/portal/ai-provider'
 import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
+import { recallDecisionMemory } from '@/lib/ai-agent/decision-memory'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -148,6 +149,23 @@ export async function POST(request: NextRequest) {
     const kbQuery = buildKBQuery(lastClientMessage, [account?.entity_type ?? '', ...serviceKeywords])
     const kbContext = await fetchKBContext(kbQuery)
 
+    // 8b. Decision Memory — how comparable situations were decided before.
+    // Best-effort: recall needs OPENAI_API_KEY for embeddings; a missing key or
+    // any failure must NEVER block a suggestion, so this is fully wrapped.
+    let decisionMemoryContext = ''
+    try {
+      if (lastClientMessage) {
+        const memories = await recallDecisionMemory(lastClientMessage, { matchCount: 5 })
+        if (memories.length) {
+          decisionMemoryContext = `PAST DECISIONS (how comparable situations were handled before — follow these unless the current context clearly differs):\n${memories
+            .map((m, i) => `${i + 1}. Situation: ${m.situation}\n   Decision: ${m.decision}${m.reasoning ? `\n   Why: ${m.reasoning}` : ''}`)
+            .join('\n')}`
+        }
+      }
+    } catch (err) {
+      console.warn('[suggest] decision memory recall skipped:', err instanceof Error ? err.message : err)
+    }
+
     // 9. Build the context
     const clientContext = [
       `Company: ${account?.company_name || contactInfo?.full_name || 'Unknown'}`,
@@ -169,7 +187,7 @@ export async function POST(request: NextRequest) {
     const systemPrompt = `You are an AI assistant that helps Antonio (admin of Tony Durante LLC, a US business formation and tax consulting company) draft replies to client portal messages.
 
 YOUR JOB: Generate a reply that sounds EXACTLY like Antonio would write it. Match his tone, style, and level of detail.
-
+${decisionMemoryContext ? `\n${decisionMemoryContext}\n` : ''}
 ANTONIO'S COMMUNICATION STYLE (learned from his past messages):
 ${uniqueExamples.length > 0 ? uniqueExamples.map((m, i) => `${i + 1}. "${m}"`).join('\n') : 'No past examples yet — use a professional but friendly tone.'}
 

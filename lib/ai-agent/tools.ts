@@ -4,6 +4,7 @@
  * Schema matches actual Supabase tables.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
 import {
   normalizeTaskPriority,
   normalizeTaskStatus,
@@ -478,6 +479,38 @@ export const AGENT_TOOLS: ToolDef[] = [
       },
     },
   },
+  // ── Decision Memory (semantic) — searchable by MEANING, distinct from the
+  //    key/value save_memory/recall_memories above. Backed by decision_memory. ──
+  {
+    name: 'memory_save',
+    description: 'Save a DECISION to long-term semantic memory so it can be recalled later when a similar situation arises. Use this when you learn something durable from a conversation: a correction Antonio made, a business decision, a pricing rule, a policy, or how a specific kind of situation should be handled. Distinct from save_memory (key/value session notes) — memory_save is searchable by meaning, not by key. It only adds knowledge; it never changes client or business data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        situation: { type: 'string', description: 'The situation/context the decision applied to. This is what future recall matches against — describe it the way it might recur.' },
+        decision: { type: 'string', description: 'What was decided or done.' },
+        reasoning: { type: 'string', description: 'Why this decision was made (optional but valuable).' },
+        domain: { type: 'string', description: 'Domain bucket for filtering, e.g. "billing", "formation", "tax", "banking", "tone".' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for filtering.' },
+        correction_type: { type: 'string', description: 'If this captures a correction, classify it: "factual", "policy", "tone", or "process".' },
+        bot_said: { type: 'string', description: 'If correcting the bot, what the bot originally said (so the wrong answer is on record).' },
+      },
+      required: ['situation', 'decision'],
+    },
+  },
+  {
+    name: 'memory_recall',
+    description: 'Recall past DECISIONS most similar to a situation, by meaning (semantic search). Call this BEFORE deciding how to handle a situation, to see how comparable situations were decided before. Returns the most relevant past decisions with their reasoning and a similarity score.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The current situation to find similar past decisions for.' },
+        domain: { type: 'string', description: 'Optional: restrict to a single domain (e.g. "billing").' },
+        limit: { type: 'number', description: 'Max results (default 5).' },
+      },
+      required: ['query'],
+    },
+  },
 ]
 
 // ============================================================
@@ -523,6 +556,8 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'get_client_360': return await getClient360(params)
       case 'save_memory': return await saveMemory(params)
       case 'recall_memories': return await recallMemories(params)
+      case 'memory_save': return await decisionMemorySaveTool(params)
+      case 'memory_recall': return await decisionMemoryRecallTool(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
   } catch (err) {
@@ -1691,6 +1726,52 @@ async function recallMemories(p: any) {
   if (error) return JSON.stringify({ error: error.message })
   if (!data?.length) return JSON.stringify({ memories: [], message: `No memories saved for scope "${scope}".` })
   return JSON.stringify({ scope, memories: data })
+}
+
+// ============================================================
+// Decision Memory (semantic) — backed by lib/ai-agent/decision-memory.ts.
+// memory_save adds knowledge only (decision_memory table); it never mutates
+// client/business data. memory_recall is a pure read.
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function decisionMemorySaveTool(p: any) {
+  if (!p?.situation || !p?.decision) {
+    return JSON.stringify({ error: 'memory_save requires both "situation" and "decision".' })
+  }
+  const id = await saveDecisionMemory({
+    situation: String(p.situation),
+    decision: String(p.decision),
+    reasoning: p.reasoning ? String(p.reasoning) : undefined,
+    domain: p.domain ? String(p.domain) : undefined,
+    tags: Array.isArray(p.tags) ? p.tags.map(String) : undefined,
+    correctionType: p.correction_type ? String(p.correction_type) : undefined,
+    botSaid: p.bot_said ? String(p.bot_said) : undefined,
+    actors: Array.isArray(p.actors) ? p.actors.map(String) : undefined,
+    // Caller may override; otherwise tag the source as the agent surface.
+    sourceType: typeof p.source_type === 'string' && p.source_type ? p.source_type : 'agent',
+  })
+  return JSON.stringify({ success: true, id, message: 'Decision saved to semantic memory.' })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function decisionMemoryRecallTool(p: any) {
+  if (!p?.query) return JSON.stringify({ error: 'memory_recall requires a "query".' })
+  const memories = await recallDecisionMemory(String(p.query), {
+    domain: p.domain ? String(p.domain) : undefined,
+    matchCount: Number(p.limit) || 5,
+  })
+  if (!memories.length) return JSON.stringify({ memories: [], message: 'No similar past decisions found.' })
+  return JSON.stringify({
+    total: memories.length,
+    memories: memories.map(m => ({
+      situation: m.situation,
+      decision: m.decision,
+      reasoning: m.reasoning,
+      domain: m.domain,
+      similarity: Math.round(m.similarity * 100) / 100,
+    })),
+  })
 }
 
 /** Called by providers.ts before the tool loop — injects global memories into the system prompt. */

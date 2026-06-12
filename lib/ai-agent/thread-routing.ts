@@ -84,6 +84,16 @@ export const CODEBASE_TOOL_NAMES = ["codebase_read", "codebase_search"] as const
 export const PROPOSE_TOOL_NAME = "propose_action"
 
 /**
+ * Decision Memory tools — semantic recall of past decisions (read) + saving a
+ * decision learned this conversation (knowledge-only write). Available on the
+ * full research surface (investigation + action_request), the bots' dominant
+ * threads. The narrow types (client_audit = CRM-only client-facing, internal_ops
+ * = no client data, bug_report = trace-only) intentionally keep their contracts
+ * and do not get memory.
+ */
+export const MEMORY_TOOL_NAMES = ["memory_recall", "memory_save"] as const
+
+/**
  * The allow-listed tool NAMES for each thread type. This is the source of truth
  * for routing — `getToolsForThreadType` just filters WORKER_TOOLS through it.
  *
@@ -100,6 +110,7 @@ const FULL_RESEARCH_NAMES = [
   ...DRIVE_TOOL_NAMES,
   ...CODEBASE_TOOL_NAMES,
   PROPOSE_TOOL_NAME,
+  ...MEMORY_TOOL_NAMES,
 ]
 
 const TOOL_NAMES_BY_THREAD_TYPE: Record<ThreadType, ReadonlySet<string>> = {
