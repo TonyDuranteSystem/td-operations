@@ -468,7 +468,8 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
             fullSub.submitted_data as Record<string, unknown>,
             (fullSub.upload_paths as string[]) || [],
             acc.drive_folder_id,
-            { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year }
+            { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
+            { bucket: "onboarding-uploads" }
           )
           if (driveResult.summaryFileId) {
             results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
