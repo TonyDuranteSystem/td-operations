@@ -95,12 +95,16 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/approval/i)
   })
 
-  it("is shorter than the Hermes research prompt (conversational bias)", () => {
-    // The Slack prompt should stay concise. Ceiling history: 2000 → 2600 (SHARED
-    // THREADS block) → 3200 (LANGUAGE/plain-English block, commit 954e4949). Still
-    // far below the multi-thousand-char Hermes research prompt, so the
-    // conversational-bias guard holds.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(3200)
+  it("stays under the absolute bloat ceiling", () => {
+    // Absolute guard against the Slack prompt ballooning. This was originally a
+    // "shorter than the Hermes research prompt" comparison, but that no longer
+    // holds and is intentionally dropped: the Slack prompt is now LONGER than
+    // Hermes (~1826) and that's fine — the two prompts serve different purposes
+    // (Slack = conversational + plain-English-by-default + SHARED THREADS + CODE
+    // TASKS + SHIPPING; Hermes = analytical research). Ceiling history: 2000 →
+    // 2600 (SHARED THREADS) → 3200 (plain-English block) → 3500 (2026-06-12,
+    // headroom for the intentional plain-English rule). Keep this as a sanity cap.
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(3500)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
