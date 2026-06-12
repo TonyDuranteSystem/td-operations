@@ -35,6 +35,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   postSlackMessage,
+  buildThinkingBlocks,
   findOrCreateConversationThread,
   slackScopeKey,
   SLACK_SUPPORTED_IMAGE_TYPES,
@@ -337,7 +338,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Capture the ack message ts so the worker can morph it (chat.update) into
   // the real answer instead of posting a second message.
   const ackThreadTs = threadTs ?? eventTs
-  const ackTs = await postSlackMessage(channelId, "On it 👍", ackThreadTs).catch((err) => {
+  const ackText = "On it 👍"
+  // Attach a "⏹ Stop" button so Antonio can cancel before the worker posts its
+  // answer (handled by /api/webhooks/slack-interactions). The button is dropped
+  // when the worker morphs this message into the final answer.
+  const ackTs = await postSlackMessage(
+    channelId,
+    ackText,
+    ackThreadTs,
+    buildThinkingBlocks(ackText),
+  ).catch((err) => {
     console.error("[slack-claude-webhook] ACK post failed:", err)
     return null
   })

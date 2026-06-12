@@ -14,7 +14,7 @@
  * a threaded reply also matches the channel-level mention that started it.
  */
 
-import { randomUUID } from "crypto"
+import { randomUUID, createHmac, timingSafeEqual } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
@@ -45,6 +45,12 @@ export const SLACK_SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
 // the API payload, so skip anything over this both at the Slack-event filter
 // (file.size) and after download (buffer length).
 export const SLACK_MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
+
+// action_id of the "⏹ Stop" button attached to the "On it 👍" acknowledgment.
+// The slack-interactions webhook listens for this to cancel an in-flight message
+// before the worker posts its answer. Single source of truth for both the block
+// builder (here) and the interactions route's action filter.
+export const STOP_THINKING_ACTION_ID = "stop_thinking"
 
 // ---------------------------------------------------------------------------
 // System prompt — conversational, discuss-first, Slack-native
@@ -123,17 +129,118 @@ async function slackApiCall(
   return res.json() as Promise<{ ok: boolean; ts?: string; error?: string }>
 }
 
-/** Post a message to Slack. threadTs makes it a reply in that thread. */
+/**
+ * Post a message to Slack. threadTs makes it a reply in that thread. Optional
+ * `blocks` post a Block Kit message (text stays as the notification/fallback);
+ * used to attach the "⏹ Stop" button to the "On it 👍" acknowledgment.
+ */
 export async function postSlackMessage(
   channelId: string,
   text: string,
   threadTs: string | null | undefined,
+  blocks?: Array<Record<string, unknown>>,
 ): Promise<string | null> {
   const payload: Record<string, unknown> = { channel: channelId, text }
   if (threadTs) payload.thread_ts = threadTs
+  if (blocks) payload.blocks = blocks
   const r = await slackApiCall("chat.postMessage", payload)
   if (!r.ok) console.error(`[slack-claude] chat.postMessage failed: ${r.error}`)
   return r.ts ?? null
+}
+
+/**
+ * Block Kit payload for the "On it 👍" acknowledgment plus a danger "⏹ Stop"
+ * button. The section renders the ack text; the actions block carries the button
+ * whose action_id (STOP_THINKING_ACTION_ID) the slack-interactions webhook
+ * listens for. Posting the ack with these blocks is what lets Antonio cancel a
+ * message while Claude is still thinking.
+ */
+export function buildThinkingBlocks(text: string): Array<Record<string, unknown>> {
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "⏹ Stop", emoji: true },
+          action_id: STOP_THINKING_ACTION_ID,
+          style: "danger",
+          value: STOP_THINKING_ACTION_ID,
+        },
+      ],
+    },
+  ]
+}
+
+/**
+ * Verify a Slack request signature (HMAC-SHA256 over `v0:timestamp:body`). Same
+ * scheme Slack uses for both the Events API and interactive components, so the
+ * slack-interactions route reuses this. Pure (secret + clock injected) so it's
+ * unit-testable. Rejects requests with a missing field, an unparseable/old
+ * timestamp (>5 min — replay protection), or a non-matching digest.
+ */
+export function verifySlackSignature(
+  rawBody: string,
+  timestamp: string,
+  signature: string,
+  secret: string | undefined,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!secret || !timestamp || !signature) return false
+  const ts = parseInt(timestamp, 10)
+  if (!Number.isFinite(ts)) return false
+  if (Math.abs(nowMs / 1000 - ts) > 300) return false
+  const base = `v0:${timestamp}:${rawBody}`
+  const computed = `v0=${createHmac("sha256", secret).update(base).digest("hex")}`
+  try {
+    return timingSafeEqual(Buffer.from(computed), Buffer.from(signature))
+  } catch {
+    return false
+  }
+}
+
+export interface SlackInteraction {
+  actionId: string
+  messageTs: string | null
+  channelId: string | null
+}
+
+/**
+ * Parse a Slack interactive-component request body. Slack sends interactivity
+ * payloads as `application/x-www-form-urlencoded` with a single `payload` field
+ * holding the JSON. Returns the first action's id plus the clicked message's ts
+ * and channel id (needed to correlate back to the agent_messages row via
+ * context_json.slack_ack_ts). Returns null when the body isn't a parseable
+ * block_actions payload with at least one action.
+ */
+export function parseSlackInteraction(rawBody: string): SlackInteraction | null {
+  const json = new URLSearchParams(rawBody).get("payload")
+  if (!json) return null
+  let payload: Record<string, unknown>
+  try {
+    payload = JSON.parse(json)
+  } catch {
+    return null
+  }
+  const actions = payload.actions as Array<Record<string, unknown>> | undefined
+  const actionId = actions?.[0]?.action_id as string | undefined
+  if (!actionId) return null
+
+  const message = payload.message as Record<string, unknown> | undefined
+  const container = payload.container as Record<string, unknown> | undefined
+  const channel = payload.channel as Record<string, unknown> | undefined
+
+  const messageTs =
+    (message?.ts as string | undefined) ??
+    (container?.message_ts as string | undefined) ??
+    null
+  const channelId =
+    (channel?.id as string | undefined) ??
+    (container?.channel_id as string | undefined) ??
+    null
+
+  return { actionId, messageTs, channelId }
 }
 
 /**
@@ -146,8 +253,14 @@ export async function updateSlackMessage(
   channelId: string,
   messageTs: string,
   text: string,
+  blocks?: Array<Record<string, unknown>>,
 ): Promise<boolean> {
-  const r = await slackApiCall("chat.update", { channel: channelId, ts: messageTs, text })
+  const payload: Record<string, unknown> = { channel: channelId, ts: messageTs, text }
+  // Pass blocks: [] explicitly to CLEAR an existing Block Kit message (e.g. drop
+  // the "⏹ Stop" button when morphing the ack into the answer). Omitting the arg
+  // leaves blocks untouched.
+  if (blocks !== undefined) payload.blocks = blocks
+  const r = await slackApiCall("chat.update", payload)
   if (!r.ok) console.error(`[slack-claude] chat.update failed: ${r.error}`)
   return r.ok
 }
@@ -585,17 +698,38 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
   }
 
+  // Cancellation check (Stop button). While callWorker was running, Antonio may
+  // have clicked "⏹ Stop" — the slack-interactions webhook then set this row's
+  // status to 'cancelled' AND already morphed the Slack message into the
+  // "Stopped" notice. If so, don't post the (now unwanted) answer and don't flip
+  // the row to done. This is the only feasible cancel point: callWorker is a
+  // single API call with no interrupt, so we honor the stop here, as late as
+  // possible — immediately before posting. Re-read the live status fresh.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: freshRow } = await (supabaseAdmin as any)
+    .from("agent_messages")
+    .select("status")
+    .eq("id", row.id)
+    .maybeSingle()
+  if (freshRow?.status === "cancelled") {
+    return reply
+  }
+
   // Morph the "On it 👍" acknowledgment into the answer (chat.update) so the
-  // thread shows one message that transforms, not two. If there's no ack ts or
+  // thread shows one message that transforms, not two. Pass blocks: [] to drop
+  // the "⏹ Stop" button now that processing is complete. If there's no ack ts or
   // the update fails (message too old/deleted), fall back to a fresh post.
   let posted = false
   if (ackTs) {
-    posted = await updateSlackMessage(channelId, ackTs, reply)
+    posted = await updateSlackMessage(channelId, ackTs, reply, [])
   }
   if (!posted) {
     await postSlackMessage(channelId, reply, replyThreadTs)
   }
 
+  // Mark done, but guard on status='processing' so a Stop that lands in the tiny
+  // window between the re-read above and this write can't be clobbered back to
+  // done (TOCTOU-safe — same pattern as the operations-helper reviewed_at guard).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabaseAdmin as any)
     .from("agent_messages")
@@ -606,6 +740,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
       updated_at: new Date().toISOString(),
     })
     .eq("id", row.id)
+    .eq("status", "processing")
 
   // Phase 5 (Decision Memory): if Antonio's message corrects a prior Claude
   // proposal in this thread, persist the lesson. Runs AFTER the reply is posted

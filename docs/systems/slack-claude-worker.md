@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-12 (thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
+**Last verified against code:** 2026-06-12 (Stop button: "On it 👍" ack now carries a "⏹ Stop" button; new `/api/webhooks/slack-interactions` route cancels the in-flight message; + thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -48,8 +48,9 @@ Slack                          Production server              Supabase
 
 | File | Role |
 |------|------|
-| `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent`, `prepareSlackImages`, `fetchThreadImages` (thread-history image harvest), `fetchThreadHistory` (thread-history **text** harvest for shared-thread context) |
-| `app/api/webhooks/slack-claude/route.ts` | Slack Events API webhook handler |
+| `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `updateSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent`, `prepareSlackImages`, `fetchThreadImages` (thread-history image harvest), `fetchThreadHistory` (thread-history **text** harvest for shared-thread context), `buildThinkingBlocks` / `verifySlackSignature` / `parseSlackInteraction` / `STOP_THINKING_ACTION_ID` (Stop button) |
+| `app/api/webhooks/slack-claude/route.ts` | Slack Events API webhook handler (posts the "On it 👍" ack with the Stop button) |
+| `app/api/webhooks/slack-interactions/route.ts` | Slack interactive-components webhook — handles the "⏹ Stop" button click |
 | `app/api/cron/slack-claude-worker/route.ts` | Worker cron (direct trigger + scan safety net) |
 | `scripts/mac-mini/code-task-runner.mjs` | Mac Mini launchd daemon: claims `recipient='code_runner'` rows, runs headless `claude --print`, auto-pushes new commits to production, posts result to the Slack thread |
 | `scripts/migrations/20260610-1400-slack-claude-party.sql` | Adds `'slack'` to `agent_message_party` enum |
@@ -241,6 +242,22 @@ curl -X POST "https://td-operations-sandbox.vercel.app/api/cron/slack-claude-wor
 
 # 5. End-to-end: mention @Claude in #td-dev → expect "On it 👍" reply within 2s
 ```
+
+---
+
+## Stop button ("⏹ Stop")
+
+Lets Antonio cancel a message after the "On it 👍" ack but before the worker posts its answer.
+
+- **Ack carries the button.** The webhook posts "On it 👍" with Block Kit (`buildThinkingBlocks`): a section + a danger button (`action_id = stop_thinking`). Plain `text` stays as the notification fallback.
+- **Click → `/api/webhooks/slack-interactions`.** Slack sends an `application/x-www-form-urlencoded` body with a single `payload` JSON field. The route verifies the HMAC signature (`SLACK_SIGNING_SECRET_CLAUDE`, same scheme as the events webhook — shared `verifySlackSignature`), parses it (`parseSlackInteraction`), and for `stop_thinking` runs a **conditional** UPDATE: `status='cancelled' WHERE slack_ack_ts = <clicked message ts> AND slack_channel_id = <channel> AND status IN ('pending','processing')`.
+- **Correlation key = `slack_ack_ts`.** The clicked message's ts equals the ack ts already stored on the row — no row id needs to ride in the button.
+- **Worker honors the stop before posting.** `processSlackEvent` re-reads the live status immediately after `callWorker` returns; if `cancelled`, it skips posting and skips the done-flip. The done-update is also guarded `.eq('status','processing')` (TOCTOU). `claimPending` only claims `status='pending'`, so a Stop that beats the claim prevents the run entirely.
+- **What it can't do.** `callWorker` is a single non-interruptible API call — Stop only prevents the answer from being POSTED (or stops a not-yet-claimed run). Claude may keep thinking server-side; the result is just discarded.
+- **No-op after the answer lands.** A Stop clicked once `status='done'` matches zero rows → the route leaves the Slack message (the delivered answer) untouched.
+- **On stop, the ack morphs** to "⏹ Stopped — go ahead with your update" (`chat.update`, `blocks: []` to drop the button). On normal completion the worker's morph also passes `blocks: []` to remove the button.
+
+**Setup (one-time, admin):** Slack app `A0B9LUJRLMB` → **Interactivity & Shortcuts** → enable → Request URL `https://td-operations.vercel.app/api/webhooks/slack-interactions`. Production-only (`SANDBOX_MODE=1` blocks `/api/webhooks/*`).
 
 ---
 
