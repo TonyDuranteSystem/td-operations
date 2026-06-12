@@ -47,6 +47,17 @@ import { createClient } from "@supabase/supabase-js"
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
 
+// Progress heartbeats posted to the Slack thread while a long-running task is
+// still executing. Each fires once at its elapsed mark (cleared when the task
+// settles, so a fast task posts none). The Slack worker that queues the task
+// runs in a 300s-capped serverless function and dies the moment it returns, so
+// it CANNOT track progress — this daemon is the only component alive long enough
+// to do it (its setTimeouts genuinely fire during the `await runClaude`).
+const HEARTBEATS = [
+  { ms: 5 * 60 * 1000, text: "⏳ Still running (5 min)…" },
+  { ms: 10 * 60 * 1000, text: "⚠️ Taking longer than expected (10 min)…" },
+]
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 // scripts/mac-mini/ -> repo root is two levels up.
@@ -202,8 +213,29 @@ async function tick(cfg) {
 
   log("claimed code task", row.id, "—", title)
 
+  // 2b) Tell the originating Slack thread the task is now running. The user only
+  // saw "I've queued the task" from the Slack worker; without this they get
+  // silence until done/failed. Best-effort — postToSlack never throws.
+  await postToSlack(cfg.slackToken, channelId, threadTs, `🔧 *${title}* — Mac Mini picked it up, working on it…`)
+
+  // 2c) Arm progress heartbeats for the duration of runClaude. Each setTimeout
+  // fires once at its elapsed mark (5 min, 10 min); all are cleared the moment
+  // the session settles, so a sub-5-min task posts none. These genuinely fire
+  // because Node timers run during the `await runClaude` below.
+  const heartbeatTimers = HEARTBEATS.map((hb) =>
+    setTimeout(() => {
+      void postToSlack(cfg.slackToken, channelId, threadTs, `${hb.text} _${title}_`)
+    }, hb.ms),
+  )
+
   // 3) Run Claude Code in the repo dir.
-  let { ok, output } = await runClaude(cfg, instructions)
+  let result
+  try {
+    result = await runClaude(cfg, instructions)
+  } finally {
+    for (const t of heartbeatTimers) clearTimeout(t)
+  }
+  let { ok, output } = result
 
   // 3b) If the session succeeded and left new local commits, push them so the
   // change actually reaches production. A single `git push origin main` deploys
