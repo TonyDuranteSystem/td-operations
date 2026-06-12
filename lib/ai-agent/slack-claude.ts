@@ -18,6 +18,7 @@ import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
+import { callAI } from "@/lib/portal/ai-provider"
 
 /**
  * Slack context for the event currently being processed. Set by
@@ -283,24 +284,19 @@ export async function fetchThreadHistory(
 // ---------------------------------------------------------------------------
 
 /**
- * Heuristic patterns that signal Antonio is correcting a prior bot proposal.
- * Bilingual (EN + the IT phrases Antonio uses), word-boundary anchored so
- * "another" doesn't match "no". Kept deliberately broad — a false positive is
- * cheap (one stray memory) while a false negative loses a real lesson.
- */
-const CORRECTION_PATTERNS =
-  /\b(no|not correct|wrong|instead|should be|actually|it'?s not|that'?s not|change|fix|don'?t|isn'?t right|is not right|non è|sbagliato|invece|cambia|correggi)\b/i
-
-/**
  * When Antonio's latest message reads like a correction of a prior bot proposal,
  * persist it as a decision memory so the lesson is recalled next time a similar
- * situation comes up. Best-effort and fully non-fatal: any failure (missing
- * OpenAI key, embedding error, insert error) is swallowed with a warn so it can
+ * situation comes up. Rather than regex-matching trigger phrases, we ask Haiku to
+ * read the prior bot turn + Antonio's message and extract the durable business
+ * lesson (or decide there is none). This catches corrections phrased in ways no
+ * keyword list anticipates, and lets the model — not us — distinguish a real
+ * lesson from idle chat. Best-effort and fully non-fatal: any failure (missing
+ * key, AI error, parse error, insert error) is swallowed with a warn so it can
  * never break the Slack/Hermes reply path.
  *
- * Mapping onto saveDecisionMemory: `currentMessage` (Antonio's words) → the new
- * decision; `botSaid` (the prior bot turn being corrected) → bot_said;
- * `situation` (thread context) → the embedded situation used for recall.
+ * Mapping onto saveDecisionMemory: the extracted `lesson` → the decision;
+ * `botSaid` (the prior bot turn being corrected) → bot_said; the extracted
+ * `situation` → the embedded situation used for recall; `domain` → the bucket.
  *
  * Note: saveDecisionMemory uses the camelCase param shape (botSaid/correctionType/
  * sourceType/sourceRef) — verified against lib/ai-agent/decision-memory.ts.
@@ -317,17 +313,38 @@ export async function detectAndSaveCorrection(params: {
 
   // A bare "no" is too ambiguous to be a useful lesson; require some substance.
   if (!currentMessage || currentMessage.trim().length < 15) return
-  if (!CORRECTION_PATTERNS.test(currentMessage)) return
   // Nothing to correct if there's no prior bot proposal in context.
   if (!botSaid?.trim()) return
 
   try {
+    // Ask Haiku to extract the business lesson (cheap, fast, JSON-only).
+    const { text } = await callAI({
+      systemPrompt:
+        "Antonio (CEO of Tony Durante LLC) may be correcting a prior bot proposal. " +
+        "Extract the durable, reusable business lesson from his message. " +
+        'Return ONLY JSON: {"situation": "...", "lesson": "...", "domain": "..."} when there is a real, reusable lesson, ' +
+        'or {"no_lesson": true} when the message is not a correction or carries no reusable lesson. No prose, JSON only.',
+      userPrompt: `PRIOR BOT PROPOSAL:\n${botSaid.slice(0, 1000)}\n\nTHREAD CONTEXT:\n${(situation || "").slice(-1500)}\n\nANTONIO'S MESSAGE:\n${currentMessage.trim()}`,
+      maxTokens: 300,
+      temperature: 0,
+      model: "haiku",
+    })
+
+    // Tolerant parse: strip code fences and grab the first {...} block.
+    let parsed: { situation?: string; lesson?: string; domain?: string; no_lesson?: boolean } | null = null
+    const match = text.replace(/```json\s*/gi, "").replace(/```/g, "").trim().match(/\{[\s\S]*\}/)
+    if (match) {
+      try { parsed = JSON.parse(match[0]) } catch { parsed = null }
+    }
+    if (!parsed || parsed.no_lesson || !parsed.situation || !parsed.lesson) return
+
     const { saveDecisionMemory } = await import("./decision-memory")
     await saveDecisionMemory({
-      situation: (situation || currentMessage).slice(-500),
-      decision: currentMessage.trim(),
+      situation: parsed.situation.slice(0, 500),
+      decision: parsed.lesson.slice(0, 1000),
       botSaid: botSaid.slice(0, 300),
       correctionType: "auto_detected",
+      domain: parsed.domain || undefined,
       sourceType,
       sourceRef,
       actors: params.actors ?? ["antonio", "claude"],
