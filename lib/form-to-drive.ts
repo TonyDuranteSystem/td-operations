@@ -502,6 +502,7 @@ export async function generateFormSummaryPDF(
           member_itin_status: "ITIN Status",
           member_itin: "ITIN",
           member_company_owner: "Real Person Behind the Company",
+          member_foreign_tax_id: "Home-Country Tax ID",
           member_ownership_pct: "Ownership %",
           member_itin_ssn: "ITIN / SSN",
           member_tax_residency: "Tax Residency",
@@ -814,6 +815,7 @@ export async function saveFormToDrive(
         member_itin_status: get("member_itin_status"),
         member_itin: get("member_itin"),
         member_company_owner: get("member_company_owner"),
+        member_foreign_tax_id: get("member_foreign_tax_id"),
         member_ownership_pct: get("member_ownership_pct"),
       })
     }

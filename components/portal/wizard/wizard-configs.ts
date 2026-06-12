@@ -430,12 +430,16 @@ export const TAX_MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_itin', label: 'ITIN number', labelIt: 'Numero ITIN', type: 'text', required: true, conditional: { field: 'member_itin_status', value: 'has_itin' }, hint: 'Format: 9XX-XX-XXXX. You find it on the IRS letter (CP565).', hintIt: 'Formato: 9XX-XX-XXXX. Lo trovi sulla lettera IRS (CP565).' },
   // ── Ownership ──
   { name: 'member_ownership_pct', label: 'Ownership % at the end of the year', labelIt: 'Quota % a fine anno', type: 'number', required: true, hint: 'The percentage of the company this member owns, as written in the Operating Agreement. All members together must total 100%.', hintIt: 'La percentuale della società posseduta da questo socio, come da Operating Agreement. Tutti i soci insieme devono fare 100%.' },
+  { name: 'member_foreign_tax_id', label: 'Home-country tax ID (Codice Fiscale, NIF, Steuernummer…)', labelIt: 'Codice fiscale del paese di residenza', type: 'text', required: false, hint: 'The member\'s personal tax number in their own country. It goes on the W-8BEN form — if you don\'t know it now, you can skip it.', hintIt: 'Il codice fiscale personale del socio nel suo paese. Va sul modulo W-8BEN — se non lo sai ora, puoi saltarlo.' },
   { name: 'member_w8ben', label: 'Form W-8BEN (optional — upload if you have it)', labelIt: 'Modulo W-8BEN (facoltativo — caricalo se ce l\'hai)', type: 'file', required: false, hint: 'The W-8BEN certifies the member is foreign. If you don\'t have it, skip — we will handle it.', hintIt: 'Il W-8BEN certifica che il socio è straniero. Se non ce l\'hai, salta — ci pensiamo noi.' },
 ]
 
 export const TAX_MMLLC_STEPS: WizardStep[] = [
-  { id: 'owner', title: 'Your Information', titleIt: 'I Tuoi Dati', description: 'The person filling this form', descriptionIt: 'La persona che compila questo modulo' },
-  { id: 'members', title: 'Members & Ownership', titleIt: 'Soci e Quote', description: 'Every member of the LLC — check what we have on file', descriptionIt: 'Tutti i soci della LLC — controlla i dati che abbiamo' },
+  // No separate "Your Information" step (Antonio, 2026-06-12): the person
+  // filling the form IS one of the members — their card is pre-filled from
+  // the CRM in the members step. Email/phone are already on file (portal
+  // login + contact record); the home-country tax ID moved to the member card.
+  { id: 'members', title: 'Members & Ownership', titleIt: 'Soci e Quote', description: 'Every member of the LLC, including you — check what we have on file', descriptionIt: 'Tutti i soci della LLC, incluso te — controlla i dati che abbiamo' },
   { id: 'company', title: 'Company', titleIt: 'Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
   { id: 'us_activity', title: 'Activity in the US', titleIt: 'Attività negli USA', description: 'Five questions about physical US presence', descriptionIt: 'Cinque domande sulla presenza fisica negli USA' },
   { id: 'compliance', title: 'A Few Yes/No Questions', titleIt: 'Alcune Domande Sì/No', description: 'Most clients answer No to everything here', descriptionIt: 'La maggior parte dei clienti risponde No a tutte' },
@@ -450,8 +454,6 @@ const YN: { value: string; label: string; labelIt?: string }[] = [
 ]
 
 export const TAX_MMLLC_FIELDS: Record<string, FieldConfig[]> = {
-  owner: TAX_OWNER_BASE,
-
   // Members machinery (wizard-client renders TAX_MEMBER_FIELDS per member,
   // pre-filled from CRM — the client confirms instead of typing). Step-level
   // questions below the member cards:
