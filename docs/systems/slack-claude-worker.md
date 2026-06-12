@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-12 (Stop button: "On it 👍" ack now carries a "⏹ Stop" button; new `/api/webhooks/slack-interactions` route cancels the in-flight message; + thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
+**Last verified against code:** 2026-06-12 (answer now posts as a NEW thread message for a Slack push notification — ack collapses to "✅" instead of morphing in place; Stop button: "On it 👍" ack now carries a "⏹ Stop" button; new `/api/webhooks/slack-interactions` route cancels the in-flight message; + thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -12,7 +12,7 @@ Always-on Claude presence in Slack. When Antonio writes `@Claude` in any Slack c
 
 **Key behaviors:**
 - Immediate "On it 👍" ACK within 1–2 s (Slack's 3-second requirement met every time)
-- AI reply 8–15 s later via the worker cron — the worker **morphs the "On it 👍" message in place** (`chat.update`) into the real answer instead of posting a second message, so the thread shows one message that transforms. Falls back to a fresh post if the ack ts is missing or the update fails (message too old/deleted).
+- AI reply 8–15 s later via the worker cron — the worker **posts the answer as a NEW message** (`chat.postMessage`) in the thread, then collapses the "On it 👍" ack to a minimal "✅" (`chat.update`, `blocks: []` to drop the Stop button). A fresh post is what triggers a Slack **push notification** so Antonio knows on his phone that Claude finished — `chat.update` is an edit and Slack does not notify on edits (which is why the old in-place "morph" left him with no signal). Order is post-first: if the fresh post fails (channel error), the worker falls back to morphing the ack into the answer so the reply is never lost.
 - **Image attachments**: screenshots attached to a mention are downloaded by the worker (bot token) and passed to sonnet as base64 image blocks (vision). An image-only message (no caption) is accepted. If the current message carries no image but it's a **thread reply**, the worker pulls images from recent **thread history** (`conversations.replies`) — so "read the screenshot" works when the screenshot was posted earlier in the thread. Unsupported media types (HEIC/SVG/BMP) and files >5 MB are skipped; text still answered. See "Image attachments" below.
 - Conversational tone (2–5 lines), discuss-before-act, never unilaterally mutates
 - Conversation continuity: same channel/thread within 30 min → same `thread_id`
@@ -255,7 +255,7 @@ Lets Antonio cancel a message after the "On it 👍" ack but before the worker p
 - **Worker honors the stop before posting.** `processSlackEvent` re-reads the live status immediately after `callWorker` returns; if `cancelled`, it skips posting and skips the done-flip. The done-update is also guarded `.eq('status','processing')` (TOCTOU). `claimPending` only claims `status='pending'`, so a Stop that beats the claim prevents the run entirely.
 - **What it can't do.** `callWorker` is a single non-interruptible API call — Stop only prevents the answer from being POSTED (or stops a not-yet-claimed run). Claude may keep thinking server-side; the result is just discarded.
 - **No-op after the answer lands.** A Stop clicked once `status='done'` matches zero rows → the route leaves the Slack message (the delivered answer) untouched.
-- **On stop, the ack morphs** to "⏹ Stopped — go ahead with your update" (`chat.update`, `blocks: []` to drop the button). On normal completion the worker's morph also passes `blocks: []` to remove the button.
+- **On stop, the ack morphs** to "⏹ Stopped — go ahead with your update" (`chat.update`, `blocks: []` to drop the button). On normal completion the worker collapses the ack to "✅" (`chat.update`, `blocks: []`) after posting the answer as a separate message.
 
 **Setup (one-time, admin):** Slack app `A0B9LUJRLMB` → **Interactivity & Shortcuts** → enable → Request URL `https://td-operations.vercel.app/api/webhooks/slack-interactions`. Production-only (`SANDBOX_MODE=1` blocks `/api/webhooks/*`).
 

@@ -715,16 +715,26 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     return reply
   }
 
-  // Morph the "On it 👍" acknowledgment into the answer (chat.update) so the
-  // thread shows one message that transforms, not two. Pass blocks: [] to drop
-  // the "⏹ Stop" button now that processing is complete. If there's no ack ts or
-  // the update fails (message too old/deleted), fall back to a fresh post.
-  let posted = false
+  // Post the answer as a NEW message in the thread. A fresh post is what triggers
+  // a Slack push notification on Antonio's phone — chat.update (the old in-place
+  // "morph" of the "On it 👍" ack) is an edit and Slack does NOT notify on edits,
+  // so he had no way to know Claude had finished. Post the answer FIRST so that if
+  // the post fails we can still fall back to the ack message and never lose the reply.
+  const answerTs = await postSlackMessage(channelId, reply, replyThreadTs)
+
+  // Clean up the "On it 👍" ack now that the answer has landed as its own message.
   if (ackTs) {
-    posted = await updateSlackMessage(channelId, ackTs, reply, [])
-  }
-  if (!posted) {
-    await postSlackMessage(channelId, reply, replyThreadTs)
+    if (answerTs) {
+      // Answer delivered → collapse the ack to a minimal "✅" and drop the "⏹ Stop"
+      // button (blocks: []) now that processing is complete. Best-effort cleanup;
+      // a failed update just leaves a harmless dead button on the ack.
+      await updateSlackMessage(channelId, ackTs, "✅", [])
+    } else {
+      // The fresh post failed (Slack error). Fall back to the OLD behavior: morph
+      // the ack into the answer so the reply still reaches Antonio (no push, but
+      // not lost) and drop the Stop button.
+      await updateSlackMessage(channelId, ackTs, reply, [])
+    }
   }
 
   // Mark done, but guard on status='processing' so a Stop that lands in the tiny

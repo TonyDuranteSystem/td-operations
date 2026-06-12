@@ -381,7 +381,9 @@ describe("processSlackEvent", () => {
     expect(body.thread_ts).toBe("1111111111.000001")
   })
 
-  it("morphs the ack message via chat.update when slack_ack_ts is present (no second post)", async () => {
+  it("posts the answer as a NEW message and collapses the ack to ✅ when slack_ack_ts is present", async () => {
+    // The answer must be a fresh chat.postMessage (triggers a Slack push); the
+    // "On it 👍" ack is then collapsed to "✅" with the Stop button removed.
     ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
 
@@ -401,21 +403,24 @@ describe("processSlackEvent", () => {
 
     await processSlackEvent(row)
 
+    // The answer is a fresh post (NOT an edit) so Slack notifies Antonio.
+    const postCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))
+    expect(postCall).toBeDefined()
+    expect(JSON.parse(postCall![1].body).text).toBe("answer")
+
+    // The ack is collapsed to "✅" with the Stop button dropped (blocks: []).
     const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
     expect(updateCall).toBeDefined()
-    const updateBody = JSON.parse(updateCall![1].body)
-    // blocks: [] clears the "⏹ Stop" button now that processing is complete.
-    expect(updateBody).toEqual({ channel: "C0BAB08DSDN", ts: "9.9", text: "answer", blocks: [] })
-    // No fresh post — the ack was reused
-    const postCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))
-    expect(postCall).toBeUndefined()
+    expect(JSON.parse(updateCall![1].body)).toEqual({ channel: "C0BAB08DSDN", ts: "9.9", text: "✅", blocks: [] })
   })
 
-  it("falls back to a fresh post when chat.update fails", async () => {
+  it("falls back to morphing the ack into the answer when the fresh post fails", async () => {
+    // If chat.postMessage fails, the reply must NOT be lost — the worker morphs
+    // the ack into the answer (old behavior: no push, but delivered).
     ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
     mockFetch.mockImplementation((url: string) =>
-      String(url).includes("chat.update")
-        ? Promise.resolve({ json: () => Promise.resolve({ ok: false, error: "message_not_found" }) })
+      String(url).includes("chat.postMessage")
+        ? Promise.resolve({ json: () => Promise.resolve({ ok: false, error: "channel_not_found" }) })
         : Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "2.2" }) }),
     )
 
@@ -435,8 +440,11 @@ describe("processSlackEvent", () => {
 
     await processSlackEvent(row)
 
-    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))).toBeDefined()
+    // Post was attempted, then the ack was morphed into the answer (not "✅").
     expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))).toBeDefined()
+    const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
+    expect(updateCall).toBeDefined()
+    expect(JSON.parse(updateCall![1].body)).toEqual({ channel: "C0BAB08DSDN", ts: "stale-ts", text: "answer", blocks: [] })
   })
 
   it("downloads slack_images and passes them to callWorker as image blocks", async () => {
