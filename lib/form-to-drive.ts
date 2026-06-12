@@ -125,6 +125,8 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
           { key: "comp_foreign_subsidiaries", label: "Owns Other Companies" },
           { key: "comp_foreign_trusts", label: "Foreign Trust Transactions" },
           { key: "comp_digital_assets", label: "Digital Assets / Crypto" },
+          { key: "comp_digital_assets_detail", label: "Digital Assets — What Happened (client description)" },
+          { key: "comp_digital_assets_report", label: "Digital Assets — Exchange Report Uploaded" },
           { key: "comp_debt_changes", label: "Debt Canceled/Forgiven/Modified" },
           { key: "comp_asset_purchases", label: "Bought/Sold Major Assets" },
           { key: "comp_anything_else", label: "Anything Else (client note)" },
