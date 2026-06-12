@@ -41,6 +41,21 @@ export async function POST(req: NextRequest) {
 
     // PDF-only guard for the prior-year return (master plan §5 Case B) —
     // same rule as wizard-upload-url.
+    // Crypto follow-ups (§14): the 1099 is a PDF tax form; the exchange
+    // transaction export follows the same CSV-only rule as the banks.
+    if (fieldName === 'comp_digital_assets_1099_file' && !/\.pdf$/i.test(file.name)) {
+      return NextResponse.json(
+        { error: 'Please upload the 1099 / 1099-DA as a PDF — you find it in your exchange\'s Tax Documents section.' },
+        { status: 400 },
+      )
+    }
+    if (fieldName === 'comp_digital_assets_csv' && !/\.csv$/i.test(file.name)) {
+      return NextResponse.json(
+        { error: 'Please upload the exchange transaction export as a CSV file — the entire year, same rule as your bank accounts.' },
+        { status: 400 },
+      )
+    }
+
     if (fieldName === 'prior_year_return' && !/\.pdf$/i.test(file.name)) {
       return NextResponse.json(
         { error: 'Please upload the filed tax return as a PDF — the complete document with all pages, including Schedule L and every K-1.' },
