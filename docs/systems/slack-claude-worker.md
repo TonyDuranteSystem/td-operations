@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-11 (ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
+**Last verified against code:** 2026-06-12 (thread-reply invitation gate: parent-message @mention check replaces channel-level participation query — Claude no longer barges into threads he was never invited to; + ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -16,7 +16,7 @@ Always-on Claude presence in Slack. When Antonio writes `@Claude` in any Slack c
 - **Image attachments**: screenshots attached to a mention are downloaded by the worker (bot token) and passed to sonnet as base64 image blocks (vision). An image-only message (no caption) is accepted. If the current message carries no image but it's a **thread reply**, the worker pulls images from recent **thread history** (`conversations.replies`) — so "read the screenshot" works when the screenshot was posted earlier in the thread. Unsupported media types (HEIC/SVG/BMP) and files >5 MB are skipped; text still answered. See "Image attachments" below.
 - Conversational tone (2–5 lines), discuss-before-act, never unilaterally mutates
 - Conversation continuity: same channel/thread within 30 min → same `thread_id`
-- Accepts `app_mention` events **and** plain thread-reply `message` events in a thread Claude already participated in (no @mention needed to keep a conversation going)
+- Accepts `app_mention` events **and** thread-reply `message` events, but a thread reply is only processed if Claude was **invited to that specific thread** — the reply @mentions Claude, or (for a plain reply) the thread's **parent message** @mentioned Claude. A plain reply in someone else's thread (e.g. a Hermes-only thread) is skipped.
 
 ---
 
@@ -100,8 +100,18 @@ Slack                          Production server              Supabase
 ## Accepted events
 
 The webhook processes:
-- `app_mention` — Antonio @mentions Claude (any channel/context)
-- `message` events that are (a) inside a thread (`thread_ts` set), (b) have **no** `subtype` **or** `subtype="file_share"` (genuine human text, or a pure screenshot drop with no @mention — Slack tags file uploads as `file_share`; all other subtypes `bot_message`/`message_changed`/`message_deleted`/joins are still excluded so edits/deletes/joins don't re-trigger), and (c) belong to a thread where Claude already participated (an `agent_messages` row exists with `context_json.source='slack'` and matching thread-level **or** channel-level `slack_scope_key`). Without the participation check Claude would answer every message in every thread in the channel.
+- `app_mention` — Antonio @mentions Claude (any channel/context). Always processed.
+- `message` events that are (a) inside a thread (`thread_ts` set), (b) have **no** `subtype` **or** `subtype="file_share"` (genuine human text, or a pure screenshot drop with no @mention — Slack tags file uploads as `file_share`; all other subtypes `bot_message`/`message_changed`/`message_deleted`/joins are still excluded so edits/deletes/joins don't re-trigger), **and** (c) pass the **thread-reply invitation gate** below.
+
+### Thread-reply invitation gate (`route.ts`, the `isThreadReply && !isAppMention` block)
+
+A thread reply is only processed if Claude was actually invited to **that specific thread**. Three cases, in order:
+
+1. The reply itself @mentions Claude (`<@U0B9S675WTT>`) → **process** (explicit).
+2. The reply @mentions someone else but **not** Claude (e.g. `@Hermes`) → **skip** (`directed_at_other`).
+3. The reply has **no** @mention at all → fetch the thread's **parent (root) message** via `conversations.history?latest=<thread_ts>&inclusive=true&limit=1` and process **only if the parent text contains `<@U0B9S675WTT>`**; otherwise the thread belongs to someone else → **skip** (`not_invited`). Parent-fetch failure (missing token/scope, network, not found) defaults to skip — the safe default, since the bug being guarded is over-responding.
+
+A top-level `@Claude` that opens a thread roots that thread at the mention message, so its later plain replies see parent-mention = true and continue the conversation. **Behavior change (2026-06-12):** the old gate used a channel-level participation query (`agent_messages` row with matching thread-level **or** bare `channelId` `slack_scope_key`). The bare-channel match leaked — once Claude had spoken at the top level of a channel, every plain reply in *any* thread of that channel matched and Claude barged in (notably Hermes-only threads). The parent-mention check scopes "invited" to the actual thread. Trade-off: if Claude was mentioned *mid-thread* of a non-Claude-rooted thread, a later *plain* reply is no longer answered — re-mention to continue.
 
 All other event types are ACK'd with `{ ok: true }` and ignored.
 
@@ -142,7 +152,7 @@ When Antonio tags **both** `@Claude` and `@Hermes` in a thread, the worker would
 
 ## Loop protection
 
-The webhook handler skips incoming events (runs **before** the participation query and insert) when:
+The webhook handler skips incoming events (runs **before** the invitation gate and insert) when:
 - `event.bot_id` is set (any bot) — this is what stops Claude's own posted replies (which carry `bot_id`) from re-triggering
 - `event.user === "U0B9S675WTT"` (Claude's own user ID)
 - `event.subtype === "bot_message"`

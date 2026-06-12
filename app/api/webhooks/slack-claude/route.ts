@@ -74,6 +74,39 @@ async function isDuplicateEvent(eventId: string): Promise<boolean> {
   return (data?.length ?? 0) > 0
 }
 
+/**
+ * Fetch the parent (root) message of a thread and report whether it @mentioned
+ * Claude. This is the "was Claude invited to THIS thread" check for a plain
+ * (no-@mention) thread reply — it replaces the old channel-level participation
+ * query that leaked Claude into unrelated threads (e.g. Hermes-only threads) in
+ * any channel where Claude had ever spoken at the top level.
+ *
+ * Mirrors the single-message-by-ts fetch the 🧠-reaction handler already uses
+ * (`conversations.history` at the exact ts). Best-effort: any failure — missing
+ * token, missing scope, network error, message not found — returns false so
+ * Claude stays quiet. That is the safe default here, because the bug being fixed
+ * is Claude over-responding; a rare transient miss just means Antonio re-mentions.
+ */
+async function parentMessageMentionsClaude(channelId: string, threadTs: string): Promise<boolean> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token || !channelId || !threadTs) return false
+  try {
+    const res = await fetch(
+      `https://slack.com/api/conversations.history?channel=${channelId}&latest=${threadTs}&inclusive=true&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean
+      messages?: Array<{ text?: string }>
+    }
+    const parentText = data.messages?.[0]?.text ?? ""
+    return parentText.includes(`<@${CLAUDE_BOT_USER_ID}>`)
+  } catch (err) {
+    console.warn("[slack-claude-webhook] parent-message fetch failed:", err)
+    return false
+  }
+}
+
 async function fireWorkerTrigger(messageId: string): Promise<void> {
   const url = `${getInternalBaseUrl()}/api/cron/slack-claude-worker?message_id=${encodeURIComponent(messageId)}`
   const cronSecret = process.env.CRON_SECRET ?? ""
@@ -243,36 +276,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true })
   }
 
-  // For thread replies (no @mention), only respond if Claude already participated
-  // in this thread — otherwise we'd answer every message in every thread in the
-  // channel. Match either the thread scope or the channel-level scope that may
-  // have started the conversation (see findOrCreateConversationThread).
+  // Thread-reply invitation gate. A `message` event in a thread (never an
+  // app_mention — this block is `!isAppMention`) is only processed if Claude was
+  // actually invited to THIS thread. Three cases, in order:
+  //   1. The reply itself @mentions Claude               → respond (explicit).
+  //   2. The reply @mentions someone else but NOT Claude → skip (directed at
+  //      other, e.g. "@Hermes do X" inside a thread Claude is part of).
+  //   3. The reply has no @mention at all               → respond only if the
+  //      thread's PARENT (root) message @mentioned Claude; otherwise the thread
+  //      belongs to someone else (e.g. a Hermes-only thread) → skip silently.
+  // Case 3 is the bug fix: the old guard checked a channel-level participation
+  // row, so a plain reply in ANY thread of a channel where Claude had ever spoken
+  // matched and Claude barged in. The parent-mention check scopes "invited" to
+  // the actual thread. A top-level @mention always works (handled as app_mention
+  // upstream); a top-level mention that opens a thread roots that thread at the
+  // mention message, so its replies see parent-mention = true and continue.
   if (isThreadReply && !isAppMention) {
-    const threadScopeKey = slackScopeKey(channelId, threadTs)
-    const channelScopeKey = channelId
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: participation } = await (supabaseAdmin as any)
-      .from("agent_messages")
-      .select("id")
-      .filter("context_json->>source", "eq", "slack")
-      .or(
-        `context_json->>slack_scope_key.eq.${threadScopeKey},context_json->>slack_scope_key.eq.${channelScopeKey}`,
-      )
-      .limit(1)
-
-    if (!participation?.length) {
-      return NextResponse.json({ ok: true }) // Claude wasn't in this thread — ignore
-    }
-
-    // Directed-at-other guard: in a thread Claude is part of, a plain `message`
-    // reply that @mentions OTHER users/bots (e.g. Hermes <@U0B9D3MAD9B>) but NOT
-    // Claude is a side conversation — Claude must stay quiet. Plain replies with
-    // no @mention at all still fall through and get answered (they're aimed at
-    // whoever last spoke, which is Claude in its own thread). app_mention events
-    // are never reached here (this block is `isThreadReply && !isAppMention`).
     const mentions: string[] = text.match(/<@U[A-Z0-9]+>/g) ?? []
-    if (mentions.length > 0 && !mentions.includes(`<@${CLAUDE_BOT_USER_ID}>`)) {
-      return NextResponse.json({ ok: true, skipped: "directed_at_other" })
+    const replyMentionsClaude = mentions.includes(`<@${CLAUDE_BOT_USER_ID}>`)
+
+    if (!replyMentionsClaude) {
+      if (mentions.length > 0) {
+        // Case 2 — aimed at another user/bot, not Claude.
+        return NextResponse.json({ ok: true, skipped: "directed_at_other" })
+      }
+      // Case 3 — no @mention: only continue a thread Claude was invited into.
+      if (!threadTs || !(await parentMessageMentionsClaude(channelId, threadTs))) {
+        return NextResponse.json({ ok: true, skipped: "not_invited" })
+      }
     }
   }
 
