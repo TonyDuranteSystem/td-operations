@@ -18,7 +18,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 const MODEL = "claude-sonnet-4-6"
-const MAX_TOKENS = 4096
+const MAX_TOKENS = 8192 // a return can carry many K-1s
 const TIMEOUT_MS = 120_000
 /** Identity checks tolerate rounding to the dollar on both sides. */
 const TOLERANCE = 2.0
@@ -130,7 +130,8 @@ const EXTRACT_TOOL = {
 const SYSTEM_PROMPT = [
   "You extract structured data from filed US business tax returns (Form 1065 partnership returns and Form 1120 corporate returns).",
   "The text comes from a PDF text layer — columns may be jumbled. Locate Schedule L by the heading 'Balance Sheets per Books', Schedule M-2 by 'Analysis of Partners' Capital Accounts', and K-1s by 'Schedule K-1'.",
-  "Schedule L columns: (a)+(b) = beginning of tax year, (c)+(d) = end of tax year. Line 1 is Cash.",
+  "Schedule L layout: line 1 is Cash, line 14 (1065) is Total assets, line 21 (1065) is Partners' capital accounts. Columns (a)+(b) = beginning of tax year, (c)+(d) = end of tax year. In the text layer a line often carries TWO amounts: the FIRST is the beginning value, the SECOND is the ending value (e.g. 'Cash 319,288. 1,142,397.' means beginning 319288, ending 1142397).",
+  "K-1s: a return has ONE Schedule K-1 PER PARTNER — scan the WHOLE document and extract EVERY one (a 2-partner LLC has 2 K-1s). If a 'Partners' Capital Account Summary' statement exists, use it to cross-check each partner's beginning/ending capital. Forms 8805 also list each foreign partner's name and country.",
   "Extract numbers EXACTLY as printed (no sign flips, no rounding). Use null for anything you cannot read confidently — null is safe, a guessed number corrupts a tax return.",
   "Always respond by calling the extract_prior_return tool.",
 ].join(" ")
@@ -304,10 +305,19 @@ export async function extractPriorReturn(
 /** Keep page 1 + Schedule L / M-1 / M-2 / K-1 sections from a long text layer.
  *  Exported for tests. */
 export function relevantSections(text: string): string {
-  const MAX = 60_000
+  const MAX = 120_000 // ~30k tokens — a 43-page filed return fits whole
   if (text.length <= MAX) return text
-  const pieces: string[] = [text.slice(0, 6_000)] // page 1 area: form type, year, EIN
-  const headings = [/Balance Sheets per Books/gi, /Analysis of Partners.{0,3} Capital Accounts/gi, /Schedule K-1/gi]
+  // page 1 area (form type, year, EIN) + the TAIL — the K-1s come LAST in a
+  // filed return (the Dynamiq 43-page return had partner 2's K-1 in the final
+  // page; any head-anchored budget missed it).
+  const pieces: string[] = [text.slice(0, 6_000), text.slice(-20_000)]
+  const headings = [
+    /Balance Sheets per Books/gi,
+    /Analysis of Partners.{0,3} Capital Accounts/gi,
+    /Schedule K-1/gi,
+    /Capital Account Summary/gi, // per-partner beginning/ending capital statement
+    /Foreign Partner.{0,3}s Information Statement/gi, // Forms 8805 — partner names/countries
+  ]
   for (const re of headings) {
     let m: RegExpExecArray | null
     while ((m = re.exec(text)) !== null && pieces.join("").length < MAX) {

@@ -109,6 +109,24 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
       {
         title: "MMLLC Tax Details (Form 1065)",
         fields: [
+          // §14 redesign (2026-06-12): members K-1 roster + factual US-activity
+          // + explicit compliance answers. Legacy keys kept below — old
+          // submissions still render; absent keys are skipped automatically.
+          { key: "members_list", label: "Members & Ownership (K-1 data)" },
+          { key: "us_office_warehouse", label: "US Office/Warehouse/Physical Location" },
+          { key: "us_people_working", label: "People Working Physically in the US" },
+          { key: "us_payroll_w2", label: "Ran US Payroll (W-2)" },
+          { key: "us_services_performed", label: "Services Physically Performed in the US" },
+          { key: "us_rental_property", label: "US Rental Real Estate" },
+          { key: "us_inventory_stored", label: "Inventory in US Warehouses (FBA/3PL)" },
+          { key: "comp_foreign_accounts", label: "Non-US Bank/Financial Accounts" },
+          { key: "comp_foreign_subsidiaries", label: "Owns Other Companies" },
+          { key: "comp_foreign_trusts", label: "Foreign Trust Transactions" },
+          { key: "comp_digital_assets", label: "Digital Assets / Crypto" },
+          { key: "comp_debt_changes", label: "Debt Canceled/Forgiven/Modified" },
+          { key: "comp_asset_purchases", label: "Bought/Sold Major Assets" },
+          { key: "comp_anything_else", label: "Anything Else (client note)" },
+          // Legacy (pre-redesign submissions)
           { key: "prior_year_returns_filed", label: "Prior Year Returns Filed" },
           { key: "financial_statements_sent", label: "Financial Statements Sent" },
           { key: "mmllc_has_payroll", label: "Has Payroll" },
@@ -473,6 +491,12 @@ export async function generateFormSummaryPDF(
 
         const memberFieldLabels: Record<string, string> = {
           member_name: "Name",
+          member_kind: "Person or Company",
+          member_citizenship: "Citizenship",
+          member_residence_country: "Country of Residence",
+          member_itin_status: "ITIN Status",
+          member_itin: "ITIN",
+          member_company_owner: "Real Person Behind the Company",
           member_ownership_pct: "Ownership %",
           member_itin_ssn: "ITIN / SSN",
           member_tax_residency: "Tax Residency",
@@ -765,6 +789,31 @@ export async function saveFormToDrive(
    */
   opts?: { bucket?: string },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }> {
+  // Tax MMLLC redesign (§14): the wizard submits members as FLATTENED keys
+  // (member_0_member_first_name…). Synthesize the members array the PDF's
+  // object-array renderer understands, so the accountant sees every member's
+  // K-1 data in one block. member_count is authoritative (removed members
+  // leave orphaned higher-index keys behind).
+  if (formType === "tax_return" && submittedData.member_count !== undefined) {
+    const count = Number(submittedData.member_count) || 0
+    const membersList: Record<string, unknown>[] = []
+    for (let i = 0; i < count; i++) {
+      const get = (k: string) => submittedData[`member_${i}_${k}`]
+      if (!get("member_first_name") && !get("member_last_name") && !get("member_company_name")) continue
+      membersList.push({
+        member_name: get("member_company_name") || `${get("member_first_name") ?? ""} ${get("member_last_name") ?? ""}`.trim(),
+        member_kind: get("member_type"),
+        member_citizenship: get("member_citizenship"),
+        member_residence_country: get("member_residence_country"),
+        member_address: [get("member_street"), get("member_city"), get("member_zip")].filter(Boolean).join(", "),
+        member_itin_status: get("member_itin_status"),
+        member_itin: get("member_itin"),
+        member_company_owner: get("member_company_owner"),
+        member_ownership_pct: get("member_ownership_pct"),
+      })
+    }
+    if (membersList.length > 0) submittedData = { ...submittedData, members_list: membersList }
+  }
   const config = FORM_CONFIGS[formType]
   if (!config) {
     return { summaryFileId: null, copied: [], failed: [], errors: [`Unknown form type: ${formType}`] }

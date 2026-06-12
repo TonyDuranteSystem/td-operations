@@ -489,6 +489,41 @@ export default async function WizardPage({
     } catch (e) {
       console.error('[wizard] Prior-return Case A prefill failed (non-blocking):', e)
     }
+
+    // Members pre-fill (§14 redesign — "confirm, don't type"): every contact
+    // linked to the account becomes a pre-filled member card; the client
+    // confirms or corrects instead of retyping data we already hold.
+    try {
+      const { data: links } = await supabaseAdmin
+        .from('account_contacts')
+        .select('ownership_pct, contacts(first_name, last_name, citizenship, itin_number, address_line1, address_city, address_zip, address_country)')
+        .eq('account_id', accountId)
+      const members = ((links ?? []) as unknown as Array<{
+        ownership_pct: number | null
+        contacts: { first_name: string | null; last_name: string | null; citizenship: string | null; itin_number: string | null; address_line1: string | null; address_city: string | null; address_zip: string | null; address_country: string | null } | null
+      }>).filter(l => l.contacts && (l.contacts.first_name || l.contacts.last_name))
+      if (members.length > 0) {
+        prefillData.member_count = String(members.length)
+        members.forEach((m, i) => {
+          const c = m.contacts!
+          prefillData[`member_${i}_member_type`] = 'individual'
+          if (c.first_name) prefillData[`member_${i}_member_first_name`] = c.first_name
+          if (c.last_name) prefillData[`member_${i}_member_last_name`] = c.last_name
+          if (c.citizenship) prefillData[`member_${i}_member_citizenship`] = c.citizenship
+          if (c.address_country) prefillData[`member_${i}_member_residence_country`] = c.address_country
+          if (c.address_line1) prefillData[`member_${i}_member_street`] = c.address_line1
+          if (c.address_city) prefillData[`member_${i}_member_city`] = c.address_city
+          if (c.address_zip) prefillData[`member_${i}_member_zip`] = c.address_zip
+          if (c.itin_number) {
+            prefillData[`member_${i}_member_itin_status`] = 'has_itin'
+            prefillData[`member_${i}_member_itin`] = c.itin_number
+          }
+          if (m.ownership_pct !== null) prefillData[`member_${i}_member_ownership_pct`] = String(m.ownership_pct)
+        })
+      }
+    } catch (e) {
+      console.error('[wizard] Members prefill failed (non-blocking):', e)
+    }
   }
 
   // Normalize entity type so the wizard config turns on the right steps. The

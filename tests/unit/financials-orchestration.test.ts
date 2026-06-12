@@ -35,6 +35,16 @@ describe("extractWizardMembers", () => {
   it("empty data → empty list", () => {
     expect(extractWizardMembers({})).toEqual([])
   })
+
+  it("member_count is authoritative — orphaned keys above it (removed members) are ignored", () => {
+    const out = extractWizardMembers({
+      member_count: "1",
+      member_0_member_first_name: "Sofia", member_0_member_last_name: "Marinoni", member_0_member_ownership_pct: 100,
+      // leftovers from a removed member — must NOT become a partner
+      member_1_member_first_name: "Ghost", member_1_member_last_name: "Member", member_1_member_ownership_pct: 50,
+    })
+    expect(out).toEqual([{ name: "Sofia Marinoni", pct: 100 }])
+  })
 })
 
 describe("extractWizardOwner", () => {

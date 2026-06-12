@@ -398,76 +398,101 @@ export const TAX_FIELDS: Record<string, FieldConfig[]> = {
 
 // ─── TAX MMLLC / Partnership (Form 1065) ──────────────────
 
+// ── MMLLC member fields (tax intake — §14 form redesign, approved 2026-06-12).
+// Rendered by the wizard's members machinery (step id 'members', keys flatten
+// to member_{idx}_{name}). Every K-1 the IRS receives needs this data; a wrong
+// or missing partner statement costs $340 each, an incomplete return $255 per
+// partner per month. Pre-filled from CRM where we already know the member —
+// the client CONFIRMS rather than types.
+export const TAX_MEMBER_FIELDS: FieldConfig[] = [
+  { name: 'member_type', label: 'Is this member a person or a company?', labelIt: 'Questo socio è una persona o una società?', type: 'select', required: true, options: [
+    { value: 'individual', label: 'A person', labelIt: 'Una persona' },
+    { value: 'company', label: 'A company / entity', labelIt: 'Una società / entità' },
+  ], hint: 'Most LLC members are people. Choose "a company" only if the owner listed in the Operating Agreement is itself a company.', hintIt: 'La maggior parte dei soci sono persone. Scegli "una società" solo se il socio indicato nell\'Operating Agreement è a sua volta una società.' },
+  // ── Person ──
+  { name: 'member_first_name', label: 'First name (as in the passport)', labelIt: 'Nome (come sul passaporto)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'Exactly as written in the passport — the IRS matches names letter by letter.', hintIt: 'Esattamente come scritto sul passaporto — l\'IRS confronta i nomi lettera per lettera.' },
+  { name: 'member_last_name', label: 'Last name (as in the passport)', labelIt: 'Cognome (come sul passaporto)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_citizenship', label: 'Country of citizenship', labelIt: 'Paese di cittadinanza', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'The country of the passport. This tells the IRS the member is a foreign (non-US) partner.', hintIt: 'Il paese del passaporto. Indica all\'IRS che il socio è straniero (non USA).' },
+  { name: 'member_residence_country', label: 'Country where this member lives', labelIt: 'Paese dove vive questo socio', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'Where the member physically lives today — not necessarily the citizenship. Example: Italian citizen living in Dubai → Dubai (UAE).', hintIt: 'Dove vive fisicamente oggi — non necessariamente la cittadinanza. Esempio: cittadino italiano che vive a Dubai → Emirati Arabi.' },
+  { name: 'member_street', label: 'Home address (street)', labelIt: 'Indirizzo di casa (via)', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' }, hint: 'The member\'s personal home address. This address goes on the member\'s IRS statement (Schedule K-1) — it must be real and current.', hintIt: 'L\'indirizzo di casa personale del socio. Va sul documento IRS del socio (Schedule K-1) — deve essere reale e attuale.' },
+  { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_zip', label: 'ZIP / Postal code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  // ── Company ──
+  { name: 'member_company_name', label: 'Company legal name', labelIt: 'Ragione sociale', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_ein', label: 'Company EIN or foreign tax number (if any)', labelIt: 'EIN o codice fiscale estero della società (se esiste)', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_owner', label: 'Who owns this company? (name of the real person behind it)', labelIt: 'Chi possiede questa società? (nome della persona reale dietro di essa)', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' }, hint: 'When a member is a company, the IRS wants to know the real person at the top. Write their full name.', hintIt: 'Quando un socio è una società, l\'IRS vuole sapere chi è la persona reale al vertice. Scrivi il nome completo.' },
+  // ── ITIN (both types — for a company member it's the beneficial owner's) ──
+  { name: 'member_itin_status', label: 'Does this member have a US tax number (ITIN)?', labelIt: 'Questo socio ha un numero fiscale USA (ITIN)?', type: 'select', required: true, options: [
+    { value: 'has_itin', label: 'Yes — I will enter it below', labelIt: 'Sì — lo inserisco qui sotto' },
+    { value: 'applied', label: 'Applied for — still waiting', labelIt: 'Richiesto — in attesa' },
+    { value: 'none', label: 'No — never applied', labelIt: 'No — mai richiesto' },
+  ], hint: 'The ITIN is the US tax ID for foreigners. The return CAN be filed while an ITIN is pending ("applied for") — but every member should have one. If a member has never applied, we can take care of the ITIN application for you — just continue, and we will contact you about it.', hintIt: 'L\'ITIN è il codice fiscale USA per stranieri. La dichiarazione PUÒ essere presentata anche con ITIN in attesa ("richiesto") — ma ogni socio dovrebbe averne uno. Se un socio non l\'ha mai richiesto, possiamo occuparci noi della pratica ITIN — prosegui pure, ti contatteremo.' },
+  { name: 'member_itin', label: 'ITIN number', labelIt: 'Numero ITIN', type: 'text', required: true, conditional: { field: 'member_itin_status', value: 'has_itin' }, hint: 'Format: 9XX-XX-XXXX. You find it on the IRS letter (CP565).', hintIt: 'Formato: 9XX-XX-XXXX. Lo trovi sulla lettera IRS (CP565).' },
+  // ── Ownership ──
+  { name: 'member_ownership_pct', label: 'Ownership % at the end of the year', labelIt: 'Quota % a fine anno', type: 'number', required: true, hint: 'The percentage of the company this member owns, as written in the Operating Agreement. All members together must total 100%.', hintIt: 'La percentuale della società posseduta da questo socio, come da Operating Agreement. Tutti i soci insieme devono fare 100%.' },
+  { name: 'member_w8ben', label: 'Form W-8BEN (optional — upload if you have it)', labelIt: 'Modulo W-8BEN (facoltativo — caricalo se ce l\'hai)', type: 'file', required: false, hint: 'The W-8BEN certifies the member is foreign. If you don\'t have it, skip — we will handle it.', hintIt: 'Il W-8BEN certifica che il socio è straniero. Se non ce l\'hai, salta — ci pensiamo noi.' },
+]
+
 export const TAX_MMLLC_STEPS: WizardStep[] = [
-  { id: 'owner', title: 'Owner & Members', titleIt: 'Titolare e Membri', description: 'All partners/members details', descriptionIt: 'Dettagli di tutti i soci/membri' },
-  { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
-  { id: 'financials', title: 'Financial Information', titleIt: 'Informazioni Finanziarie', description: 'Partnership financial details', descriptionIt: 'Dettagli finanziari della partnership' },
-  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload statements and review', descriptionIt: 'Carica estratti conto e rivedi' },
+  { id: 'owner', title: 'Your Information', titleIt: 'I Tuoi Dati', description: 'The person filling this form', descriptionIt: 'La persona che compila questo modulo' },
+  { id: 'members', title: 'Members & Ownership', titleIt: 'Soci e Quote', description: 'Every member of the LLC — check what we have on file', descriptionIt: 'Tutti i soci della LLC — controlla i dati che abbiamo' },
+  { id: 'company', title: 'Company', titleIt: 'Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
+  { id: 'us_activity', title: 'Activity in the US', titleIt: 'Attività negli USA', description: 'Five questions about physical US presence', descriptionIt: 'Cinque domande sulla presenza fisica negli USA' },
+  { id: 'compliance', title: 'A Few Yes/No Questions', titleIt: 'Alcune Domande Sì/No', description: 'Most clients answer No to everything here', descriptionIt: 'La maggior parte dei clienti risponde No a tutte' },
+  { id: 'documents', title: 'Bank Statements & Documents', titleIt: 'Estratti Conto e Documenti', description: 'Upload statements and review', descriptionIt: 'Carica estratti conto e rivedi' },
+]
+
+// Yes/No options shared by the redesign's explicit selects (NEVER ambiguous
+// optional checkboxes — an unchecked box can't be told apart from a skipped one).
+const YN: { value: string; label: string; labelIt?: string }[] = [
+  { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+  { value: 'No', label: 'No' },
 ]
 
 export const TAX_MMLLC_FIELDS: Record<string, FieldConfig[]> = {
-  owner: [
-    ...TAX_OWNER_BASE,
-    // MMLLC members are added dynamically via repeater
+  owner: TAX_OWNER_BASE,
+
+  // Members machinery (wizard-client renders TAX_MEMBER_FIELDS per member,
+  // pre-filled from CRM — the client confirms instead of typing). Step-level
+  // questions below the member cards:
+  members: [
+    ...TAX_MEMBER_FIELDS,
   ],
+
   company: [
-    ...TAX_COMPANY_BASE,
-    { name: 'has_payroll_w2', label: 'Does the LLC have payroll / W-2 employees?', labelIt: 'La LLC ha dipendenti / W-2?', type: 'select', required: true, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'payroll_details', label: 'Payroll Details (if applicable)', labelIt: 'Dettagli Payroll (se applicabile)', type: 'textarea', required: false },
+    { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true, hint: 'The exact name on your Articles of Organization, including "LLC".', hintIt: 'Il nome esatto sull\'Atto Costitutivo, inclusa la sigla "LLC".' },
+    { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein', hint: 'The company\'s 9-digit tax number, on the IRS letter CP575 (format 12-3456789).', hintIt: 'Il numero fiscale a 9 cifre della società, sulla lettera IRS CP575 (formato 12-3456789).' },
+    { name: 'date_of_incorporation', label: 'Date of Incorporation', labelIt: 'Data Costituzione', type: 'date', required: true, hint: 'The date the LLC was officially formed — on the Articles of Organization.', hintIt: 'La data di costituzione ufficiale della LLC — sull\'Atto Costitutivo.' },
+    { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato di Costituzione', type: 'text', required: true, hint: 'The US state where the LLC is registered (e.g. New Mexico, Wyoming, Florida, Delaware).', hintIt: 'Lo stato USA dove la LLC è registrata (es. New Mexico, Wyoming, Florida, Delaware).' },
+    { name: 'principal_product_service', label: 'What does the company actually do?', labelIt: 'Cosa fa effettivamente la società?', type: 'textarea', required: true, hint: 'Be specific — "online sale of silver jewelry through Shopify" is better than "e-commerce". The more specific, the better your filing. We use this to choose the official IRS business code for you.', hintIt: 'Sii specifico — "vendita online di gioielli in argento tramite Shopify" è meglio di "e-commerce". Più sei specifico, migliore sarà la dichiarazione. Lo usiamo per scegliere noi il codice attività IRS.' },
+    { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (facoltativo)', type: 'text', required: false },
   ],
-  financials: [
-    { name: 'prior_year_returns_filed', label: 'Prior Year Returns Filed?', labelIt: 'Dichiarazioni anno precedente presentate?', type: 'select', required: true, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'financial_statements_sent', label: 'Financial Statements Prepared?', labelIt: 'Rendiconti finanziari preparati?', type: 'select', required: true, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_ownership_change', label: 'Any ownership changes during the year?', labelIt: 'Cambiamenti nella proprietà durante l\'anno?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_foreign_partners', label: 'Any foreign partners?', labelIt: 'Soci stranieri?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_assets_over_50k', label: 'Total assets over $50,000?', labelIt: 'Attivi totali superiori a $50.000?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_received_1099', label: 'Received any 1099 forms?', labelIt: 'Ricevuti moduli 1099?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_issued_1099', label: 'Issued any 1099 forms?', labelIt: 'Emessi moduli 1099?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_crypto_transactions', label: 'Any cryptocurrency transactions?', labelIt: 'Transazioni in criptovaluta?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_real_estate', label: 'Any real estate owned?', labelIt: 'Immobili di proprietà?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_foreign_bank_accounts', label: 'Foreign bank accounts (FBAR)?', labelIt: 'Conti bancari esteri (FBAR)?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_related_party_trans', label: 'Related party transactions?', labelIt: 'Transazioni con parti correlate?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_debt_forgiveness', label: 'Any debt forgiveness?', labelIt: 'Cancellazione di debiti?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_vehicle_business_use', label: 'Vehicle used for business?', labelIt: 'Veicolo usato per l\'attività?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_home_office', label: 'Home office deduction?', labelIt: 'Deduzione ufficio in casa?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_retirement_plan', label: 'Retirement plan contributions?', labelIt: 'Contributi piano pensionistico?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_health_insurance', label: 'Health insurance for partners?', labelIt: 'Assicurazione sanitaria per i soci?', type: 'select', required: false, options: [
-      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'mmllc_additional_info', label: 'Additional Information', labelIt: 'Informazioni Aggiuntive', type: 'textarea', required: false },
+
+  // The facts that determine US tax exposure. The client never self-certifies
+  // "effectively connected income" — we ask what actually happened and OUR
+  // accountant draws the legal conclusion (§14 redesign; the old form asked
+  // the client to make this call, which clients cannot do).
+  us_activity: [
+    { name: 'us_office_warehouse', label: 'Does the company have an office, warehouse, or any physical location in the US?', labelIt: 'La società ha un ufficio, magazzino o altra sede fisica negli USA?', type: 'select', required: true, options: YN, hint: 'A registered-agent address or a virtual mailbox does NOT count. We mean a real place where the business operates.', hintIt: 'L\'indirizzo del registered agent o una casella virtuale NON contano. Intendiamo un luogo reale dove opera l\'attività.' },
+    { name: 'us_people_working', label: 'Does anyone work for the company physically inside the US (employees, agents, contractors)?', labelIt: 'Qualcuno lavora per la società fisicamente negli USA (dipendenti, agenti, collaboratori)?', type: 'select', required: true, options: YN, hint: 'People working from outside the US for US customers do NOT count. We mean people physically in the US.', hintIt: 'Chi lavora da fuori gli USA per clienti americani NON conta. Intendiamo persone fisicamente negli USA.' },
+    { name: 'us_payroll_w2', label: 'Did the company run official US payroll (Forms W-2)?', labelIt: 'La società ha gestito buste paga ufficiali USA (Moduli W-2)?', type: 'select', required: true, conditional: { field: 'us_people_working', value: 'Yes' }, options: YN, hint: 'If yes, we will ask your payroll provider\'s reports later.', hintIt: 'Se sì, ti chiederemo più avanti i report del provider paghe.' },
+    { name: 'us_services_performed', label: 'Were any services physically performed inside the US?', labelIt: 'Sono stati svolti servizi fisicamente all\'interno degli USA?', type: 'select', required: true, options: YN, hint: 'Example: you or your team traveled to the US to do work for a client there. Selling online to US customers from abroad is NOT this.', hintIt: 'Esempio: tu o il tuo team siete andati negli USA per lavorare per un cliente lì. Vendere online a clienti USA dall\'estero NON è questo.' },
+    { name: 'us_rental_property', label: 'Does the company own US real estate that it rents out?', labelIt: 'La società possiede immobili USA dati in affitto?', type: 'select', required: true, options: YN, hint: 'US rental property changes the tax treatment — we need to know.', hintIt: 'Gli immobili in affitto negli USA cambiano il trattamento fiscale — dobbiamo saperlo.' },
+    { name: 'us_inventory_stored', label: 'Are products stored in US warehouses (Amazon FBA, 3PL, fulfillment centers)?', labelIt: 'I prodotti sono stoccati in magazzini USA (Amazon FBA, 3PL, centri logistici)?', type: 'select', required: true, options: YN, hint: 'This is the most common one for e-commerce: if Amazon or a logistics partner keeps your inventory in the US, answer Yes.', hintIt: 'È il caso più comune per l\'e-commerce: se Amazon o un partner logistico tiene il tuo inventario negli USA, rispondi Sì.' },
   ],
+
+  // Schedule B / international questions, in plain words. Explicit Yes/No —
+  // most clients answer No to all of them, and the step says so.
+  compliance: [
+    { name: 'comp_foreign_accounts', label: 'Did the company have a bank or financial account OUTSIDE the US during the year?', labelIt: 'La società ha avuto un conto bancario o finanziario FUORI dagli USA durante l\'anno?', type: 'select', required: true, options: YN, hint: 'Accounts in your home country or anywhere outside the US — even if empty. US banks and US fintechs (Mercury, Relay…) do NOT count. Wise and Revolut: answer Yes only if the account is held with their European entity.', hintIt: 'Conti nel tuo paese o ovunque fuori dagli USA — anche se vuoti. Banche e fintech USA (Mercury, Relay…) NON contano. Wise e Revolut: rispondi Sì solo se il conto è presso la loro entità europea.' },
+    { name: 'comp_foreign_subsidiaries', label: 'Does the company OWN any other company, US or foreign?', labelIt: 'La società POSSIEDE altre società, USA o estere?', type: 'select', required: true, options: YN, hint: 'For example a subsidiary, a holding position, or shares above 20% in another business.', hintIt: 'Per esempio una controllata, una holding, o quote sopra il 20% di un\'altra azienda.' },
+    { name: 'comp_foreign_trusts', label: 'Did the company send money to, or receive money from, a foreign trust?', labelIt: 'La società ha inviato o ricevuto denaro da un trust estero?', type: 'select', required: true, options: YN, hint: 'If you don\'t know what a trust is, your answer is No.', hintIt: 'Se non sai cos\'è un trust, la risposta è No.' },
+    { name: 'comp_digital_assets', label: 'Did the company receive, sell, or hold cryptocurrency or other digital assets?', labelIt: 'La società ha ricevuto, venduto o detenuto criptovalute o altri asset digitali?', type: 'select', required: true, options: YN, hint: 'Bitcoin, stablecoins, NFTs — receiving them as payment counts too.', hintIt: 'Bitcoin, stablecoin, NFT — anche riceverli come pagamento conta.' },
+    { name: 'comp_debt_changes', label: 'Was any company debt canceled, forgiven, or renegotiated to a lower amount?', labelIt: 'Qualche debito della società è stato cancellato, condonato o rinegoziato a un importo inferiore?', type: 'select', required: true, options: YN, hint: 'Canceled debt can count as income for the IRS — we need to know.', hintIt: 'Un debito cancellato può contare come reddito per l\'IRS — dobbiamo saperlo.' },
+    { name: 'comp_asset_purchases', label: 'Did the company buy or sell big assets (equipment, vehicles, property) during the year?', labelIt: 'La società ha comprato o venduto beni importanti (attrezzature, veicoli, immobili) durante l\'anno?', type: 'select', required: true, options: YN, hint: 'Normal inventory you sell does NOT count — we mean things the company keeps and uses.', hintIt: 'Il normale inventario che vendi NON conta — intendiamo beni che la società tiene e usa.' },
+    { name: 'comp_anything_else', label: 'Anything else we should know? (optional)', labelIt: 'Qualcos\'altro che dovremmo sapere? (facoltativo)', type: 'textarea', required: false, hint: 'Large unusual transactions, plans to close or sell the company, anything you are unsure about — write it here and we will check it for you.', hintIt: 'Operazioni insolite o importanti, piani di chiusura o vendita, qualsiasi dubbio — scrivilo qui e lo verifichiamo noi.' },
+  ],
+
   documents: TAX_DOCUMENTS_BASE,
 }
 

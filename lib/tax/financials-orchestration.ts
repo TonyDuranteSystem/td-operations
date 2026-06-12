@@ -34,10 +34,15 @@ export interface FinancialsView {
  *  Exported for tests. */
 export function extractWizardMembers(submittedData: Record<string, unknown>): OwnershipSource[] {
   const byIdx = new Map<number, Record<string, unknown>>()
+  // member_count is authoritative when present — indexed keys above it are
+  // leftovers from removed members and must NOT become partners.
+  const countRaw = Number(submittedData.member_count)
+  const maxIdx = Number.isFinite(countRaw) && countRaw > 0 ? countRaw - 1 : Infinity
   for (const [key, value] of Object.entries(submittedData)) {
     const m = key.match(/^member_(\d+)_member_(.+)$/)
     if (!m) continue
     const idx = Number(m[1])
+    if (idx > maxIdx) continue
     if (!byIdx.has(idx)) byIdx.set(idx, {})
     byIdx.get(idx)![m[2]] = value
   }

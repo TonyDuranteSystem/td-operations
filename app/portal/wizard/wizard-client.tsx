@@ -537,11 +537,23 @@ export function WizardClient({
                   <button
                     type="button"
                     onClick={() => {
-                      setMemberCount(c => c - 1)
-                      // Clear this member's fields
+                      const newCount = memberCount - 1
+                      setMemberCount(newCount)
+                      // Shift every later member down one slot, then clear the
+                      // last index — otherwise removing a middle member leaves
+                      // the following members' data orphaned above the count
+                      // (and the tax submission would still read it as a member).
                       setFormData(prev => {
                         const next = { ...prev }
-                        stepFields.forEach(f => { delete next[`member_${idx}_${f.name}`] })
+                        for (let i = idx; i < newCount; i++) {
+                          stepFields.forEach(f => {
+                            const from = next[`member_${i + 1}_${f.name}`]
+                            if (from === undefined) delete next[`member_${i}_${f.name}`]
+                            else next[`member_${i}_${f.name}`] = from
+                          })
+                        }
+                        stepFields.forEach(f => { delete next[`member_${newCount}_${f.name}`] })
+                        next.member_count = newCount
                         return next
                       })
                     }}
