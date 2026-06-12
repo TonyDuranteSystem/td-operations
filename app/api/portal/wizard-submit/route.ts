@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
-import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
+import { enqueueJob } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
@@ -535,45 +535,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 6. DIRECT HANDLER EXECUTION (for tax jobs) ───
-    // Claim and run the handler inline — more reliable than fire-and-forget HTTP.
-    // For tax_form_setup: blocks the response until processing completes (~10-30s).
-    // If claim fails (worker already picked it up), skip — it will be handled.
-    // Cron at /api/cron/process-jobs acts as safety net for anything missed.
-    if (jobType === 'tax_form_setup' && jobId) {
-      const claimNow = new Date().toISOString()
-      const { data: claimedJob } = await supabaseAdmin
-        .from('job_queue')
-        .update({ status: 'processing', started_at: claimNow, attempts: 1 })
-        .eq('id', jobId)
-        .eq('status', 'pending')
-        .select('*')
-        .single()
-
-      if (claimedJob) {
-        try {
-          const { handleTaxFormSetup } = await import('@/lib/jobs/handlers/tax-form-setup')
-          const result = await handleTaxFormSetup(claimedJob as unknown as Job)
-          if (result.ok === false) {
-            // Handler reached a failure path but didn't throw — mark the
-            // job failed so the Exception Center picks it up. Same rule as
-            // the /api/cron/process-jobs branch.
-            await failJob(jobId, result.summary || 'Handler reported failure', result)
-            console.warn(`[wizard-submit] Job ${jobId} inline-completed as failed: ${result.summary}`)
-          } else {
-            await completeJob(jobId, result)
-            console.warn(`[wizard-submit] Job ${jobId} completed inline: ${result.summary}`)
-          }
-        } catch (handlerErr) {
-          const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
-          await failJob(jobId, errMsg)
-          console.error(`[wizard-submit] Job ${jobId} failed inline:`, errMsg)
-          // Still return success — data was saved, cron will retry
-        }
-      } else {
-        console.warn(`[wizard-submit] Job ${jobId} already claimed by worker — skipping inline execution`)
-      }
-    }
+    // ─── 6. RETURN IMMEDIATELY — the job runs in the worker, never inline ───
+    // Tax jobs used to claim + execute the handler INLINE here, holding the
+    // browser's submit response hostage for 15-45s+. On Vercel those long-held
+    // responses died ("No response is returned from route handler") and the
+    // client saw "Submission failed" even though every server-side step had
+    // succeeded — so they resubmitted, duplicating review tasks (2026-06-12,
+    // Antonio's report; verified: both "failed" submits had fully completed
+    // jobs). enqueueJob already fire-and-forgets the /api/jobs/process
+    // trigger (~1s pickup) and /api/cron/process-jobs sweeps every 5 min —
+    // the same path formation/onboarding jobs have always used. The success
+    // screen's "we are preparing your P&L" copy covers the async window.
 
     return NextResponse.json({
       success: true,
