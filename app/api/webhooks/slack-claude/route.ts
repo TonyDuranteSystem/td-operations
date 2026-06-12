@@ -46,6 +46,11 @@ import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
 // Claude bot user ID — used to filter out self-messages (loop protection)
 const CLAUDE_BOT_USER_ID = "U0B9S675WTT"
 
+// Antonio's Slack user ID. Only his thread reply counts as an answer to a
+// pending ask-antonio code-task question (matches SLACK_USER_ANTONIO in
+// lib/ai-agent/slack-claude.ts and ANTONIO_SLACK_USER_ID in the Mac Mini CLI).
+const ANTONIO_SLACK_USER_ID = "U0BAALR4Y4Q"
+
 function verifySlackSignature(rawBody: string, timestamp: string, signature: string): boolean {
   const secret = process.env.SLACK_SIGNING_SECRET_CLAUDE
   if (!secret) {
@@ -256,6 +261,45 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const eventTs: string = event.ts ?? ""
   const text: string = event.text ?? ""
   const userId: string = event.user ?? ""
+
+  // ── ask-antonio answer routing ──
+  // If a running code-task session is waiting on a question in THIS thread,
+  // Antonio's reply IS the answer: record it and SUPPRESS normal bot processing
+  // so Claude doesn't also try to respond to it. Strictly scoped — fires only
+  // when (a) the message is a thread reply, (b) the sender is Antonio, and (c) a
+  // pending code_task_questions row exists for this thread. Fully defensive: any
+  // error (including the table not yet existing in this environment) falls
+  // through to normal processing, so this can never break the webhook nor
+  // swallow a message unless a genuine pending question is present.
+  if (threadTs && userId === ANTONIO_SLACK_USER_ID) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: pendingQ } = await (supabaseAdmin as any)
+        .from("code_task_questions")
+        .select("id")
+        .eq("slack_thread_ts", threadTs)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(1)
+      if (pendingQ?.length) {
+        const answer = text.replace(/<@[A-Z0-9]+>/g, "").trim()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabaseAdmin as any)
+          .from("code_task_questions")
+          .update({
+            status: "answered",
+            answer,
+            answered_by: userId,
+            answered_at: new Date().toISOString(),
+          })
+          .eq("id", pendingQ[0].id)
+          .eq("status", "pending")
+        return NextResponse.json({ ok: true, answered: pendingQ[0].id })
+      }
+    } catch (err) {
+      console.warn("[slack-claude-webhook] ask-antonio answer routing skipped (non-fatal):", err)
+    }
+  }
 
   // Image attachments (Feature 2). Keep only Anthropic-supported image types
   // within the size cap; url_private is fetched later (with the bot token) by
