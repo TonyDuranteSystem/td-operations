@@ -80,7 +80,12 @@ SHIPPING: When Antonio says "ship it", "deploy it", "push it", or similar:
 
 CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and sometimes Hermes
 (the Telegram AI assistant). Antonio is the decision-maker. You answer, discuss, and
-propose — he approves and directs. Hermes handles its own work independently.`.trim()
+propose — he approves and directs. Hermes handles its own work independently.
+
+SHARED THREADS: When Antonio tags both you and Hermes, you'll see Hermes's messages in
+the thread context. Read them. Don't repeat what Hermes already answered. If Hermes found
+something and Antonio asks you to act on it, you have the context. If Antonio says "send it"
+after Hermes drafted something, acknowledge that Hermes already sent it — don't ask "to who?"`.trim()
 
 // Conversation window: how long a scope stays "open" for follow-ups
 const SCOPE_WINDOW_MS = 30 * 60 * 1000 // 30 minutes
@@ -187,6 +192,85 @@ export async function fetchThreadImages(
   } catch (err) {
     console.warn('[slack-claude] fetchThreadImages failed:', err)
     return []
+  }
+}
+
+// Known Slack user IDs, used to label thread-history lines so the worker can
+// tell who said what. Claude (U0B9S675WTT) and Hermes (U0B9D3MAD9B) are verified
+// against app/api/webhooks/slack-claude/route.ts (lines 46 + 201). Antonio's id
+// is supplied by Antonio (his own Slack id) — an unknown sender just falls back
+// to "Someone", so a wrong id degrades the label only, never the flow.
+const SLACK_USER_CLAUDE = "U0B9S675WTT"
+const SLACK_USER_HERMES = "U0B9D3MAD9B"
+const SLACK_USER_ANTONIO = "U0BAALR4Y4Q"
+
+/**
+ * Fetch recent messages from a Slack thread for shared context.
+ * Returns a formatted string of who said what, so Claude can see
+ * Hermes's messages and Antonio's replies to both bots.
+ *
+ * Why this exists: in a thread where Antonio tags both @Claude and @Hermes, the
+ * worker otherwise only has `row.body` (the current message) + Claude's own
+ * agent_messages memory — it never sees what Hermes said. This injects the real
+ * Slack transcript so Claude has the full picture. Claude's own messages are
+ * skipped (they're already in its agent_messages context). Best-effort: a
+ * missing token, non-ok response (e.g. missing channels:history scope), or
+ * network error returns "" (logged) so the worker still answers.
+ */
+export async function fetchThreadHistory(
+  channelId: string,
+  threadTs: string,
+  limit: number = 30,
+): Promise<string> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) return ""
+
+  try {
+    const res = await fetch(
+      `https://slack.com/api/conversations.replies?channel=${channelId}&ts=${threadTs}&limit=${limit}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const data = await res.json() as {
+      ok: boolean
+      messages?: Array<{
+        user?: string
+        bot_id?: string
+        text?: string
+        ts?: string
+        files?: Array<{ name: string }>
+      }>
+    }
+    if (!data.ok || !data.messages) return ""
+
+    const lines: string[] = []
+    for (const msg of data.messages) {
+      // Skip Claude's own messages — already in its agent_messages context.
+      if (msg.user === SLACK_USER_CLAUDE) continue
+
+      const text = (msg.text || "").trim()
+      const fileNote = msg.files?.length ? ` [+${msg.files.length} file(s)]` : ""
+      if (!text && !fileNote) continue
+
+      // Determine who sent it
+      let sender = "Someone"
+      if (msg.user === SLACK_USER_ANTONIO) sender = "Antonio"
+      else if (msg.user === SLACK_USER_HERMES) sender = "Hermes"
+      else if (msg.bot_id) sender = "Bot"
+
+      // Clean up Slack mention formatting so the worker reads plain @names.
+      const cleanText = text
+        .replace(/<@U0B9S675WTT(\|[^>]*)?>/g, "@Claude")
+        .replace(/<@U0B9D3MAD9B(\|[^>]*)?>/g, "@Hermes")
+        .replace(/<@U0BAALR4Y4Q(\|[^>]*)?>/g, "@Antonio")
+
+      lines.push(`${sender}: ${cleanText}${fileNote}`)
+    }
+
+    if (lines.length === 0) return ""
+    return lines.join("\n")
+  } catch (err) {
+    console.warn("[slack-claude] fetchThreadHistory failed:", err)
+    return ""
   }
 }
 
@@ -366,6 +450,22 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // queued code task knows which channel/thread to report back to.
   _currentSlackCtx = { channelId, threadTs: replyThreadTs }
 
+  // Shared-thread context: when this is a thread reply, fetch the full Slack
+  // thread so Claude sees what everyone else said — including Hermes. Without
+  // this the worker only has row.body + Claude's own agent_messages memory and
+  // misses Hermes's messages in a thread where both bots were tagged. Gated on
+  // the genuine thread ts (slack_thread_ts) — same gate as the thread-image
+  // fallback above; a brand-new top-level mention has no prior thread to read.
+  // Best-effort: returns "" on any failure, in which case we use row.body as-is.
+  let enrichedBody = row.body
+  const historyThreadTs = ctx.slack_thread_ts as string | undefined
+  if (historyThreadTs) {
+    const slackThreadContext = await fetchThreadHistory(channelId, historyThreadTs)
+    if (slackThreadContext) {
+      enrichedBody = `[SLACK THREAD CONTEXT — what others said in this thread]\n${slackThreadContext}\n\n[YOUR CURRENT MESSAGE]\n${row.body}`
+    }
+  }
+
   // Run the worker. If the call fails specifically because of an image the API
   // rejected (a 400 mentioning "image" — e.g. a corrupt download that slipped
   // past the magic-byte guard, or an edge media type), retry once WITHOUT the
@@ -374,7 +474,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // cron marks the row failed as before.
   let reply: string
   try {
-    ;({ reply } = await callWorker(row.body, workerOpts))
+    ;({ reply } = await callWorker(enrichedBody, workerOpts))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
@@ -386,7 +486,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
       enableCodeTasks: true,
     }
-    ;({ reply } = await callWorker(row.body, textOnlyOpts))
+    ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
   }
 
   // Morph the "On it 👍" acknowledgment into the answer (chat.update) so the

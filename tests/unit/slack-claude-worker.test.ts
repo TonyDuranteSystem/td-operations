@@ -40,6 +40,7 @@ import {
   updateSlackMessage,
   prepareSlackImages,
   fetchThreadImages,
+  fetchThreadHistory,
 } from "@/lib/ai-agent/slack-claude"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker } from "@/lib/ai-agent/worker-tools"
@@ -95,8 +96,15 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
   })
 
   it("is shorter than the Hermes research prompt (conversational bias)", () => {
-    // The Slack prompt should stay concise — if it grows > 2000 chars it's too long
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(2000)
+    // The Slack prompt should stay concise. Ceiling bumped 2000 → 2600 when the
+    // SHARED THREADS block was added (multi-bot thread awareness); still far below
+    // a multi-thousand-char research prompt, so the conversational-bias guard holds.
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(2600)
+  })
+
+  it("instructs awareness of Hermes's messages in shared threads", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SHARED THREADS/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/Hermes/)
   })
 })
 
@@ -774,5 +782,196 @@ describe("fetchThreadImages", () => {
     mockFetch.mockRejectedValue(new Error("network down"))
     const imgs = await fetchThreadImages("C123", "100.000")
     expect(imgs).toEqual([])
+  })
+})
+
+// -------------------------------------------------------------------------
+// fetchThreadHistory
+// -------------------------------------------------------------------------
+
+describe("fetchThreadHistory", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("formats who-said-what, labels Antonio/Hermes, and skips Claude's own messages", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", text: "look at this invoice" }, // Antonio
+            { user: "U0B9D3MAD9B", text: "I found the duplicate" }, // Hermes
+            { user: "U0B9S675WTT", text: "On it 👍" }, // Claude — must be skipped
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Antonio: look at this invoice\nHermes: I found the duplicate")
+    // queries conversations.replies with channel + thread root ts + limit
+    const url = String(mockFetch.mock.calls[0][0])
+    expect(url).toContain("conversations.replies")
+    expect(url).toContain("channel=C123")
+    expect(url).toContain("ts=100.000")
+  })
+
+  it("rewrites <@ID> mention tokens to readable @names", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", text: "<@U0B9S675WTT> and <@U0B9D3MAD9B> please check" },
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Antonio: @Claude and @Hermes please check")
+  })
+
+  it("includes a file note for messages that carry files but no text", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", files: [{ name: "shot.png" }] },
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Antonio:  [+1 file(s)]")
+  })
+
+  it("labels unknown senders as 'Bot' (bot_id present) or 'Someone'", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { bot_id: "B999", text: "automated note" },
+            { user: "UUNKNOWN", text: "hello" },
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Bot: automated note\nSomeone: hello")
+  })
+
+  it("returns '' when the Slack API responds not-ok (e.g. missing scope)", async () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: false, error: "missing_scope" }) })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+  })
+
+  it("returns '' when there are no usable lines", async () => {
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, messages: [{ user: "U0B9S675WTT", text: "only me" }] }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+  })
+
+  it("returns '' (and does not fetch) when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("returns '' when fetch throws", async () => {
+    mockFetch.mockRejectedValue(new Error("network down"))
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+  })
+})
+
+// -------------------------------------------------------------------------
+// processSlackEvent — shared-thread context injection
+// -------------------------------------------------------------------------
+
+describe("processSlackEvent shared-thread context", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("prepends Slack thread history to the worker body for a thread reply", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "ok", toolsUsed: [] })
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes("conversations.replies")) {
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              messages: [
+                { user: "U0BAALR4Y4Q", text: "check this" },
+                { user: "U0B9D3MAD9B", text: "Hermes found the answer" },
+              ],
+            }),
+        })
+      }
+      // chat.postMessage / chat.update / cron trigger
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+    })
+
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+
+    const row = {
+      id: "row-shared-1",
+      body: "do what Hermes said",
+      thread_id: "thread-x",
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_thread_ts: "100.000",
+        slack_event_ts: "200.000",
+        slack_images: [],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    const sentBody = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(sentBody).toContain("[SLACK THREAD CONTEXT")
+    expect(sentBody).toContain("Hermes: Hermes found the answer")
+    expect(sentBody).toContain("[YOUR CURRENT MESSAGE]")
+    expect(sentBody).toContain("do what Hermes said")
+  })
+
+  it("uses the raw body (no context block) when the message is not in a thread", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "ok", toolsUsed: [] })
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+
+    const row = {
+      id: "row-shared-2",
+      body: "channel-level mention",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "300.000", // no slack_thread_ts → not in a thread
+        slack_images: [],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    const sentBody = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(sentBody).toBe("channel-level mention")
+    // No thread → no conversations.replies call
+    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("conversations.replies"))).toBeUndefined()
   })
 })

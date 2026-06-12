@@ -1,7 +1,7 @@
 # Slack Claude Worker
 
 **Subsystem:** `slack-claude-worker`
-**Last verified against code:** 2026-06-11 (ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt)
+**Last verified against code:** 2026-06-11 (ack-collapse + image support + thread-history images + file_share thread replies + message-ts dedup + image-validity guard + text-only fallback + code-task rail auto-push + SHIPPING prompt + shared-thread text context so Claude sees Hermes's messages)
 **Owned by:** Antonio Durante LLC — dev
 
 ---
@@ -48,7 +48,7 @@ Slack                          Production server              Supabase
 
 | File | Role |
 |------|------|
-| `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent`, `prepareSlackImages`, `fetchThreadImages` (thread-history image harvest) |
+| `lib/ai-agent/slack-claude.ts` | Core module: `SLACK_WORKER_SYSTEM_PROMPT`, `slackScopeKey`, `postSlackMessage`, `findOrCreateConversationThread`, `processSlackEvent`, `prepareSlackImages`, `fetchThreadImages` (thread-history image harvest), `fetchThreadHistory` (thread-history **text** harvest for shared-thread context) |
 | `app/api/webhooks/slack-claude/route.ts` | Slack Events API webhook handler |
 | `app/api/cron/slack-claude-worker/route.ts` | Worker cron (direct trigger + scan safety net) |
 | `scripts/mac-mini/code-task-runner.mjs` | Mac Mini launchd daemon: claims `recipient='code_runner'` rows, runs headless `claude --print`, auto-pushes new commits to production, posts result to the Slack thread |
@@ -122,6 +122,24 @@ Slack can deliver more than one event for a single underlying message, so the we
 - **Worker — thread history fallback** (`fetchThreadImages` in `slack-claude.ts`): when `context_json.slack_images` is empty **and** the row is a thread reply (`slack_thread_ts` set), the worker calls `conversations.replies` (≤20 messages) and harvests any supported images from earlier in the thread, then feeds them through `prepareSlackImages`. This is what makes "read the screenshot" work when the screenshot was posted in a prior message. Best-effort: missing token / non-ok response (e.g. missing `channels:history` scope) / network error returns `[]` and the worker answers text-only. **Requires the bot to hold `channels:history` (and `groups:history` for private channels) read scope** — verify in prod E2E.
 - **callWorker** (`worker-tools.ts`): `opts.images` is optional. When non-empty the user turn is sent as `[{type:"text",…}, …imageBlocks]`; otherwise a plain string — identical to the Hermes/Telegram path. `runWorkerLoop` accepts `string | content[]`.
 
+## Shared-thread context (Claude sees Hermes's messages)
+
+When Antonio tags **both** `@Claude` and `@Hermes` in a thread, the worker would otherwise only have `row.body` (the current message) + Claude's own `agent_messages` memory — it never sees what Hermes said. The fix injects the real Slack transcript:
+
+- **`fetchThreadHistory(channelId, threadTs, limit=30)`** (`slack-claude.ts`): calls `conversations.replies` and formats each message as `Sender: text [+N file(s)]`. Skips Claude's own messages (user id `U0B9S675WTT` — already in its agent_messages context). Labels by user id: Antonio `U0BAALR4Y4Q`, Hermes `U0B9D3MAD9B`, any `bot_id` → `Bot`, else `Someone`. Rewrites `<@ID>` mention tokens to readable `@Claude`/`@Hermes`/`@Antonio`. Best-effort: missing token / non-ok response (e.g. missing `channels:history` scope) / network error → returns `""` and the worker uses `row.body` unchanged.
+- **`processSlackEvent`** gates the fetch on the genuine thread ts (`context_json.slack_thread_ts`), same gate as the thread-image fallback — a brand-new top-level mention has no prior thread to read (and would fire a useless `conversations.replies` call). When history is non-empty the worker body becomes:
+  ```
+  [SLACK THREAD CONTEXT — what others said in this thread]
+  Antonio: …
+  Hermes: …
+
+  [YOUR CURRENT MESSAGE]
+  <row.body>
+  ```
+- **System prompt** carries a `SHARED THREADS` block telling Claude to read the context, not repeat what Hermes already answered, and — if Antonio says "send it" after Hermes drafted something — acknowledge Hermes already sent it rather than asking "to who?".
+- Antonio's user id `U0BAALR4Y4Q` is **not otherwise referenced in code** (supplied by Antonio); a wrong id only degrades his label to `Someone`, never the flow. Claude `U0B9S675WTT` + Hermes `U0B9D3MAD9B` are cross-checked against `app/api/webhooks/slack-claude/route.ts`.
+- **Requires the bot to hold `channels:history`** (and `groups:history` for private channels) read scope — same scope the thread-image fallback needs. Verify in prod E2E.
+
 ## Loop protection
 
 The webhook handler skips incoming events (runs **before** the participation query and insert) when:
@@ -156,6 +174,7 @@ The webhook handler skips incoming events (runs **before** the participation que
 - `propose_action` pattern: describe in plain English → wait for explicit approval ("yes", "go", "send it")
 - **CODE TASKS** block: when asked to implement/build/fix/deploy → investigate with read tools, then call `start_code_task` with detailed instructions, then say "I've queued the task — Mac Mini will handle it and report back here"
 - **SHIPPING** block: when Antonio says "ship it"/"deploy it"/"push it" → don't re-queue a done code task (the runner auto-pushes); if a local commit is waiting, say "The code is committed and being pushed to production"; "ship" = push to production, "do it" = implement — don't confuse the two
+- **SHARED THREADS** block: read Hermes's messages from the injected thread context, don't repeat what Hermes already answered, acknowledge Hermes already sent something rather than asking "to who?" (see "Shared-thread context" above)
 - Differs from `WORKER_SYSTEM_PROMPT` (Hermes): less analytical, more interactive
 
 ---
