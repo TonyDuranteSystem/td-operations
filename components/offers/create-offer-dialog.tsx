@@ -44,7 +44,7 @@ const PAYMENT_GATEWAYS = [
 ]
 
 const BANK_OPTIONS = [
-  { value: 'auto', label: 'Auto (by currency)' },
+  { value: 'auto', label: 'Default (from settings)' },
   { value: 'relay', label: 'Relay (USD)' },
   { value: 'mercury', label: 'Mercury (USD)' },
   { value: 'revolut', label: 'Revolut (USD)' },
@@ -920,7 +920,7 @@ export function CreateOfferDialog({
                   </span>
                 </p>
               ) : bankPreference === 'auto' ? (
-                <p className="text-xs text-zinc-400 mt-0.5">EUR-Airwallex, USD-Relay</p>
+                <p className="text-xs text-zinc-400 mt-0.5">Picks default bank from Invoice Settings</p>
               ) : null}
             </div>
           </div>

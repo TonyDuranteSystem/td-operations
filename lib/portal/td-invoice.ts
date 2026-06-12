@@ -37,7 +37,7 @@ export interface TDInvoiceInput {
   whop_payment_id?: string
   /** Bank account to use for this invoice. Honored by sendTDInvoice when rendering
    *  PDF + email bank block. Null falls back to 'auto' (EUR→Airwallex, USD→Relay). */
-  bank_preference?: 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
+  bank_preference?: string
   /**
    * Optional content-level idempotency key. If provided and a payments row
    * with this key already exists, returns the existing row (no new invoice

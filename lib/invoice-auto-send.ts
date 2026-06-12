@@ -20,21 +20,94 @@ import { buildInvoiceEmail } from "@/lib/email/invoice-email"
 import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
 import { TD_COMPANY } from "@/lib/config"
 
+type SettingsBank = {
+  name: string
+  currency: string
+  bank_name: string
+  account_number: string
+  routing_number: string
+  iban: string
+  swift: string
+  active: boolean
+  is_default?: boolean
+}
+
+async function fetchSettingsBanks(): Promise<SettingsBank[]> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("invoice_settings")
+      .select("bank_accounts")
+      .limit(1)
+      .single()
+    return (data?.bank_accounts as SettingsBank[]) ?? []
+  } catch {
+    return []
+  }
+}
+
+function settingsBankToDetails(bank: SettingsBank, currency: "USD" | "EUR"): NonNullable<InvoicePdfInput["bankDetails"]> {
+  return {
+    label: `${bank.name || bank.bank_name} — ${currency}`,
+    accountHolder: "Tony Durante L.L.C.",
+    bankName: bank.bank_name || null,
+    iban: bank.iban || null,
+    swiftBic: bank.swift || null,
+    accountNumber: bank.account_number || null,
+    routingNumber: bank.routing_number || null,
+  }
+}
+
 /**
  * Resolve bank details for a payment row into the shape generateInvoicePdf +
- * buildAutoSendEmail expect. Reads payments.bank_preference; if null, falls
- * back to 'auto' which maps to Relay (USD) or Airwallex (EUR) via currency.
+ * buildAutoSendEmail expect.
+ *
+ * Resolution order:
+ *  1. settings_bank_N — specific bank from Invoice Settings by index
+ *  2. null / "auto"  — default bank from Invoice Settings (is_default=true, same currency)
+ *  3. Legacy value   — hardcoded bank via getBankDetailsByPreference
+ *
+ * Fallback for auto when Invoice Settings has no matching bank: Mercury (USD) or Airwallex (EUR).
  */
-function resolveBankDetails(
+async function resolveBankDetails(
   preference: string | null | undefined,
   currency: "USD" | "EUR",
-): NonNullable<InvoicePdfInput["bankDetails"]> {
-  const pref = (preference ?? "auto") as BankPreference
-  const bd = getBankDetailsByPreference(pref, currency)
-  const effectivePref: BankPreference = pref === "auto"
-    ? (currency === "USD" ? "relay" : "airwallex")
-    : pref
-  const label = `${effectivePref.charAt(0).toUpperCase()}${effectivePref.slice(1)} — ${currency}`
+): Promise<NonNullable<InvoicePdfInput["bankDetails"]>> {
+  // settings_bank_N — specific bank from Invoice Settings by index
+  if (preference?.startsWith("settings_bank_")) {
+    const idx = parseInt(preference.replace("settings_bank_", ""), 10)
+    if (!isNaN(idx)) {
+      const banks = await fetchSettingsBanks()
+      const bank = banks[idx]
+      if (bank?.active) return settingsBankToDetails(bank, currency)
+    }
+    // Fall through to default resolution
+  }
+
+  // null or "auto" — look up the default bank from Invoice Settings
+  if (!preference || preference === "auto") {
+    const banks = await fetchSettingsBanks()
+    const defaultBank =
+      banks.find(b => b.active && b.is_default && b.currency === currency) ??
+      banks.find(b => b.active && b.currency === currency)
+    if (defaultBank) return settingsBankToDetails(defaultBank, currency)
+
+    // Final fallback: Mercury (USD) or Airwallex (EUR)
+    const fallbackPref = currency === "USD" ? "mercury" : "airwallex"
+    const bd = getBankDetailsByPreference(fallbackPref, currency)
+    return {
+      label: `${fallbackPref.charAt(0).toUpperCase()}${fallbackPref.slice(1)} — ${currency}`,
+      accountHolder: bd.beneficiary ?? "Tony Durante LLC",
+      bankName: bd.bank_name ?? null,
+      iban: bd.iban ?? null,
+      swiftBic: bd.bic ?? null,
+      accountNumber: bd.account_number ?? null,
+      routingNumber: bd.routing_number ?? null,
+    }
+  }
+
+  // Legacy hardcoded preference (relay, mercury, revolut, airwallex)
+  const bd = getBankDetailsByPreference(preference as BankPreference, currency)
+  const label = `${preference.charAt(0).toUpperCase()}${preference.slice(1)} — ${currency}`
   return {
     label,
     accountHolder: bd.beneficiary ?? "Tony Durante LLC",
@@ -149,8 +222,8 @@ export async function sendTDInvoice(
   const currency: "USD" | "EUR" = (payment.amount_currency === "EUR" ? "EUR" : "USD")
   const csym = currency === "EUR" ? "€" : "$"
   // Dynamic bank resolution via payments.bank_preference. Null => 'auto'
-  // => Relay USD or Airwallex EUR via getBankDetailsByPreference.
-  const bankDetails = resolveBankDetails(payment.bank_preference, currency)
+  // => default from Invoice Settings, fallback to Mercury USD or Airwallex EUR.
+  const bankDetails = await resolveBankDetails(payment.bank_preference, currency)
   const clientName = recipientName || account?.company_name || "Client"
   const invoiceNumber = payment.invoice_number ?? "DRAFT"
   const total = Number(payment.total ?? payment.amount ?? 0)
@@ -358,7 +431,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
   const currency: "USD" | "EUR" = payment.amount_currency === "EUR" ? "EUR" : "USD"
   const csym = currency === "EUR" ? "€" : "$"
   const total = Number(payment.total ?? payment.amount ?? 0)
-  const bankDetails = resolveBankDetails(payment.bank_preference, currency)
+  const bankDetails = await resolveBankDetails(payment.bank_preference, currency)
 
   // Generate the PAID PDF (reuses the same template; the document is
   // marked Paid in the payment record by now so the PDF's status line
