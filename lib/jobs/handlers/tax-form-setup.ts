@@ -349,6 +349,47 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
   await updateJobProgress(job.id, result)
 
   // ─── 7. BANK STATEMENT PARSING + P&L FOR MMLLC/Corp ───
+  // ── Portal bank CSVs: ingest DIRECTLY from storage (master plan §3.3) ──
+  // The wizard's per-bank CSV uploads feed the client's P&L + Balance Sheet
+  // screen (/portal/tax-financials). This goes through ingestPortalCsv — the
+  // same battle-tested pipeline as the review screen's own upload: content-
+  // signature parsing, taxYear hint, 'upload:<sha256>' source keys, duplicate
+  // structural guarantee, deterministic categorization + background AI pass.
+  // The Drive scan below stays as the legacy/staff fallback — re-scanning the
+  // same content is harmless (deterministic refs collide on the dedup index).
+  if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
+    try {
+      const bankCsvs = uploadPaths.filter(path => /bank_accounts_\d+_statements_/.test(path))
+      if (bankCsvs.length > 0) {
+        const { ingestPortalCsv } = await import("@/lib/tax/portal-csv-ingest")
+        let ok = 0
+        const failures: string[] = []
+        for (const path of bankCsvs) {
+          try {
+            const idx = path.match(/bank_accounts_(\d+)_statements_/)?.[1]
+            const bankLabel = String(p.submitted_data?.[`bank_accounts_${idx}_bank_name`] ?? "Bank")
+            const accountKind = String(p.submitted_data?.[`bank_accounts_${idx}_account_kind`] ?? "checking")
+            const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(path)
+            if (dlErr || !blob) { failures.push(`${path.split("/").pop()}: ${dlErr?.message ?? "download failed"}`); continue }
+            const buffer = Buffer.from(await blob.arrayBuffer())
+            const fileName = path.split("/").pop() ?? "statement.csv"
+            const r = await ingestPortalCsv({ accountId: p.account_id, taxYear, bankLabel, accountKind, buffer, fileName })
+            if (r.ok) ok++
+            else failures.push(`${fileName}: ${r.error?.slice(0, 80)}`)
+          } catch (e) {
+            failures.push(`${path.split("/").pop()}: ${e instanceof Error ? e.message.slice(0, 80) : "error"}`)
+          }
+        }
+        result.steps.push(step("portal_csv_ingest", ok > 0 ? "ok" : "error",
+          `${ok}/${bankCsvs.length} CSV files ingested into bank_transactions${failures.length ? ` — failures: ${failures.join("; ")}` : ""}`))
+      } else {
+        result.steps.push(step("portal_csv_ingest", "skipped", "No per-bank CSV uploads on the submission"))
+      }
+    } catch (e) {
+      result.steps.push(step("portal_csv_ingest", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
   if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
     try {
       const { listFolder, uploadBinaryToDrive, downloadFileBinary } = await import("@/lib/google-drive")

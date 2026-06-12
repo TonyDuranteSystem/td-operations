@@ -98,7 +98,11 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   }
 
   // 4. Insert — the unique index drops exact-duplicate rows (structural L2).
+  // Per-row errors are COLLECTED and the whole file fails loudly when nothing
+  // landed — a silent 0-insert hid the sandbox index drift for a full
+  // submission (13 files parsed, 0 rows, no error anywhere).
   let inserted = 0
+  let firstInsertError: string | null = null
   for (const tx of categorized) {
     const { error } = await supabaseAdmin
       .from("bank_transactions")
@@ -121,6 +125,10 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
         notes: tx.notes,
       }, { onConflict: "account_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
     if (!error) inserted++
+    else if (!firstInsertError) firstInsertError = error.message
+  }
+  if (inserted === 0 && categorized.length > 0 && firstInsertError) {
+    return fail(`The file was read correctly (${categorized.length} transactions) but could not be saved: ${firstInsertError}. Please contact us — this is on our side, not yours.`)
   }
 
   // 5. Deterministic categorization passes now (rules + transfer pairs)…

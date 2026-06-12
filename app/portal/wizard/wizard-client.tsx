@@ -439,6 +439,10 @@ export function WizardClient({
   if (isSubmitted) {
     const isBanking = wizardType === 'banking_payset' || wizardType === 'banking_relay'
     const bankLabel = wizardType === 'banking_relay' ? 'Relay (USD)' : 'Payset (EUR)'
+    // MMLLC/Corp tax: the submission's bank CSVs feed the generated P&L +
+    // Balance Sheet — the success screen's PRIMARY action is checking them
+    // (master plan §3.5; before this the screen never mentioned they exist).
+    const isTaxFinancials = wizardType === 'tax' && (entityType === 'MMLLC' || entityType === 'Corp')
 
     return (
       <div className="max-w-lg mx-auto text-center py-16">
@@ -451,11 +455,32 @@ export function WizardClient({
             : (locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')}
         </h2>
         <p className="text-zinc-500 mb-6">
-          {locale === 'it'
-            ? 'Il nostro team esaminerà le informazioni e ti contatterà a breve.'
-            : 'Our team will review your information and contact you shortly.'}
+          {isTaxFinancials
+            ? (locale === 'it'
+              ? 'Stiamo preparando il tuo Conto Economico e Stato Patrimoniale dai file che hai caricato — controllali, rispondi alle eventuali domande e conferma i numeri.'
+              : 'We are preparing your Profit & Loss and Balance Sheet from the files you uploaded — check them, answer any remaining questions, and confirm the numbers.')
+            : (locale === 'it'
+              ? 'Il nostro team esaminerà le informazioni e ti contatterà a breve.'
+              : 'Our team will review your information and contact you shortly.')}
         </p>
-        {isBanking ? (
+        {isTaxFinancials ? (
+          <div className="space-y-3">
+            <a
+              href="/portal/tax-financials"
+              className="inline-flex items-center px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+            >
+              {locale === 'it' ? 'Vedi il tuo Conto Economico e Stato Patrimoniale →' : 'See your Profit & Loss and Balance Sheet →'}
+            </a>
+            <div>
+              <a
+                href="/portal"
+                className="inline-flex items-center px-4 py-1.5 text-sm text-zinc-500 hover:text-zinc-700 transition-colors"
+              >
+                {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+              </a>
+            </div>
+          </div>
+        ) : isBanking ? (
           <div className="space-y-3">
             <a
               href="/portal/wizard?type=banking"
