@@ -3119,52 +3119,59 @@ export default function PortalChatsPage() {
 
             {/* AI Suggestion */}
             {(aiLoading || aiSuggestion) && (
-              <div className="px-4 py-3 border-t bg-gradient-to-r from-violet-50 to-blue-50 shrink-0">
-                {aiLoading ? (
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-violet-500 animate-pulse" />
-                    <span className="text-xs text-violet-600 font-medium">AI is thinking...</span>
+              <div className="border-t bg-gradient-to-r from-violet-50 to-blue-50 flex flex-col shrink-0">
+                {/* Sticky header — always visible even when content scrolls */}
+                <div className="sticky top-0 bg-gradient-to-r from-violet-50 to-blue-50 z-10 flex items-center justify-between px-4 py-2 border-b border-violet-100">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                    <span className="text-[11px] font-semibold text-violet-600 uppercase tracking-wide">AI Suggestion</span>
                   </div>
-                ) : aiSuggestion ? (
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <Sparkles className="h-3.5 w-3.5 text-violet-500" />
-                        <span className="text-[11px] font-semibold text-violet-600 uppercase tracking-wide">AI Suggestion</span>
+                  {aiSuggestion && (
+                    <button
+                      onClick={() => setAiSuggestion('')}
+                      className="p-0.5 rounded hover:bg-violet-100 text-violet-400"
+                      aria-label="Dismiss suggestion"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {/* Scrollable body — capped so it never pushes the reply bar off-screen */}
+                <div className="overflow-y-auto max-h-48 px-4 py-2">
+                  {aiLoading ? (
+                    <div className="flex items-center gap-2 py-1">
+                      <Sparkles className="h-4 w-4 text-violet-500 animate-pulse" />
+                      <span className="text-xs text-violet-600 font-medium">AI is thinking...</span>
+                    </div>
+                  ) : aiSuggestion ? (
+                    <>
+                      <p className="text-sm text-zinc-700 whitespace-pre-wrap mb-2">{aiSuggestion}</p>
+                      <div className="flex gap-2 flex-wrap pb-1">
+                        <button
+                          onClick={() => {
+                            setReplyText(aiSuggestion)
+                            setAiSuggestion('')
+                            inputRef.current?.focus()
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
+                        >
+                          <Check className="h-3 w-3" />
+                          Use this reply
+                        </button>
+                        <button
+                          onClick={() => {
+                            setReplyText(aiSuggestion)
+                            setAiSuggestion('')
+                            inputRef.current?.focus()
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors"
+                        >
+                          Edit first
+                        </button>
                       </div>
-                      <button
-                        onClick={() => setAiSuggestion('')}
-                        className="p-0.5 rounded hover:bg-violet-100 text-violet-400"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                    <p className="text-sm text-zinc-700 whitespace-pre-wrap mb-2">{aiSuggestion}</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          setReplyText(aiSuggestion)
-                          setAiSuggestion('')
-                          inputRef.current?.focus()
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
-                      >
-                        <Check className="h-3 w-3" />
-                        Use this reply
-                      </button>
-                      <button
-                        onClick={() => {
-                          setReplyText(aiSuggestion)
-                          setAiSuggestion('')
-                          inputRef.current?.focus()
-                        }}
-                        className="px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors"
-                      >
-                        Edit first
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
+                    </>
+                  ) : null}
+                </div>
               </div>
             )}
 
