@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
-import { WizardField } from '@/components/portal/wizard/wizard-field'
+import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
 import { createClient } from '@/lib/supabase/client'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
@@ -34,6 +34,19 @@ interface WizardClientProps {
   /** How many ITINs the offer bundled (start-at-wizard). 0 = no ITIN question.
    * When > 0 the wizard asks who applies and requires exactly this many "Yes". */
   itinCount?: number
+}
+
+// A conditional field is visible only if its condition matches AND its parent
+// field is itself visible — the WHOLE ancestor chain must hold. Without this,
+// a child kept demanding its upload after the grandparent flipped to No: the
+// parent's stale answer stayed in the draft, the child checked only its direct
+// parent, and Next blocked on an invisible field (crypto-CSV repro:
+// answer 1099=No, then crypto=No). Pure module-level — no hook deps.
+function isFieldVisible(field: FieldConfig, stepFields: FieldConfig[], data: Record<string, unknown>, depth = 0): boolean {
+  if (!field.conditional || depth > 10) return true
+  if (String(data[field.conditional.field]) !== field.conditional.value) return false
+  const parent = stepFields.find(f => f.name === field.conditional!.field)
+  return parent ? isFieldVisible(parent, stepFields, data, depth + 1) : true
 }
 
 export function WizardClient({
@@ -188,6 +201,7 @@ export function WizardClient({
     return false
   }
 
+
   // Validate current step
   const validateStep = useCallback(() => {
     const stepId = steps[currentStep].id
@@ -217,11 +231,10 @@ export function WizardClient({
 
     for (const field of stepFields) {
       // Skip validation for hidden conditional fields (applies to repeaters
-      // too — e.g. the related-party repeater only when its gate is "Yes")
-      if (field.conditional) {
-        const refValue = formData[field.conditional.field]
-        if (String(refValue) !== field.conditional.value) continue
-      }
+      // too — e.g. the related-party repeater only when its gate is "Yes").
+      // Full ancestor-chain check: a stale child answer must not keep a
+      // field required after its grandparent flipped.
+      if (!isFieldVisible(field, stepFields, formData)) continue
       // Repeater gate (merged from both wizard features 2026-06-11): a
       // required repeater (`required` — SMLLC related-party — OR
       // `repeaterRequired` — MMLLC bank accounts) needs ≥1 row, and every
@@ -610,16 +623,11 @@ export function WizardClient({
             .filter(field => {
               // Conditional show/hide applies to ALL field types, including
               // repeaters — e.g. related_party_transactions is gated behind the
-              // has_related_party_transactions = 'Yes' answer. (Previously
-              // repeaters short-circuited to always-render, which would have
-              // made that gate inert.)
-              if (field.conditional) {
-                const refValue = formData[field.conditional.field]
-                return String(refValue) === field.conditional.value
-              }
-              // Repeaters without a conditional always render.
-              if (field.type === 'repeater') return true
-              return true
+              // has_related_party_transactions = 'Yes' answer. Visibility walks
+              // the FULL ancestor chain (see isFieldVisible) so a stale child
+              // answer can't keep a field on screen after its grandparent
+              // flipped to No.
+              return isFieldVisible(field, stepFields, formData)
             })
             .map(field => {
               // ── Inline repeater ─────────────────────────────────────
