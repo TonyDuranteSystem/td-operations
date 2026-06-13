@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { isDashboardUser } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -6,8 +8,20 @@ export const dynamic = 'force-dynamic'
  * GET /api/portal/chat/search-accounts?q=term
  * Search active CRM accounts with their primary contact for starting a new portal chat.
  * Splits query into words and matches each independently (handles "Play Lover" matching "PlayLover").
+ *
+ * STAFF-ONLY: this is the CRM dashboard "start a new chat" picker (portal-chats
+ * page + action-board new-card dialog). It enumerates the active client roster
+ * via the service-role client, so it MUST reject clients — middleware only
+ * verifies "a session exists" for /api/portal/*, not the role (security audit
+ * 2026-06-13, C1).
  */
 export async function GET(request: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
   const q = request.nextUrl.searchParams.get('q')?.trim() ?? ''
   if (q.length < 2) {
     return NextResponse.json({ accounts: [] })

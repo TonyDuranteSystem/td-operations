@@ -47,8 +47,13 @@ function getSupabase() {
 async function verifyStripeSignature(body: string, signature: string): Promise<StripeEvent | null> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim()
   if (!secret) {
-    console.warn("[stripe-webhook] STRIPE_WEBHOOK_SECRET not set — skipping verification")
-    return JSON.parse(body) as StripeEvent
+    // Fail CLOSED: with no secret we cannot verify the signature, so we must
+    // reject rather than trust an unsigned payload. Accepting it would let
+    // anyone forge a checkout.session.completed and trigger a fraudulent
+    // activation (security audit 2026-06-13, C2). The Slack webhooks fail
+    // closed the same way.
+    console.error("[stripe-webhook] STRIPE_WEBHOOK_SECRET not set — rejecting webhook (fail closed)")
+    return null
   }
 
   // Parse Stripe signature header: t=timestamp,v1=signature
