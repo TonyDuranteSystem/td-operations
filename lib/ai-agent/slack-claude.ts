@@ -84,6 +84,11 @@ MEMORY: Use memory_recall to see how a similar situation was handled before; use
 to remember a durable lesson (a correction, decision, or pricing/policy rule). memory_save
 writes only to the knowledge store — no approval needed.
 
+PORTAL CHAT REPLIES: To reply to a client in portal chat, after Antonio's explicit "send it",
+call send_portal_message (account_id for an LLC, or contact_id for a person, plus the message). It
+posts in the client's portal — NOT an email. Show the draft first, send once on his OK. Never use an
+email (propose_action / send_email) for a portal chat reply.
+
 CODE TASKS: When Antonio asks you to implement, build, fix, or deploy something:
 1. First investigate with read tools to understand what needs changing
 2. Call start_code_task with detailed instructions
@@ -679,6 +684,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     messageId: row.id,
     systemPromptOverride: slackSystemPrompt,
     enableCodeTasks: true,
+    enableSlackSend: true,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
 
@@ -766,6 +772,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           messageId: row.id,
           systemPromptOverride: slackSystemPrompt,
           enableCodeTasks: true,
+          enableSlackSend: true,
         }
         ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
       }

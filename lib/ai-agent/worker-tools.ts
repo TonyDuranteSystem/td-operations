@@ -26,6 +26,7 @@
 import { createHash, randomUUID } from "crypto"
 import { AGENT_TOOLS, executeTool, type ToolDef } from "./tools"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logAction } from "@/lib/mcp/action-log"
 import {
   APPROVABLE_TOOL_NAMES,
   isApprovableTool,
@@ -184,6 +185,169 @@ export const START_CODE_TASK_TOOL: ToolDef = {
 }
 
 /**
+ * send_portal_message — Slack-only direct send to a client's PORTAL CHAT.
+ *
+ * Unlike every other side-effecting capability the worker has (which must go
+ * through propose_action → approval_queue → confirmation code), this tool sends
+ * immediately. Antonio authorized that on 2026-06-13: a portal chat reply is a
+ * routine, low-stakes, conversational action, and the "approval" is his explicit
+ * "send it" in the Slack thread after Claude shows the draft.
+ *
+ * SAFETY — why this is NOT in WORKER_TOOLS (mirrors START_CODE_TASK_TOOL):
+ *   WORKER_TOOLS feeds BOTH the Slack worker AND the Hermes/Telegram research
+ *   worker (via getToolsForThreadType). The Hermes worker is RESEARCH-ONLY
+ *   (R108) — it must never get a direct client-send tool. So this tool is
+ *   injected ONLY when CallWorkerOptions.enableSlackSend is set, which only the
+ *   Slack worker does. See callWorker() below.
+ */
+export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
+  name: "send_portal_message",
+  description: [
+    "Send a message to a client in their PORTAL CHAT (portal.tonydurante.us). This is the client's in-portal messaging — it is NOT an email.",
+    "Use this to deliver a reply to a client AFTER Antonio has explicitly approved the draft in THIS Slack thread (he said 'send it', 'go', 'send', or similar). Show the draft first, wait for his OK, then call this ONCE.",
+    "Provide account_id for an LLC-related message, OR contact_id for a person without an LLC (at least one is required). The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
+    "Do NOT call this speculatively, without an explicit approval in the thread, or for a team-only note (clients see portal chat).",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      account_id: { type: "string", description: "Account (LLC) UUID to message. Provide this OR contact_id." },
+      contact_id: { type: "string", description: "Contact (person) UUID to message. Provide this OR account_id." },
+      message: { type: "string", description: "The exact message text to send to the client." },
+    },
+    required: ["message"],
+  },
+}
+
+/**
+ * Antonio's admin auth user id — stamped as sender_id on portal_messages so the
+ * client sees the message as coming from the Tony Durante team (sender_type
+ * 'admin'). Same constant the MCP portal_chat_send tool uses
+ * (lib/mcp/tools/portal.ts) — keep the two in sync.
+ */
+const ADMIN_PORTAL_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+
+/** Window for the same-recipient+same-text dedup guard on portal sends. */
+const PORTAL_SEND_DEDUP_WINDOW_MS = 2 * 60 * 1000
+
+/**
+ * Send a portal chat message on behalf of the Slack worker. Mirrors the MCP
+ * portal_chat_send tool (insert into portal_messages as admin + fire the client
+ * notification/email), with one extra guard: because this is an un-gated,
+ * LLM-driven send, it dedups against an identical admin message to the same
+ * recipient within the last 2 minutes so a model retry / cron reprocess can't
+ * double-post. Returns a plain-text result string (never throws). Exported for
+ * unit tests.
+ */
+export async function sendPortalMessageFromWorker(input: {
+  account_id?: unknown
+  contact_id?: unknown
+  message?: unknown
+}): Promise<string> {
+  const accountId =
+    typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
+  const contactId =
+    typeof input.contact_id === "string" && input.contact_id.length > 0 ? input.contact_id : null
+  const message = typeof input.message === "string" ? input.message.trim() : ""
+
+  if (!accountId && !contactId) {
+    return "❌ send_portal_message needs an account_id (LLC) or a contact_id (person) — which client to message."
+  }
+  if (!message) {
+    return "❌ send_portal_message needs a non-empty message."
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+
+  // Resolve contact_id from the account when only the account was given, so the
+  // message lands in the client's contact-scoped thread. Mirrors the MCP tool —
+  // do NOT filter by is_primary (only 1 row in the DB has it set).
+  let resolvedContactId = contactId
+  if (!resolvedContactId && accountId) {
+    const { data: link } = await db
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", accountId)
+      .limit(1)
+      .maybeSingle()
+    resolvedContactId = link?.contact_id ?? null
+  }
+
+  // Dedup guard (best-effort): skip if an identical admin message to the same
+  // recipient was inserted in the last 2 minutes. A query failure never blocks
+  // the send.
+  try {
+    const sinceIso = new Date(Date.now() - PORTAL_SEND_DEDUP_WINDOW_MS).toISOString()
+    let dq = db
+      .from("portal_messages")
+      .select("id, created_at")
+      .eq("sender_type", "admin")
+      .eq("message", message)
+      .gte("created_at", sinceIso)
+    dq = accountId ? dq.eq("account_id", accountId) : dq.eq("contact_id", resolvedContactId)
+    const { data: dup } = await dq.limit(1).maybeSingle()
+    if (dup) {
+      return `✅ Already sent (duplicate within 2 min) — no new message posted. id=${dup.id}`
+    }
+  } catch {
+    // ignore — proceed with the send
+  }
+
+  const { data: msg, error } = await db
+    .from("portal_messages")
+    .insert({
+      account_id: accountId,
+      contact_id: resolvedContactId,
+      sender_type: "admin",
+      sender_id: ADMIN_PORTAL_SENDER_ID,
+      message,
+      attachments: [],
+    })
+    .select("id, created_at")
+    .single()
+
+  if (error) return `❌ Failed to send portal message: ${error.message ?? "unknown error"}`
+  if (!msg) return "❌ Portal message insert returned no row."
+
+  // Audit trail (fire-and-forget, never throws).
+  logAction({
+    actor: "claude.slack",
+    action_type: "send",
+    table_name: "portal_messages",
+    record_id: msg.id,
+    account_id: accountId ?? undefined,
+    contact_id: resolvedContactId ?? undefined,
+    summary: `Portal chat message sent via Slack worker: "${message.slice(0, 80)}${message.length > 80 ? "…" : ""}"`,
+  })
+
+  // In-app notification + client email (fire-and-forget; a wiring failure never
+  // fails the send the client already received).
+  try {
+    const { createPortalNotification, notifyClientOfAdminMessage } = await import(
+      "@/lib/portal/notifications"
+    )
+    createPortalNotification({
+      account_id: accountId ?? undefined,
+      contact_id: resolvedContactId ?? undefined,
+      type: "chat",
+      title: "New message from Tony Durante Team",
+      body: message.slice(0, 100),
+      link: "/portal/chat",
+    }).catch(() => {})
+    notifyClientOfAdminMessage({
+      account_id: accountId,
+      contact_id: resolvedContactId,
+      messagePreview: message,
+    }).catch(() => {})
+  } catch {
+    // notification wiring failure never fails the send
+  }
+
+  return `✅ Portal message sent to the client. id=${msg.id} at ${msg.created_at}`
+}
+
+/**
  * memory_save — knowledge-only write (Phase 3, Decision Memory). It writes ONLY
  * to the decision_memory knowledge store (a correction / business decision /
  * pricing rule the worker learned); it NEVER touches client or business data and
@@ -209,13 +373,14 @@ export const WORKER_TOOLS: ToolDef[] = [
   MEMORY_SAVE_TOOL,
 ]
 
-// NOTE: START_CODE_TASK_TOOL is intentionally NOT in WORKER_TOOLS. WORKER_TOOLS
-// feeds both the default tool list AND getToolsForThreadType() (thread-routing),
-// which the Hermes/Telegram research worker also uses. Thread type cannot
-// distinguish the Slack worker (which may queue code tasks) from the Hermes
-// worker (Phase-1 RESEARCH ONLY — no mutate/execute tools, per R108). So this
-// tool is injected ONLY when CallWorkerOptions.enableCodeTasks is set, which only
-// the Slack worker does. See callWorker() below.
+// NOTE: START_CODE_TASK_TOOL and SEND_PORTAL_MESSAGE_TOOL are intentionally NOT
+// in WORKER_TOOLS. WORKER_TOOLS feeds both the default tool list AND
+// getToolsForThreadType() (thread-routing), which the Hermes/Telegram research
+// worker also uses. Thread type cannot distinguish the Slack worker (which may
+// queue code tasks and send portal messages) from the Hermes worker (Phase-1
+// RESEARCH ONLY — no mutate/execute/send tools, per R108). So these tools are
+// injected ONLY when their CallWorkerOptions flag is set (enableCodeTasks /
+// enableSlackSend), which only the Slack worker does. See callWorker() below.
 
 /**
  * Mint a 6-digit confirmation code for a proposal (WP1). Antonio must type this
@@ -438,6 +603,12 @@ export async function executeWorkerTool(name: string, params: Record<string, unk
     if (error) return "Failed: " + error.message
     return "Code task queued (id:" + data.id + "). Mac Mini will implement it and post results back here."
   }
+  if (name === "send_portal_message") {
+    // Slack-only direct send (gated at the tool-list level via enableSlackSend).
+    // Reaches here only when the model was actually handed the tool, same as
+    // start_code_task above.
+    return sendPortalMessageFromWorker(params)
+  }
   if (name === "propose_action") {
     return proposeAction(params)
   }
@@ -572,6 +743,14 @@ export interface CallWorkerOptions {
    * task is read from _currentSlackCtx in executeWorkerTool at call time.
    */
   enableCodeTasks?: boolean
+  /**
+   * Expose the Slack-only send_portal_message tool for this call. Set by the
+   * Slack worker (processSlackEvent). When true, SEND_PORTAL_MESSAGE_TOOL is
+   * appended to whatever tool list this call resolves to. The Hermes/Telegram
+   * path never sets this, so its worker stays research-only (R108) — a direct
+   * client-send tool must never reach the Hermes worker.
+   */
+  enableSlackSend?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -751,6 +930,14 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // the Hermes research worker (R108) and never double-adds.
   if (opts.enableCodeTasks && !tools.some((t) => t.name === START_CODE_TASK_TOOL.name)) {
     tools = [...tools, START_CODE_TASK_TOOL]
+  }
+
+  // Slack-only: append the portal-chat send tool the same way. Gated on
+  // enableSlackSend so it NEVER reaches the Hermes research worker (R108), and
+  // never double-adds. This is the only direct-send capability the worker has —
+  // every other action still routes through propose_action.
+  if (opts.enableSlackSend && !tools.some((t) => t.name === SEND_PORTAL_MESSAGE_TOOL.name)) {
+    tools = [...tools, SEND_PORTAL_MESSAGE_TOOL]
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send

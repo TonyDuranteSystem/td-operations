@@ -131,10 +131,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // holds and is intentionally dropped: the Slack prompt is now LONGER than
     // Hermes (~1826) and that's fine — the two prompts serve different purposes
     // (Slack = conversational + plain-English-by-default + SHARED THREADS + CODE
-    // TASKS + SHIPPING; Hermes = analytical research). Ceiling history: 2000 →
-    // 2600 (SHARED THREADS) → 3200 (plain-English block) → 3500 (2026-06-12,
-    // headroom for the intentional plain-English rule). Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(3500)
+    // TASKS + SHIPPING + PORTAL CHAT REPLIES; Hermes = analytical research).
+    // Ceiling history: 2000 → 2600 (SHARED THREADS) → 3200 (plain-English block)
+    // → 3500 (2026-06-12, plain-English rule) → 3800 (2026-06-13, PORTAL CHAT
+    // REPLIES block — send_portal_message guidance). Keep this as a sanity cap.
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(3800)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
@@ -328,6 +329,7 @@ describe("processSlackEvent", () => {
       messageId: "row-id-001",
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
       enableCodeTasks: true,
+      enableSlackSend: true,
     })
 
     // Should have called Slack chat.postMessage
