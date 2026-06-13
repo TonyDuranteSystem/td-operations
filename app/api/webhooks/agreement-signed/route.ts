@@ -13,8 +13,16 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { verifyInternalWebhookSecret } from "@/lib/webhook-internal-auth"
 
 export async function POST(req: NextRequest) {
+  // Fail CLOSED: this webhook flips an annual agreement to signed and auto-sends
+  // a 1st-installment invoice. Public path → require the internal secret so a
+  // bare token can't trigger it (security audit 2026-06-13, H4).
+  if (!verifyInternalWebhookSecret(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   try {
     const body = await req.json()
     const { agreement_token } = body

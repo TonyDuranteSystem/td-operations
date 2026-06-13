@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import type { InboxMessage, InboxConversation } from '@/lib/types'
+import { sanitizeEmailHtml } from '@/lib/html-escape'
 
 interface MessageThreadProps {
   conversation: InboxConversation
@@ -151,7 +152,11 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
               {msg.content?.includes('<') && msg.content?.includes('>') ? (
                 <div
                   className="text-sm prose prose-sm max-w-none break-words [&_a]:text-blue-600 [&_a]:underline"
-                  dangerouslySetInnerHTML={{ __html: msg.content }}
+                  // Inbound email HTML is attacker-controlled (anyone can email
+                  // support@) and renders in the staff CRM session, so it MUST be
+                  // sanitized before dangerouslySetInnerHTML (security audit
+                  // 2026-06-13, H9).
+                  dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.content) }}
                 />
               ) : (
                 <p className="text-sm whitespace-pre-wrap break-words">

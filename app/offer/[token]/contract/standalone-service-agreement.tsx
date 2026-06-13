@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
+import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -300,7 +301,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
       try {
         await fetch('/api/webhooks/offer-signed', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
           body: JSON.stringify({ offer_token: token })
         })
       } catch (e) {

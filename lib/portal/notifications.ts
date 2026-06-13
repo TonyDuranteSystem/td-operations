@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
 import { PORTAL_BASE_URL } from '@/lib/config'
+import { escapeHtml } from '@/lib/html-escape'
 
 // Email digest is handled by /api/cron/portal-digest (every 5 min)
 // All notification types are eligible for digest emails.
@@ -97,16 +98,16 @@ async function _sendNotificationEmail(accountId: string, title: string, body: st
           <h1 style="color: white; margin: 0; font-size: 18px;">TD Portal</h1>
         </div>
         <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-          <p>Dear ${contact.full_name || 'Client'},</p>
-          <h2 style="margin: 16px 0 8px; font-size: 16px; color: #111827;">${title}</h2>
-          ${body ? `<p style="color: #4b5563;">${body}</p>` : ''}
+          <p>Dear ${escapeHtml(contact.full_name || 'Client')},</p>
+          <h2 style="margin: 16px 0 8px; font-size: 16px; color: #111827;">${escapeHtml(title)}</h2>
+          ${body ? `<p style="color: #4b5563;">${escapeHtml(body)}</p>` : ''}
           <div style="margin-top: 24px;">
             <a href="https://portal.tonydurante.us/portal" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold;">
               Open Portal
             </a>
           </div>
           <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">
-            ${account?.company_name || 'Your account'} — Tony Durante LLC
+            ${escapeHtml(account?.company_name || 'Your account')} — Tony Durante LLC
           </p>
         </div>
       </div>
@@ -158,9 +159,9 @@ async function _sendNotificationEmailToContact(contactId: string, title: string,
           <h1 style="color: white; margin: 0; font-size: 18px;">TD Portal</h1>
         </div>
         <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-          <p>Dear ${contact.full_name || 'Client'},</p>
-          <h2 style="margin: 16px 0 8px; font-size: 16px; color: #111827;">${title}</h2>
-          ${body ? `<p style="color: #4b5563;">${body}</p>` : ''}
+          <p>Dear ${escapeHtml(contact.full_name || 'Client')},</p>
+          <h2 style="margin: 16px 0 8px; font-size: 16px; color: #111827;">${escapeHtml(title)}</h2>
+          ${body ? `<p style="color: #4b5563;">${escapeHtml(body)}</p>` : ''}
           <div style="margin-top: 24px;">
             <a href="https://portal.tonydurante.us/portal" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold;">
               Open Portal
