@@ -4,6 +4,7 @@
  * Schema matches actual Supabase tables.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { logAction } from '@/lib/mcp/action-log'
 import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
 import { searchTemplates } from './templates'
 import {
@@ -525,6 +526,63 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['query'],
     },
   },
+  // ── Portal chat reads (read-only) ──────────────────────────────────────
+  {
+    name: 'portal_chat_inbox',
+    description: 'List portal chat threads with unread counts and last-message previews. Use this FIRST to see which clients have messages waiting. Each thread returns an account_id or contact_id to pass to portal_chat_read. Read-only.',
+    parameters: {
+      type: 'object',
+      properties: {
+        unread_only: { type: 'boolean', description: 'If true, only threads with unread client messages. Default false.' },
+        account_id: { type: 'string', description: 'Filter to a specific account/LLC.' },
+        contact_id: { type: 'string', description: 'Filter to a specific contact/person (all their threads).' },
+        limit: { type: 'number', description: 'Max threads (default 20).' },
+      },
+    },
+  },
+  {
+    name: 'portal_chat_read',
+    description: 'Read the full message history of ONE portal chat thread in chronological order (sender, timestamp, attachments, unread flags). Pass account_id for an LLC thread, or contact_id for a person thread (use portal_chat_inbox first to find the id). Read-only — does NOT mark anything as read.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account UUID — read the LLC thread. Provide this OR contact_id.' },
+        contact_id: { type: 'string', description: 'Contact UUID — read the person thread (no LLC). Provide this OR account_id.' },
+        limit: { type: 'number', description: 'Most-recent N messages (default 30).' },
+      },
+    },
+  },
+  // ── Actions (approval-rail; the bridge worker can only PROPOSE these) ───
+  {
+    name: 'update_deadline',
+    description: "Update a compliance deadline — status, filed date, confirmation number, blocked reason, assignee, or notes. Use search_deadlines first to get the id. This is an ACTION: when proposed by the bridge worker it requires Antonio's approval before it runs.",
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Deadline UUID (from search_deadlines).' },
+        status: { type: 'string', description: 'New status (e.g. "Filed", "In Progress", "Blocked"). Use the value shown by search_deadlines.' },
+        filed_date: { type: 'string', description: 'Date filed, YYYY-MM-DD.' },
+        confirmation_number: { type: 'string', description: 'Filing confirmation number.' },
+        blocked_reason: { type: 'string', description: 'Why the deadline is blocked.' },
+        assigned_to: { type: 'string', description: 'Who it is assigned to.' },
+        notes: { type: 'string', description: 'Free-text notes.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'send_team_message',
+    description: "Post an INTERNAL team note about a client, visible to staff ONLY (CRM > Portal Chats > Team) — NEVER visible to the client. Use to flag something for the team. Pass account_id for an LLC, or contact_id for a person. This is an ACTION: when proposed by the bridge worker it requires Antonio's approval before it runs.",
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account UUID. Provide this OR contact_id.' },
+        contact_id: { type: 'string', description: 'Contact UUID. Provide this OR account_id.' },
+        message: { type: 'string', description: 'The internal team note text.' },
+      },
+      required: ['message'],
+    },
+  },
 ]
 
 // ============================================================
@@ -573,6 +631,10 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'recall_memories': return await recallMemories(params)
       case 'memory_save': return await decisionMemorySaveTool(params)
       case 'memory_recall': return await decisionMemoryRecallTool(params)
+      case 'portal_chat_inbox': return await portalChatInboxTool(params)
+      case 'portal_chat_read': return await portalChatReadTool(params)
+      case 'update_deadline': return await updateDeadlineTool(params)
+      case 'send_team_message': return await sendTeamMessageTool(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
   } catch (err) {
@@ -1823,4 +1885,228 @@ export async function loadGlobalMemories(): Promise<string> {
   if (!data?.length) return ''
   const lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
   return `\n\n## REMEMBERED FROM PREVIOUS SESSIONS\n${lines}`
+}
+
+// ============================================================
+// Portal chat reads + bounded actions (added 2026-06-13)
+// Read tools mirror the MCP portal_chat_inbox / portal_chat_read query logic;
+// action tools (update_deadline / send_team_message) are reachable by the
+// bridge worker ONLY via propose_action (approval rail).
+// ============================================================
+
+/** List portal chat threads with unread counts + last-message previews (read-only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function portalChatInboxTool(p: any): Promise<string> {
+  const unreadOnly = p.unread_only === true
+  const limit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 20
+
+  let accountIds: string[] = []
+  let contactOnlyIds: string[] = []
+
+  if (p.account_id) {
+    accountIds = [p.account_id]
+  } else if (p.contact_id) {
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts').select('account_id').eq('contact_id', p.contact_id)
+    accountIds = (links || []).map((l) => l.account_id)
+    contactOnlyIds = [p.contact_id]
+  } else {
+    const { data: acctRows } = await supabaseAdmin
+      .from('portal_messages').select('account_id').not('account_id', 'is', null).order('created_at', { ascending: false })
+    accountIds = Array.from(new Set((acctRows || []).map((r) => r.account_id as string)))
+    const { data: ctRows } = await supabaseAdmin
+      .from('portal_messages').select('contact_id').is('account_id', null).not('contact_id', 'is', null).order('created_at', { ascending: false })
+    contactOnlyIds = Array.from(new Set((ctRows || []).map((r) => r.contact_id as string)))
+  }
+
+  interface InboxThread { id: string; isAccount: boolean; name: string; last: string; lastAt: string; lastBy: string; unread: number }
+  const threads: InboxThread[] = []
+
+  for (const acctId of accountIds.slice(0, limit)) {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', acctId).maybeSingle()
+    const { data: link } = await supabaseAdmin.from('account_contacts').select('contacts(full_name)').eq('account_id', acctId).limit(1).maybeSingle()
+    const { data: lastMsg } = await supabaseAdmin.from('portal_messages').select('message, created_at, sender_type').eq('account_id', acctId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const { count } = await supabaseAdmin.from('portal_messages').select('id', { count: 'exact', head: true }).eq('account_id', acctId).eq('sender_type', 'client').is('read_at', null)
+    const unread = count ?? 0
+    if (unreadOnly && unread === 0) continue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cName = (link?.contacts as any)?.full_name ?? null
+    threads.push({
+      id: `account_id: ${acctId}`, isAccount: true,
+      name: cName ? `${acct?.company_name ?? 'Unknown'} (${cName})` : (acct?.company_name ?? 'Unknown'),
+      last: lastMsg?.message?.substring(0, 120) ?? '', lastAt: lastMsg?.created_at ?? '',
+      lastBy: lastMsg?.sender_type === 'client' ? 'Client' : 'Admin', unread,
+    })
+  }
+
+  for (const ctId of contactOnlyIds.slice(0, limit)) {
+    const { data: ct } = await supabaseAdmin.from('contacts').select('full_name, email').eq('id', ctId).maybeSingle()
+    const { data: lastMsg } = await supabaseAdmin.from('portal_messages').select('message, created_at, sender_type').eq('contact_id', ctId).is('account_id', null).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const { count } = await supabaseAdmin.from('portal_messages').select('id', { count: 'exact', head: true }).eq('contact_id', ctId).is('account_id', null).eq('sender_type', 'client').is('read_at', null)
+    const unread = count ?? 0
+    if (unreadOnly && unread === 0) continue
+    threads.push({
+      id: `contact_id: ${ctId}`, isAccount: false,
+      name: ct?.full_name ?? ct?.email ?? 'Unknown Contact',
+      last: lastMsg?.message?.substring(0, 120) ?? '', lastAt: lastMsg?.created_at ?? '',
+      lastBy: lastMsg?.sender_type === 'client' ? 'Client' : 'Admin', unread,
+    })
+  }
+
+  threads.sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+  if (threads.length === 0) {
+    return JSON.stringify({ message: unreadOnly ? 'No unread portal messages.' : 'No portal chat threads found.', threads: [] })
+  }
+  const totalUnread = threads.reduce((s, t) => s + t.unread, 0)
+  const lines = threads.map((t) => {
+    const badge = t.unread > 0 ? ` [${t.unread} unread]` : ''
+    return `${t.unread > 0 ? '🔴' : '⚪'} ${t.name}${badge} — last (${t.lastBy}): "${t.last}"  [${t.id}]`
+  })
+  return `Portal Chat Inbox — ${totalUnread} unread across ${threads.filter((t) => t.unread > 0).length} thread(s)\n\n${lines.join('\n')}\n\nUse portal_chat_read(account_id or contact_id) to read a full conversation.`
+}
+
+/** Read the full message history of one portal chat thread, chronological (read-only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function portalChatReadTool(p: any): Promise<string> {
+  if (!p.account_id && !p.contact_id) {
+    return JSON.stringify({ error: 'At least one of account_id or contact_id is required.' })
+  }
+  const msgLimit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 30
+
+  let clientName = 'Unknown'
+  if (p.account_id) {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', p.account_id).maybeSingle()
+    clientName = acct?.company_name ?? p.account_id
+  } else {
+    const { data: ct } = await supabaseAdmin.from('contacts').select('full_name, email').eq('id', p.contact_id).maybeSingle()
+    clientName = ct?.full_name ?? ct?.email ?? p.contact_id
+  }
+
+  let query = supabaseAdmin
+    .from('portal_messages')
+    .select('id, sender_type, message, attachment_url, attachment_name, attachments, read_at, created_at, contacts:contact_id(full_name)')
+    .order('created_at', { ascending: false })
+    .limit(msgLimit)
+  query = p.account_id ? query.eq('account_id', p.account_id) : query.eq('contact_id', p.contact_id).is('account_id', null)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: messages, error } = await (query as any)
+  if (error) return JSON.stringify({ error: `Failed to read messages: ${error.message}` })
+  if (!messages?.length) return `No messages found for ${clientName}.`
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sorted = (messages as any[]).reverse()
+  const unread = sorted.filter((m) => m.sender_type === 'client' && !m.read_at).length
+  const formatted = sorted.map((m) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cName = (m.contacts as any)?.full_name ?? null
+    const sender = m.sender_type === 'client' ? `Client${cName ? ` (${cName})` : ''}` : `Admin${cName ? ` (${cName})` : ''}`
+    const time = new Date(m.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    const flag = m.sender_type === 'client' && !m.read_at ? ' 🔴 UNREAD' : ''
+    const atts = Array.isArray(m.attachments) && m.attachments.length
+      ? m.attachments.map((a: { name: string }) => `\n   📎 ${a.name}`).join('')
+      : m.attachment_url ? `\n   📎 ${m.attachment_name || 'file'}` : ''
+    return `[${time}] ${sender}${flag}:\n   ${m.message}${atts}`
+  })
+  return `Portal Chat — ${clientName} (${unread} unread)\n${'─'.repeat(40)}\n\n${formatted.join('\n\n')}\n\nMessages shown: ${sorted.length}.`
+}
+
+/** Update a compliance deadline (action — bridge worker reaches this via propose_action only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateDeadlineTool(p: any): Promise<string> {
+  if (!p.id || typeof p.id !== 'string') return JSON.stringify({ error: 'update_deadline requires a deadline id (from search_deadlines).' })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {}
+  if (p.status != null) updates.status = normalizeDeadlineStatus(String(p.status))
+  if (p.filed_date != null) updates.filed_date = p.filed_date
+  if (p.confirmation_number != null) updates.confirmation_number = p.confirmation_number
+  if (p.blocked_reason != null) updates.blocked_reason = p.blocked_reason
+  if (p.assigned_to != null) updates.assigned_to = p.assigned_to
+  if (p.notes != null) updates.notes = p.notes
+  if (Object.keys(updates).length === 0) {
+    return JSON.stringify({ error: 'update_deadline: nothing to update — provide at least one of status, filed_date, confirmation_number, blocked_reason, assigned_to, notes.' })
+  }
+  updates.updated_at = new Date().toISOString()
+
+  const { data, error } = await supabaseAdmin
+    .from('deadlines')
+    .update(updates)
+    .eq('id', p.id)
+    .select('id, deadline_type, status, due_date, accounts(company_name)')
+    .maybeSingle()
+  if (error) return JSON.stringify({ error: error.message })
+  if (!data) return JSON.stringify({ error: `No deadline found with id ${p.id}.` })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const acct = (data as any).accounts as { company_name?: string } | null
+  logAction({
+    actor: 'claude.agent', action_type: 'update', table_name: 'deadlines', record_id: data.id,
+    summary: `Deadline updated: ${acct?.company_name || '?'} — ${data.deadline_type} → ${data.status}`,
+    details: updates,
+  })
+  return `✅ Deadline updated: ${acct?.company_name || '?'} — ${data.deadline_type}\nStatus: ${data.status} | Due: ${data.due_date}\nID: ${data.id}`
+}
+
+/** Post an internal, staff-only team note about a client (action — propose_action only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function sendTeamMessageTool(p: any): Promise<string> {
+  const accountId = typeof p.account_id === 'string' && p.account_id.length > 0 ? p.account_id : null
+  const contactId = typeof p.contact_id === 'string' && p.contact_id.length > 0 ? p.contact_id : null
+  const message = typeof p.message === 'string' ? p.message.trim() : ''
+  if (!accountId && !contactId) return JSON.stringify({ error: 'send_team_message requires an account_id or a contact_id.' })
+  if (!message) return JSON.stringify({ error: 'send_team_message requires a non-empty message.' })
+
+  let contextName = 'Client'
+  if (accountId) {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', accountId).maybeSingle()
+    contextName = acct?.company_name || accountId
+  } else if (contactId) {
+    const { data: cnt } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
+    contextName = cnt?.full_name || contactId
+  }
+
+  // Admin sender id (Antonio's auth user id — same constant used across portal sends).
+  const senderId = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
+
+  // Reuse an existing unresolved internal thread for this client, else create one.
+  let threadQuery = supabaseAdmin
+    .from('internal_threads').select('id').is('resolved_at', null).order('created_at', { ascending: false }).limit(1)
+  threadQuery = accountId ? threadQuery.eq('account_id', accountId) : threadQuery.eq('contact_id', contactId)
+  const { data: existing } = await threadQuery.maybeSingle()
+
+  let threadId: string
+  let reused = false
+  if (existing) {
+    threadId = existing.id
+    reused = true
+  } else {
+    const { data: newThread, error: threadErr } = await supabaseAdmin
+      .from('internal_threads')
+      .insert({ account_id: accountId, contact_id: contactId, created_by: senderId, title: contextName })
+      .select('id').single()
+    if (threadErr) return JSON.stringify({ error: `Failed to create thread: ${threadErr.message}` })
+    threadId = newThread.id
+  }
+
+  const { data: msg, error: msgErr } = await supabaseAdmin
+    .from('internal_messages')
+    .insert({ thread_id: threadId, sender_id: senderId, sender_name: 'Claude', message })
+    .select('id, created_at').single()
+  if (msgErr) return JSON.stringify({ error: `Failed to send team message: ${msgErr.message}` })
+
+  // Push notification to admins (best-effort).
+  try {
+    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
+    await sendPushToAdmin({
+      title: `Team: ${contextName}`, body: message.slice(0, 100),
+      url: '/portal-chats?view=internal', tag: `internal-thread-${threadId}`,
+    })
+  } catch { /* non-critical */ }
+
+  logAction({
+    actor: 'claude.agent', action_type: 'create', table_name: 'internal_messages', record_id: msg.id,
+    account_id: accountId ?? undefined, contact_id: contactId ?? undefined,
+    summary: `Team note re: ${contextName}: "${message.substring(0, 80)}${message.length > 80 ? '…' : ''}"`,
+  })
+  return `✅ Internal team note posted re: ${contextName}${reused ? ' (existing thread)' : ' (new thread)'}. Visible in CRM > Portal Chats > Team. Not visible to the client.`
 }

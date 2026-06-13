@@ -65,6 +65,8 @@ export const CRM_READ_TOOL_NAMES = [
   "search_tax_returns",
   "search_deadlines",
   "search_portal_messages",
+  "portal_chat_inbox",
+  "portal_chat_read",
   "get_dashboard_stats",
 ] as const
 
@@ -91,7 +93,7 @@ export const PROPOSE_TOOL_NAME = "propose_action"
  * = no client data, bug_report = trace-only) intentionally keep their contracts
  * and do not get memory.
  */
-export const MEMORY_TOOL_NAMES = ["memory_recall", "memory_save"] as const
+export const MEMORY_TOOL_NAMES = ["memory_recall", "memory_save", "recall_memories"] as const
 
 /**
  * The allow-listed tool NAMES for each thread type. This is the source of truth

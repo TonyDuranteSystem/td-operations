@@ -72,6 +72,8 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "search_tax_returns",
   "search_deadlines",
   "search_portal_messages",
+  "portal_chat_inbox",
+  "portal_chat_read",
   "get_dashboard_stats",
   // Knowledge & SOP
   "search_kb",
@@ -86,6 +88,10 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "drive_list_folder",
   // Decision Memory — semantic recall of past decisions (pure read).
   "memory_recall",
+  // Key/value session-note recall (older memory system; read-only). The worker
+  // could already PROPOSE save_memory but couldn't read notes back — this closes
+  // that asymmetry.
+  "recall_memories",
 ])
 
 /**
