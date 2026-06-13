@@ -5832,6 +5832,33 @@ export type Database = {
         }
         Relationships: []
       }
+      itin_expiring_digits: {
+        Row: {
+          id: string
+          year: number
+          middle_digits: string[]
+          source_url: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          year: number
+          middle_digits: string[]
+          source_url?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          year?: number
+          middle_digits?: string[]
+          source_url?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
       itin_submissions: {
         Row: {
           access_code: string | null

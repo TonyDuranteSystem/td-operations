@@ -17,6 +17,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { parseItinIssueDateFromOcr } from '@/lib/ocr-helpers'
+import { writeITINFields } from '@/lib/itin/write-itin-fields'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Contacts: { num: 2, subfolder: '2. Contacts' },
@@ -202,13 +203,14 @@ export async function POST(req: NextRequest) {
               // Extract issue date from CP565 OCR text (format: "Month DD, YYYY")
               const issueDate = parseItinIssueDateFromOcr(ocrResult.fullText)
 
-              // eslint-disable-next-line no-restricted-syntax -- pre-existing contacts write, unrelated to new-document alerts change
-              await supabaseAdmin.from('contacts').update({
+              const { itin_renewal_date } = await writeITINFields(contactId, {
                 itin_number: itinFormatted,
                 itin_issue_date: issueDate,
-                updated_at: new Date().toISOString(),
-              }).eq('id', contactId)
-              sideEffects.push(`ITIN extracted: ${itinFormatted}, issue date: ${issueDate}`)
+              })
+              sideEffects.push(
+                `ITIN extracted: ${itinFormatted}, issue date: ${issueDate}` +
+                  (itin_renewal_date ? `, renewal date: ${itin_renewal_date}` : ''),
+              )
             } else {
               sideEffects.push('OCR ran but no ITIN number found (expected format: 9XX-XX-XXXX)')
             }

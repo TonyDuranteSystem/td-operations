@@ -19,6 +19,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
+import { emitActionNeeded } from "@/lib/notifications/act-event"
+import { extractITINMiddleDigits } from "@/lib/itin/renewal-utils"
 import type { Json } from "@/lib/database.types"
 
 interface _DeadlineCheck {
@@ -57,6 +59,7 @@ export async function GET(req: NextRequest) {
       .limit(1)
     if (existing?.length) return false
 
+    // eslint-disable-next-line no-restricted-syntax -- deadline-reminders cron creates filing tasks directly, no operations helper for this pattern
     await supabaseAdmin.from("tasks").insert({
       task_title: title,
       description,
@@ -181,30 +184,50 @@ export async function GET(req: NextRequest) {
     }
 
     // ═══════════════════════════════════════
-    // 3. ITIN RENEWAL (every 3 years)
+    // 3. ITIN RENEWAL — January annual check
     // ═══════════════════════════════════════
-    const itinDeadline = `${year}-06-15`
-    if (isWithinDays(itinDeadline, 30)) {
-      const threeYearsAgo = `${year - 3}-01-01`
+    // Runs once per year in January. Checks both:
+    //   (a) 3-year rule: itin_renewal_date falls in current year
+    //   (b) IRS middle-digits batch: contact's ITIN middle digits are in
+    //       itin_expiring_digits for the current year
+    if (now.getMonth() === 0) {
+      const currentYear = year
+
+      const { data: expiringRow } = await supabaseAdmin
+        .from("itin_expiring_digits")
+        .select("middle_digits")
+        .eq("year", currentYear)
+        .maybeSingle()
+
+      const expiringDigits: string[] = expiringRow?.middle_digits ?? []
+
       const { data: itinContacts } = await supabaseAdmin
         .from("contacts")
-        .select("id, full_name, itin_number, itin_issue_date")
+        .select("id, itin_number, itin_renewal_date")
         .not("itin_number", "is", null)
-        .lte("itin_issue_date", threeYearsAgo)
         .or("is_test.is.null,is_test.eq.false")
 
       if (itinContacts?.length) {
-        let created = 0
+        let emitted = 0
         for (const c of itinContacts) {
-          const made = await createTaskIfNew(
-            `[ITIN RENEWAL] ${c.full_name} -- ITIN ${c.itin_number}`,
-            `ITIN renewal recommended. Issued: ${c.itin_issue_date}.\nITIN numbers expire if not used on a tax return for 3 consecutive years.\nDeadline: June 15, ${year}.\nContact client to initiate renewal process.`,
-            "Normal",
-            `${year}-05-15`,
-          )
-          if (made) created++
+          const renewalDueThisYear =
+            c.itin_renewal_date !== null &&
+            new Date(c.itin_renewal_date).getFullYear() <= currentYear
+
+          const middleDigits = extractITINMiddleDigits(c.itin_number)
+          const middleDigitsExpiring =
+            middleDigits !== null && expiringDigits.includes(middleDigits)
+
+          if (renewalDueThisYear || middleDigitsExpiring) {
+            const emitResult = await emitActionNeeded({
+              event: "itin_renewal_upcoming",
+              contact_id: c.id,
+              source_ref: `itin_renewal:${c.id}:${currentYear}`,
+            })
+            if (emitResult.created) emitted++
+          }
         }
-        results.push({ type: "ITIN Renewal", action: "checked", count: created })
+        results.push({ type: "ITIN Renewal", action: "checked", count: emitted })
       }
     }
 
