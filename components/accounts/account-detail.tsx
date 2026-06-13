@@ -25,6 +25,8 @@ import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/ge
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { type ServiceDeliveryForStepper } from './service-deliveries-section'
 import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
+import { FlowChips } from '@/components/flows/flow-chips'
+import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 import { DeactivateServiceButton, ReactivateServiceButton } from './service-status-actions'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
@@ -224,6 +226,9 @@ interface AccountDetailProps {
     filing_fee: number | null
     detail_notes: string | null
   }>
+  // Service Flow Workspaces — recurring flows for this account (live SDs +
+  // date-derived scheduled placeholders). Rendered as chips in the Services tab.
+  flows?: ResolvedFlow[]
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -566,7 +571,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [] }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // Deep-link support: a `?tab=<key>` param (e.g. from the What's New "Open"
@@ -869,7 +874,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
       )}
       {activeTab === 'services' && (
-        <ServiziTab services={services} today={today} accountId={account.id} accountType={account.account_type ?? null} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} />
+        <ServiziTab services={services} today={today} accountId={account.id} accountType={account.account_type ?? null} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} flows={flows} />
       )}
       {activeTab === 'payments' && (
         <PagamentiTab payments={payments} today={today} />
@@ -2237,6 +2242,7 @@ function ServiziTab({
   stepperDeliveries,
   stagesByServiceType,
   payments,
+  flows = [],
 }: {
   services: Service[]
   today: string
@@ -2245,6 +2251,7 @@ function ServiziTab({
   stepperDeliveries: ServiceDeliveryForStepper[]
   stagesByServiceType: Record<string, PipelineStage[]>
   payments: Payment[]
+  flows?: ResolvedFlow[]
 }) {
   const router = useRouter()
   const [showAddService, setShowAddService] = useState(false)
@@ -2267,6 +2274,12 @@ function ServiziTab({
 
   return (
     <div className="space-y-6">
+      {flows.length > 0 && (
+        <div className="pb-2 border-b border-zinc-100">
+          <FlowChips flows={flows} />
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
           Active ({active.length})
