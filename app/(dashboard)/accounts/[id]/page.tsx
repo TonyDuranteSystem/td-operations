@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
 import { isDashboardUser } from '@/lib/auth'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
+import { resolveFlows } from '@/lib/flows/resolve-flows'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 interface DocumentRecord {
@@ -433,9 +434,14 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     stagesByServiceType = grouped
   }
 
+  // Service Flow Workspaces — resolve the account's recurring flows (live SDs +
+  // date-derived scheduled placeholders for RA/AR). Read-only; additive.
+  const flows = await resolveFlows(params.id)
+
   return (
     <div className="p-6 lg:p-8">
       <AccountDetail
+        flows={flows}
         account={account as Account}
         contacts={contacts}
         services={services}
