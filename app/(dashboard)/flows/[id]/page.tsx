@@ -6,6 +6,7 @@ import { parseStageLayout } from '@/lib/flows/stage-layout'
 import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
+import { GoBackButton } from '@/components/flows/go-back-button'
 import type { WorkspaceServiceDelivery, WorkspaceAccount } from '@/components/flows/types'
 
 export const dynamic = 'force-dynamic'
@@ -50,6 +51,15 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
   const currentStageRow = stages.find((s) => s.stage_name === sd.stage) ?? null
   const layout = parseStageLayout(currentStageRow?.stage_layout)
   const year = deriveFlowYear(sd)
+
+  // Previous stage (highest stage_order below the current one) drives the
+  // "← Go Back" button — hidden on the first stage. Resolved by stage_order
+  // from the pipeline catalog, matching the revert route's server-side logic.
+  const previousStageRow = currentStageRow
+    ? stages
+        .filter((s) => s.stage_order < currentStageRow.stage_order)
+        .sort((a, b) => b.stage_order - a.stage_order)[0] ?? null
+    : null
 
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
@@ -115,6 +125,14 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
       {/* Stage content from stage_layout */}
       <StageRenderer layout={layout} serviceDelivery={serviceDelivery} account={account} />
+
+      {/* Go Back — every stage except the first */}
+      {previousStageRow && (
+        <GoBackButton
+          serviceDeliveryId={serviceDelivery.id}
+          previousStageLabel={previousStageRow.client_label ?? previousStageRow.stage_name}
+        />
+      )}
     </div>
   )
 }

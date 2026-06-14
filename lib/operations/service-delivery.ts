@@ -1124,3 +1124,248 @@ export async function reactivateSD(
     renewal_date_empty: renewalDateEmpty,
   }
 }
+
+// ─── revertServiceDelivery ─────────────────────────────
+
+export interface RevertStageParams {
+  delivery_id: string
+  actor?: string
+  /** Free-text note appended to stage_history + action_log. */
+  notes?: string
+}
+
+export interface RevertStageResult {
+  success: boolean
+  outcome: "reverted" | "at_first_stage" | "not_found" | "error"
+  delivery_id: string
+  service_type?: string
+  from_stage?: string
+  to_stage?: string
+  to_order?: number
+  /** Documents deleted (stamped with the target/previous stage). */
+  documents_deleted?: number
+  /** SD was at a completed final stage and was reset to active. */
+  status_reset?: boolean
+  /** Set when reverting OUT of a "Closed" renewal stage undid the +1y bump. */
+  renewal_date_reverted?: { column: string; from: string; to: string } | null
+  error?: string
+}
+
+/**
+ * Untyped delete surface for the `documents` table. `flow_stage` was added by
+ * the S0 flow-workspace migration but the generated DB types haven't been
+ * regenerated (gen:types pending), so a typed `.match({ flow_stage })` won't
+ * compile. We cast to a minimal local shape (NOT SupabaseClient — that cast is
+ * eslint-blocked) so the query type-checks while staying on the real client.
+ */
+type UntypedDocDelete = {
+  from: (table: string) => {
+    delete: () => {
+      match: (q: Record<string, unknown>) => {
+        select: (
+          cols: string,
+        ) => PromiseLike<{ data: { id: string }[] | null; error: { message: string } | null }>
+      }
+    }
+  }
+}
+
+/**
+ * Revert a service delivery ONE stage backwards — the inverse of advancing.
+ *
+ * Backs the flow Workspace "← Go Back" button. Steps:
+ *   1. Resolve current + previous stage by NAME from pipeline_stages (SD
+ *      stage_order is frequently NULL/stale, so name is the reliable key).
+ *   2. If there is no earlier stage, return `at_first_stage` (the button is
+ *      hidden on the first stage, this is the server-side guard).
+ *   3. Delete the documents stamped with the PREVIOUS (target) stage — these
+ *      are the deliverables that completed the stage being re-opened (a doc
+ *      uploaded while viewing stage B is stamped flow_stage=B and then
+ *      auto-advances the SD to C; so going C→B removes the flow_stage=B docs so
+ *      they can be re-uploaded). Internal docs (portal_visible=false) → hard
+ *      delete is allowed (R100).
+ *   4. Move the SD back: stage/stage_order/stage_entered_at + append a
+ *      stage_history entry. If the SD was at a completed final stage
+ *      (status='completed'), reset it to 'active' and clear end_date.
+ *   5. If leaving a "Closed" renewal final (State Annual Report / State RA
+ *      Renewal), undo advanceServiceDelivery's +1-year renewal-date bump by
+ *      subtracting one year from the relevant account date.
+ *
+ * NOT undone (deliberate, documented limitations): tasks that advance
+ * auto-closed on completion are NOT reopened; the underlying Drive/Storage file
+ * is NOT deleted (only the documents row).
+ */
+export async function revertServiceDelivery(
+  params: RevertStageParams,
+): Promise<RevertStageResult> {
+  const actor = params.actor || "system"
+
+  // 1. Load SD.
+  const { data: sd, error: sdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select(
+      "id, service_type, service_name, stage, status, account_id, contact_id, stage_history, end_date",
+    )
+    .eq("id", params.delivery_id)
+    .maybeSingle()
+
+  if (sdErr) {
+    return { success: false, outcome: "error", delivery_id: params.delivery_id, error: sdErr.message }
+  }
+  if (!sd) {
+    return { success: false, outcome: "not_found", delivery_id: params.delivery_id, error: "Service delivery not found" }
+  }
+
+  // 2. Resolve the pipeline + current/previous stage by name.
+  const { data: stages, error: stErr } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("stage_name, stage_order")
+    .eq("service_type", sd.service_type)
+    .order("stage_order", { ascending: true })
+
+  if (stErr || !stages?.length) {
+    return {
+      success: false,
+      outcome: "error",
+      delivery_id: sd.id,
+      service_type: sd.service_type,
+      error: `No pipeline stages for service_type "${sd.service_type}"`,
+    }
+  }
+
+  const current = stages.find((s) => s.stage_name === sd.stage)
+  if (!current) {
+    return {
+      success: false,
+      outcome: "error",
+      delivery_id: sd.id,
+      service_type: sd.service_type,
+      error: `Current stage "${sd.stage}" is not part of the "${sd.service_type}" pipeline.`,
+    }
+  }
+
+  const previous = stages
+    .filter((s) => s.stage_order < current.stage_order)
+    .sort((a, b) => b.stage_order - a.stage_order)[0]
+
+  if (!previous) {
+    return {
+      success: false,
+      outcome: "at_first_stage",
+      delivery_id: sd.id,
+      service_type: sd.service_type,
+      error: "Already at the first stage — there is no previous step to go back to.",
+    }
+  }
+
+  // 3. Delete documents stamped with the PREVIOUS (target) stage. documents is
+  // not a protected table, so a raw delete is fine; flow_stage is untyped.
+  let documentsDeleted = 0
+  const adminDocs = supabaseAdmin as unknown as UntypedDocDelete
+  const { data: deletedDocs, error: delErr } = await dbWriteSafe(
+    adminDocs
+      .from("documents")
+      .delete()
+      .match({ service_delivery_id: sd.id, flow_stage: previous.stage_name })
+      .select("id"),
+    "documents.delete.flow-revert",
+  )
+  if (!delErr && Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
+
+  // 4. Move the SD back. Append a stage_history entry mirroring the forward
+  // shape so the audit trail reads symmetrically.
+  const historyEntry = {
+    from_stage: sd.stage || "New",
+    from_order: current.stage_order,
+    to_stage: previous.stage_name,
+    to_order: previous.stage_order,
+    advanced_at: new Date().toISOString(),
+    advanced_by: actor,
+    notes: params.notes || "Reverted to previous stage",
+  }
+  const stageHistory = Array.isArray(sd.stage_history)
+    ? [...sd.stage_history, historyEntry]
+    : [historyEntry]
+
+  const patch: Record<string, unknown> = {
+    stage: previous.stage_name,
+    stage_order: previous.stage_order,
+    stage_entered_at: new Date().toISOString(),
+    stage_history: stageHistory,
+    updated_at: new Date().toISOString(),
+  }
+  // Reverting out of a completed final stage re-opens the SD.
+  const statusReset = sd.status === "completed"
+  if (statusReset) {
+    patch.status = "active"
+    patch.end_date = null
+  }
+
+  await dbWrite(
+    supabaseAdmin.from("service_deliveries").update(patch).eq("id", sd.id),
+    "service_deliveries.update.revert",
+  )
+
+  // 5. Undo the +1-year renewal-date bump when leaving a "Closed" renewal final.
+  let renewalDateReverted: { column: string; from: string; to: string } | null = null
+  const leavingClosedRenewalFinal = sd.stage === "Closed" && isRenewalServiceType(sd.service_type)
+  if (leavingClosedRenewalFinal && sd.account_id) {
+    const column = RENEWAL_DATE_COLUMN[sd.service_type]
+    const { data: acct } = await supabaseAdmin
+      .from("accounts")
+      .select(column)
+      .eq("id", sd.account_id)
+      .maybeSingle()
+    const currentValue = (acct as Record<string, unknown> | null)?.[column] as string | null | undefined
+    if (currentValue) {
+      const d = new Date(currentValue)
+      d.setFullYear(d.getFullYear() - 1)
+      const newValue = d.toISOString().split("T")[0]
+      const acctPatch =
+        column === "ra_renewal_date"
+          ? { ra_renewal_date: newValue }
+          : { annual_report_due_date: newValue }
+      const acctResult = await updateAccount({
+        id: sd.account_id,
+        patch: acctPatch,
+        actor,
+        summary: `Reverted ${column} -1y — ${sd.service_type} reverted from Closed`,
+        details: { column, from: currentValue, to: newValue },
+      })
+      if (acctResult.success) {
+        renewalDateReverted = { column, from: currentValue, to: newValue }
+      }
+    }
+  }
+
+  logAction({
+    actor,
+    action_type: "update",
+    table_name: "service_deliveries",
+    record_id: sd.id,
+    account_id: sd.account_id ?? undefined,
+    contact_id: sd.contact_id ?? undefined,
+    summary: `Stage reverted: ${sd.stage || "New"} → ${previous.stage_name} (${sd.service_name || sd.service_type})`,
+    details: {
+      from_stage: sd.stage,
+      to_stage: previous.stage_name,
+      documents_deleted: documentsDeleted,
+      status_reset: statusReset,
+      renewal_date_reverted: renewalDateReverted,
+      notes: params.notes ?? null,
+    },
+  })
+
+  return {
+    success: true,
+    outcome: "reverted",
+    delivery_id: sd.id,
+    service_type: sd.service_type,
+    from_stage: sd.stage || "New",
+    to_stage: previous.stage_name,
+    to_order: previous.stage_order,
+    documents_deleted: documentsDeleted,
+    status_reset: statusReset,
+    renewal_date_reverted: renewalDateReverted,
+  }
+}
