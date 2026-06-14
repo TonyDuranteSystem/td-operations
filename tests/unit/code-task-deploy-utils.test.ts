@@ -5,6 +5,8 @@ import {
   compareUrl,
   taskShortId,
   codeTaskWorktreePath,
+  promoteTempBranch,
+  promoteWorktreePath,
 } from "../../scripts/mac-mini/deploy-utils.mjs"
 
 describe("codeTaskBranchName", () => {
@@ -100,6 +102,21 @@ describe("codeTaskWorktreePath", () => {
     expect(codeTaskWorktreePath("/Users/x/td-operations/", "abcd1234")).toBe(
       "/Users/x/td-operations/.claude/worktrees/code-task-abcd1234",
     )
+  })
+})
+
+describe("promoteTempBranch / promoteWorktreePath", () => {
+  it("derives a safe temp branch from a code branch", () => {
+    expect(promoteTempBranch("code-task/abcd1234-fix-itin")).toBe("promote/code-task-abcd1234-fix-itin")
+  })
+  it("derives a worktree path under .claude/worktrees", () => {
+    expect(promoteWorktreePath("/Users/x/td-operations", "code-task/abcd1234-fix-itin")).toBe(
+      "/Users/x/td-operations/.claude/worktrees/promote-code-task-abcd1234-fix-itin",
+    )
+  })
+  it("falls back to 'branch' for empty input", () => {
+    expect(promoteTempBranch("")).toBe("promote/branch")
+    expect(promoteTempBranch(null)).toBe("promote/branch")
   })
 })
 

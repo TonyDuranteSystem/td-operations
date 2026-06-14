@@ -49,7 +49,14 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@supabase/supabase-js"
 import { parseStreamLine, milestoneFromEvent, finalResultFromEvent } from "./code-task-progress.mjs"
-import { codeTaskBranchName, codeTaskWorktreePath, repoWebUrlFromRemote, compareUrl } from "./deploy-utils.mjs"
+import {
+  codeTaskBranchName,
+  codeTaskWorktreePath,
+  promoteTempBranch,
+  promoteWorktreePath,
+  repoWebUrlFromRemote,
+  compareUrl,
+} from "./deploy-utils.mjs"
 
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
@@ -313,6 +320,70 @@ function sweepOrphanWorktrees(cfg) {
 }
 
 /**
+ * Promote a code branch to production: merge it into the CURRENT origin/main in an
+ * isolated worktree and push main. This is the ONLY place the rail pushes to main,
+ * and it runs only for a "ship it" promote task (R104 — explicit human approval).
+ *
+ * SURGICAL + SAFE: merges exactly the one branch's commits. If origin/main has
+ * advanced and the branch conflicts, the merge is aborted and NOTHING is pushed —
+ * the branch is reported as needing a rebase, never force-merged. The pre-push
+ * hooks (build, unit tests, ESLint, R107 doc gate, remote-sync) run on the main
+ * push, so a broken or doc-stale promotion is rejected before it reaches prod.
+ * Returns { ok, output } and never throws.
+ */
+function promoteBranchToMain(cfg, branch) {
+  const wtPath = promoteWorktreePath(cfg.repoDir, branch)
+  const tmpBranch = promoteTempBranch(branch)
+  const cleanup = () => {
+    try { execSync(`git worktree remove --force "${wtPath}"`, { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* ignore */ }
+    try { execSync("git worktree prune", { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* ignore */ }
+    try { execSync(`git branch -D "${tmpBranch}"`, { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* ignore */ }
+  }
+  try {
+    cleanup() // clear any stale promote worktree/branch from a prior run
+    execSync("git fetch origin --quiet", { cwd: cfg.repoDir, timeout: 120000, encoding: "utf8" })
+    // The branch must exist on origin (it was pushed by its build task).
+    try {
+      execSync(`git rev-parse --verify "origin/${branch}"`, { cwd: cfg.repoDir, encoding: "utf8", stdio: "pipe" })
+    } catch {
+      return { ok: false, output: `⚠️ Can't promote — branch \`${branch}\` no longer exists on origin. Was it already shipped or deleted?` }
+    }
+    // Isolated worktree on the CURRENT origin/main; symlink deps for the hooks.
+    execSync(`git worktree add --quiet "${wtPath}" -b "${tmpBranch}" origin/main`, {
+      cwd: cfg.repoDir,
+      timeout: 120000,
+      encoding: "utf8",
+    })
+    const mainNodeModules = path.join(cfg.repoDir, "node_modules")
+    const wtNodeModules = path.join(wtPath, "node_modules")
+    if (fs.existsSync(mainNodeModules) && !fs.existsSync(wtNodeModules)) {
+      fs.symlinkSync(mainNodeModules, wtNodeModules, "dir")
+    }
+    // Try a clean merge of the branch into current main.
+    try {
+      execSync(`git merge --no-ff --no-edit "origin/${branch}"`, { cwd: wtPath, encoding: "utf8", stdio: "pipe" })
+    } catch {
+      try { execSync("git merge --abort", { cwd: wtPath, encoding: "utf8" }) } catch { /* ignore */ }
+      return {
+        ok: false,
+        output: `⚠️ Can't ship \`${branch}\` cleanly — main has advanced and the branch conflicts. It needs a rebase first. Nothing was pushed to production.`,
+      }
+    }
+    // Clean merge → push to main. This is the human-approved production deploy.
+    execSync("ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin HEAD:main", {
+      cwd: wtPath,
+      timeout: 120000,
+      encoding: "utf8",
+    })
+    return { ok: true, output: `🚀 Shipped \`${branch}\` to production (merged into main and deployed).` }
+  } catch (e) {
+    return { ok: false, output: `⚠️ Promotion of \`${branch}\` failed:\n${String(e?.message || e).slice(0, 500)}` }
+  } finally {
+    cleanup()
+  }
+}
+
+/**
  * Claim and process the oldest pending code task. Returns true if a task was
  * handled this tick (so main() can log activity), false if the queue was empty.
  */
@@ -390,6 +461,24 @@ async function tick(cfg) {
   // saw "I've queued the task" from the Slack worker; without this they get
   // silence until done/failed. Best-effort — postToSlack never throws.
   await postToSlack(cfg.slackToken, channelId, threadTs, `🔧 *${title}* — Mac Mini picked it up, working on it…`)
+
+  // 2b-0) PROMOTE TASK — a "ship it" request carries a code branch to merge into
+  // main. This is the ONLY path that deploys to production, and only here (R104,
+  // explicit human approval). It runs no Claude session — just the guarded merge.
+  const promoteBranch = typeof ctx.promote_branch === "string" ? ctx.promote_branch : null
+  if (promoteBranch) {
+    await postToSlack(cfg.slackToken, channelId, threadTs, `🚀 Shipping \`${promoteBranch}\` to production…`)
+    const pr = promoteBranchToMain(cfg, promoteBranch)
+    const phdr = pr.ok ? `✅ *${title}* — shipped` : `⚠️ *${title}* — not shipped`
+    await postToSlack(cfg.slackToken, channelId, threadTs, `${phdr}\n\n${pr.output.slice(0, 3500)}`)
+    const pupd = pr.ok
+      ? { status: "done", reply: pr.output.slice(0, 100000), replied_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      : { status: "failed", error_text: pr.output.slice(0, 10000), updated_at: new Date().toISOString() }
+    const { error: pErr } = await supabase.from("agent_messages").update(pupd).eq("id", row.id)
+    if (pErr) log("promote finalize ERROR for", row.id, ":", pErr.message)
+    log(pr.ok ? "promoted" : "promote failed", row.id, promoteBranch)
+    return true
+  }
 
   // 2b-i) ISOLATED WORKSPACE — every task runs in its OWN git worktree on its OWN
   // branch cut from origin/main, so it only ever sees its own changes and can never

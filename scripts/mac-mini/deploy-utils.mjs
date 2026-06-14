@@ -46,6 +46,25 @@ export function codeTaskWorktreePath(repoDir, taskId) {
 }
 
 /**
+ * Sanitize a branch name into a single git-ref-safe token (slashes/specials →
+ * hyphen). Used to derive the promote worktree dir + temp branch from the code
+ * branch being shipped.
+ */
+function sanitizeRef(name) {
+  return String(name || "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "branch"
+}
+
+/** Temp branch the runner checks out to merge a code branch into main. */
+export function promoteTempBranch(codeBranch) {
+  return `promote/${sanitizeRef(codeBranch)}`
+}
+
+/** Isolated worktree path used for a promotion (merge code branch → main). */
+export function promoteWorktreePath(repoDir, codeBranch) {
+  return `${String(repoDir || "").replace(/\/+$/, "")}/.claude/worktrees/promote-${sanitizeRef(codeBranch)}`
+}
+
+/**
  * Convert a git remote URL to its https web base.
  *   git@github.com:Org/Repo.git      -> https://github.com/Org/Repo
  *   https://github.com/Org/Repo.git  -> https://github.com/Org/Repo
