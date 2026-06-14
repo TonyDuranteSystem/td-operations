@@ -44,10 +44,12 @@
  */
 
 import { spawn, execSync } from "node:child_process"
+import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@supabase/supabase-js"
 import { parseStreamLine, milestoneFromEvent, finalResultFromEvent } from "./code-task-progress.mjs"
+import { codeTaskBranchName, codeTaskWorktreePath, repoWebUrlFromRemote, compareUrl } from "./deploy-utils.mjs"
 
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
@@ -137,7 +139,7 @@ async function postToSlack(token, channelId, threadTs, text) {
  * (CODE_TASK_ID / CODE_TASK_QUESTION_CHANNEL / CODE_TASK_QUESTION_THREAD_TS) so
  * the ask-antonio CLI the session may run knows which task/thread it's in.
  */
-function runClaude(cfg, instructions, onMilestone, isPaused, taskEnv) {
+function runClaude(cfg, instructions, onMilestone, isPaused, taskEnv, workdir) {
   return new Promise((resolve) => {
     const args = ["--print", "--output-format", "stream-json", "--verbose"]
     if (cfg.extraArgs) args.push(...cfg.extraArgs.split(/\s+/))
@@ -153,7 +155,7 @@ function runClaude(cfg, instructions, onMilestone, isPaused, taskEnv) {
 
     let child
     try {
-      child = spawn(cfg.claudeBin, args, { cwd: cfg.repoDir, env: { ...process.env, ...(taskEnv || {}) } })
+      child = spawn(cfg.claudeBin, args, { cwd: workdir || cfg.repoDir, env: { ...process.env, ...(taskEnv || {}) } })
     } catch (e) {
       resolve({ ok: false, output: `Failed to launch ${cfg.claudeBin}: ${e?.message || String(e)}` })
       return
@@ -231,6 +233,83 @@ function runClaude(cfg, instructions, onMilestone, isPaused, taskEnv) {
       resolve({ ok, output })
     })
   })
+}
+
+/**
+ * Create an ISOLATED worktree for a task on a fresh branch cut from origin/main,
+ * so the session only ever sees its own changes and can never mix with or clobber
+ * another session's in-flight work. Symlinks node_modules from the main checkout
+ * so the pre-push build/tests have their deps without a reinstall. Returns
+ * { ok, detail } and never throws.
+ */
+function prepareWorktree(cfg, branch, wtPath) {
+  try {
+    // Clear any stale worktree/branch left by a previous crashed run of THIS task.
+    try { execSync(`git worktree remove --force "${wtPath}"`, { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* none */ }
+    try { execSync("git worktree prune", { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* none */ }
+    try { execSync(`git branch -D "${branch}"`, { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* none */ }
+    // Cut the branch from the CURRENT origin/main so it holds only this task's commits.
+    execSync("git fetch origin main --quiet", { cwd: cfg.repoDir, timeout: 120000, encoding: "utf8" })
+    execSync(`git worktree add --quiet "${wtPath}" -b "${branch}" origin/main`, {
+      cwd: cfg.repoDir,
+      timeout: 120000,
+      encoding: "utf8",
+    })
+    // Symlink node_modules from the main checkout (fast; no reinstall). If the task
+    // changes dependencies, the pre-push build step surfaces it for a follow-up.
+    const mainNodeModules = path.join(cfg.repoDir, "node_modules")
+    const wtNodeModules = path.join(wtPath, "node_modules")
+    if (fs.existsSync(mainNodeModules) && !fs.existsSync(wtNodeModules)) {
+      fs.symlinkSync(mainNodeModules, wtNodeModules, "dir")
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, detail: String(e?.message || e) }
+  }
+}
+
+/**
+ * Remove a task's worktree (and its local branch once it's safely on origin).
+ * Best-effort — never throws. A push failure keeps the local branch for retry.
+ */
+function cleanupWorktree(cfg, wtPath, branch, branchPushed) {
+  try {
+    execSync(`git worktree remove --force "${wtPath}"`, { cwd: cfg.repoDir, encoding: "utf8" })
+  } catch (e) {
+    log("worktree remove failed:", e?.message || String(e))
+  }
+  try { execSync("git worktree prune", { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* ignore */ }
+  // The branch is preserved on origin for review; the local ref is redundant.
+  if (branchPushed) {
+    try { execSync(`git branch -D "${branch}"`, { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Startup sweep: remove orphaned code-task worktrees left by a crashed/killed
+ * runner before launchd restarted it. Safe to run at boot because no task is in
+ * flight yet. Best-effort — never throws.
+ */
+function sweepOrphanWorktrees(cfg) {
+  try {
+    const out = execSync("git worktree list --porcelain", { cwd: cfg.repoDir, encoding: "utf8" })
+    const paths = out
+      .split("\n")
+      .filter((l) => l.startsWith("worktree "))
+      .map((l) => l.slice("worktree ".length).trim())
+      .filter((p) => p.includes("/.claude/worktrees/code-task-"))
+    for (const p of paths) {
+      try {
+        execSync(`git worktree remove --force "${p}"`, { cwd: cfg.repoDir, encoding: "utf8" })
+        log("swept orphan worktree:", p)
+      } catch (e) {
+        log("sweep failed for", p, ":", e?.message || String(e))
+      }
+    }
+    try { execSync("git worktree prune", { cwd: cfg.repoDir, encoding: "utf8" }) } catch { /* ignore */ }
+  } catch (e) {
+    log("sweepOrphanWorktrees ERROR (ignored):", e?.message || String(e))
+  }
 }
 
 /**
@@ -312,6 +391,25 @@ async function tick(cfg) {
   // silence until done/failed. Best-effort — postToSlack never throws.
   await postToSlack(cfg.slackToken, channelId, threadTs, `🔧 *${title}* — Mac Mini picked it up, working on it…`)
 
+  // 2b-i) ISOLATED WORKSPACE — every task runs in its OWN git worktree on its OWN
+  // branch cut from origin/main, so it only ever sees its own changes and can never
+  // mix with, or clobber, another session's in-flight work (no shared main, no
+  // reset --hard on the live checkout, no stash collisions).
+  const branch = codeTaskBranchName(row.id, title)
+  const wtPath = codeTaskWorktreePath(cfg.repoDir, row.id)
+  let branchPushed = false
+  const prep = prepareWorktree(cfg, branch, wtPath)
+  if (!prep.ok) {
+    const msg = `⚠️ *${title}* — couldn't set up an isolated workspace:\n${prep.detail}`
+    await postToSlack(cfg.slackToken, channelId, threadTs, msg)
+    await supabase
+      .from("agent_messages")
+      .update({ status: "failed", error_text: msg.slice(0, 10000), updated_at: new Date().toISOString() })
+      .eq("id", row.id)
+    log("worktree prep failed", row.id, ":", prep.detail)
+    return true
+  }
+
   // 2c) Arm progress heartbeats for the duration of runClaude. Each setTimeout
   // fires once at its elapsed mark (5 min, 10 min); all are cleared the moment
   // the session settles, so a sub-5-min task posts none. These genuinely fire
@@ -359,6 +457,7 @@ async function tick(cfg) {
       },
       () => questionPending,
       taskEnv,
+      wtPath,
     )
   } finally {
     for (const t of heartbeatTimers) clearTimeout(t)
@@ -379,45 +478,61 @@ async function tick(cfg) {
   }
   let { ok, output } = result
 
-  // 3b) If the session succeeded and left new local commits, push them so the
-  // change actually reaches production. A single `git push origin main` deploys
-  // it (the repo is wired to both Vercel projects). If the push fails — pre-push
-  // hooks (build, unit tests, ESLint, remote-sync) or a non-fast-forward — surface
-  // the error and mark the task FAILED: the code is committed locally but did NOT
-  // reach production, so it must not look like a success.
+  // 3b) On success with commits, push the task's BRANCH (never main). Because the
+  // worktree was cut from origin/main, the branch holds ONLY this task's commits —
+  // surgical: "ship it" later promotes exactly these and nothing else. Production
+  // deploy is a separate, explicit step (R104): the rail does NOT auto-ship. The
+  // pre-push hooks (build, unit tests, ESLint, remote-sync) run on this push, so a
+  // broken change is rejected before it reaches a reviewable branch.
   if (ok) {
     try {
       const newCommits = execSync('git log --oneline HEAD...origin/main 2>/dev/null || echo ""', {
-        cwd: cfg.repoDir,
+        cwd: wtPath,
         encoding: "utf8",
       }).trim()
       if (newCommits) {
-        // Narrate the push phase — the runner's own milestone (the session's
-        // git-push tool_use is intentionally suppressed in code-task-progress.mjs
-        // so this is the single source of the "pushing" signal). The pre-push
-        // hooks (build, unit tests, ESLint, remote-sync) run inside this step.
-        await postToSlack(cfg.slackToken, channelId, threadTs, `📦 Pushing to production… _${title}_`)
-        execSync("ALLOW_SYSTEM_DOC_SKIP=1 ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin main", {
-          cwd: cfg.repoDir,
-          timeout: 120000,
-          encoding: "utf8",
-        })
-        output += "\n\n✅ Pushed to production."
+        // Narrate the push phase — the session's own git tool_use is suppressed in
+        // code-task-progress.mjs so this is the single "pushing" signal.
+        await postToSlack(
+          cfg.slackToken,
+          channelId,
+          threadTs,
+          `📦 Pushing to branch \`${branch}\` for review (preview — NOT production)… _${title}_`,
+        )
+        execSync(`git push -u origin "${branch}"`, { cwd: wtPath, timeout: 120000, encoding: "utf8" })
+        branchPushed = true
+        const repoWeb = repoWebUrlFromRemote(
+          execSync("git remote get-url origin", { cwd: wtPath, encoding: "utf8" }),
+        )
+        const url = compareUrl(repoWeb, branch)
+        output +=
+          `\n\n🌿 Pushed to branch \`${branch}\` — preview build, NOT production.` +
+          (url ? `\nReview / open PR: ${url}` : "") +
+          `\nReply "ship it" in this thread to promote to production.`
       }
     } catch (pushErr) {
       ok = false
-      output += "\n\n⚠️ Code changes committed locally but push failed:\n" + String(pushErr?.message || pushErr).slice(0, 500)
+      output +=
+        "\n\n⚠️ Code changes committed locally but branch push failed:\n" +
+        String(pushErr?.message || pushErr).slice(0, 500)
     }
   }
+
+  // 3c) Tear down the isolated worktree. The branch lives on origin (if pushed) for
+  // review; the working dir is disposable. Best-effort — never throws.
+  cleanupWorktree(cfg, wtPath, branch, branchPushed)
 
   // 4) Post the result back to the originating Slack thread.
   const header = ok ? `✅ *${title}* — done` : `⚠️ *${title}* — failed`
   await postToSlack(cfg.slackToken, channelId, threadTs, `${header}\n\n${output.slice(0, 3500)}`)
 
   // 5) Finalize the row.
+  // Record the pushed branch on the row so the "ship it" promotion step can find
+  // exactly this task's branch (null if nothing was pushed).
+  const ctxOut = { ...ctx, code_branch: branchPushed ? branch : null }
   const update = ok
-    ? { status: "done", reply: output.slice(0, 100000), replied_at: new Date().toISOString(), updated_at: new Date().toISOString() }
-    : { status: "failed", error_text: output.slice(0, 10000), updated_at: new Date().toISOString() }
+    ? { status: "done", reply: output.slice(0, 100000), context_json: ctxOut, replied_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    : { status: "failed", error_text: output.slice(0, 10000), context_json: ctxOut, updated_at: new Date().toISOString() }
 
   const { error: finErr } = await supabase
     .from("agent_messages")
@@ -435,6 +550,10 @@ process.on("unhandledRejection", (e) => log("unhandledRejection (ignored):", e?.
 
 async function main() {
   log("code-task-runner starting; instance=", INSTANCE_ID, "interval=", `${INTERVAL_MS}ms`)
+  // Clear any code-task worktrees orphaned by a crashed/killed previous run before
+  // we start claiming tasks (safe: nothing is in flight at boot).
+  const bootCfg = getConfig()
+  if (bootCfg.repoDir) sweepOrphanWorktrees(bootCfg)
   for (;;) {
     const cfg = getConfig()
     if (!cfg.supabaseUrl || !cfg.supabaseKey) {
