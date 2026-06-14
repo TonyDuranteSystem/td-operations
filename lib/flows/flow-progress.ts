@@ -23,6 +23,17 @@ export interface FlowStageRow {
   stage_order: number
   client_label: string | null
   client_label_it: string | null
+  icon?: string | null
+}
+
+export interface FlowStep {
+  /** Catalog stage_name (internal key). */
+  stageName: string
+  /** Locale-resolved client-facing label. */
+  label: string
+  /** Optional catalog icon (emoji/char), or null. */
+  icon: string | null
+  state: 'completed' | 'current' | 'future'
 }
 
 export interface FlowProgress {
@@ -81,4 +92,53 @@ export function computeFlowProgress(
     totalStages,
     currentLabel: labelFor(labelled[currentIdx], locale),
   }
+}
+
+/**
+ * Build the full ordered step list for a flow's visual progress stepper, or
+ * null when the flow has no client-facing stages (CMRA) — the caller then
+ * renders a neutral "Active" state instead of an empty stepper.
+ *
+ * Each labelled stage becomes a step marked completed / current / future. The
+ * "current" step is the highest labelled stage at or below the SD's current
+ * stage order (so an internal in-between stage keeps the previous labelled step
+ * highlighted). When the current stage is unknown/legacy or sits before the
+ * first labelled stage, no step is marked current — every step is "future"
+ * (journey not visibly started), which still shows the client the road ahead.
+ */
+export function buildFlowSteps(
+  stages: FlowStageRow[],
+  currentStageName: string | null,
+  locale: 'en' | 'it',
+): FlowStep[] | null {
+  const labelled = stages
+    .filter(s => s.client_label !== null)
+    .sort((a, b) => a.stage_order - b.stage_order)
+
+  if (labelled.length === 0) return null
+
+  const current = currentStageName
+    ? stages.find(s => s.stage_name === currentStageName) ?? null
+    : null
+
+  let currentIdx = -1
+  if (current) {
+    for (let i = 0; i < labelled.length; i++) {
+      if (labelled[i].stage_order <= current.stage_order) currentIdx = i
+    }
+  }
+
+  return labelled.map((s, i) => ({
+    stageName: s.stage_name,
+    label: labelFor(s, locale) ?? s.stage_name,
+    icon: s.icon ?? null,
+    state:
+      currentIdx === -1
+        ? 'future'
+        : i < currentIdx
+          ? 'completed'
+          : i === currentIdx
+            ? 'current'
+            : 'future',
+  }))
 }

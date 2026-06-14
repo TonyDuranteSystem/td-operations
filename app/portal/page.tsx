@@ -6,6 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
+import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight, ListChecks } from 'lucide-react'
 import Link from 'next/link'
@@ -573,6 +574,11 @@ export default async function PortalDashboardPage() {
   // RA Renewal / CMRA) driven by active service_deliveries + per-stage
   // client_label. Distinct from the services-table "Services" card below.
   const flows = await getPortalFlows(selectedAccountId, locale)
+  // The dedicated Slice-5 Tax tracker (below) already renders the Tax Return
+  // journey, so drop Tax Return from Service Status when it's showing to avoid
+  // two Tax Return steppers on the same page.
+  const taxTrackerShown = !!(trackerSteps && trackerTr)
+  const flowsForStatus = flows.filter(f => !(taxTrackerShown && f.flow_type === 'Tax Return'))
 
   // Team Access announcement is shown only to the account-admin (the only user
   // who can invite teammates). Same resolver the sidebar/layout uses.
@@ -750,48 +756,31 @@ export default async function PortalDashboardPage() {
         <TaxProgressTracker steps={trackerSteps} taxYear={trackerTr.tax_year} locale={locale} />
       )}
 
-      {/* Service Status — flow progress from active service_deliveries. Each
-          flow shows its title (e.g. "Tax Return 2025"), the current client-
-          facing stage label, and a stage-based progress bar. Flows with no
-          client-facing stages (CMRA) show a neutral "Active" state. */}
-      {flows.length > 0 && (
-        <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide flex items-center gap-2">
+      {/* Service Status — a visual progress stepper per active recurring flow
+          (Annual Report / RA Renewal / Tax Return when its dedicated tracker
+          isn't already shown). Each flow renders its title ("Tax Return 2025"),
+          a dot-per-stage stepper with the current stage highlighted, and the
+          stage labels. Flows with no client-facing stages (CMRA) show a neutral
+          "Active" card. Stage labels come from pipeline_stages client_label /
+          client_label_it, so relabels need no deploy. */}
+      {flowsForStatus.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide flex items-center gap-2 px-1">
             <ListChecks className="h-4 w-4 text-zinc-400" />
             {locale === 'it' ? 'Stato dei Servizi' : 'Service Status'}
           </h2>
-          <div className="space-y-2">
-            {flows.map(f => (
-              <div key={f.id} className="rounded-lg border p-3">
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="text-sm font-medium truncate">{f.title}</span>
-                  {f.currentLabel ? (
-                    <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                      {f.currentLabel}
-                    </span>
-                  ) : (
-                    <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
-                      {locale === 'it' ? 'Attivo' : 'Active'}
-                    </span>
-                  )}
-                </div>
-                {f.totalStages > 0 && (
-                  <div className="mt-2">
-                    <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
-                      <span>{t('dashboard.progress', locale)}</span>
-                      <span>{f.completedStages}/{f.totalStages}</span>
-                    </div>
-                    <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-blue-500 rounded-full transition-all"
-                        style={{ width: `${Math.min((f.completedStages / f.totalStages) * 100, 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
+          {flowsForStatus.map(f =>
+            f.steps ? (
+              <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} />
+            ) : (
+              <div key={f.id} className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-zinc-900">{f.title}</span>
+                <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
+                  {locale === 'it' ? 'Attivo' : 'Active'}
+                </span>
               </div>
-            ))}
-          </div>
+            )
+          )}
         </div>
       )}
 

@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
 import type { PortalAccount, PortalService } from '@/lib/types'
-import type { FlowStageRow } from '@/lib/flows/flow-progress'
+import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -437,11 +437,13 @@ export interface PortalFlow {
   completedStages: number
   totalStages: number
   dueDate: string | null
+  /** Ordered visual-stepper steps; null for flows with no client-facing stages. */
+  steps: FlowStep[] | null
 }
 
 export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Promise<PortalFlow[]> {
   const { FLOW_TYPES, deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
-  const { computeFlowProgress } = await import('@/lib/flows/flow-progress')
+  const { computeFlowProgress, buildFlowSteps } = await import('@/lib/flows/flow-progress')
 
   const { data: sds } = await supabaseAdmin
     .from('service_deliveries')
@@ -456,7 +458,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Pr
   const serviceTypes = Array.from(new Set(sds.map(s => s.service_type).filter((t): t is string => !!t)))
   const { data: stageRows } = await supabaseAdmin
     .from('pipeline_stages')
-    .select('service_type, stage_name, stage_order, client_label, client_label_it')
+    .select('service_type, stage_name, stage_order, client_label, client_label_it, icon')
     .in('service_type', serviceTypes)
 
   const stagesByType = new Map<string, FlowStageRow[]>()
@@ -468,6 +470,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Pr
       stage_order: (r.stage_order as number | null) ?? 0,
       client_label: (r.client_label as string | null) ?? null,
       client_label_it: (r.client_label_it as string | null) ?? null,
+      icon: (r.icon as string | null) ?? null,
     })
     stagesByType.set(r.service_type, list)
   }
@@ -476,6 +479,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Pr
     const serviceType = sd.service_type ?? ''
     const stages = stagesByType.get(serviceType) ?? []
     const progress = computeFlowProgress(stages, sd.stage ?? null, locale)
+    const steps = buildFlowSteps(stages, sd.stage ?? null, locale)
     const year = deriveFlowYear(sd)
     const title = buildFlowTopic(serviceType, year) || sd.service_name || serviceType || 'Service'
     return {
@@ -486,6 +490,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Pr
       completedStages: progress.completedStages,
       totalStages: progress.totalStages,
       dueDate: (sd.due_date as string | null) ?? null,
+      steps,
     }
   })
 }

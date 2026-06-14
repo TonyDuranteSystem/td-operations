@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeFlowProgress, type FlowStageRow } from '@/lib/flows/flow-progress'
+import { computeFlowProgress, buildFlowSteps, type FlowStageRow } from '@/lib/flows/flow-progress'
 
 // Minimal Tax-Return-like labelled flow (subset of the real catalog).
 const TAX_STAGES: FlowStageRow[] = [
@@ -59,5 +59,43 @@ describe('computeFlowProgress', () => {
     const p = computeFlowProgress(TAX_STAGES, null, 'en')
     expect(p.completedStages).toBe(0)
     expect(p.currentLabel).toBeNull()
+  })
+})
+
+describe('buildFlowSteps', () => {
+  it('returns one step per labelled stage with completed/current/future states', () => {
+    const steps = buildFlowSteps(TAX_STAGES, 'Wizard Available', 'en')
+    expect(steps).not.toBeNull()
+    expect(steps!.map(s => s.label)).toEqual([
+      'Extension Due', 'Complete Your Tax Form', 'Under Review', 'Completed',
+    ])
+    expect(steps!.map(s => s.state)).toEqual(['completed', 'current', 'future', 'future'])
+  })
+
+  it('resolves IT labels with EN fallback', () => {
+    const steps = buildFlowSteps(TAX_STAGES, 'Extension Due', 'it')!
+    expect(steps[0].label).toBe('Proroga')
+    expect(steps[2].label).toBe('Under Review') // no IT label → EN fallback
+  })
+
+  it('keeps the previous labelled step current on an internal stage', () => {
+    const steps = buildFlowSteps(TAX_STAGES, 'Data Received', 'en')!
+    expect(steps.find(s => s.state === 'current')?.label).toBe('Complete Your Tax Form')
+  })
+
+  it('marks all steps future when not yet started / unknown stage', () => {
+    const steps = buildFlowSteps(TAX_STAGES, 'Some Legacy Stage', 'en')!
+    expect(steps.every(s => s.state === 'future')).toBe(true)
+  })
+
+  it('returns null for a flow with no client-facing stages (CMRA)', () => {
+    expect(buildFlowSteps(CMRA_STAGES, 'Lease Created', 'en')).toBeNull()
+  })
+
+  it('carries the catalog icon through when present', () => {
+    const withIcon: FlowStageRow[] = [
+      { stage_name: 'A', stage_order: 10, client_label: 'Step A', client_label_it: null, icon: '📝' },
+    ]
+    expect(buildFlowSteps(withIcon, 'A', 'en')![0].icon).toBe('📝')
   })
 })
