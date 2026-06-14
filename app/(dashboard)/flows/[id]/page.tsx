@@ -27,7 +27,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
   const [{ data: accountRow }, { data: stageRows }] = await Promise.all([
     sd.account_id
-      ? supabaseAdmin.from('accounts').select('id, company_name, state_of_formation').eq('id', sd.account_id).single()
+      ? supabaseAdmin.from('accounts').select('id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date').eq('id', sd.account_id).single()
       : Promise.resolve({ data: null }),
     supabaseAdmin
       .from('pipeline_stages')
@@ -55,6 +55,8 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
     company_name: (accountRow?.company_name as string | null) ?? null,
     state_of_formation: (accountRow?.state_of_formation as string | null) ?? null,
+    annual_report_due_date: (accountRow?.annual_report_due_date as string | null) ?? null,
+    ra_renewal_date: (accountRow?.ra_renewal_date as string | null) ?? null,
   }
 
   const serviceDelivery: WorkspaceServiceDelivery = {

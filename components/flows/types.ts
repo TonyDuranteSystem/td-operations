@@ -24,4 +24,8 @@ export interface WorkspaceAccount {
   /** Free-text state (e.g. "Wyoming" or "WY"); normalized by consumers that
    *  need it (Secretary of State link resolution). */
   state_of_formation: string | null
+  /** Next annual-report deadline (date). Surfaced on the Closed stage summary. */
+  annual_report_due_date: string | null
+  /** Next registered-agent renewal date. Surfaced on the Closed stage summary. */
+  ra_renewal_date: string | null
 }

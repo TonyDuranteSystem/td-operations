@@ -1,6 +1,6 @@
-import { Building2, Flag, Clock, CalendarClock, UserRound } from 'lucide-react'
+import { Building2, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck } from 'lucide-react'
 import type { WorkspaceServiceDelivery, WorkspaceAccount } from './types'
-import { daysSince } from '@/lib/flows/workspace-format'
+import { daysSince, formatUploadDate } from '@/lib/flows/workspace-format'
 
 interface InfoPanelProps {
   serviceDelivery: WorkspaceServiceDelivery
@@ -28,8 +28,22 @@ export function InfoPanel({ serviceDelivery: sd, account }: InfoPanelProps) {
   const stageLabel = sd.stage ?? '—'
   const clientLabel = sd.current_client_label
 
+  // On the terminal "Closed" stage, show a completed summary: when it was
+  // finished and the next renewal date pulled from the account.
+  const isClosed = sd.stage === 'Closed'
+  const completedDate = formatUploadDate(sd.stage_entered_at)
+  const nextRenewal =
+    sd.service_type === 'State RA Renewal' ? account.ra_renewal_date : account.annual_report_due_date
+  const nextRenewalLabel = formatUploadDate(nextRenewal)
+
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
+      {isClosed && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+          <span className="text-sm font-semibold text-green-700">Completed</span>
+        </div>
+      )}
       <h3 className="text-sm font-semibold text-zinc-900 mb-1">Overview</h3>
       <div className="divide-y divide-zinc-100">
         <Row icon={<Building2 className="h-4 w-4" />} label="Company" value={account.company_name ?? '—'} />
@@ -60,6 +74,20 @@ export function InfoPanel({ serviceDelivery: sd, account }: InfoPanelProps) {
           label="Assignee"
           value={sd.assigned_to ?? <span className="text-zinc-400">Unassigned</span>}
         />
+        {isClosed && (
+          <Row
+            icon={<CheckCircle2 className="h-4 w-4 text-green-600" />}
+            label="Completed on"
+            value={completedDate ?? <span className="text-zinc-400">—</span>}
+          />
+        )}
+        {isClosed && (
+          <Row
+            icon={<CalendarCheck className="h-4 w-4" />}
+            label="Next renewal"
+            value={nextRenewalLabel ?? <span className="text-zinc-400">Not set</span>}
+          />
+        )}
       </div>
     </div>
   )
