@@ -1,0 +1,63 @@
+import { describe, it, expect } from 'vitest'
+import { computeFlowProgress, type FlowStageRow } from '@/lib/flows/flow-progress'
+
+// Minimal Tax-Return-like labelled flow (subset of the real catalog).
+const TAX_STAGES: FlowStageRow[] = [
+  { stage_name: 'Extension Due', stage_order: 10, client_label: 'Extension Due', client_label_it: 'Proroga' },
+  { stage_name: 'Wizard Available', stage_order: 50, client_label: 'Complete Your Tax Form', client_label_it: 'Compila il Modulo' },
+  { stage_name: 'Data Received', stage_order: 55, client_label: null, client_label_it: null }, // internal
+  { stage_name: 'Under Review', stage_order: 65, client_label: 'Under Review', client_label_it: null },
+  { stage_name: 'Completed', stage_order: 100, client_label: 'Completed', client_label_it: 'Completato' },
+]
+
+// CMRA-like flow: no client_label anywhere.
+const CMRA_STAGES: FlowStageRow[] = [
+  { stage_name: 'Lease Created', stage_order: 1, client_label: null, client_label_it: null },
+]
+
+describe('computeFlowProgress', () => {
+  it('counts labelled stages and resolves the current EN label', () => {
+    const p = computeFlowProgress(TAX_STAGES, 'Wizard Available', 'en')
+    expect(p.totalStages).toBe(4) // Extension, Wizard, Under Review, Completed
+    expect(p.completedStages).toBe(2)
+    expect(p.currentLabel).toBe('Complete Your Tax Form')
+  })
+
+  it('prefers the IT label when present and falls back to EN otherwise', () => {
+    expect(computeFlowProgress(TAX_STAGES, 'Wizard Available', 'it').currentLabel).toBe('Compila il Modulo')
+    // Under Review has no IT label → falls back to EN.
+    expect(computeFlowProgress(TAX_STAGES, 'Under Review', 'it').currentLabel).toBe('Under Review')
+  })
+
+  it('keeps the previous labelled step highlighted on an internal stage', () => {
+    // "Data Received" (55) is unlabelled and sits between Wizard (50) and
+    // Under Review (65) — the active step stays Wizard (#2).
+    const p = computeFlowProgress(TAX_STAGES, 'Data Received', 'en')
+    expect(p.completedStages).toBe(2)
+    expect(p.currentLabel).toBe('Complete Your Tax Form')
+  })
+
+  it('marks the final stage complete (full progress)', () => {
+    const p = computeFlowProgress(TAX_STAGES, 'Completed', 'en')
+    expect(p.completedStages).toBe(4)
+    expect(p.totalStages).toBe(4)
+  })
+
+  it('returns totalStages=0 for a flow with no client labels (CMRA)', () => {
+    const p = computeFlowProgress(CMRA_STAGES, 'Lease Created', 'en')
+    expect(p).toEqual({ completedStages: 0, totalStages: 0, currentLabel: null })
+  })
+
+  it('does not start the journey for an unknown/legacy stage name', () => {
+    const p = computeFlowProgress(TAX_STAGES, 'Some Legacy Stage', 'en')
+    expect(p.completedStages).toBe(0)
+    expect(p.totalStages).toBe(4)
+    expect(p.currentLabel).toBeNull()
+  })
+
+  it('handles a null current stage without throwing', () => {
+    const p = computeFlowProgress(TAX_STAGES, null, 'en')
+    expect(p.completedStages).toBe(0)
+    expect(p.currentLabel).toBeNull()
+  })
+})
