@@ -120,7 +120,11 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
       {/* Stage stepper */}
       <div className="mb-6 overflow-x-auto pb-1">
-        <StageStepper stages={stepperStages} currentStage={serviceDelivery.stage} />
+        <StageStepper
+          stages={stepperStages}
+          currentStage={serviceDelivery.stage}
+          serviceDeliveryId={serviceDelivery.id}
+        />
       </div>
 
       {/* Stage content from stage_layout */}

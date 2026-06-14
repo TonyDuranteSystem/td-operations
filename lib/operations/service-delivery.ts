@@ -1369,3 +1369,178 @@ export async function revertServiceDelivery(
     renewal_date_reverted: renewalDateReverted,
   }
 }
+
+// ─── setServiceDeliveryStage ───────────────────────────
+
+export interface SetStageParams {
+  delivery_id: string
+  /** Target stage NAME (case-insensitive). Must exist in the SD's pipeline. */
+  target_stage: string
+  actor?: string
+  notes?: string
+}
+
+export interface SetStageResult {
+  success: boolean
+  outcome: "moved" | "same_stage" | "stage_not_found" | "not_found" | "error"
+  delivery_id: string
+  service_type?: string
+  from_stage?: string
+  to_stage?: string
+  to_order?: number
+  /** True when the target is a terminal stage and status was set to completed. */
+  completed?: boolean
+  error?: string
+}
+
+/**
+ * Move a service delivery DIRECTLY to any stage — forward OR backward — for the
+ * flow Workspace clickable stepper. This is a manual staff position-correction
+ * control, intentionally LIGHTWEIGHT and distinct from the two side-effecting
+ * paths:
+ *   - `advanceServiceDelivery` (action buttons): creates the target stage's
+ *     auto-tasks, fires a client portal notification, runs completion logic
+ *     (renewal-date +1y bump). Reusing it for the stepper would spam the client
+ *     and duplicate tasks on every backward click — so we do NOT.
+ *   - `revertServiceDelivery` (Go Back): deletes the documents stamped with the
+ *     target stage. The stepper does NOT delete documents.
+ *
+ * What it DOES: resolve the target by NAME (SD stage_order is often NULL/stale),
+ * set stage/stage_order/stage_entered_at, append a symmetric stage_history
+ * entry, and keep `status` coherent — a terminal target (Completed / TR Filed /
+ * Closed for the renewal flows) sets status='completed' + end_date; any other
+ * target sets status='active' and clears end_date (so jumping back out of a
+ * completed stage re-opens the SD).
+ *
+ * What it deliberately does NOT do (documented limitations): no auto-tasks, no
+ * client notification, no document deletion, no renewal-date bump/undo. Use the
+ * stage action buttons for a real, side-effecting completion.
+ */
+export async function setServiceDeliveryStage(
+  params: SetStageParams,
+): Promise<SetStageResult> {
+  const actor = params.actor || "system"
+
+  // 1. Load SD.
+  const { data: sd, error: sdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("id, service_type, service_name, stage, status, account_id, contact_id, stage_history, end_date")
+    .eq("id", params.delivery_id)
+    .maybeSingle()
+
+  if (sdErr) {
+    return { success: false, outcome: "error", delivery_id: params.delivery_id, error: sdErr.message }
+  }
+  if (!sd) {
+    return { success: false, outcome: "not_found", delivery_id: params.delivery_id, error: "Service delivery not found" }
+  }
+
+  // 2. Resolve pipeline + target stage by NAME (case-insensitive).
+  const { data: stages, error: stErr } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("stage_name, stage_order")
+    .eq("service_type", sd.service_type)
+    .order("stage_order", { ascending: true })
+
+  if (stErr || !stages?.length) {
+    return {
+      success: false,
+      outcome: "error",
+      delivery_id: sd.id,
+      service_type: sd.service_type,
+      error: `No pipeline stages for service_type "${sd.service_type}"`,
+    }
+  }
+
+  const target = stages.find(
+    (s) => s.stage_name.toLowerCase() === params.target_stage.toLowerCase(),
+  )
+  if (!target) {
+    return {
+      success: false,
+      outcome: "stage_not_found",
+      delivery_id: sd.id,
+      service_type: sd.service_type,
+      error: `Stage "${params.target_stage}" is not part of the "${sd.service_type}" pipeline.`,
+    }
+  }
+
+  // 3. No-op when already at the target stage.
+  if (sd.stage === target.stage_name) {
+    return {
+      success: true,
+      outcome: "same_stage",
+      delivery_id: sd.id,
+      service_type: sd.service_type,
+      from_stage: sd.stage,
+      to_stage: target.stage_name,
+      to_order: target.stage_order,
+    }
+  }
+
+  const currentOrder =
+    stages.find((s) => s.stage_name === sd.stage)?.stage_order ?? 0
+
+  // 4. Terminal-stage detection mirrors advanceServiceDelivery's isCompleted:
+  // "Completed" / "TR Filed" globally, plus "Closed" for the renewal flows only.
+  const isCompleted =
+    target.stage_name === "Completed" ||
+    target.stage_name === "TR Filed" ||
+    (target.stage_name === "Closed" && isRenewalServiceType(sd.service_type))
+
+  // 5. Append a symmetric stage_history entry and write the move.
+  const historyEntry = {
+    from_stage: sd.stage || "New",
+    from_order: currentOrder,
+    to_stage: target.stage_name,
+    to_order: target.stage_order,
+    advanced_at: new Date().toISOString(),
+    advanced_by: actor,
+    notes: params.notes || "Moved via flow Workspace stepper",
+  }
+  const stageHistory = Array.isArray(sd.stage_history)
+    ? [...sd.stage_history, historyEntry]
+    : [historyEntry]
+
+  const patch: Record<string, unknown> = {
+    stage: target.stage_name,
+    stage_order: target.stage_order,
+    stage_entered_at: new Date().toISOString(),
+    stage_history: stageHistory,
+    status: isCompleted ? "completed" : "active",
+    end_date: isCompleted ? new Date().toISOString().split("T")[0] : null,
+    updated_at: new Date().toISOString(),
+  }
+
+  await dbWrite(
+    supabaseAdmin.from("service_deliveries").update(patch).eq("id", sd.id),
+    "service_deliveries.update.set-stage",
+  )
+
+  logAction({
+    actor,
+    action_type: "update",
+    table_name: "service_deliveries",
+    record_id: sd.id,
+    account_id: sd.account_id ?? undefined,
+    contact_id: sd.contact_id ?? undefined,
+    summary: `Stage set: ${sd.stage || "New"} → ${target.stage_name} (${sd.service_name || sd.service_type}) via stepper`,
+    details: {
+      from_stage: sd.stage,
+      to_stage: target.stage_name,
+      completed: isCompleted,
+      notes: params.notes ?? null,
+    },
+  })
+
+  return {
+    success: true,
+    outcome: "moved",
+    delivery_id: sd.id,
+    service_type: sd.service_type,
+    from_stage: sd.stage || "New",
+    to_stage: target.stage_name,
+    to_order: target.stage_order,
+    completed: isCompleted,
+  }
+}
