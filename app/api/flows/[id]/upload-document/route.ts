@@ -84,44 +84,70 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buffer = Buffer.from(await blob.arrayBuffer())
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    // 3. Resolve the account's Drive folder.
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id, gdrive_folder_url')
-      .eq('id', accountId)
-      .single()
+    // 3. Decide where the canonical copy lives.
+    //    Production: copy to the account's Google Drive folder (canonical store).
+    //    Sandbox (SANDBOX_MODE=1): Drive writes are mocked AND many seeded
+    //    accounts have no Drive folder, so we KEEP the file in Supabase Storage
+    //    (onboarding-uploads) and reference it directly — no Drive round-trip and
+    //    no Drive-folder requirement. The documents row + stage advance happen
+    //    identically, so the flow works end-to-end in sandbox.
+    const useStorageFallback = process.env.SANDBOX_MODE === '1'
 
-    let driveFolderId: string | null = (account?.drive_folder_id as string | null) ?? null
-    if (!driveFolderId && account?.gdrive_folder_url) {
-      const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-      if (match) driveFolderId = match[1]
-    }
-    if (!driveFolderId) {
-      return NextResponse.json(
-        { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
-        { status: 400 },
-      )
-    }
+    let docFileId: string
+    let docLink: string
 
-    // 4. Upload to Drive.
-    const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const driveFile = (await uploadBinaryToDrive(fileName, buffer, fileMime, driveFolderId)) as {
-      id: string
-      name: string
+    if (useStorageFallback) {
+      // The file already lives in onboarding-uploads from the signed-URL PUT —
+      // keep it (do NOT delete it in step 8). Synthetic, per-upload-unique
+      // drive_file_id (the column is NOT NULL) that doubles as the idempotency
+      // key, so repeat uploads create distinct rows instead of colliding on a
+      // shared mock id.
+      docFileId = `storage:${storagePath}`
+      const { data: signed } = await supabaseAdmin.storage
+        .from('onboarding-uploads')
+        .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
+      docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
+    } else {
+      // Production: resolve the account's Drive folder and copy the file there.
+      const { data: account } = await supabaseAdmin
+        .from('accounts')
+        .select('drive_folder_id, gdrive_folder_url')
+        .eq('id', accountId)
+        .single()
+
+      let driveFolderId: string | null = (account?.drive_folder_id as string | null) ?? null
+      if (!driveFolderId && account?.gdrive_folder_url) {
+        const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
+        if (match) driveFolderId = match[1]
+      }
+      if (!driveFolderId) {
+        return NextResponse.json(
+          { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
+          { status: 400 },
+        )
+      }
+
+      const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+      const driveFile = (await uploadBinaryToDrive(fileName, buffer, fileMime, driveFolderId)) as {
+        id: string
+        name: string
+      }
+      docFileId = driveFile.id
+      docLink = `https://drive.google.com/file/d/${driveFile.id}/view`
     }
 
     // 5. Insert documents row (idempotent on drive_file_id), stamped with the flow.
     const { data: existingDoc } = await supabaseAdmin
       .from('documents')
       .select('id')
-      .eq('drive_file_id', driveFile.id)
+      .eq('drive_file_id', docFileId)
       .limit(1)
 
     if (!existingDoc?.length) {
       await adminUntyped.from('documents').insert({
         file_name: fileName,
-        drive_file_id: driveFile.id,
-        drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
+        drive_file_id: docFileId,
+        drive_link: docLink,
         mime_type: fileMime,
         file_size: buffer.length,
         status: 'classified',
@@ -137,7 +163,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       actor: 'crm-admin',
       action_type: 'upload_flow_document',
       table_name: 'documents',
-      record_id: driveFile.id,
+      record_id: docFileId,
       account_id: accountId,
       service_delivery_id: serviceDeliveryId,
       summary: `Flow document uploaded: ${fileName}`,
@@ -171,13 +197,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       advance = { success: false, error: advErr instanceof Error ? advErr.message : String(advErr) }
     }
 
-    // 8. Best-effort storage cleanup.
-    supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
+    // 8. Best-effort storage cleanup — only when the canonical copy now lives in
+    //    Drive. In the storage-fallback path the Storage object IS the document,
+    //    so it must be kept.
+    if (!useStorageFallback) {
+      supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
+    }
 
     return NextResponse.json({
       success: true,
       detail: `${fileName} uploaded`,
-      driveFileId: driveFile.id,
+      driveFileId: docFileId,
       advance,
     })
   } catch (e) {
