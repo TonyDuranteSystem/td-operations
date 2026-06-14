@@ -1,5 +1,5 @@
 # AI Agent (in-dashboard assistant)
-_Last verified against code: 2026-06-10 — Claude (no in-dashboard-assistant change this push; flagged because the shared `callWorker` gained `systemPromptOverride` for a new Slack worker consumer — see slack-claude-worker.md; prior: worker max_tokens 2048→16384 + ANTHROPIC_TIMEOUT_MS 55s→240s)_
+_Last verified against code: 2026-06-14 — the gmail read tools (`gmail_search`/`gmail_read`/`gmail_read_thread` in `AGENT_TOOLS`) gained an optional `as_user` mailbox param, allow-listed via `lib/ai-agent/gmail-mailbox.ts` (`resolveMailbox` — env `GMAIL_WORKER_ALLOWED_MAILBOXES`, default `support@` + `antonio.durante@`). So all workers (Slack, Hermes, dashboard) can read Antonio's personal inbox on request, but a non-allow-listed mailbox is refused (prompt-injection guard); default mailbox unchanged (`support@`). Prior: 2026-06-13 (c) — the shared `worker-tools.ts` gained a Slack-only `promote_code_branch` tool (gated by `enableCodeTasks`, not in `WORKER_TOOLS`; neither the in-dashboard agent nor the Hermes worker receives it) for the code-task "ship it" promotion — see `slack-claude-worker.md`. Earlier 2026-06-13 — added 4 tools to `AGENT_TOOLS`: reads `portal_chat_inbox` + `portal_chat_read` (full portal thread/inbox) and actions `update_deadline` + `send_team_message` (both on the approval rail). The reads also joined the bridge worker's read surface + thread-routing CRM reads; `recall_memories` was added to the worker read allow-list (closing the save-but-can't-read asymmetry). See `agent-bridge.md`. Prior: 2026-06-10 — shared `callWorker` gained `systemPromptOverride` for the Slack worker consumer (see slack-claude-worker.md)._
 
 ## What it is
 A built-in AI chat assistant **inside the CRM dashboard** for staff — it can search the CRM, read Gmail/Drive, and take actions through its own tool set. This is **separate** from Claude Code and the Claude.ai MCP connector: it has its **own** tool definitions (`lib/ai-agent/tools.ts`), not the MCP server's ~217 tools.
@@ -12,9 +12,9 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 - **System prompt:** `lib/ai-agent/system-prompt.ts` (`SYSTEM_PROMPT`) — embeds business knowledge + instructions.
 
 ## The agent's tool set (`lib/ai-agent/tools.ts`)
-~34 tools, each a schema + execute function over real Supabase tables:
-- **Read:** `search_accounts/contacts/leads/deals/payments/services/tasks/tax_returns/deadlines/portal_messages/kb`, `get_account_detail`, `get_dashboard_stats`, `get_sop`, `run_sql_query`.
-- **Write/act:** `create_task`, `update_task`, `update_contact`, `update_account_notes`, `update_service`, `advance_service_stage`, `send_email`.
+~38 tools, each a schema + execute function over real Supabase tables:
+- **Read:** `search_accounts/contacts/leads/deals/payments/services/tasks/tax_returns/deadlines/portal_messages/kb`, `get_account_detail`, `get_dashboard_stats`, `get_sop`, `run_sql_query`, `portal_chat_inbox`, `portal_chat_read` (full portal thread / inbox with unread counts).
+- **Write/act:** `create_task`, `update_task`, `update_contact`, `update_account_notes`, `update_service`, `advance_service_stage`, `send_email`, `update_deadline`, `send_team_message` (internal staff-only note — never client-visible).
 - **Gmail/Drive:** `gmail_search/read/read_thread/get_attachments`, `drive_search/list_folder/move/upload_file`, `preview_attachment`.
 - **Conversation/memory:** `log_conversation`, `save_memory`, `recall_memories` — the agent has **persistent memory** (the "Antonio Brain" — see sysdoc `antonio-brain-architecture`).
 

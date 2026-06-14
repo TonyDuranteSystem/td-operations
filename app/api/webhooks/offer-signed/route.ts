@@ -13,8 +13,17 @@ import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
+import { verifyInternalWebhookSecret } from "@/lib/webhook-internal-auth"
 
 export async function POST(req: NextRequest) {
+  // Fail CLOSED: this webhook mints a real TD invoice and rewrites offer bank
+  // references. It sits on the public /api/webhooks/* path, so without a secret
+  // anyone who learned a token could POST it (security audit 2026-06-13, H4).
+  // Requires the internal secret; rejects when the secret is unset.
+  if (!verifyInternalWebhookSecret(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   try {
     const body = await req.json()
     const { offer_token } = body

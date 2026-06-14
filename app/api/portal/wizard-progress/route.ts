@@ -9,6 +9,38 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
+import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
+import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
+
+/**
+ * Re-prove that the logged-in identity owns a lead-scoped wizard_progress row
+ * (account_id null, contact_id null, lead_id set — the formation case). Mirrors
+ * the wizard-submit 0b check so a client can't overwrite another client's
+ * in-flight formation by supplying its lead_id.
+ */
+async function ownsLeadScopedRow(
+  identity: Awaited<ReturnType<typeof resolvePortalIdentity>>,
+  user: { email?: string | null },
+  leadId: string,
+): Promise<boolean> {
+  const ctcId = identity.kind === 'contact' ? identity.contactId : null
+  const ownerEmails = new Set<string>()
+  if (user.email) ownerEmails.add(user.email.toLowerCase())
+  if (ctcId) {
+    const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', ctcId).maybeSingle()
+    if (c?.email) ownerEmails.add(String(c.email).toLowerCase())
+  }
+  const { data: leadOffer } = await supabaseAdmin
+    .from('offers')
+    .select('client_email, contract_type, contact_id')
+    .eq('lead_id', leadId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return formationLeadOwned(leadOffer, ctcId, ownerEmails)
+}
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -18,15 +50,55 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, current_step, data, account_id, contact_id, lead_id, progress_id } = body
+  const { wizard_type, current_step, data, account_id: rawAccountId, contact_id, lead_id, progress_id } = body
 
   if (!wizard_type) {
     return NextResponse.json({ error: 'wizard_type is required' }, { status: 400 })
   }
 
+  // A formation never carries an account_id (lives on contact+lead until the
+  // Articles materialize the account). Same backstop as wizard-submit.
+  const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
+
+  const identity = await resolvePortalIdentity(user)
+
   try {
     if (progress_id) {
-      // Update existing progress
+      // ─── OWNERSHIP CHECK BEFORE UPDATE (default-deny) ───
+      // The route previously trusted a client-supplied progress_id and wrote
+      // `.eq('id', progress_id)` with NO ownership check, so any client could
+      // overwrite another client's in-flight wizard data by supplying a
+      // different UUID (security audit 2026-06-13, H1 / IDOR). Re-fetch the row
+      // and verify the caller owns its subject before writing.
+      const { data: existing, error: fetchErr } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('id, account_id, contact_id, lead_id')
+        .eq('id', progress_id)
+        .maybeSingle()
+
+      if (fetchErr) throw fetchErr
+      if (!existing) {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      }
+
+      const rowAccountId = (existing.account_id as string | null) ?? null
+      const rowContactId = (existing.contact_id as string | null) ?? null
+      const rowLeadId = (existing.lead_id as string | null) ?? null
+
+      let allowed = false
+      if (rowAccountId || rowContactId) {
+        // Account- or contact-scoped row → standard subject check.
+        allowed = canSubmitWizard(identity, rowAccountId, rowContactId)
+      } else if (rowLeadId) {
+        // Lead-scoped formation row → re-prove lead ownership.
+        allowed = await ownsLeadScopedRow(identity, user, rowLeadId)
+      }
+      // No scope at all (orphan row) → deny.
+
+      if (!allowed) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+
       const { error } = await supabaseAdmin
         .from('wizard_progress')
         .update({
@@ -39,7 +111,18 @@ export async function POST(req: NextRequest) {
       if (error) throw error
       return NextResponse.json({ id: progress_id, updated: true })
     } else {
-      // Create new progress
+      // ─── OWNERSHIP CHECK BEFORE CREATE (default-deny) ───
+      // CREATE previously accepted client-supplied account_id/contact_id/lead_id
+      // unverified. Gate the subject the same way wizard-submit does.
+      if (!canSubmitWizard(identity, account_id, contact_id ?? null)) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+      if (lead_id && wizard_type === 'formation') {
+        if (!(await ownsLeadScopedRow(identity, user, lead_id))) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+        }
+      }
+
       const { data: created, error } = await supabaseAdmin
         .from('wizard_progress')
         .insert({

@@ -4,6 +4,10 @@
  * Schema matches actual Supabase tables.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { logAction } from '@/lib/mcp/action-log'
+import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
+import { searchTemplates } from './templates'
+import { resolveMailbox } from './gmail-mailbox'
 import {
   normalizeTaskPriority,
   normalizeTaskStatus,
@@ -216,6 +220,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       properties: {
         query: { type: 'string', description: 'Gmail search query. ALWAYS use "from:email@address.com" to search by sender (not by name). Examples: "from:mario@example.com", "from:client@email.com has:attachment", "from:client@email.com newer_than:7d". Supports all Gmail operators.' },
         max_results: { type: 'number', description: 'Max results to return (default 10, max 20)' },
+        as_user: { type: 'string', description: "Mailbox to search. Default support@tonydurante.us. Use 'antonio.durante@tonydurante.us' to search Antonio's personal inbox — ONLY when Antonio explicitly asks. Other mailboxes are not permitted." },
       },
       required: ['query'],
     },
@@ -227,6 +232,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
+        as_user: { type: 'string', description: "Mailbox the message is in. Must match the as_user used in the gmail_search that returned this ID. Default support@tonydurante.us; 'antonio.durante@tonydurante.us' for Antonio's personal inbox (only when Antonio asks)." },
       },
       required: ['message_id'],
     },
@@ -238,6 +244,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         thread_id: { type: 'string', description: 'Gmail thread ID (from gmail_search results)' },
+        as_user: { type: 'string', description: "Mailbox the thread is in. Must match the as_user used in the gmail_search that returned this ID. Default support@tonydurante.us; 'antonio.durante@tonydurante.us' for Antonio's personal inbox (only when Antonio asks)." },
       },
       required: ['thread_id'],
     },
@@ -301,6 +308,19 @@ export const AGENT_TOOLS: ToolDef[] = [
         service_type: { type: 'string', description: 'Service type name (e.g. "Company Formation", "Tax Return", "Client Onboarding")' },
       },
       required: ['service_type'],
+    },
+  },
+  {
+    name: 'search_templates',
+    description: 'Search the firm\'s APPROVED message + email templates (banking, ITIN, formation, tax, billing, etc.) for the situation at hand. Returns up to a few ranked templates with their approved copy. PREFER an approved template as the base for any client-facing reply — adapt placeholders to the client but keep the structure and key information. Matched on trigger keywords/category/name.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The client message or topic to find a template for (e.g. "how do I open a bank account", "ITIN required documents")' },
+        category: { type: 'string', description: 'Optional category filter (e.g. "banking", "tax", "formation")' },
+        language: { type: 'string', description: 'Optional preferred language (e.g. "English", "Italian") — soft-boosts same-language templates' },
+      },
+      required: ['query'],
     },
   },
   // ── Google Drive Tools ──
@@ -478,6 +498,95 @@ export const AGENT_TOOLS: ToolDef[] = [
       },
     },
   },
+  // ── Decision Memory (semantic) — searchable by MEANING, distinct from the
+  //    key/value save_memory/recall_memories above. Backed by decision_memory. ──
+  {
+    name: 'memory_save',
+    description: 'Save a DECISION to long-term semantic memory so it can be recalled later when a similar situation arises. Use this when you learn something durable from a conversation: a correction Antonio made, a business decision, a pricing rule, a policy, or how a specific kind of situation should be handled. Distinct from save_memory (key/value session notes) — memory_save is searchable by meaning, not by key. It only adds knowledge; it never changes client or business data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        situation: { type: 'string', description: 'The situation/context the decision applied to. This is what future recall matches against — describe it the way it might recur.' },
+        decision: { type: 'string', description: 'What was decided or done.' },
+        reasoning: { type: 'string', description: 'Why this decision was made (optional but valuable).' },
+        domain: { type: 'string', description: 'Domain bucket for filtering, e.g. "billing", "formation", "tax", "banking", "tone".' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for filtering.' },
+        correction_type: { type: 'string', description: 'If this captures a correction, classify it: "factual", "policy", "tone", or "process".' },
+        bot_said: { type: 'string', description: 'If correcting the bot, what the bot originally said (so the wrong answer is on record).' },
+      },
+      required: ['situation', 'decision'],
+    },
+  },
+  {
+    name: 'memory_recall',
+    description: 'Recall past DECISIONS most similar to a situation, by meaning (semantic search). Call this BEFORE deciding how to handle a situation, to see how comparable situations were decided before. Returns the most relevant past decisions with their reasoning and a similarity score.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The current situation to find similar past decisions for.' },
+        domain: { type: 'string', description: 'Optional: restrict to a single domain (e.g. "billing").' },
+        limit: { type: 'number', description: 'Max results (default 5).' },
+      },
+      required: ['query'],
+    },
+  },
+  // ── Portal chat reads (read-only) ──────────────────────────────────────
+  {
+    name: 'portal_chat_inbox',
+    description: 'List portal chat threads with unread counts and last-message previews. Use this FIRST to see which clients have messages waiting. Each thread returns an account_id or contact_id to pass to portal_chat_read. Read-only.',
+    parameters: {
+      type: 'object',
+      properties: {
+        unread_only: { type: 'boolean', description: 'If true, only threads with unread client messages. Default false.' },
+        account_id: { type: 'string', description: 'Filter to a specific account/LLC.' },
+        contact_id: { type: 'string', description: 'Filter to a specific contact/person (all their threads).' },
+        limit: { type: 'number', description: 'Max threads (default 20).' },
+      },
+    },
+  },
+  {
+    name: 'portal_chat_read',
+    description: 'Read the full message history of ONE portal chat thread in chronological order (sender, timestamp, attachments, unread flags). Pass account_id for an LLC thread, or contact_id for a person thread (use portal_chat_inbox first to find the id). Read-only — does NOT mark anything as read.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account UUID — read the LLC thread. Provide this OR contact_id.' },
+        contact_id: { type: 'string', description: 'Contact UUID — read the person thread (no LLC). Provide this OR account_id.' },
+        limit: { type: 'number', description: 'Most-recent N messages (default 30).' },
+      },
+    },
+  },
+  // ── Actions (approval-rail; the bridge worker can only PROPOSE these) ───
+  {
+    name: 'update_deadline',
+    description: "Update a compliance deadline — status, filed date, confirmation number, blocked reason, assignee, or notes. Use search_deadlines first to get the id. This is an ACTION: when proposed by the bridge worker it requires Antonio's approval before it runs.",
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Deadline UUID (from search_deadlines).' },
+        status: { type: 'string', description: 'New status (e.g. "Filed", "In Progress", "Blocked"). Use the value shown by search_deadlines.' },
+        filed_date: { type: 'string', description: 'Date filed, YYYY-MM-DD.' },
+        confirmation_number: { type: 'string', description: 'Filing confirmation number.' },
+        blocked_reason: { type: 'string', description: 'Why the deadline is blocked.' },
+        assigned_to: { type: 'string', description: 'Who it is assigned to.' },
+        notes: { type: 'string', description: 'Free-text notes.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'send_team_message',
+    description: "Post an INTERNAL team note about a client, visible to staff ONLY (CRM > Portal Chats > Team) — NEVER visible to the client. Use to flag something for the team. Pass account_id for an LLC, or contact_id for a person. This is an ACTION: when proposed by the bridge worker it requires Antonio's approval before it runs.",
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account UUID. Provide this OR contact_id.' },
+        contact_id: { type: 'string', description: 'Contact UUID. Provide this OR account_id.' },
+        message: { type: 'string', description: 'The internal team note text.' },
+      },
+      required: ['message'],
+    },
+  },
 ]
 
 // ============================================================
@@ -510,6 +619,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'run_sql_query': return await runSqlQuery(params)
       case 'search_kb': return await searchKb(params)
       case 'get_sop': return await getSop(params)
+      case 'search_templates': return await searchTemplatesTool(params)
       case 'drive_search': return await driveSearchTool(params)
       case 'drive_list_folder': return await driveListFolderTool(params)
       case 'drive_move': return await driveMoveTool(params)
@@ -523,6 +633,12 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'get_client_360': return await getClient360(params)
       case 'save_memory': return await saveMemory(params)
       case 'recall_memories': return await recallMemories(params)
+      case 'memory_save': return await decisionMemorySaveTool(params)
+      case 'memory_recall': return await decisionMemoryRecallTool(params)
+      case 'portal_chat_inbox': return await portalChatInboxTool(params)
+      case 'portal_chat_read': return await portalChatReadTool(params)
+      case 'update_deadline': return await updateDeadlineTool(params)
+      case 'send_team_message': return await sendTeamMessageTool(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
   } catch (err) {
@@ -913,13 +1029,14 @@ async function getDashboardStats() {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailSearch(p: any) {
   const { gmailGet } = await import('@/lib/gmail')
+  const asUser = resolveMailbox(p.as_user) ?? undefined
   const maxResults = Math.min(Number(p.max_results) || 10, 20)
 
   // Search messages
   const searchResult = await gmailGet('/messages', {
     q: p.query,
     maxResults: String(maxResults),
-  }) as { messages?: Array<{ id: string; threadId: string }> }
+  }, asUser) as { messages?: Array<{ id: string; threadId: string }> }
 
   if (!searchResult.messages?.length) {
     return JSON.stringify({ results: [], total: 0, message: 'No emails found matching the search query.' })
@@ -930,7 +1047,7 @@ async function gmailSearch(p: any) {
   const details = await Promise.all(
     messagesToFetch.map(async (msg) => {
       try {
-        const detail = await gmailGet(`/messages/${msg.id}`, { format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date'] }) as {
+        const detail = await gmailGet(`/messages/${msg.id}`, { format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date'] }, asUser) as {
           id: string
           threadId: string
           snippet: string
@@ -962,8 +1079,9 @@ async function gmailSearch(p: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailRead(p: any) {
   const { gmailGet } = await import('@/lib/gmail')
+  const asUser = resolveMailbox(p.as_user) ?? undefined
 
-  const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }) as {
+  const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }, asUser) as {
     id: string
     threadId: string
     snippet: string
@@ -1008,8 +1126,9 @@ async function gmailRead(p: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailReadThread(p: any) {
   const { gmailGet } = await import('@/lib/gmail')
+  const asUser = resolveMailbox(p.as_user) ?? undefined
 
-  const thread = await gmailGet(`/threads/${p.thread_id}`, { format: 'full' }) as {
+  const thread = await gmailGet(`/threads/${p.thread_id}`, { format: 'full' }, asUser) as {
     id: string
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     messages?: any[]
@@ -1164,6 +1283,30 @@ async function searchKb(p: any) {
   }))
 
   return JSON.stringify({ results, total: results.length })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function searchTemplatesTool(p: any) {
+  const results = await searchTemplates({
+    query: typeof p.query === 'string' ? p.query : '',
+    category: typeof p.category === 'string' ? p.category : null,
+    language: typeof p.language === 'string' ? p.language : null,
+    limit: 3,
+  })
+  if (!results.length) {
+    return JSON.stringify({ results: [], message: 'No matching approved templates. Draft from scratch, following the SOPs and tone.' })
+  }
+  return JSON.stringify({
+    results: results.map((t) => ({
+      template_name: t.template_name,
+      category: t.category,
+      language: t.language,
+      source: t.source,
+      text: t.text,
+    })),
+    total: results.length,
+    note: 'Prefer one of these approved templates as the base — adapt placeholders, keep structure.',
+  })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1693,6 +1836,52 @@ async function recallMemories(p: any) {
   return JSON.stringify({ scope, memories: data })
 }
 
+// ============================================================
+// Decision Memory (semantic) — backed by lib/ai-agent/decision-memory.ts.
+// memory_save adds knowledge only (decision_memory table); it never mutates
+// client/business data. memory_recall is a pure read.
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function decisionMemorySaveTool(p: any) {
+  if (!p?.situation || !p?.decision) {
+    return JSON.stringify({ error: 'memory_save requires both "situation" and "decision".' })
+  }
+  const id = await saveDecisionMemory({
+    situation: String(p.situation),
+    decision: String(p.decision),
+    reasoning: p.reasoning ? String(p.reasoning) : undefined,
+    domain: p.domain ? String(p.domain) : undefined,
+    tags: Array.isArray(p.tags) ? p.tags.map(String) : undefined,
+    correctionType: p.correction_type ? String(p.correction_type) : undefined,
+    botSaid: p.bot_said ? String(p.bot_said) : undefined,
+    actors: Array.isArray(p.actors) ? p.actors.map(String) : undefined,
+    // Caller may override; otherwise tag the source as the agent surface.
+    sourceType: typeof p.source_type === 'string' && p.source_type ? p.source_type : 'agent',
+  })
+  return JSON.stringify({ success: true, id, message: 'Decision saved to semantic memory.' })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function decisionMemoryRecallTool(p: any) {
+  if (!p?.query) return JSON.stringify({ error: 'memory_recall requires a "query".' })
+  const memories = await recallDecisionMemory(String(p.query), {
+    domain: p.domain ? String(p.domain) : undefined,
+    matchCount: Number(p.limit) || 5,
+  })
+  if (!memories.length) return JSON.stringify({ memories: [], message: 'No similar past decisions found.' })
+  return JSON.stringify({
+    total: memories.length,
+    memories: memories.map(m => ({
+      situation: m.situation,
+      decision: m.decision,
+      reasoning: m.reasoning,
+      domain: m.domain,
+      similarity: Math.round(m.similarity * 100) / 100,
+    })),
+  })
+}
+
 /** Called by providers.ts before the tool loop — injects global memories into the system prompt. */
 export async function loadGlobalMemories(): Promise<string> {
   const { data } = await supabaseAdmin
@@ -1703,4 +1892,228 @@ export async function loadGlobalMemories(): Promise<string> {
   if (!data?.length) return ''
   const lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
   return `\n\n## REMEMBERED FROM PREVIOUS SESSIONS\n${lines}`
+}
+
+// ============================================================
+// Portal chat reads + bounded actions (added 2026-06-13)
+// Read tools mirror the MCP portal_chat_inbox / portal_chat_read query logic;
+// action tools (update_deadline / send_team_message) are reachable by the
+// bridge worker ONLY via propose_action (approval rail).
+// ============================================================
+
+/** List portal chat threads with unread counts + last-message previews (read-only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function portalChatInboxTool(p: any): Promise<string> {
+  const unreadOnly = p.unread_only === true
+  const limit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 20
+
+  let accountIds: string[] = []
+  let contactOnlyIds: string[] = []
+
+  if (p.account_id) {
+    accountIds = [p.account_id]
+  } else if (p.contact_id) {
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts').select('account_id').eq('contact_id', p.contact_id)
+    accountIds = (links || []).map((l) => l.account_id)
+    contactOnlyIds = [p.contact_id]
+  } else {
+    const { data: acctRows } = await supabaseAdmin
+      .from('portal_messages').select('account_id').not('account_id', 'is', null).order('created_at', { ascending: false })
+    accountIds = Array.from(new Set((acctRows || []).map((r) => r.account_id as string)))
+    const { data: ctRows } = await supabaseAdmin
+      .from('portal_messages').select('contact_id').is('account_id', null).not('contact_id', 'is', null).order('created_at', { ascending: false })
+    contactOnlyIds = Array.from(new Set((ctRows || []).map((r) => r.contact_id as string)))
+  }
+
+  interface InboxThread { id: string; isAccount: boolean; name: string; last: string; lastAt: string; lastBy: string; unread: number }
+  const threads: InboxThread[] = []
+
+  for (const acctId of accountIds.slice(0, limit)) {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', acctId).maybeSingle()
+    const { data: link } = await supabaseAdmin.from('account_contacts').select('contacts(full_name)').eq('account_id', acctId).limit(1).maybeSingle()
+    const { data: lastMsg } = await supabaseAdmin.from('portal_messages').select('message, created_at, sender_type').eq('account_id', acctId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const { count } = await supabaseAdmin.from('portal_messages').select('id', { count: 'exact', head: true }).eq('account_id', acctId).eq('sender_type', 'client').is('read_at', null)
+    const unread = count ?? 0
+    if (unreadOnly && unread === 0) continue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cName = (link?.contacts as any)?.full_name ?? null
+    threads.push({
+      id: `account_id: ${acctId}`, isAccount: true,
+      name: cName ? `${acct?.company_name ?? 'Unknown'} (${cName})` : (acct?.company_name ?? 'Unknown'),
+      last: lastMsg?.message?.substring(0, 120) ?? '', lastAt: lastMsg?.created_at ?? '',
+      lastBy: lastMsg?.sender_type === 'client' ? 'Client' : 'Admin', unread,
+    })
+  }
+
+  for (const ctId of contactOnlyIds.slice(0, limit)) {
+    const { data: ct } = await supabaseAdmin.from('contacts').select('full_name, email').eq('id', ctId).maybeSingle()
+    const { data: lastMsg } = await supabaseAdmin.from('portal_messages').select('message, created_at, sender_type').eq('contact_id', ctId).is('account_id', null).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const { count } = await supabaseAdmin.from('portal_messages').select('id', { count: 'exact', head: true }).eq('contact_id', ctId).is('account_id', null).eq('sender_type', 'client').is('read_at', null)
+    const unread = count ?? 0
+    if (unreadOnly && unread === 0) continue
+    threads.push({
+      id: `contact_id: ${ctId}`, isAccount: false,
+      name: ct?.full_name ?? ct?.email ?? 'Unknown Contact',
+      last: lastMsg?.message?.substring(0, 120) ?? '', lastAt: lastMsg?.created_at ?? '',
+      lastBy: lastMsg?.sender_type === 'client' ? 'Client' : 'Admin', unread,
+    })
+  }
+
+  threads.sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+  if (threads.length === 0) {
+    return JSON.stringify({ message: unreadOnly ? 'No unread portal messages.' : 'No portal chat threads found.', threads: [] })
+  }
+  const totalUnread = threads.reduce((s, t) => s + t.unread, 0)
+  const lines = threads.map((t) => {
+    const badge = t.unread > 0 ? ` [${t.unread} unread]` : ''
+    return `${t.unread > 0 ? '🔴' : '⚪'} ${t.name}${badge} — last (${t.lastBy}): "${t.last}"  [${t.id}]`
+  })
+  return `Portal Chat Inbox — ${totalUnread} unread across ${threads.filter((t) => t.unread > 0).length} thread(s)\n\n${lines.join('\n')}\n\nUse portal_chat_read(account_id or contact_id) to read a full conversation.`
+}
+
+/** Read the full message history of one portal chat thread, chronological (read-only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function portalChatReadTool(p: any): Promise<string> {
+  if (!p.account_id && !p.contact_id) {
+    return JSON.stringify({ error: 'At least one of account_id or contact_id is required.' })
+  }
+  const msgLimit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 30
+
+  let clientName = 'Unknown'
+  if (p.account_id) {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', p.account_id).maybeSingle()
+    clientName = acct?.company_name ?? p.account_id
+  } else {
+    const { data: ct } = await supabaseAdmin.from('contacts').select('full_name, email').eq('id', p.contact_id).maybeSingle()
+    clientName = ct?.full_name ?? ct?.email ?? p.contact_id
+  }
+
+  let query = supabaseAdmin
+    .from('portal_messages')
+    .select('id, sender_type, message, attachment_url, attachment_name, attachments, read_at, created_at, contacts:contact_id(full_name)')
+    .order('created_at', { ascending: false })
+    .limit(msgLimit)
+  query = p.account_id ? query.eq('account_id', p.account_id) : query.eq('contact_id', p.contact_id).is('account_id', null)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: messages, error } = await (query as any)
+  if (error) return JSON.stringify({ error: `Failed to read messages: ${error.message}` })
+  if (!messages?.length) return `No messages found for ${clientName}.`
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sorted = (messages as any[]).reverse()
+  const unread = sorted.filter((m) => m.sender_type === 'client' && !m.read_at).length
+  const formatted = sorted.map((m) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cName = (m.contacts as any)?.full_name ?? null
+    const sender = m.sender_type === 'client' ? `Client${cName ? ` (${cName})` : ''}` : `Admin${cName ? ` (${cName})` : ''}`
+    const time = new Date(m.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    const flag = m.sender_type === 'client' && !m.read_at ? ' 🔴 UNREAD' : ''
+    const atts = Array.isArray(m.attachments) && m.attachments.length
+      ? m.attachments.map((a: { name: string }) => `\n   📎 ${a.name}`).join('')
+      : m.attachment_url ? `\n   📎 ${m.attachment_name || 'file'}` : ''
+    return `[${time}] ${sender}${flag}:\n   ${m.message}${atts}`
+  })
+  return `Portal Chat — ${clientName} (${unread} unread)\n${'─'.repeat(40)}\n\n${formatted.join('\n\n')}\n\nMessages shown: ${sorted.length}.`
+}
+
+/** Update a compliance deadline (action — bridge worker reaches this via propose_action only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateDeadlineTool(p: any): Promise<string> {
+  if (!p.id || typeof p.id !== 'string') return JSON.stringify({ error: 'update_deadline requires a deadline id (from search_deadlines).' })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {}
+  if (p.status != null) updates.status = normalizeDeadlineStatus(String(p.status))
+  if (p.filed_date != null) updates.filed_date = p.filed_date
+  if (p.confirmation_number != null) updates.confirmation_number = p.confirmation_number
+  if (p.blocked_reason != null) updates.blocked_reason = p.blocked_reason
+  if (p.assigned_to != null) updates.assigned_to = p.assigned_to
+  if (p.notes != null) updates.notes = p.notes
+  if (Object.keys(updates).length === 0) {
+    return JSON.stringify({ error: 'update_deadline: nothing to update — provide at least one of status, filed_date, confirmation_number, blocked_reason, assigned_to, notes.' })
+  }
+  updates.updated_at = new Date().toISOString()
+
+  const { data, error } = await supabaseAdmin
+    .from('deadlines')
+    .update(updates)
+    .eq('id', p.id)
+    .select('id, deadline_type, status, due_date, accounts(company_name)')
+    .maybeSingle()
+  if (error) return JSON.stringify({ error: error.message })
+  if (!data) return JSON.stringify({ error: `No deadline found with id ${p.id}.` })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const acct = (data as any).accounts as { company_name?: string } | null
+  logAction({
+    actor: 'claude.agent', action_type: 'update', table_name: 'deadlines', record_id: data.id,
+    summary: `Deadline updated: ${acct?.company_name || '?'} — ${data.deadline_type} → ${data.status}`,
+    details: updates,
+  })
+  return `✅ Deadline updated: ${acct?.company_name || '?'} — ${data.deadline_type}\nStatus: ${data.status} | Due: ${data.due_date}\nID: ${data.id}`
+}
+
+/** Post an internal, staff-only team note about a client (action — propose_action only). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function sendTeamMessageTool(p: any): Promise<string> {
+  const accountId = typeof p.account_id === 'string' && p.account_id.length > 0 ? p.account_id : null
+  const contactId = typeof p.contact_id === 'string' && p.contact_id.length > 0 ? p.contact_id : null
+  const message = typeof p.message === 'string' ? p.message.trim() : ''
+  if (!accountId && !contactId) return JSON.stringify({ error: 'send_team_message requires an account_id or a contact_id.' })
+  if (!message) return JSON.stringify({ error: 'send_team_message requires a non-empty message.' })
+
+  let contextName = 'Client'
+  if (accountId) {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', accountId).maybeSingle()
+    contextName = acct?.company_name || accountId
+  } else if (contactId) {
+    const { data: cnt } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
+    contextName = cnt?.full_name || contactId
+  }
+
+  // Admin sender id (Antonio's auth user id — same constant used across portal sends).
+  const senderId = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
+
+  // Reuse an existing unresolved internal thread for this client, else create one.
+  let threadQuery = supabaseAdmin
+    .from('internal_threads').select('id').is('resolved_at', null).order('created_at', { ascending: false }).limit(1)
+  threadQuery = accountId ? threadQuery.eq('account_id', accountId) : threadQuery.eq('contact_id', contactId)
+  const { data: existing } = await threadQuery.maybeSingle()
+
+  let threadId: string
+  let reused = false
+  if (existing) {
+    threadId = existing.id
+    reused = true
+  } else {
+    const { data: newThread, error: threadErr } = await supabaseAdmin
+      .from('internal_threads')
+      .insert({ account_id: accountId, contact_id: contactId, created_by: senderId, title: contextName })
+      .select('id').single()
+    if (threadErr) return JSON.stringify({ error: `Failed to create thread: ${threadErr.message}` })
+    threadId = newThread.id
+  }
+
+  const { data: msg, error: msgErr } = await supabaseAdmin
+    .from('internal_messages')
+    .insert({ thread_id: threadId, sender_id: senderId, sender_name: 'Claude', message })
+    .select('id, created_at').single()
+  if (msgErr) return JSON.stringify({ error: `Failed to send team message: ${msgErr.message}` })
+
+  // Push notification to admins (best-effort).
+  try {
+    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
+    await sendPushToAdmin({
+      title: `Team: ${contextName}`, body: message.slice(0, 100),
+      url: '/portal-chats?view=internal', tag: `internal-thread-${threadId}`,
+    })
+  } catch { /* non-critical */ }
+
+  logAction({
+    actor: 'claude.agent', action_type: 'create', table_name: 'internal_messages', record_id: msg.id,
+    account_id: accountId ?? undefined, contact_id: contactId ?? undefined,
+    summary: `Team note re: ${contextName}: "${message.substring(0, 80)}${message.length > 80 ? '…' : ''}"`,
+  })
+  return `✅ Internal team note posted re: ${contextName}${reused ? ' (existing thread)' : ' (new thread)'}. Visible in CRM > Portal Chats > Team. Not visible to the client.`
 }

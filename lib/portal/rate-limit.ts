@@ -55,3 +55,74 @@ export function getRateLimitKey(request: Request): string {
   const url = new URL(request.url)
   return `${ip}:${url.pathname}`
 }
+
+// ─── Login brute-force protection ───────────────────────────────────────────
+// Tracks FAILED auth attempts per key (IP + identifier). After
+// LOGIN_MAX_FAILURES failures the key is locked for LOGIN_LOCK_MS. A successful
+// login clears the counter. Separate from checkRateLimit (which counts every
+// request) because we only want to penalize FAILURES, not normal traffic.
+//
+// Security audit 2026-06-13 (H10). In-memory per serverless instance — a
+// best-effort guard against obvious brute force, not a distributed limiter.
+
+export const LOGIN_MAX_FAILURES = 5
+export const LOGIN_LOCK_MS = 15 * 60 * 1000 // 15 minutes
+
+interface LoginEntry {
+  failures: number
+  firstAt: number
+  lockedUntil: number
+}
+
+const loginStore = new Map<string, LoginEntry>()
+
+// Reuse the same 5-minute sweep cadence to drop fully-expired entries.
+setInterval(() => {
+  const now = Date.now()
+  loginStore.forEach((entry, key) => {
+    const expiry = entry.lockedUntil || entry.firstAt + LOGIN_LOCK_MS
+    if (now > expiry) loginStore.delete(key)
+  })
+}, 5 * 60 * 1000)
+
+/**
+ * Check whether a login key is currently locked out.
+ * Call BEFORE attempting authentication.
+ */
+export function checkLoginRateLimit(key: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now()
+  const entry = loginStore.get(key)
+  if (!entry) return { allowed: true }
+
+  // Expired lock / window → reset.
+  if (entry.lockedUntil && now >= entry.lockedUntil) {
+    loginStore.delete(key)
+    return { allowed: true }
+  }
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    return { allowed: false, retryAfter: Math.ceil((entry.lockedUntil - now) / 1000) }
+  }
+  return { allowed: true }
+}
+
+/**
+ * Record a FAILED login attempt. Locks the key once failures reach the cap.
+ * Call AFTER an authentication attempt that failed.
+ */
+export function recordLoginFailure(key: string): void {
+  const now = Date.now()
+  const entry = loginStore.get(key)
+  if (!entry || now > entry.firstAt + LOGIN_LOCK_MS) {
+    loginStore.set(key, { failures: 1, firstAt: now, lockedUntil: 0 })
+    return
+  }
+  entry.failures += 1
+  if (entry.failures >= LOGIN_MAX_FAILURES) {
+    entry.lockedUntil = now + LOGIN_LOCK_MS
+  }
+}
+
+/** Clear the failure counter for a key after a SUCCESSFUL login. */
+export function clearLoginFailures(key: string): void {
+  loginStore.delete(key)
+}

@@ -1,5 +1,5 @@
 # Billing & Invoicing
-_Last verified against code: 2026-06-03 — Claude (credit application reworked to click-to-apply: invoice-actions.ts regenerateInvoice, invoice-regenerate.ts, credit-netting.ts, referral.ts)_
+_Last verified against code: 2026-06-12 — Claude (bank_preference now free-form string with three-tier resolution via invoice_settings.bank_accounts; is_default per currency; Invoice Settings UI radio buttons; dialog loads dynamic bank list from /api/invoice-settings)_
 
 ## What it is
 Everything about money on invoices. There are **four separate money "worlds"** that look similar but must never be mixed up — confusing them is the #1 source of billing bugs:
@@ -34,13 +34,16 @@ Both creators accept an optional `idempotency_key`; if a row with that key exist
 - `payments.status` = Pending/Paid (+ Partial/Overdue/Cancelled/Split); `payments.invoice_status` = Draft/Paid.
 - `syncTDInvoiceStatus()` keeps the `client_expenses` mirror in step with the payment (maps payment status → expense status; partial payment stays Pending). `reconcileTDInvoiceMirror()` repairs a drifted mirror.
 - `installment` uses `payment_type_enum`: Setup Fee, Installment 1 (Jan), Installment 2 (Jun), Annual Payment, One-Time Service, Custom.
-- Currency USD/EUR; `bank_preference` auto/relay/mercury/revolut/airwallex (auto = EUR→Airwallex, USD→Relay).
+- Currency USD/EUR; `bank_preference` is a free-form string. Three-tier resolution in `lib/invoice-auto-send.ts::resolveBankDetails`: (1) `settings_bank_N` — N-th active bank from `invoice_settings.bank_accounts`; (2) `auto`/null — `is_default` bank from invoice_settings for matching currency, then first bank of that currency, then Mercury/Airwallex fallback; (3) legacy enum (`relay/mercury/revolut/airwallex`) → hardcoded constants. `is_default` is scoped per currency (radio button in Invoice Settings UI). Index N is 0-based into ACTIVE-ONLY banks — both dialog and resolver filter to `active === true` to keep indices aligned.
 
 ### Key files
 - `lib/portal/td-invoice.ts` (now stamps `client_expenses.amount_due/amount_paid` on the mirror) · `lib/portal/unified-invoice.ts` · `lib/portal/invoice-number.ts` (`generateInvoiceNumber` + `generateCreditNoteNumber`)
 - `lib/operations/credit-netting.ts` — `computeCreditApplication`/`consumeCredits` (at-creation) + `reconcileAccountCredits`/`allocateCredits` (existing-invoice reconcile) · `lib/portal/invoice-audit.ts`
 - `lib/billing/installment-defaults.ts` · `lib/billing/renewal-guard.ts`
+- `lib/invoice-auto-send.ts` — `resolveBankDetails()` (bank resolution at send time), `fetchSettingsBanks()` (active-only from invoice_settings), `sendPaidReceipt()`, `sendInvoiceEmail()`
 - MCP tools: `portal_invoice_create`, `portal_invoice_send`. CRM: Finance pages, `/payments`, `/invoice-aging`, `/invoice-settings`.
+- `app/(dashboard)/invoice-settings/page.tsx` — Invoice Settings UI with is_default radio buttons per currency
+- `components/payments/invoice-dialog.tsx` — dynamic bank dropdown loaded from `/api/invoice-settings`
 
 ### Tables
 `payments`, `payment_items`, `client_invoices`, `client_invoice_documents`, `client_expenses`, `client_expense_items`, `td_expenses`, `td_expense_items`, `client_customers`, `client_vendors`.

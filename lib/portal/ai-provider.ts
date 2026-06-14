@@ -3,6 +3,12 @@ export interface AIRequest {
   userPrompt: string
   maxTokens: number
   temperature: number
+  /**
+   * Which Anthropic model to use for the primary call. Defaults to 'haiku'
+   * to preserve existing behavior for all callers that don't specify it.
+   * 'sonnet' = deeper knowledge / more accurate technical answers (slower).
+   */
+  model?: 'haiku' | 'sonnet'
 }
 
 export interface AIResult {
@@ -10,18 +16,34 @@ export interface AIResult {
   provider: 'anthropic' | 'openai'
 }
 
-const ANTHROPIC_TIMEOUT_MS = 5_000
+// Anthropic model IDs keyed by the friendly name passed in AIRequest.model.
+const ANTHROPIC_MODELS = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+} as const
+
+// Haiku is fast (5s is plenty). Sonnet is materially slower, especially with a
+// larger max_tokens — a 5s abort would make every Sonnet call silently fall
+// back to OpenAI, so it gets a generous timeout (still well under Vercel's 60s).
+const ANTHROPIC_TIMEOUT_MS: Record<'haiku' | 'sonnet', number> = {
+  haiku: 5_000,
+  sonnet: 30_000,
+}
 const OPENAI_TIMEOUT_MS = 20_000
 
 /**
- * Call Claude Haiku (primary). Throws on error or timeout.
+ * Call Claude (primary). Model selected by req.model (default Haiku).
+ * Throws on error or timeout.
  */
 async function callAnthropic(req: AIRequest): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
+  const modelKey = req.model ?? 'haiku'
+  const modelId = ANTHROPIC_MODELS[modelKey]
+
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS[modelKey])
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -32,7 +54,7 @@ async function callAnthropic(req: AIRequest): Promise<string> {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: modelId,
         max_tokens: req.maxTokens,
         system: req.systemPrompt,
         messages: [{ role: 'user', content: req.userPrompt }],
@@ -105,7 +127,7 @@ async function callOpenAI(req: AIRequest): Promise<string> {
 export async function callAI(req: AIRequest): Promise<AIResult> {
   try {
     const text = await callAnthropic(req)
-    console.warn('[ai-provider] Used: anthropic/claude-haiku-4-5-20251001')
+    console.warn(`[ai-provider] Used: anthropic/${ANTHROPIC_MODELS[req.model ?? 'haiku']}`)
     return { text, provider: 'anthropic' }
   } catch (primaryErr) {
     console.error('[ai-provider] Anthropic failed, falling back to OpenAI:', primaryErr instanceof Error ? primaryErr.message : primaryErr)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send, CheckCircle2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
@@ -50,7 +50,28 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
   const [discount, setDiscount] = useState('')
   const [message, setMessage] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'card' | 'both'>('both')
-  const [bankPreference, setBankPreference] = useState<'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'>('auto')
+  const [bankPreference, setBankPreference] = useState<string>('auto')
+  const [settingsBanks, setSettingsBanks] = useState<Array<{
+    name: string
+    currency: string
+    bank_name: string
+    account_number: string
+    routing_number: string
+    iban: string
+    swift: string
+    active: boolean
+    is_default?: boolean
+  }>>([])
+
+  useEffect(() => {
+    fetch('/api/invoice-settings')
+      .then(r => r.json())
+      .then(data => {
+        const banks = (data.settings?.bank_accounts ?? []).filter((b: { active: boolean }) => b.active)
+        setSettingsBanks(banks)
+      })
+      .catch(() => {})
+  }, [])
   const [items, setItems] = useState<InvoiceItem[]>(defaultValues?.items ?? [emptyItem()])
   const [markAsPaid, setMarkAsPaid] = useState(false)
   const [installment, setInstallment] = useState<string>(defaultValues?.installment ?? '')
@@ -564,14 +585,23 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
                     <label className="block text-sm font-medium mb-1">Bank Account</label>
                     <select
                       value={bankPreference}
-                      onChange={e => setBankPreference(e.target.value as typeof bankPreference)}
+                      onChange={e => setBankPreference(e.target.value)}
                       className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="auto">Auto — {currency === 'EUR' ? 'Airwallex (EUR)' : 'Relay (USD)'}</option>
-                      <option value="relay">Relay Financial (USD)</option>
-                      <option value="mercury">Mercury (USD)</option>
-                      <option value="revolut">Revolut (USD)</option>
-                      <option value="airwallex">Airwallex (EUR)</option>
+                      <option value="auto">Default (from settings)</option>
+                      {settingsBanks.map((bank, i) => (
+                        <option key={i} value={`settings_bank_${i}`}>
+                          {bank.name || bank.bank_name} ({bank.currency})
+                        </option>
+                      ))}
+                      {settingsBanks.length === 0 && (
+                        <>
+                          <option value="relay">Relay Financial (USD)</option>
+                          <option value="mercury">Mercury (USD)</option>
+                          <option value="revolut">Revolut (USD)</option>
+                          <option value="airwallex">Airwallex (EUR)</option>
+                        </>
+                      )}
                     </select>
                     <p className="text-[10px] text-zinc-400 mt-1">
                       Bank details will be included in the invoice message automatically.

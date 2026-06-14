@@ -440,6 +440,23 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
   },
 }
 
+// ─── Text Sanitizer for WinAnsi PDF fonts ───
+
+/**
+ * Replace characters outside the WinAnsi range (U+0000–U+00FF) with ASCII
+ * approximations so pdf-lib's StandardFonts don't throw on non-Latin-1 input.
+ * Common substitutions (e.g. Maltese ħ→h) are explicit; everything else falls
+ * back to "?" so no data is silently lost without a visible marker.
+ */
+export function sanitizeForPdf(text: string): string {
+  return text
+    .replace(/[Ħħ]/g, match => match === "Ħ" ? "H" : "h")   // Maltese h-bar
+    .replace(/[Ġġ]/g, match => match === "Ġ" ? "G" : "g")   // Maltese g-dot
+    .replace(/[Ċċ]/g, match => match === "Ċ" ? "C" : "c")   // Maltese c-dot
+    .replace(/[Żż]/g, match => match === "Ż" ? "Z" : "z")   // Maltese z-dot
+    .replace(/[^\x00-\xFF]/g, "?")                    // any remaining non-Latin-1
+}
+
 // ─── Generate Summary PDF ───
 
 export async function generateFormSummaryPDF(
@@ -469,7 +486,7 @@ export async function generateFormSummaryPDF(
   page.drawText(config.pdfTitle, { x: 50, y, size: 18, font: fontBold, color: blue })
   y -= 20
   if (meta.companyName) {
-    page.drawText(meta.companyName, { x: 50, y, size: 14, font: fontBold, color: black })
+    page.drawText(sanitizeForPdf(meta.companyName), { x: 50, y, size: 14, font: fontBold, color: black })
     y -= 16
   }
   page.drawText(`Form: ${meta.token} | Submitted: ${meta.submittedAt}`, { x: 50, y, size: 9, font, color: gray })
@@ -552,7 +569,7 @@ export async function generateFormSummaryPDF(
             ensureSpace(14)
             const itemLabel = memberFieldLabels[itemKey] || itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
             const mappedValue = repeaterValueLabels[itemKey]?.[String(itemVal)]
-            const itemDisplay = mappedValue ?? (typeof itemVal === "boolean" ? (itemVal ? "Yes" : "No") : String(itemVal))
+            const itemDisplay = sanitizeForPdf(mappedValue ?? (typeof itemVal === "boolean" ? (itemVal ? "Yes" : "No") : String(itemVal)))
             page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
             page.drawText(itemDisplay, { x: 200, y, size: 10, font, color: black })
             y -= 14
@@ -571,6 +588,8 @@ export async function generateFormSummaryPDF(
       } else {
         display = String(val)
       }
+
+      display = sanitizeForPdf(display)
 
       // Wrap long values across multiple lines (never truncate)
       page.drawText(field.label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
@@ -634,7 +653,7 @@ export async function generateFormSummaryPDF(
             ensureSpace(14)
             const itemLabel = itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
             page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
-            page.drawText(String(itemVal), { x: 200, y, size: 10, font, color: black })
+            page.drawText(sanitizeForPdf(String(itemVal)), { x: 200, y, size: 10, font, color: black })
             y -= 14
           }
           y -= 6
@@ -647,6 +666,7 @@ export async function generateFormSummaryPDF(
       else if (Array.isArray(val)) display = val.join(", ")
       else if (typeof val === "object" && val !== null) display = JSON.stringify(val, null, 2)
       else display = String(val)
+      display = sanitizeForPdf(display)
 
       const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
       page.drawText(label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })

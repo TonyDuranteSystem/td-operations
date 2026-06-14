@@ -15,7 +15,7 @@ export async function createUnifiedInvoiceDraft(input: {
   due_date?: string
   message?: string
   payment_method?: 'bank_transfer' | 'card' | 'both'
-  bank_preference?: 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
+  bank_preference?: string
   items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order: number }>
   mark_as_paid?: boolean
 }): Promise<ActionResult<{ id: string; invoice_number: string }>> {
@@ -23,11 +23,16 @@ export async function createUnifiedInvoiceDraft(input: {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
     const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
 
-    // Resolve bank details from preference
+    // Resolve bank details from preference. For settings_bank_N values (from the
+    // dynamic Invoice Settings dropdown), fall back to 'auto' for the inline payment
+    // instructions — the PDF/email bank details are resolved correctly by
+    // resolveBankDetails() in invoice-auto-send.ts when the invoice is sent.
     const bankPref = input.bank_preference || 'auto'
-    const bankDetails = getBankDetailsByPreference(bankPref, input.currency)
-    const bankLabel = bankPref === 'auto'
-      ? (input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Relay (USD)')
+    const legacyPrefs = new Set(['auto', 'relay', 'mercury', 'revolut', 'airwallex'])
+    const legacyPref = (legacyPrefs.has(bankPref) ? bankPref : 'auto') as 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
+    const bankDetails = getBankDetailsByPreference(legacyPref, input.currency)
+    const bankLabel = bankPref === 'auto' || !legacyPrefs.has(bankPref)
+      ? (input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Mercury (USD)')
       : bankPref.charAt(0).toUpperCase() + bankPref.slice(1)
 
     // Build payment instructions for the message field

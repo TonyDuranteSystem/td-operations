@@ -34,8 +34,12 @@ async function verifyStandardWebhook(
 ): Promise<boolean> {
   const secret = process.env.WHOP_WEBHOOK_SECRET
   if (!secret) {
-    console.warn("[whop-webhook] WHOP_WEBHOOK_SECRET not set — skipping verification")
-    return true // allow in dev, but log warning
+    // Fail CLOSED: with no secret we cannot verify the signature, so we must
+    // reject rather than trust an unsigned payload. Accepting it would let
+    // anyone forge a payment.succeeded and trigger a fraudulent activation
+    // (security audit 2026-06-13, C2). The Slack webhooks fail closed the same way.
+    console.error("[whop-webhook] WHOP_WEBHOOK_SECRET not set — rejecting webhook (fail closed)")
+    return false
   }
 
   const webhookId = headers["webhook-id"]

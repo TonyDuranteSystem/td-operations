@@ -8,6 +8,7 @@ import StandaloneServiceAgreement, { SERVICE_CONTENT } from './standalone-servic
 import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
+import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -597,7 +598,7 @@ export default function ContractPage() {
       try {
         await fetch('/api/webhooks/offer-signed', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
           body: JSON.stringify({ offer_token: offer.token })
         })
       } catch (e) {

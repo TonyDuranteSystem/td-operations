@@ -1,6 +1,8 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { gmailPost } from '@/lib/gmail'
+import { createClient } from '@/lib/supabase/server'
+import { isDashboardUser } from '@/lib/auth'
 
 /**
  * POST /api/portal/resolve-issue
@@ -8,10 +10,16 @@ import { gmailPost } from '@/lib/gmail'
  * Body: { issue_id, notify_client?: boolean, custom_message?: string }
  */
 export async function POST(request: NextRequest) {
-  // Simple auth check — this is an internal endpoint
-  const authHeader = request.headers.get('authorization')
-  const isBearer = authHeader?.startsWith('Bearer ')
-  if (!isBearer) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // Staff-only. The previous check only verified that an Authorization header
+  // STARTED WITH "Bearer " — it never validated the token, so any caller (incl.
+  // a logged-in client) could resolve any issue and send an attacker-controlled
+  // email from support@ (security audit 2026-06-13, H2). Gate on a real session
+  // with a dashboard (non-client) role.
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const { issue_id, notify_client = true, custom_message } = await request.json()
   if (!issue_id) return NextResponse.json({ error: 'issue_id required' }, { status: 400 })

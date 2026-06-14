@@ -40,7 +40,14 @@ import {
   updateSlackMessage,
   prepareSlackImages,
   fetchThreadImages,
+  fetchThreadHistory,
+  buildThinkingBlocks,
+  thinkingIndicatorText,
+  verifySlackSignature,
+  parseSlackInteraction,
+  STOP_THINKING_ACTION_ID,
 } from "@/lib/ai-agent/slack-claude"
+import { createHmac } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker } from "@/lib/ai-agent/worker-tools"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
@@ -57,6 +64,30 @@ function _makeSupabaseChain(data: unknown, error: unknown = null) {
   chain.limit = vi.fn().mockReturnValue({ data, error })
   chain.maybeSingle = vi.fn().mockResolvedValue({ data, error })
   chain.update = vi.fn().mockReturnValue({ ...chain, data: null, error: null })
+  return chain
+}
+
+/**
+ * Robust thenable chain for the processSlackEvent tests. processSlackEvent now
+ * issues three kinds of supabase calls per run: a cancellation re-read
+ * (select→eq→maybeSingle), a TOCTOU-guarded done-update (update→eq→eq, awaited),
+ * and the decision-memory lookup (…→limit, awaited). A single chain where every
+ * builder method returns `this`, terminal awaits resolve, and maybeSingle
+ * reports the live status covers all three. Override `status` to simulate a Stop
+ * landing mid-flight.
+ */
+function makeProcessChain(opts: { status?: string; data?: unknown[] } = {}): Record<string, unknown> {
+  const status = opts.status ?? "processing"
+  const result = { data: opts.data ?? [], error: null }
+  const chain: Record<string, unknown> = {}
+  const passthrough = ["from", "select", "update", "insert", "eq", "in", "filter", "not", "neq", "gt", "lt", "order"]
+  passthrough.forEach((m) => { chain[m] = vi.fn(() => chain) })
+  chain.limit = vi.fn(() => Promise.resolve(result))
+  chain.single = vi.fn(() => Promise.resolve(result))
+  chain.maybeSingle = vi.fn(() => Promise.resolve({ data: { status }, error: null }))
+  // Thenable so a terminal `await update().eq().eq()` resolves.
+  chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+    Promise.resolve(result).then(resolve, reject)
   return chain
 }
 
@@ -94,9 +125,22 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/approval/i)
   })
 
-  it("is shorter than the Hermes research prompt (conversational bias)", () => {
-    // The Slack prompt should stay concise — if it grows > 2000 chars it's too long
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(2000)
+  it("stays under the absolute bloat ceiling", () => {
+    // Absolute guard against the Slack prompt ballooning. This was originally a
+    // "shorter than the Hermes research prompt" comparison, but that no longer
+    // holds and is intentionally dropped: the Slack prompt is now LONGER than
+    // Hermes (~1826) and that's fine — the two prompts serve different purposes
+    // (Slack = conversational + plain-English-by-default + SHARED THREADS + CODE
+    // TASKS + SHIPPING + PORTAL CHAT REPLIES; Hermes = analytical research).
+    // Ceiling history: 2000 → 2600 (SHARED THREADS) → 3200 (plain-English block)
+    // → 3500 (2026-06-12, plain-English rule) → 3800 (2026-06-13, PORTAL CHAT
+    // REPLIES block — send_portal_message guidance). Keep this as a sanity cap.
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(3800)
+  })
+
+  it("instructs awareness of Hermes's messages in shared threads", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SHARED THREADS/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/Hermes/)
   })
 })
 
@@ -263,12 +307,8 @@ describe("processSlackEvent", () => {
       json: () => Promise.resolve({ ok: true, ts: "1234567890.000200" }),
     })
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-id-001",
@@ -288,6 +328,8 @@ describe("processSlackEvent", () => {
       threadId: "thread-001",
       messageId: "row-id-001",
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
+      enableCodeTasks: true,
+      enableSlackSend: true,
     })
 
     // Should have called Slack chat.postMessage
@@ -317,12 +359,8 @@ describe("processSlackEvent", () => {
       json: () => Promise.resolve({ ok: true, ts: "1111111111.000001" }),
     })
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-id-003",
@@ -346,16 +384,14 @@ describe("processSlackEvent", () => {
     expect(body.thread_ts).toBe("1111111111.000001")
   })
 
-  it("morphs the ack message via chat.update when slack_ack_ts is present (no second post)", async () => {
+  it("posts the answer as a NEW message and collapses the ack to ✅ when slack_ack_ts is present", async () => {
+    // The answer must be a fresh chat.postMessage (triggers a Slack push); the
+    // "On it 👍" ack is then collapsed to "✅" with the Stop button removed.
     ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-ack-1",
@@ -370,29 +406,29 @@ describe("processSlackEvent", () => {
 
     await processSlackEvent(row)
 
+    // The answer is a fresh post (NOT an edit) so Slack notifies Antonio.
+    const postCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))
+    expect(postCall).toBeDefined()
+    expect(JSON.parse(postCall![1].body).text).toBe("answer")
+
+    // The ack is collapsed to "✅" with the Stop button dropped (blocks: []).
     const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
     expect(updateCall).toBeDefined()
-    const updateBody = JSON.parse(updateCall![1].body)
-    expect(updateBody).toEqual({ channel: "C0BAB08DSDN", ts: "9.9", text: "answer" })
-    // No fresh post — the ack was reused
-    const postCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))
-    expect(postCall).toBeUndefined()
+    expect(JSON.parse(updateCall![1].body)).toEqual({ channel: "C0BAB08DSDN", ts: "9.9", text: "✅", blocks: [] })
   })
 
-  it("falls back to a fresh post when chat.update fails", async () => {
+  it("falls back to morphing the ack into the answer when the fresh post fails", async () => {
+    // If chat.postMessage fails, the reply must NOT be lost — the worker morphs
+    // the ack into the answer (old behavior: no push, but delivered).
     ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
     mockFetch.mockImplementation((url: string) =>
-      String(url).includes("chat.update")
-        ? Promise.resolve({ json: () => Promise.resolve({ ok: false, error: "message_not_found" }) })
+      String(url).includes("chat.postMessage")
+        ? Promise.resolve({ json: () => Promise.resolve({ ok: false, error: "channel_not_found" }) })
         : Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "2.2" }) }),
     )
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-ack-2",
@@ -407,8 +443,11 @@ describe("processSlackEvent", () => {
 
     await processSlackEvent(row)
 
-    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))).toBeDefined()
+    // Post was attempted, then the ack was morphed into the answer (not "✅").
     expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))).toBeDefined()
+    const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
+    expect(updateCall).toBeDefined()
+    expect(JSON.parse(updateCall![1].body)).toEqual({ channel: "C0BAB08DSDN", ts: "stale-ts", text: "answer", blocks: [] })
   })
 
   it("downloads slack_images and passes them to callWorker as image blocks", async () => {
@@ -416,15 +455,11 @@ describe("processSlackEvent", () => {
     mockFetch.mockImplementation((url: string) =>
       String(url).includes("/api/")
         ? Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "3.3" }) })
-        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([1, 2, 3, 4]).buffer) }),
+        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer) }),
     )
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-img-1",
@@ -444,8 +479,135 @@ describe("processSlackEvent", () => {
     expect(opts.images.length).toBe(1)
     expect(opts.images[0]).toEqual({
       type: "image",
-      source: { type: "base64", media_type: "image/png", data: Buffer.from([1, 2, 3, 4]).toString("base64") },
+      source: { type: "base64", media_type: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64") },
     })
+  })
+
+  it("retries text-only when the API rejects an image (400) and still posts a reply", async () => {
+    // First call (with images) fails with an image-related 400; the worker must
+    // retry WITHOUT images so Antonio still gets a text answer.
+    ;(callWorker as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(
+        new Error('Claude API error 400: {"type":"error","error":{"message":"messages.0.content.1.image.source: invalid base64 data"}}'),
+      )
+      .mockResolvedValueOnce({ reply: "text-only answer", toolsUsed: [] })
+    mockFetch.mockImplementation((url: string) =>
+      String(url).includes("/api/")
+        ? Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer) }),
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+
+    const row = {
+      id: "row-img-400",
+      body: "look at this",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_images: [{ url: "https://files.slack.com/img.png", name: "img.png", mimetype: "image/png" }],
+      },
+    }
+
+    const reply = await processSlackEvent(row)
+
+    expect(reply).toBe("text-only answer")
+    // callWorker invoked twice: first WITH images, retry WITHOUT
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2)
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls[0][1].images).toBeDefined()
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls[1][1].images).toBeUndefined()
+  })
+
+  it("does NOT retry (re-throws) on a non-image API error", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Claude API error 529: {"type":"error","error":{"message":"overloaded"}}'),
+    )
+    mockFetch.mockImplementation((url: string) =>
+      String(url).includes("/api/")
+        ? Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+        : Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer) }),
+    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue({ update: vi.fn().mockReturnThis(), eq: vi.fn().mockResolvedValue({ error: null }) })
+
+    const row = {
+      id: "row-529",
+      body: "look at this",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_images: [{ url: "https://files.slack.com/img.png", name: "img.png", mimetype: "image/png" }],
+      },
+    }
+
+    await expect(processSlackEvent(row)).rejects.toThrow("529")
+    expect((callWorker as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
+  })
+
+  it("morphs the ack into an error notice when the worker fails (frozen-indicator fix)", async () => {
+    // A genuine worker failure must not leave the ack frozen on the last
+    // "🔍 Looking into it…" animation frame forever. The worker replaces the ack
+    // with an error notice (Stop button dropped) and STILL re-throws so the cron
+    // marks the row failed exactly as before.
+    ;(callWorker as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Claude API error 529: overloaded"),
+    )
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    // Status re-read in the error path returns 'processing' (not cancelled), so
+    // the error notice is allowed to overwrite the frozen ack.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain({ status: "processing" }))
+
+    const row = {
+      id: "row-fail",
+      body: "do something",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_ack_ts: "9.9",
+      },
+    }
+
+    await expect(processSlackEvent(row)).rejects.toThrow("529")
+
+    const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
+    expect(updateCall).toBeDefined()
+    const body = JSON.parse(updateCall![1].body)
+    expect(body.ts).toBe("9.9")
+    expect(body.text).toMatch(/went wrong/i)
+    expect(body.blocks).toEqual([]) // Stop button dropped
+  })
+
+  it("does NOT overwrite the ack on failure when the row was cancelled (Stop owns the message)", async () => {
+    // If Antonio clicked Stop, the interactions webhook already wrote the
+    // "⏹ Stopped" notice. A worker failure must NOT clobber it with the error
+    // notice — the status re-read sees 'cancelled' and leaves the message alone.
+    ;(callWorker as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom 500"))
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain({ status: "cancelled" }))
+
+    const row = {
+      id: "row-fail-cancelled",
+      body: "do something",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_ack_ts: "9.9",
+      },
+    }
+
+    await expect(processSlackEvent(row)).rejects.toThrow("boom")
+
+    const updateCall = mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))
+    expect(updateCall).toBeUndefined() // left the "Stopped" notice untouched
   })
 
   it("falls back to thread-history images when the current message has none (thread reply)", async () => {
@@ -468,16 +630,12 @@ describe("processSlackEvent", () => {
       if (u.includes("/api/") || u.includes("chat.")) {
         return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "4.4" }) })
       }
-      // image download (url_private)
-      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([9, 8, 7]).buffer) })
+      // image download (url_private) — valid PNG magic bytes
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x9, 0x8, 0x7]).buffer) })
     })
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-thread-img",
@@ -502,19 +660,15 @@ describe("processSlackEvent", () => {
     const opts = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][1]
     expect(opts.images).toBeDefined()
     expect(opts.images.length).toBe(1)
-    expect(opts.images[0].source.data).toBe(Buffer.from([9, 8, 7]).toString("base64"))
+    expect(opts.images[0].source.data).toBe(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x9, 0x8, 0x7]).toString("base64"))
   })
 
   it("does NOT fetch thread history when the message is not in a thread", async () => {
     ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "answer", toolsUsed: [] })
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "5.5" }) })
 
-    const updateChain = {
-      update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null }),
-    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(updateChain)
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
 
     const row = {
       id: "row-no-thread",
@@ -575,7 +729,7 @@ describe("prepareSlackImages", () => {
   it("downloads a supported image and returns a base64 block", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(Uint8Array.from([10, 20, 30]).buffer),
+      arrayBuffer: () => Promise.resolve(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 10, 20, 30]).buffer),
     })
     const blocks = await prepareSlackImages([
       { url: "https://files.slack.com/a.png", name: "a.png", mimetype: "image/png" },
@@ -583,9 +737,20 @@ describe("prepareSlackImages", () => {
     expect(blocks).toEqual([
       {
         type: "image",
-        source: { type: "base64", media_type: "image/png", data: Buffer.from([10, 20, 30]).toString("base64") },
+        source: { type: "base64", media_type: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 10, 20, 30]).toString("base64") },
       },
     ])
+  })
+
+  it("skips a download whose body is not a valid image (HTML login page)", async () => {
+    // url_private returns an HTML login page (not an error status) when the bot
+    // lacks files:read — the magic-byte guard must skip it, not base64 garbage.
+    const html = Buffer.from("<!DOCTYPE html><html><body>Sign in</body></html>", "utf8")
+    mockFetch.mockResolvedValue({ ok: true, arrayBuffer: () => Promise.resolve(html.buffer.slice(html.byteOffset, html.byteOffset + html.byteLength)) })
+    const blocks = await prepareSlackImages([
+      { url: "https://files.slack.com/login.png", name: "login.png", mimetype: "image/png" },
+    ])
+    expect(blocks).toEqual([])
   })
 
   it("skips unsupported media types without downloading", async () => {
@@ -598,6 +763,9 @@ describe("prepareSlackImages", () => {
 
   it("skips an image whose downloaded body exceeds the 5MB cap", async () => {
     const tooBig = new Uint8Array(5 * 1024 * 1024 + 1)
+    // Valid PNG magic so it passes the image-validity guard and is rejected by the size cap (the path under test)
+    tooBig[0] = 0x89
+    tooBig[1] = 0x50
     mockFetch.mockResolvedValue({ ok: true, arrayBuffer: () => Promise.resolve(tooBig.buffer) })
     const blocks = await prepareSlackImages([
       { url: "https://files.slack.com/big.png", name: "big.png", mimetype: "image/png" },
@@ -691,5 +859,343 @@ describe("fetchThreadImages", () => {
     mockFetch.mockRejectedValue(new Error("network down"))
     const imgs = await fetchThreadImages("C123", "100.000")
     expect(imgs).toEqual([])
+  })
+})
+
+// -------------------------------------------------------------------------
+// fetchThreadHistory
+// -------------------------------------------------------------------------
+
+describe("fetchThreadHistory", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("formats who-said-what, labels Antonio/Hermes, and skips Claude's own messages", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", text: "look at this invoice" }, // Antonio
+            { user: "U0B9D3MAD9B", text: "I found the duplicate" }, // Hermes
+            { user: "U0B9S675WTT", text: "On it 👍" }, // Claude — must be skipped
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Antonio: look at this invoice\nHermes: I found the duplicate")
+    // queries conversations.replies with channel + thread root ts + limit
+    const url = String(mockFetch.mock.calls[0][0])
+    expect(url).toContain("conversations.replies")
+    expect(url).toContain("channel=C123")
+    expect(url).toContain("ts=100.000")
+  })
+
+  it("rewrites <@ID> mention tokens to readable @names", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", text: "<@U0B9S675WTT> and <@U0B9D3MAD9B> please check" },
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Antonio: @Claude and @Hermes please check")
+  })
+
+  it("includes a file note for messages that carry files but no text", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", files: [{ name: "shot.png" }] },
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Antonio:  [+1 file(s)]")
+  })
+
+  it("labels unknown senders as 'Bot' (bot_id present) or 'Someone'", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { bot_id: "B999", text: "automated note" },
+            { user: "UUNKNOWN", text: "hello" },
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Bot: automated note\nSomeone: hello")
+  })
+
+  it("returns '' when the Slack API responds not-ok (e.g. missing scope)", async () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: false, error: "missing_scope" }) })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+  })
+
+  it("returns '' when there are no usable lines", async () => {
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, messages: [{ user: "U0B9S675WTT", text: "only me" }] }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+  })
+
+  it("returns '' (and does not fetch) when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("returns '' when fetch throws", async () => {
+    mockFetch.mockRejectedValue(new Error("network down"))
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("")
+  })
+})
+
+// -------------------------------------------------------------------------
+// processSlackEvent — shared-thread context injection
+// -------------------------------------------------------------------------
+
+describe("processSlackEvent shared-thread context", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("prepends Slack thread history to the worker body for a thread reply", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "ok", toolsUsed: [] })
+    mockFetch.mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes("conversations.replies")) {
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              messages: [
+                { user: "U0BAALR4Y4Q", text: "check this" },
+                { user: "U0B9D3MAD9B", text: "Hermes found the answer" },
+              ],
+            }),
+        })
+      }
+      // chat.postMessage / chat.update / cron trigger
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+
+    const row = {
+      id: "row-shared-1",
+      body: "do what Hermes said",
+      thread_id: "thread-x",
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_thread_ts: "100.000",
+        slack_event_ts: "200.000",
+        slack_images: [],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    const sentBody = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(sentBody).toContain("[SLACK THREAD CONTEXT")
+    expect(sentBody).toContain("Hermes: Hermes found the answer")
+    expect(sentBody).toContain("[YOUR CURRENT MESSAGE]")
+    expect(sentBody).toContain("do what Hermes said")
+  })
+
+  it("uses the raw body (no context block) when the message is not in a thread", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "ok", toolsUsed: [] })
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+
+    const row = {
+      id: "row-shared-2",
+      body: "channel-level mention",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "300.000", // no slack_thread_ts → not in a thread
+        slack_images: [],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    const sentBody = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(sentBody).toBe("channel-level mention")
+    // No thread → no conversations.replies call
+    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("conversations.replies"))).toBeUndefined()
+  })
+
+  // ── Stop button: cancellation honored before posting ──────────────────────
+  it("does NOT post the answer or mark done when the row was cancelled mid-flight", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "the answer", toolsUsed: [] })
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+
+    // Live status reads back 'cancelled' (Stop was clicked while callWorker ran).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain({ status: "cancelled" }))
+
+    const row = {
+      id: "row-cancelled",
+      body: "do the thing",
+      thread_id: null,
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "1.1",
+        slack_ack_ts: "9.9",
+      },
+    }
+
+    const reply = await processSlackEvent(row)
+    expect(reply).toBe("the answer") // still returned to the cron (marks row, not re-posted)
+
+    // No answer posted: neither a chat.update morph nor a fresh chat.postMessage.
+    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.update"))).toBeUndefined()
+    expect(mockFetch.mock.calls.find((c) => String(c[0]).includes("chat.postMessage"))).toBeUndefined()
+  })
+})
+
+// -------------------------------------------------------------------------
+// buildThinkingBlocks
+// -------------------------------------------------------------------------
+
+describe("buildThinkingBlocks", () => {
+  it("renders the ack text as a section and a danger Stop button", () => {
+    const blocks = buildThinkingBlocks("On it 👍")
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toEqual({ type: "section", text: { type: "mrkdwn", text: "On it 👍" } })
+
+    const actions = blocks[1] as { type: string; elements: Array<Record<string, unknown>> }
+    expect(actions.type).toBe("actions")
+    const button = actions.elements[0]
+    expect(button.action_id).toBe(STOP_THINKING_ACTION_ID)
+    expect(button.style).toBe("danger")
+    expect((button.text as { text: string }).text).toContain("Stop")
+  })
+})
+
+// -------------------------------------------------------------------------
+// thinkingIndicatorText
+// -------------------------------------------------------------------------
+
+describe("thinkingIndicatorText", () => {
+  it("cycles through ascending-dot frames", () => {
+    expect(thinkingIndicatorText(0)).toBe("🔍 Looking into it.")
+    expect(thinkingIndicatorText(1)).toBe("🔍 Looking into it..")
+    expect(thinkingIndicatorText(2)).toBe("🔍 Looking into it...")
+  })
+
+  it("wraps around so a long-running call keeps looping", () => {
+    expect(thinkingIndicatorText(3)).toBe(thinkingIndicatorText(0))
+    expect(thinkingIndicatorText(4)).toBe(thinkingIndicatorText(1))
+    expect(thinkingIndicatorText(99)).toBe(thinkingIndicatorText(99 % 3))
+  })
+
+  it("never returns undefined, even for a negative tick", () => {
+    expect(thinkingIndicatorText(-1)).toContain("Looking into it")
+  })
+})
+
+// -------------------------------------------------------------------------
+// verifySlackSignature
+// -------------------------------------------------------------------------
+
+describe("verifySlackSignature", () => {
+  const secret = "test-signing-secret"
+  const body = "payload=%7B%22type%22%3A%22block_actions%22%7D"
+  const now = 1_700_000_000_000 // fixed clock
+  const ts = String(Math.floor(now / 1000))
+
+  function sign(rawBody: string, timestamp: string): string {
+    return `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${rawBody}`).digest("hex")}`
+  }
+
+  it("accepts a correctly signed, fresh request", () => {
+    expect(verifySlackSignature(body, ts, sign(body, ts), secret, now)).toBe(true)
+  })
+
+  it("rejects a tampered body", () => {
+    expect(verifySlackSignature(body + "x", ts, sign(body, ts), secret, now)).toBe(false)
+  })
+
+  it("rejects a stale timestamp (replay > 5 min)", () => {
+    const oldTs = String(Math.floor(now / 1000) - 600)
+    expect(verifySlackSignature(body, oldTs, sign(body, oldTs), secret, now)).toBe(false)
+  })
+
+  it("rejects when the secret is missing", () => {
+    expect(verifySlackSignature(body, ts, sign(body, ts), undefined, now)).toBe(false)
+  })
+
+  it("rejects an empty or non-numeric timestamp", () => {
+    expect(verifySlackSignature(body, "", sign(body, ts), secret, now)).toBe(false)
+    expect(verifySlackSignature(body, "abc", sign(body, ts), secret, now)).toBe(false)
+  })
+})
+
+// -------------------------------------------------------------------------
+// parseSlackInteraction
+// -------------------------------------------------------------------------
+
+describe("parseSlackInteraction", () => {
+  function encode(payload: unknown): string {
+    return `payload=${encodeURIComponent(JSON.stringify(payload))}`
+  }
+
+  it("extracts action_id, message ts, and channel id from a block_actions payload", () => {
+    const raw = encode({
+      type: "block_actions",
+      actions: [{ action_id: "stop_thinking", value: "stop_thinking" }],
+      message: { ts: "1234567890.000300" },
+      channel: { id: "C0BAB08DSDN" },
+    })
+    expect(parseSlackInteraction(raw)).toEqual({
+      actionId: "stop_thinking",
+      messageTs: "1234567890.000300",
+      channelId: "C0BAB08DSDN",
+    })
+  })
+
+  it("falls back to container fields when message/channel are absent", () => {
+    const raw = encode({
+      type: "block_actions",
+      actions: [{ action_id: "stop_thinking" }],
+      container: { type: "message", message_ts: "999.111", channel_id: "C999" },
+    })
+    expect(parseSlackInteraction(raw)).toEqual({
+      actionId: "stop_thinking",
+      messageTs: "999.111",
+      channelId: "C999",
+    })
+  })
+
+  it("returns null when there is no payload field", () => {
+    expect(parseSlackInteraction("foo=bar")).toBeNull()
+  })
+
+  it("returns null on malformed JSON", () => {
+    expect(parseSlackInteraction("payload=%7Bnot-json")).toBeNull()
+  })
+
+  it("returns null when there are no actions", () => {
+    expect(parseSlackInteraction(encode({ type: "block_actions", actions: [] }))).toBeNull()
   })
 })

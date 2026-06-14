@@ -127,6 +127,14 @@
     {
       "path": "/api/cron/slack-claude-worker",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/memory-digest",
+      "schedule": "0 9 * * 0"
+    },
+    {
+      "path": "/api/cron/memory-decay",
+      "schedule": "0 9 1 * *"
     }
   ],
   "rewrites": [

@@ -145,10 +145,70 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       } else {
         result.steps.push(step("contact_update", "skipped", "No contact fields in wizard data"))
       }
+
+      // If wizard provided itin_issue_date, persist renewal date alongside
+      if (submitted.owner_itin && submitted.itin_issue_date) {
+        try {
+          const { writeITINFields } = await import("@/lib/itin/write-itin-fields")
+          await writeITINFields(contact_id, {
+            itin_issue_date: String(submitted.itin_issue_date),
+          })
+        } catch {
+          // non-blocking — renewal date calculation is best-effort
+        }
+      }
     } catch (e) {
       result.steps.push(step("contact_update", "error", e instanceof Error ? e.message : String(e)))
     }
     await updateJobProgress(job.id, result)
+
+    // ITIN renewal check — fires if client onboards with a known existing ITIN
+    if (submitted.owner_itin) {
+      try {
+        const { calcITINRenewalDate, extractITINMiddleDigits } = await import("@/lib/itin/renewal-utils")
+        const { emitActionNeeded } = await import("@/lib/notifications/act-event")
+
+        // Fetch stored itin_issue_date (may have been set via prior OCR scan)
+        const { data: contactData } = await supabaseAdmin
+          .from("contacts")
+          .select("itin_issue_date")
+          .eq("id", contact_id)
+          .single()
+
+        const itinIssueDate = contactData?.itin_issue_date ?? null
+        const currentYear = new Date().getFullYear()
+        const renewalDate = calcITINRenewalDate(itinIssueDate)
+        const renewalDueThisYear = renewalDate !== null && renewalDate.getFullYear() <= currentYear
+
+        const digits = extractITINMiddleDigits(String(submitted.owner_itin))
+        let middleDigitsExpiring = false
+        if (digits) {
+          const { data: expiringRow } = await supabaseAdmin
+            .from("itin_expiring_digits")
+            .select("middle_digits")
+            .eq("year", currentYear)
+            .maybeSingle()
+          if (expiringRow?.middle_digits?.includes(digits)) {
+            middleDigitsExpiring = true
+          }
+        }
+
+        if (renewalDueThisYear || middleDigitsExpiring) {
+          await emitActionNeeded({
+            event: "itin_renewal_upcoming",
+            contact_id,
+            source_ref: `itin_renewal_check:${contact_id}:${currentYear}`,
+          })
+          result.steps.push(step("itin_renewal_check", "ok",
+            `Renewal card created (3yr=${renewalDueThisYear}, digits=${middleDigitsExpiring})`))
+        } else {
+          result.steps.push(step("itin_renewal_check", "ok", "No renewal needed"))
+        }
+      } catch (e) {
+        result.steps.push(step("itin_renewal_check", "skipped",
+          `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
   }
 
   // ─── 0b. OCR CROSS-CHECK (uploaded docs vs wizard data) ───

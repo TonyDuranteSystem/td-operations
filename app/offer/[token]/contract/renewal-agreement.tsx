@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
+import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -188,7 +189,7 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
       try {
         const webhookRes = await fetch('/api/webhooks/agreement-signed', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
           body: JSON.stringify({ agreement_token: token })
         })
         if (webhookRes.ok) {

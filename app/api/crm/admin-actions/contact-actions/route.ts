@@ -18,6 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { writeITINFields } from "@/lib/itin/write-itin-fields"
 import { upgradePortalTier } from "@/lib/portal/auto-create"
 import { createSD } from "@/lib/operations/service-delivery"
 import { createPortalNotification } from "@/lib/portal/notifications"
@@ -1058,14 +1059,15 @@ export async function POST(req: NextRequest) {
               // Extract issue date from CP565 OCR text (format: "Month DD, YYYY")
               const issueDate = parseItinIssueDateFromOcr(ocrResult.fullText)
 
-              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-              await supabaseAdmin.from("contacts").update({
+              const { itin_renewal_date } = await writeITINFields(targetContactId, {
                 itin_number: itinFormatted,
                 itin_issue_date: issueDate,
-                updated_at: new Date().toISOString(),
-              }).eq("id", targetContactId)
+              })
 
-              ocrSideEffects.push(`ITIN extracted: ${itinFormatted}, issue date: ${issueDate}`)
+              ocrSideEffects.push(
+                `ITIN extracted: ${itinFormatted}, issue date: ${issueDate}` +
+                  (itin_renewal_date ? `, renewal date: ${itin_renewal_date}` : ""),
+              )
             } else {
               ocrSideEffects.push("OCR ran but no ITIN number found (expected 9XX-XX-XXXX)")
             }

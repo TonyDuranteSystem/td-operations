@@ -35,6 +35,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   postSlackMessage,
+  buildThinkingBlocks,
   findOrCreateConversationThread,
   slackScopeKey,
   SLACK_SUPPORTED_IMAGE_TYPES,
@@ -44,6 +45,11 @@ import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
 
 // Claude bot user ID — used to filter out self-messages (loop protection)
 const CLAUDE_BOT_USER_ID = "U0B9S675WTT"
+
+// Antonio's Slack user ID. Only his thread reply counts as an answer to a
+// pending ask-antonio code-task question (matches SLACK_USER_ANTONIO in
+// lib/ai-agent/slack-claude.ts and ANTONIO_SLACK_USER_ID in the Mac Mini CLI).
+const ANTONIO_SLACK_USER_ID = "U0BAALR4Y4Q"
 
 function verifySlackSignature(rawBody: string, timestamp: string, signature: string): boolean {
   const secret = process.env.SLACK_SIGNING_SECRET_CLAUDE
@@ -72,6 +78,39 @@ async function isDuplicateEvent(eventId: string): Promise<boolean> {
     .filter("context_json->>slack_event_id", "eq", eventId)
     .limit(1)
   return (data?.length ?? 0) > 0
+}
+
+/**
+ * Fetch the parent (root) message of a thread and report whether it @mentioned
+ * Claude. This is the "was Claude invited to THIS thread" check for a plain
+ * (no-@mention) thread reply — it replaces the old channel-level participation
+ * query that leaked Claude into unrelated threads (e.g. Hermes-only threads) in
+ * any channel where Claude had ever spoken at the top level.
+ *
+ * Mirrors the single-message-by-ts fetch the 🧠-reaction handler already uses
+ * (`conversations.history` at the exact ts). Best-effort: any failure — missing
+ * token, missing scope, network error, message not found — returns false so
+ * Claude stays quiet. That is the safe default here, because the bug being fixed
+ * is Claude over-responding; a rare transient miss just means Antonio re-mentions.
+ */
+async function parentMessageMentionsClaude(channelId: string, threadTs: string): Promise<boolean> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token || !channelId || !threadTs) return false
+  try {
+    const res = await fetch(
+      `https://slack.com/api/conversations.history?channel=${channelId}&latest=${threadTs}&inclusive=true&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean
+      messages?: Array<{ text?: string }>
+    }
+    const parentText = data.messages?.[0]?.text ?? ""
+    return parentText.includes(`<@${CLAUDE_BOT_USER_ID}>`)
+  } catch (err) {
+    console.warn("[slack-claude-webhook] parent-message fetch failed:", err)
+    return false
+  }
 }
 
 async function fireWorkerTrigger(messageId: string): Promise<void> {
@@ -124,6 +163,73 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const event = payload.event ?? {}
   const eventId: string = payload.event_id ?? ""
 
+  // ── Decision Memory Phase 7: 🧠 reaction → save the message as a memory ──
+  // Slack delivers reaction_added as an event_callback. The app must subscribe
+  // to the `reaction_added` bot event for these to arrive (admin config — noted
+  // in the deploy report). When someone reacts with 🧠, persist the reacted
+  // message as an explicit decision memory.
+  if (event.type === "reaction_added" && event.reaction === "brain") {
+    // Ignore the bot reacting to itself (loop / accidental self-mark).
+    if (event.user === CLAUDE_BOT_USER_ID) {
+      return NextResponse.json({ ok: true })
+    }
+    const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (!token || !itemChannel || !itemTs) {
+      return NextResponse.json({ ok: true })
+    }
+
+    const sourceRef = `${itemChannel}:${itemTs}`
+    // Idempotency: a user can react / un-react / re-react, and Slack retries
+    // deliveries. Skip if this exact message was already saved.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existing } = await (supabaseAdmin as any)
+      .from("decision_memory")
+      .select("id")
+      .eq("source_ref", sourceRef)
+      .eq("source_type", "slack_reaction")
+      .limit(1)
+    if (existing?.length) {
+      return NextResponse.json({ ok: true, dedup: "already_saved" })
+    }
+
+    // Fetch the reacted message text (single message at item.ts).
+    const msgRes = await fetch(
+      `https://slack.com/api/conversations.history?channel=${itemChannel}&latest=${itemTs}&inclusive=true&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const msgData = (await msgRes.json().catch(() => ({}))) as {
+      ok?: boolean
+      messages?: Array<{ text?: string }>
+    }
+    const msgText = msgData.messages?.[0]?.text?.trim()
+    if (!msgText) {
+      return NextResponse.json({ ok: true, skipped: "no_text" })
+    }
+
+    const decision = msgText.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, "").trim()
+    if (!decision) {
+      return NextResponse.json({ ok: true, skipped: "empty_after_strip" })
+    }
+
+    try {
+      const { saveDecisionMemory } = await import("@/lib/ai-agent/decision-memory")
+      await saveDecisionMemory({
+        situation: "Explicitly marked important by Antonio via 🧠 reaction in Slack",
+        decision,
+        sourceType: "slack_reaction",
+        sourceRef,
+        actors: ["antonio"],
+        tags: ["explicit_save"],
+      })
+    } catch (err) {
+      console.warn("[slack-claude-webhook] brain reaction save failed:", err)
+      return NextResponse.json({ ok: true, saved: false })
+    }
+    return NextResponse.json({ ok: true, saved: true })
+  }
+
   // Accept two kinds of events:
   //  1. app_mention — Antonio @mentions Claude (any channel, any context)
   //  2. message in a thread — a follow-up reply in a thread Claude already
@@ -156,6 +262,45 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const text: string = event.text ?? ""
   const userId: string = event.user ?? ""
 
+  // ── ask-antonio answer routing ──
+  // If a running code-task session is waiting on a question in THIS thread,
+  // Antonio's reply IS the answer: record it and SUPPRESS normal bot processing
+  // so Claude doesn't also try to respond to it. Strictly scoped — fires only
+  // when (a) the message is a thread reply, (b) the sender is Antonio, and (c) a
+  // pending code_task_questions row exists for this thread. Fully defensive: any
+  // error (including the table not yet existing in this environment) falls
+  // through to normal processing, so this can never break the webhook nor
+  // swallow a message unless a genuine pending question is present.
+  if (threadTs && userId === ANTONIO_SLACK_USER_ID) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: pendingQ } = await (supabaseAdmin as any)
+        .from("code_task_questions")
+        .select("id")
+        .eq("slack_thread_ts", threadTs)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(1)
+      if (pendingQ?.length) {
+        const answer = text.replace(/<@[A-Z0-9]+>/g, "").trim()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabaseAdmin as any)
+          .from("code_task_questions")
+          .update({
+            status: "answered",
+            answer,
+            answered_by: userId,
+            answered_at: new Date().toISOString(),
+          })
+          .eq("id", pendingQ[0].id)
+          .eq("status", "pending")
+        return NextResponse.json({ ok: true, answered: pendingQ[0].id })
+      }
+    } catch (err) {
+      console.warn("[slack-claude-webhook] ask-antonio answer routing skipped (non-fatal):", err)
+    }
+  }
+
   // Image attachments (Feature 2). Keep only Anthropic-supported image types
   // within the size cap; url_private is fetched later (with the bot token) by
   // the worker, NOT here — downloading during the ACK window risks the 3s SLA.
@@ -176,25 +321,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true })
   }
 
-  // For thread replies (no @mention), only respond if Claude already participated
-  // in this thread — otherwise we'd answer every message in every thread in the
-  // channel. Match either the thread scope or the channel-level scope that may
-  // have started the conversation (see findOrCreateConversationThread).
+  // Thread-reply invitation gate. A `message` event in a thread (never an
+  // app_mention — this block is `!isAppMention`) is only processed if Claude was
+  // actually invited to THIS thread. Three cases, in order:
+  //   1. The reply itself @mentions Claude               → respond (explicit).
+  //   2. The reply @mentions someone else but NOT Claude → skip (directed at
+  //      other, e.g. "@Hermes do X" inside a thread Claude is part of).
+  //   3. The reply has no @mention at all               → respond only if the
+  //      thread's PARENT (root) message @mentioned Claude; otherwise the thread
+  //      belongs to someone else (e.g. a Hermes-only thread) → skip silently.
+  // Case 3 is the bug fix: the old guard checked a channel-level participation
+  // row, so a plain reply in ANY thread of a channel where Claude had ever spoken
+  // matched and Claude barged in. The parent-mention check scopes "invited" to
+  // the actual thread. A top-level @mention always works (handled as app_mention
+  // upstream); a top-level mention that opens a thread roots that thread at the
+  // mention message, so its replies see parent-mention = true and continue.
   if (isThreadReply && !isAppMention) {
-    const threadScopeKey = slackScopeKey(channelId, threadTs)
-    const channelScopeKey = channelId
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: participation } = await (supabaseAdmin as any)
-      .from("agent_messages")
-      .select("id")
-      .filter("context_json->>source", "eq", "slack")
-      .or(
-        `context_json->>slack_scope_key.eq.${threadScopeKey},context_json->>slack_scope_key.eq.${channelScopeKey}`,
-      )
-      .limit(1)
+    const mentions: string[] = text.match(/<@U[A-Z0-9]+>/g) ?? []
+    const replyMentionsClaude = mentions.includes(`<@${CLAUDE_BOT_USER_ID}>`)
 
-    if (!participation?.length) {
-      return NextResponse.json({ ok: true }) // Claude wasn't in this thread — ignore
+    if (!replyMentionsClaude) {
+      if (mentions.length > 0) {
+        // Case 2 — aimed at another user/bot, not Claude.
+        return NextResponse.json({ ok: true, skipped: "directed_at_other" })
+      }
+      // Case 3 — no @mention: only continue a thread Claude was invited into.
+      if (!threadTs || !(await parentMessageMentionsClaude(channelId, threadTs))) {
+        return NextResponse.json({ ok: true, skipped: "not_invited" })
+      }
     }
   }
 
@@ -203,12 +357,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true })
   }
 
+  // Dedup by message timestamp (catches app_mention + message for the same Slack
+  // message). When Antonio @mentions Claude in a thread Claude already joined,
+  // Slack fires TWO events — app_mention AND message — with DIFFERENT event_ids
+  // but the SAME message ts. The event_id dedup above misses that; this catches
+  // it because both events carry the same event.ts for the one underlying message.
+  const msgTs = eventTs || event.event_ts
+  if (msgTs) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: dupByTs } = await (supabaseAdmin as any)
+      .from("agent_messages")
+      .select("id")
+      .eq("recipient", "claude")
+      .filter("context_json->>slack_event_ts", "eq", msgTs)
+      .filter("context_json->>slack_channel_id", "eq", channelId)
+      .limit(1)
+    if (dupByTs?.length) {
+      return NextResponse.json({ ok: true, dedup: "message_ts" })
+    }
+  }
+
   // Immediate acknowledgment — Antonio sees this within 1-2s
   // Reply anchored to the message's ts so it opens (or continues) a thread.
   // Capture the ack message ts so the worker can morph it (chat.update) into
   // the real answer instead of posting a second message.
   const ackThreadTs = threadTs ?? eventTs
-  const ackTs = await postSlackMessage(channelId, "On it 👍", ackThreadTs).catch((err) => {
+  const ackText = "On it 👍"
+  // Attach a "⏹ Stop" button so Antonio can cancel before the worker posts its
+  // answer (handled by /api/webhooks/slack-interactions). The button is dropped
+  // when the worker morphs this message into the final answer.
+  const ackTs = await postSlackMessage(
+    channelId,
+    ackText,
+    ackThreadTs,
+    buildThinkingBlocks(ackText),
+  ).catch((err) => {
     console.error("[slack-claude-webhook] ACK post failed:", err)
     return null
   })

@@ -29,7 +29,7 @@ import { createHash } from "crypto"
 import { AGENT_TOOLS } from "./tools"
 
 /**
- * The closed set of action tools the bridge worker may propose. All 12 map to
+ * The closed set of action tools the bridge worker may propose. All map to
  * real AGENT_TOOLS entries. Read-only research tools are NOT here — they don't
  * need approval, the worker just calls them directly in Phase 1.
  */
@@ -46,6 +46,8 @@ export const APPROVABLE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "gmail_get_attachments",
   "log_conversation",
   "save_memory",
+  "update_deadline",
+  "send_team_message",
 ])
 
 /** Is this tool one Antonio can be asked to approve? */
@@ -127,6 +129,16 @@ export const APPROVABLE_TOOL_CONSTRAINTS: Readonly<Record<string, ApprovableTool
   save_memory: {
     label: "Save agent memory",
     surface: ["key", "scope"],
+  },
+  update_deadline: {
+    // Changes a compliance deadline's state. Internal record edit, no external send.
+    label: "Update compliance deadline",
+    surface: ["id", "status", "filed_date", "confirmation_number", "blocked_reason", "assigned_to", "notes"],
+  },
+  send_team_message: {
+    // INTERNAL staff-only note (CRM Team tab). NOT client-facing — no external send.
+    label: "Post internal team note",
+    surface: ["account_id", "contact_id", "message"],
   },
 }
 

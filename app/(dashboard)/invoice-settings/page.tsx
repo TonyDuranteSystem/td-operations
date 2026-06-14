@@ -28,6 +28,7 @@ interface BankAccount {
   swift: string
   iban: string
   active: boolean
+  is_default?: boolean
 }
 
 interface PaymentGateway {
@@ -73,7 +74,6 @@ export default function InvoiceSettingsPage() {
   const [newServiceName, setNewServiceName] = useState('')
   const [newServicePrice, setNewServicePrice] = useState('')
   const [newServiceCurrency, setNewServiceCurrency] = useState('USD')
-  const [addingBank, setAddingBank] = useState(false)
   const [activeTab, setActiveTab] = useState<'company' | 'services' | 'banks' | 'gateways'>('company')
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const logoInputRef = useRef<HTMLInputElement>(null)
@@ -190,9 +190,9 @@ export default function InvoiceSettingsPage() {
       swift: '',
       iban: '',
       active: true,
+      is_default: false,
     }
     setSettings({ ...settings, bank_accounts: [...settings.bank_accounts, newBank] })
-    setAddingBank(true)
   }
 
   const removeBankAccount = (index: number) => {
@@ -332,6 +332,7 @@ export default function InvoiceSettingsPage() {
               <label className="block text-sm font-medium mb-1">Company Logo</label>
               <div className="flex items-center gap-4">
                 {settings.logo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- user-uploaded logo from an arbitrary remote URL; next/image would require per-domain remotePatterns allowlisting
                   <img src={settings.logo_url} alt="Logo" className="h-16 w-auto border rounded bg-white" />
                 ) : (
                   <div className="h-16 w-16 bg-zinc-100 border rounded flex items-center justify-center text-zinc-400">
@@ -563,6 +564,22 @@ export default function InvoiceSettingsPage() {
                     <input type="checkbox" checked={bank.active} onChange={e => updateBankAccount(i, 'active', e.target.checked)}
                       className="rounded" />
                     Active
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs">
+                    <input
+                      type="radio"
+                      name={`default_bank_${bank.currency}`}
+                      checked={!!bank.is_default}
+                      onChange={() => {
+                        if (!settings) return
+                        const updated = settings.bank_accounts.map((b, idx) =>
+                          b.currency === bank.currency ? { ...b, is_default: idx === i } : b
+                        )
+                        setSettings({ ...settings, bank_accounts: updated })
+                      }}
+                      className="rounded-full"
+                    />
+                    Default
                   </label>
                   <button onClick={() => removeBankAccount(i)} className="p-1 rounded hover:bg-red-50 text-red-400">
                     <Trash2 className="h-4 w-4" />
