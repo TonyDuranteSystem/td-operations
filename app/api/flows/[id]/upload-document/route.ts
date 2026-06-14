@@ -1,6 +1,8 @@
 /**
  * Upload a document bound to a flow (service_delivery) + the stage that expects
- * it. Mirrors the DBA upload route (app/api/accounts/[id]/dba/[dbaId]/
+ * it, then AUTO-ADVANCE the service delivery to the next stage.
+ *
+ * Mirrors the DBA upload route (app/api/accounts/[id]/dba/[dbaId]/
  * upload-document) but stamps service_delivery_id + flow_stage on the documents
  * row so the flow Workspace's Documents tab can group it.
  *
@@ -9,7 +11,13 @@
  *  2. Upload to the account's Drive folder.
  *  3. Insert a documents row stamped with service_delivery_id + flow_stage.
  *  4. Audit to action_log (scoped with service_delivery_id).
- *  5. Best-effort cleanup of the storage file.
+ *  5. Auto-advance the SD to the next stage via advanceServiceDelivery.
+ *     NOTE: the +1-year renewal-date bump for State RA Renewal / State Annual
+ *     Report is handled INSIDE advanceServiceDelivery on the transition into the
+ *     final (Closed) stage. We deliberately do NOT bump the date here — doing so
+ *     would double-bump it (+2 years). advanceServiceDelivery is the single
+ *     source of truth for that side effect.
+ *  6. Best-effort cleanup of the storage file.
  *
  * Body: { storage_path, file_name, mime_type?, flow_stage? }
  * [id] = service_delivery_id.
@@ -20,6 +28,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { advanceServiceDelivery } from '@/lib/service-delivery'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -135,13 +144,41 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       details: { file_name: fileName, service_delivery_id: serviceDeliveryId, flow_stage: flowStage },
     })
 
-    // 7. Best-effort storage cleanup.
+    // 7. Auto-advance the SD to the next stage. advanceServiceDelivery owns all
+    // stage-advance side effects (stage_history, auto-tasks, portal notify, and
+    // the +1-year renewal-date bump for RA Renewal / Annual Report on the
+    // transition into the final stage). We do NOT bump the date here — that
+    // would double it. Best-effort: a failed/at-final advance must NOT fail the
+    // upload that already succeeded.
+    let advance: { success: boolean; to_stage?: string; is_completed?: boolean; error?: string } = {
+      success: false,
+    }
+    try {
+      const result = await advanceServiceDelivery({
+        delivery_id: serviceDeliveryId,
+        actor: 'flow-upload',
+        notes: `Document uploaded: ${fileName}`,
+      })
+      advance = {
+        success: result.success,
+        to_stage: result.to_stage,
+        is_completed: result.is_completed,
+        error: result.error,
+      }
+    } catch (advErr) {
+      // "Already at final stage" / intake-stage guard / approval-required all land
+      // here. The upload is still a success; surface the advance outcome only.
+      advance = { success: false, error: advErr instanceof Error ? advErr.message : String(advErr) }
+    }
+
+    // 8. Best-effort storage cleanup.
     supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
 
     return NextResponse.json({
       success: true,
       detail: `${fileName} uploaded`,
       driveFileId: driveFile.id,
+      advance,
     })
   } catch (e) {
     console.error('[flow-upload-document] Error:', e)
