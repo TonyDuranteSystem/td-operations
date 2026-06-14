@@ -91,6 +91,20 @@ export function flowStatusFromSd(sdStatus: string | null): FlowStatus {
   return sdStatus === 'completed' ? 'completed' : 'active'
 }
 
+/**
+ * Topic label for a flow's chat thread, e.g. "Tax Return 2025". The year is
+ * appended only when known (deriveFlowYear may return null). Returns "" for an
+ * empty/whitespace service type so callers can fall back to null. Pure.
+ */
+export function buildFlowTopic(
+  serviceType: string | null | undefined,
+  year: number | null | undefined,
+): string {
+  const base = (serviceType ?? '').trim()
+  if (!base) return ''
+  return year ? `${base} ${year}` : base
+}
+
 /** Transform one live SD row into a ResolvedFlow. */
 export function mapSdToFlow(sd: SdRow, account: AccountDates): ResolvedFlow {
   return {

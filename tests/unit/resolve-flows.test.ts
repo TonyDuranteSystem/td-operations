@@ -7,6 +7,7 @@ import {
   yearOf,
   deriveFlowYear,
   flowStatusFromSd,
+  buildFlowTopic,
   buildScheduledFlows,
   assembleFlows,
   mapSdToFlow,
@@ -67,6 +68,23 @@ describe('flowStatusFromSd', () => {
     expect(flowStatusFromSd('active')).toBe('active')
     expect(flowStatusFromSd('blocked')).toBe('active')
     expect(flowStatusFromSd(null)).toBe('active')
+  })
+})
+
+describe('buildFlowTopic', () => {
+  it('appends the year when known', () => {
+    expect(buildFlowTopic('Tax Return', 2025)).toBe('Tax Return 2025')
+    expect(buildFlowTopic('State Annual Report', 2026)).toBe('State Annual Report 2026')
+  })
+  it('omits the year when null/undefined', () => {
+    expect(buildFlowTopic('Tax Return', null)).toBe('Tax Return')
+    expect(buildFlowTopic('Tax Return', undefined)).toBe('Tax Return')
+  })
+  it('trims and returns "" for an empty service type', () => {
+    expect(buildFlowTopic('  Tax Return  ', 2025)).toBe('Tax Return 2025')
+    expect(buildFlowTopic('', 2025)).toBe('')
+    expect(buildFlowTopic(null, 2025)).toBe('')
+    expect(buildFlowTopic('   ', 2025)).toBe('')
   })
 })
 

@@ -1,6 +1,7 @@
 # Service Flow Workspaces
 
-_Last verified against code: 2026-06-14 — Claude (Tax Return e-signature: extended the existing portal signature system to the flow — `signature_send` (stage 80) + `signature_status` (stage 85) components, `lib/operations/signature.ts` shared helper, `/api/flows/[id]/send-for-signature` + `/signature` routes, `document_upload` auto-advance opt-out, webhook auto-advance 85→90 on sign, `signature_requests.service_delivery_id` column + sandbox `signature-requests`/`signed-documents` buckets.)_
+_Last verified against code: 2026-06-14 — Claude (Flow chat: replaced the `chat` stub with `flow-chat.tsx` — a per-SD, CLIENT-FACING message stream backed by `portal_messages` filtered by a new `portal_messages.service_delivery_id` column (migration `20260614-1700`); `GET`/`POST /api/flows/[id]/chat`. Staff send auto-stamps `service_delivery_id` + `topic` (the flow name, e.g. "Tax Return 2025") + `account_id` + `contact_id` + `sender_type='admin'`, so the message shows in the client's portal chat AND notifies them via the existing portal notification system. The portal chat POST inherits `service_delivery_id` from a replied-to flow message so client replies thread back here.)_
+_Earlier 2026-06-14 — Claude (Tax Return e-signature: extended the existing portal signature system to the flow — `signature_send` (stage 80) + `signature_status` (stage 85) components, `lib/operations/signature.ts` shared helper, `/api/flows/[id]/send-for-signature` + `/signature` routes, `document_upload` auto-advance opt-out, webhook auto-advance 85→90 on sign, `signature_requests.service_delivery_id` column + sandbox `signature-requests`/`signed-documents` buckets.)_
 _Earlier 2026-06-14 — Claude (Tax Return workspace: built `DataViewer` (schema-agnostic submitted_data renderer) + `/api/flows/[id]/submission`, extended `ActionButtons` to the 5 Tax Return transitions, made info-panel treat "Completed" as terminal, seeded all 15 Tax Return stage_layouts in sandbox.)_
 
 ## What it is
@@ -22,7 +23,8 @@ A per-service-delivery **Workspace** page (`/flows/[id]`, `[id]` = `service_deli
 | `external_link` | `external-link.tsx` | Static/state-resolved external link (e.g. Secretary of State). |
 | `signature_send` | `signature-send.tsx` | "Send for Signature" action (Tax Return stage 80). Enabled once a doc is uploaded; POSTs `/api/flows/[id]/send-for-signature` → creates a `signature_requests` row linked to the SD, notifies the client, advances to "Sent for Signature". |
 | `signature_status` | `signature-status.tsx` | Shows the SD's signature request status (Waiting / Signed on date) + a staff preview link. Reads `GET /api/flows/[id]/signature`. |
-| `chat` / `notes` | stub | Placeholder panels (not yet built). |
+| `chat` | `flow-chat.tsx` | Per-SD CLIENT-FACING message stream backed by `portal_messages` filtered by `service_delivery_id`. Loads `GET /api/flows/[id]/chat` (oldest-first); staff send via `POST` auto-stamps `service_delivery_id` + `topic` (the flow name) + `account_id` + `contact_id` + `sender_type='admin'` + `sender_id` (the auth user), so the message appears in the client's portal chat and fires the existing admin-message client notification. Client replies to a flow message inherit its `service_delivery_id` (in the portal chat POST) and thread back here. |
+| `notes` | stub | Placeholder panel (not yet built). |
 
 `document_upload` takes an optional `autoAdvance` (default true). Stage 80 sets it **false** so uploading the prepared return does NOT advance — the `signature_send` action owns the advance instead. Every other upload stage keeps the default auto-advance.
 
@@ -66,7 +68,7 @@ Reuses the existing portal signature system (`signature_requests` + `/sign-docum
 ## How it's built
 - `lib/flows/` — `stage-layout.ts` (schema), `resolve-flows.ts` (which flows an account has), `submitted-data.ts` (DataViewer grouping), `state-links.ts`, `workspace-format.ts`.
 - `components/flows/` — the renderer + one component per type.
-- `app/api/flows/[id]/` — `advance` (target_stage), `revert` (go back one stage), `upload-document` (upload + optional auto-advance via `auto_advance` body flag), `documents` (list), `submission` (latest tax submission), `send-for-signature` (create signature request + notify + advance), `signature` (latest request status).
+- `app/api/flows/[id]/` — `advance` (target_stage), `revert` (go back one stage), `upload-document` (upload + optional auto-advance via `auto_advance` body flag), `documents` (list), `submission` (latest tax submission), `send-for-signature` (create signature request + notify + advance), `signature` (latest request status), `chat` (per-SD client-facing `portal_messages` stream: GET oldest-first + POST staff send auto-stamping `service_delivery_id` + `topic` (flow name) + `account_id`/`contact_id` + client notification).
 - `lib/operations/signature.ts` — `createSignatureRequest` (shared sig-request core, Buffer-sourced), `fetchFlowDocumentPdf` (Drive/Storage dual source), `buildSignatureToken` (pure, unit-tested).
 - Layouts are stored in `pipeline_stages.stage_layout` per `(service_type, stage_name)`. Editing a layout = SQL/UPDATE on that row; no code change.
 

@@ -247,9 +247,51 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const topic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic.trim().slice(0, 100) : null
+  let topic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic.trim().slice(0, 100) : null
 
-  const { data, error } = await supabaseAdmin
+  // Flow threading: a reply to a flow-scoped message inherits that message's
+  // service_delivery_id (and its topic when none was supplied) so client replies
+  // thread back to the flow Workspace chat (/flows/[id]). Additive — only set
+  // when the parent is flow-scoped; every other send is unchanged.
+  // service_delivery_id isn't in the generated DB types yet, so the parent read
+  // and the insert go through an untyped surface (mirrors app/api/flows/[id]/*).
+  let inheritedServiceDeliveryId: string | null = null
+  if (reply_to_id) {
+    const parentSurface = supabaseAdmin as unknown as {
+      from: (t: string) => {
+        select: (c: string) => {
+          eq: (col: string, v: string) => {
+            maybeSingle: () => Promise<{
+              data: { service_delivery_id: string | null; topic: string | null } | null
+            }>
+          }
+        }
+      }
+    }
+    const { data: parent } = await parentSurface
+      .from('portal_messages')
+      .select('service_delivery_id, topic')
+      .eq('id', reply_to_id)
+      .maybeSingle()
+    if (parent?.service_delivery_id) {
+      inheritedServiceDeliveryId = parent.service_delivery_id
+      if (!topic && parent.topic) topic = parent.topic
+    }
+  }
+
+  const insertSurface = supabaseAdmin as unknown as {
+    from: (t: string) => {
+      insert: (row: Record<string, unknown>) => {
+        select: (c: string) => {
+          single: () => Promise<{
+            data: (Record<string, unknown> & { contacts: { full_name: string } | null }) | null
+            error: { message: string } | null
+          }>
+        }
+      }
+    }
+  }
+  const { data, error } = await insertSurface
     .from('portal_messages')
     .insert({
       account_id: account_id || null,
@@ -264,11 +306,12 @@ export async function POST(request: NextRequest) {
       attachment_name: attachment_name || null,
       attachments: Array.isArray(attachments) ? attachments : [],
       reply_to_id: reply_to_id || null,
+      ...(inheritedServiceDeliveryId ? { service_delivery_id: inheritedServiceDeliveryId } : {}),
     })
     .select('*, contacts:contact_id(full_name)')
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error || !data) return NextResponse.json({ error: error?.message || 'Could not send message' }, { status: 500 })
 
   // Flatten sender_name
   const contact = data.contacts as unknown as { full_name: string } | null

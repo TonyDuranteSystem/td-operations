@@ -8,6 +8,7 @@ import { ActionButtons } from './action-buttons'
 import { DataViewer } from './data-viewer'
 import { SignatureSend } from './signature-send'
 import { SignatureStatus } from './signature-status'
+import { FlowChat } from './flow-chat'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -64,7 +65,7 @@ function renderComponent(
     case 'signature_status':
       return <SignatureStatus key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'chat':
-      return <StubPanel key={key} type="chat" />
+      return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':
       return (
         <ActionButtons key={key} serviceDeliveryId={serviceDelivery.id} actions={component.actions} />
