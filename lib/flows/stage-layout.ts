@@ -16,6 +16,8 @@ export const STAGE_COMPONENT_TYPES = [
   'chat',
   'action_buttons',
   'external_link',
+  'signature_send',
+  'signature_status',
   'notes',
 ] as const
 
@@ -29,6 +31,9 @@ export interface StageComponent {
   url?: string
   /** action_buttons: list of action keys (e.g. ["start_review"]) */
   actions?: string[]
+  /** document_upload: whether the upload auto-advances the SD (default true).
+   *  Set false when an explicit action (e.g. signature_send) owns the advance. */
+  autoAdvance?: boolean
 }
 
 export interface StageLayout {
@@ -47,11 +52,13 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
+    const rawComp = comp as { autoAdvance?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? comp.label : undefined,
       url: typeof comp.url === 'string' ? comp.url : undefined,
       actions: Array.isArray(comp.actions) ? comp.actions.filter((a): a is string => typeof a === 'string') : undefined,
+      autoAdvance: typeof rawComp.autoAdvance === 'boolean' ? rawComp.autoAdvance : undefined,
     })
   }
   return {

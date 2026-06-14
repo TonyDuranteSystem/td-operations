@@ -45,6 +45,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const fileName: string | undefined = body.file_name
     const mimeType: string | undefined = body.mime_type
     const flowStageInput: string | null = typeof body.flow_stage === 'string' ? body.flow_stage : null
+    // Default true: every existing upload stage auto-advances. A caller can opt
+    // out (auto_advance:false) when a separate action owns the advance — e.g. the
+    // Tax Return "Tax Return Prepared" stage, where "Send for Signature" advances.
+    const autoAdvance: boolean = body.auto_advance !== false
 
     if (!storagePath || !fileName) {
       return NextResponse.json(
@@ -179,22 +183,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let advance: { success: boolean; to_stage?: string; is_completed?: boolean; error?: string } = {
       success: false,
     }
-    try {
-      const result = await advanceServiceDelivery({
-        delivery_id: serviceDeliveryId,
-        actor: 'flow-upload',
-        notes: `Document uploaded: ${fileName}`,
-      })
-      advance = {
-        success: result.success,
-        to_stage: result.to_stage,
-        is_completed: result.is_completed,
-        error: result.error,
+    if (autoAdvance) {
+      try {
+        const result = await advanceServiceDelivery({
+          delivery_id: serviceDeliveryId,
+          actor: 'flow-upload',
+          notes: `Document uploaded: ${fileName}`,
+        })
+        advance = {
+          success: result.success,
+          to_stage: result.to_stage,
+          is_completed: result.is_completed,
+          error: result.error,
+        }
+      } catch (advErr) {
+        // "Already at final stage" / intake-stage guard / approval-required all land
+        // here. The upload is still a success; surface the advance outcome only.
+        advance = { success: false, error: advErr instanceof Error ? advErr.message : String(advErr) }
       }
-    } catch (advErr) {
-      // "Already at final stage" / intake-stage guard / approval-required all land
-      // here. The upload is still a success; surface the advance outcome only.
-      advance = { success: false, error: advErr instanceof Error ? advErr.message : String(advErr) }
     }
 
     // 8. Best-effort storage cleanup — only when the canonical copy now lives in

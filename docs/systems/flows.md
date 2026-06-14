@@ -1,6 +1,7 @@
 # Service Flow Workspaces
 
-_Last verified against code: 2026-06-14 — Claude (Tax Return workspace: built `DataViewer` (schema-agnostic submitted_data renderer) + `/api/flows/[id]/submission`, extended `ActionButtons` to the 5 Tax Return transitions, made info-panel treat "Completed" as terminal, seeded all 15 Tax Return stage_layouts in sandbox.)_
+_Last verified against code: 2026-06-14 — Claude (Tax Return e-signature: extended the existing portal signature system to the flow — `signature_send` (stage 80) + `signature_status` (stage 85) components, `lib/operations/signature.ts` shared helper, `/api/flows/[id]/send-for-signature` + `/signature` routes, `document_upload` auto-advance opt-out, webhook auto-advance 85→90 on sign, `signature_requests.service_delivery_id` column + sandbox `signature-requests`/`signed-documents` buckets.)_
+_Earlier 2026-06-14 — Claude (Tax Return workspace: built `DataViewer` (schema-agnostic submitted_data renderer) + `/api/flows/[id]/submission`, extended `ActionButtons` to the 5 Tax Return transitions, made info-panel treat "Completed" as terminal, seeded all 15 Tax Return stage_layouts in sandbox.)_
 
 ## What it is
 A per-service-delivery **Workspace** page (`/flows/[id]`, `[id]` = `service_delivery_id`) that drives the staff UI for a recurring service from a **catalog-stored layout descriptor** — no per-stage React. Each `pipeline_stages` row carries a `stage_layout` (JSONB) listing the components to render for that stage. The page reads the SD's current stage, looks up that stage's layout, and renders it. Built for the four recurring flows (`Tax Return`, `State Annual Report`, `State RA Renewal`, `CMRA Mailing Address`); Tax Return is the fully-built reference flow (15 stages).
@@ -19,7 +20,11 @@ A per-service-delivery **Workspace** page (`/flows/[id]`, `[id]` = `service_deli
 | `data_viewer` | `data-viewer.tsx` | Renders the account's latest tax-wizard submission (`GET /api/flows/[id]/submission`) as grouped, readable cards. **Schema-agnostic** — see below. |
 | `action_buttons` | `action-buttons.tsx` | Renders a button per action key in the layout; each POSTs to `/api/flows/[id]/advance` with a target stage. |
 | `external_link` | `external-link.tsx` | Static/state-resolved external link (e.g. Secretary of State). |
+| `signature_send` | `signature-send.tsx` | "Send for Signature" action (Tax Return stage 80). Enabled once a doc is uploaded; POSTs `/api/flows/[id]/send-for-signature` → creates a `signature_requests` row linked to the SD, notifies the client, advances to "Sent for Signature". |
+| `signature_status` | `signature-status.tsx` | Shows the SD's signature request status (Waiting / Signed on date) + a staff preview link. Reads `GET /api/flows/[id]/signature`. |
 | `chat` / `notes` | stub | Placeholder panels (not yet built). |
+
+`document_upload` takes an optional `autoAdvance` (default true). Stage 80 sets it **false** so uploading the prepared return does NOT advance — the `signature_send` action owns the advance instead. Every other upload stage keeps the default auto-advance.
 
 ### DataViewer + submitted_data (schema-agnostic)
 `lib/flows/submitted-data.ts::groupSubmittedData()` turns a flat tax-wizard `submitted_data` blob into ordered display groups **without assuming a fixed schema** (keys vary by entity type — SMLLC / MMLLC / Corp):
@@ -45,14 +50,24 @@ The submission is fetched per-account (newest `tax_return_submissions` by `creat
 ## The Tax Return 15-stage flow (sandbox pipeline)
 `Extension Due (10)` → `Extension Filed (20)` → `Awaiting 2nd Payment (30)` → `2nd Installment Paid (40)` → `Wizard Available (50)` → `Data Submitted (60)` → `Under Review (65)` → `Revision Requested (67)` → `Review Completed (70)` → `Tax Return Prepared (80)` → `Sent for Signature (85)` → `Signed (90)` → `Filed with IRS (95)` → `IRS Receipt Uploaded (98)` → `Completed (100)`.
 
-Review actions live on the SD stage (`Data Submitted` → Start Review → `Under Review` → Approve/`Review Completed` or Request Changes/`Revision Requested`). Document uploads auto-advance (Extension Due→Filed, Tax Return Prepared→Sent for Signature, Filed with IRS→IRS Receipt Uploaded).
+Review actions live on the SD stage (`Data Submitted` → Start Review → `Under Review` → Approve/`Review Completed` or Request Changes/`Revision Requested`). Document uploads auto-advance (Extension Due→Filed, Filed with IRS→IRS Receipt Uploaded). **Exception:** the `Tax Return Prepared` upload does NOT auto-advance — the **e-signature** sub-flow below owns that transition.
+
+### E-signature sub-flow (Tax Return Prepared → Sent for Signature → Signed)
+Reuses the existing portal signature system (`signature_requests` + `/sign-document/[token]/[code]` + `/portal/sign/document`), NOT a new one.
+1. **Stage 80 (`Tax Return Prepared`)** — staff uploads the return (`document_upload`, auto-advance off), then clicks **Send for Signature** (`signature_send`). `POST /api/flows/[id]/send-for-signature` fetches the latest SD document's PDF bytes (Drive in prod, `onboarding-uploads` storage in sandbox — `fetchFlowDocumentPdf`), calls `createSignatureRequest` (`lib/operations/signature.ts`) which stores the PDF in the `signature-requests` bucket and inserts a `signature_requests` row stamped with `service_delivery_id`, creates a portal notification ("Your tax return is ready to sign"), and advances the SD to `Sent for Signature` with `skip_notify:true` (one tailored notice, not the generic stage-move one).
+2. **Client portal** — the request auto-appears on `/portal/sign` as a "Tax Return" card (the generic `signature_requests` path already lists these) → client signs at `/sign-document/[token]/[code]` (canvas → pdf-lib overlay → `signed-documents` bucket → status `signed` → `POST /api/signature-request-signed`).
+3. **Stage 85 (`Sent for Signature`)** — `signature_status` shows Waiting / Signed-on-date. The signed webhook (`/api/signature-request-signed`), seeing the request's `service_delivery_id` and the SD at `Sent for Signature`, advances it to `Signed` and stamps the signed PDF document row with the SD (idempotent: guarded on the current stage).
+4. **Stage 90 (`Signed`)** — `file_with_irs` action proceeds as before.
+
+`createSignatureRequest` sets `drive_file_id=NULL` so `/api/signature-request/[token]/pdf` serves uniformly from the `signature-requests` bucket in both environments. The MCP `signature_request_create` tool (OA/8879 production signing) is unchanged. DB: `signature_requests.service_delivery_id` (nullable FK) + the two storage buckets — migration `20260614-1500-tax-return-esignature.sql` (production already had the buckets; the column needs promoting).
 
 > **Important divergence from the production tax pipeline.** `docs/systems/tax-returns.md` documents the PRODUCTION pipeline (Data Submitted 45 / Under Review 46 / Approved 48 / Confirmed 49 with a `tax_return_submissions.review_status` sub-state machine, SD parked at "Data Submitted" through the whole loop). The flow-workspace sandbox pipeline above is a DIFFERENT model where the review states are REAL SD stages advanced directly by the action buttons. Verified against live sandbox `pipeline_stages` on 2026-06-14. Do not assume the two pipelines match.
 
 ## How it's built
 - `lib/flows/` — `stage-layout.ts` (schema), `resolve-flows.ts` (which flows an account has), `submitted-data.ts` (DataViewer grouping), `state-links.ts`, `workspace-format.ts`.
 - `components/flows/` — the renderer + one component per type.
-- `app/api/flows/[id]/` — `advance` (target_stage), `revert` (go back one stage), `upload-document` (upload + auto-advance), `documents` (list), `submission` (latest tax submission).
+- `app/api/flows/[id]/` — `advance` (target_stage), `revert` (go back one stage), `upload-document` (upload + optional auto-advance via `auto_advance` body flag), `documents` (list), `submission` (latest tax submission), `send-for-signature` (create signature request + notify + advance), `signature` (latest request status).
+- `lib/operations/signature.ts` — `createSignatureRequest` (shared sig-request core, Buffer-sourced), `fetchFlowDocumentPdf` (Drive/Storage dual source), `buildSignatureToken` (pure, unit-tested).
 - Layouts are stored in `pipeline_stages.stage_layout` per `(service_type, stage_name)`. Editing a layout = SQL/UPDATE on that row; no code change.
 
 ## Gotchas, invariants & past bugs

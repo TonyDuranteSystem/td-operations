@@ -10,6 +10,9 @@ interface DocumentUploadProps {
   serviceDeliveryId: string
   /** Stamped onto the documents row as flow_stage (the stage that expects it). */
   flowStage: string | null
+  /** Whether uploading auto-advances the SD (default true). Set false when a
+   *  separate action (e.g. Send for Signature) owns the stage advance. */
+  autoAdvance?: boolean
 }
 
 /**
@@ -30,7 +33,7 @@ interface DocumentUploadProps {
  *      switch this to a multipart/FormData body or the 4.5MB limit returns.
  * Surfaces the server's real error on failure (R099) — never a generic toast.
  */
-export function DocumentUpload({ label, serviceDeliveryId, flowStage }: DocumentUploadProps) {
+export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance }: DocumentUploadProps) {
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -94,6 +97,9 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage }: Document
           file_name: file.name,
           mime_type: file.type || 'application/pdf',
           flow_stage: flowStage,
+          // Default true preserves existing auto-advance behavior for every
+          // other upload stage; only pass false when explicitly opted out.
+          auto_advance: autoAdvance === false ? false : undefined,
         }),
       })
       const data = await apiRes.json().catch(() => ({}))

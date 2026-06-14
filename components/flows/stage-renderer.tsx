@@ -6,6 +6,8 @@ import { DocumentViewer } from './document-viewer'
 import { ExternalLinkCard } from './external-link'
 import { ActionButtons } from './action-buttons'
 import { DataViewer } from './data-viewer'
+import { SignatureSend } from './signature-send'
+import { SignatureStatus } from './signature-status'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -41,6 +43,7 @@ function renderComponent(
           label={component.label}
           serviceDeliveryId={serviceDelivery.id}
           flowStage={serviceDelivery.stage}
+          autoAdvance={component.autoAdvance}
         />
       )
     case 'external_link':
@@ -56,6 +59,10 @@ function renderComponent(
       return <DocumentViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'data_viewer':
       return <DataViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
+    case 'signature_send':
+      return <SignatureSend key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
+    case 'signature_status':
+      return <SignatureStatus key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'chat':
       return <StubPanel key={key} type="chat" />
     case 'action_buttons':

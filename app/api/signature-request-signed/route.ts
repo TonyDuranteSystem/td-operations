@@ -24,9 +24,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "signature_request_id and token required" }, { status: 400 })
     }
 
-    const { data: sigReq, error: sigErr } = await supabaseAdmin
+    // service_delivery_id was added by migration but the generated DB types
+    // aren't regenerated — select it via an untyped surface.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: sigReq, error: sigErr } = await (supabaseAdmin as any)
       .from("signature_requests")
-      .select("id, token, document_name, account_id, contact_id, signed_pdf_path")
+      .select("id, token, document_name, account_id, contact_id, signed_pdf_path, service_delivery_id")
       .eq("id", signature_request_id)
       .eq("token", token)
       .single()
@@ -90,6 +93,16 @@ export async function POST(req: NextRequest) {
               .update({ signed_pdf_drive_id: driveFileId })
               .eq("id", sigReq.id)
 
+            // If this request is bound to a flow, stamp the signed document so
+            // it shows in that flow's Documents viewer.
+            if (sigReq.service_delivery_id) {
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+              await supabaseAdmin
+                .from("documents")
+                .update({ service_delivery_id: sigReq.service_delivery_id, flow_stage: "Signed" } as never)
+                .eq("drive_file_id", driveFileId)
+            }
+
             // Make visible in portal
             await updateDocument({
               drive_file_id: driveFileId,
@@ -150,6 +163,33 @@ export async function POST(req: NextRequest) {
       results.push("task: ok")
     } catch (err) {
       results.push(`task: error - ${err instanceof Error ? err.message : "unknown"}`)
+    }
+
+    // 4. Flow auto-advance: a tax-return signature request advances its SD from
+    //    "Sent for Signature" → "Signed". Guarded to that stage for idempotency
+    //    (a re-fired webhook on an already-"Signed" SD is a no-op).
+    if (sigReq.service_delivery_id) {
+      try {
+        const { data: sd } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("stage")
+          .eq("id", sigReq.service_delivery_id)
+          .single()
+        if (sd?.stage === "Sent for Signature") {
+          const { advanceServiceDelivery } = await import("@/lib/service-delivery")
+          await advanceServiceDelivery({
+            delivery_id: sigReq.service_delivery_id,
+            target_stage: "Signed",
+            actor: "signature-webhook",
+            notes: `Client signed: ${sigReq.document_name}`,
+          })
+          results.push("flow_advance: ok")
+        } else {
+          results.push(`flow_advance: skipped (stage=${sd?.stage ?? "unknown"})`)
+        }
+      } catch (err) {
+        results.push(`flow_advance: error - ${err instanceof Error ? err.message : "unknown"}`)
+      }
     }
 
     return NextResponse.json({ ok: true, results })
