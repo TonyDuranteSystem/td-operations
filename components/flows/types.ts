@@ -21,4 +21,7 @@ export interface WorkspaceServiceDelivery {
 export interface WorkspaceAccount {
   id: string
   company_name: string | null
+  /** Free-text state (e.g. "Wyoming" or "WY"); normalized by consumers that
+   *  need it (Secretary of State link resolution). */
+  state_of_formation: string | null
 }

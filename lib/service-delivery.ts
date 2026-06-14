@@ -148,7 +148,19 @@ export async function advanceServiceDelivery(
   const stageHistory = Array.isArray(delivery.stage_history) ? [...delivery.stage_history, historyEntry] : [historyEntry]
 
   // 6. Update delivery
-  const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
+  // "Closed" is the final stage for the recurring renewal flows (State Annual
+  // Report / State RA Renewal — verified the only two service types with a
+  // "Closed" stage). Treating it as completed here is what fires the +1-year
+  // renewal-date bump (sections 10/11), sets status=completed + end_date, and
+  // sends the "is complete!" portal notification. Scoped by service_type so no
+  // other flow that might name a stage "Closed" is affected.
+  const isClosedRenewalFinal =
+    targetStage.stage_name === "Closed" &&
+    (delivery.service_type === "State Annual Report" || delivery.service_type === "State RA Renewal")
+  const isCompleted =
+    targetStage.stage_name === "Completed" ||
+    targetStage.stage_name === "TR Filed" ||
+    isClosedRenewalFinal
   await dbWrite(
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     supabaseAdmin

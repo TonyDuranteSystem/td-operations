@@ -1,8 +1,10 @@
-import { ExternalLink as ExternalLinkIcon } from 'lucide-react'
 import type { StageLayout, StageComponent } from '@/lib/flows/stage-layout'
 import type { WorkspaceServiceDelivery, WorkspaceAccount } from './types'
 import { InfoPanel } from './info-panel'
 import { DocumentUpload } from './document-upload'
+import { DocumentViewer } from './document-viewer'
+import { ExternalLinkCard } from './external-link'
+import { ActionButtons } from './action-buttons'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -18,21 +20,6 @@ function StubPanel({ type, note }: { type: string; note?: string }) {
       <div className="text-sm font-medium text-zinc-600">{type}</div>
       <div className="text-xs text-zinc-400 mt-1">{note ?? 'Coming in a later slice.'}</div>
     </div>
-  )
-}
-
-function ExternalLinkCard({ label, url }: { label?: string; url?: string }) {
-  if (!url) return <StubPanel type="external_link" note="No URL configured." />
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-blue-700 hover:bg-blue-50"
-    >
-      <ExternalLinkIcon className="h-4 w-4" />
-      {label || 'Open link'}
-    </a>
   )
 }
 
@@ -56,20 +43,23 @@ function renderComponent(
         />
       )
     case 'external_link':
-      return <ExternalLinkCard key={key} label={component.label} url={component.url} />
+      return (
+        <ExternalLinkCard
+          key={key}
+          label={component.label}
+          url={component.url}
+          stateOfFormation={account.state_of_formation}
+        />
+      )
     case 'document_viewer':
-      return <StubPanel key={key} type="document_viewer" />
+      return <DocumentViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'data_viewer':
       return <StubPanel key={key} type="data_viewer" />
     case 'chat':
       return <StubPanel key={key} type="chat" />
     case 'action_buttons':
       return (
-        <StubPanel
-          key={key}
-          type="action_buttons"
-          note={component.actions?.length ? `Actions: ${component.actions.join(', ')}` : undefined}
-        />
+        <ActionButtons key={key} serviceDeliveryId={serviceDelivery.id} actions={component.actions} />
       )
     case 'notes':
       return <StubPanel key={key} type="notes" />
