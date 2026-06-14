@@ -5,6 +5,7 @@ import { DocumentUpload } from './document-upload'
 import { DocumentViewer } from './document-viewer'
 import { ExternalLinkCard } from './external-link'
 import { ActionButtons } from './action-buttons'
+import { DataViewer } from './data-viewer'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -54,7 +55,7 @@ function renderComponent(
     case 'document_viewer':
       return <DocumentViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'data_viewer':
-      return <StubPanel key={key} type="data_viewer" />
+      return <DataViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'chat':
       return <StubPanel key={key} type="chat" />
     case 'action_buttons':

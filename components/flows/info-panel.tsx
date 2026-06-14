@@ -28,9 +28,12 @@ export function InfoPanel({ serviceDelivery: sd, account }: InfoPanelProps) {
   const stageLabel = sd.stage ?? '—'
   const clientLabel = sd.current_client_label
 
-  // On the terminal "Closed" stage, show a completed summary: when it was
-  // finished and the next renewal date pulled from the account.
-  const isClosed = sd.stage === 'Closed'
+  // On the terminal stage, show a completed summary: when it was finished and
+  // (for recurring renewal flows) the next renewal date pulled from the account.
+  // AR / RA close at "Closed"; Tax Return closes at "Completed".
+  const isClosed = sd.stage === 'Closed' || sd.stage === 'Completed'
+  const isRenewalFlow =
+    sd.service_type === 'State RA Renewal' || sd.service_type === 'State Annual Report'
   const completedDate = formatUploadDate(sd.stage_entered_at)
   const nextRenewal =
     sd.service_type === 'State RA Renewal' ? account.ra_renewal_date : account.annual_report_due_date
@@ -81,7 +84,7 @@ export function InfoPanel({ serviceDelivery: sd, account }: InfoPanelProps) {
             value={completedDate ?? <span className="text-zinc-400">—</span>}
           />
         )}
-        {isClosed && (
+        {isClosed && isRenewalFlow && (
           <Row
             icon={<CalendarCheck className="h-4 w-4" />}
             label="Next renewal"
