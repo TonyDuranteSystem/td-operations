@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logAction } from '@/lib/mcp/action-log'
 import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
 import { searchTemplates } from './templates'
+import { resolveMailbox } from './gmail-mailbox'
 import {
   normalizeTaskPriority,
   normalizeTaskStatus,
@@ -219,6 +220,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       properties: {
         query: { type: 'string', description: 'Gmail search query. ALWAYS use "from:email@address.com" to search by sender (not by name). Examples: "from:mario@example.com", "from:client@email.com has:attachment", "from:client@email.com newer_than:7d". Supports all Gmail operators.' },
         max_results: { type: 'number', description: 'Max results to return (default 10, max 20)' },
+        as_user: { type: 'string', description: "Mailbox to search. Default support@tonydurante.us. Use 'antonio.durante@tonydurante.us' to search Antonio's personal inbox — ONLY when Antonio explicitly asks. Other mailboxes are not permitted." },
       },
       required: ['query'],
     },
@@ -230,6 +232,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
+        as_user: { type: 'string', description: "Mailbox the message is in. Must match the as_user used in the gmail_search that returned this ID. Default support@tonydurante.us; 'antonio.durante@tonydurante.us' for Antonio's personal inbox (only when Antonio asks)." },
       },
       required: ['message_id'],
     },
@@ -241,6 +244,7 @@ export const AGENT_TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         thread_id: { type: 'string', description: 'Gmail thread ID (from gmail_search results)' },
+        as_user: { type: 'string', description: "Mailbox the thread is in. Must match the as_user used in the gmail_search that returned this ID. Default support@tonydurante.us; 'antonio.durante@tonydurante.us' for Antonio's personal inbox (only when Antonio asks)." },
       },
       required: ['thread_id'],
     },
@@ -1025,13 +1029,14 @@ async function getDashboardStats() {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailSearch(p: any) {
   const { gmailGet } = await import('@/lib/gmail')
+  const asUser = resolveMailbox(p.as_user) ?? undefined
   const maxResults = Math.min(Number(p.max_results) || 10, 20)
 
   // Search messages
   const searchResult = await gmailGet('/messages', {
     q: p.query,
     maxResults: String(maxResults),
-  }) as { messages?: Array<{ id: string; threadId: string }> }
+  }, asUser) as { messages?: Array<{ id: string; threadId: string }> }
 
   if (!searchResult.messages?.length) {
     return JSON.stringify({ results: [], total: 0, message: 'No emails found matching the search query.' })
@@ -1042,7 +1047,7 @@ async function gmailSearch(p: any) {
   const details = await Promise.all(
     messagesToFetch.map(async (msg) => {
       try {
-        const detail = await gmailGet(`/messages/${msg.id}`, { format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date'] }) as {
+        const detail = await gmailGet(`/messages/${msg.id}`, { format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date'] }, asUser) as {
           id: string
           threadId: string
           snippet: string
@@ -1074,8 +1079,9 @@ async function gmailSearch(p: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailRead(p: any) {
   const { gmailGet } = await import('@/lib/gmail')
+  const asUser = resolveMailbox(p.as_user) ?? undefined
 
-  const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }) as {
+  const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }, asUser) as {
     id: string
     threadId: string
     snippet: string
@@ -1120,8 +1126,9 @@ async function gmailRead(p: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailReadThread(p: any) {
   const { gmailGet } = await import('@/lib/gmail')
+  const asUser = resolveMailbox(p.as_user) ?? undefined
 
-  const thread = await gmailGet(`/threads/${p.thread_id}`, { format: 'full' }) as {
+  const thread = await gmailGet(`/threads/${p.thread_id}`, { format: 'full' }, asUser) as {
     id: string
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     messages?: any[]

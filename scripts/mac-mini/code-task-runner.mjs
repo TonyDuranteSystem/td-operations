@@ -43,7 +43,7 @@
  *   and lib/ai-agent/slack-claude.ts (chat.postMessage shape), 2026-06-11.
  */
 
-import { spawn, execSync } from "node:child_process"
+import { spawn, execSync, execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -514,6 +514,7 @@ async function tick(cfg) {
   const branch = codeTaskBranchName(row.id, title)
   const wtPath = codeTaskWorktreePath(cfg.repoDir, row.id)
   let branchPushed = false
+  let prUrl = null
   const prep = prepareWorktree(cfg, branch, wtPath)
   if (!prep.ok) {
     const msg = `⚠️ *${title}* — couldn't set up an isolated workspace:\n${prep.detail}`
@@ -636,11 +637,37 @@ async function tick(cfg) {
         const repoWeb = repoWebUrlFromRemote(
           execSync("git remote get-url origin", { cwd: wtPath, encoding: "utf8" }),
         )
-        const url = compareUrl(repoWeb, branch)
+        // Open a PR as the REVIEW surface — review/approve from the GitHub mobile app.
+        // Best-effort: if gh is missing/unauthed, fall back to a plain compare link.
+        // execFileSync (no shell) so the task title can't inject. "ship it" still
+        // merges via the gated local path below — the PR closes when its commits land.
+        let reviewUrl = compareUrl(repoWeb, branch)
+        try {
+          const prBody =
+            `Automated change from a Slack code task: **${title}**.\n\n` +
+            `Review the diff here, then reply "ship it" in the Slack thread to merge to ` +
+            `production (the merge runs the full build + test gate locally).`
+          const created = execFileSync(
+            "gh",
+            ["pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", prBody],
+            { cwd: wtPath, encoding: "utf8", timeout: 60000 },
+          ).trim()
+          const m = created.match(/https?:\/\/\S+/)
+          if (m) {
+            prUrl = m[0]
+            reviewUrl = m[0]
+          }
+        } catch (e) {
+          log("gh pr create failed (falling back to compare link):", e?.message || String(e))
+        }
         output +=
           `\n\n🌿 Pushed to branch \`${branch}\` — preview build, NOT production.` +
-          (url ? `\nReview / open PR: ${url}` : "") +
-          `\nReply "ship it" in this thread to promote to production.`
+          (prUrl
+            ? `\n📱 Review on your phone: ${prUrl}`
+            : reviewUrl
+              ? `\nReview / open PR: ${reviewUrl}`
+              : "") +
+          `\nReply "ship it" in this thread to merge it to production.`
       }
     } catch (pushErr) {
       ok = false
@@ -661,7 +688,7 @@ async function tick(cfg) {
   // 5) Finalize the row.
   // Record the pushed branch on the row so the "ship it" promotion step can find
   // exactly this task's branch (null if nothing was pushed).
-  const ctxOut = { ...ctx, session_id: sessionId, code_branch: branchPushed ? branch : null }
+  const ctxOut = { ...ctx, session_id: sessionId, code_branch: branchPushed ? branch : null, pr_url: prUrl }
   const update = ok
     ? { status: "done", reply: output.slice(0, 100000), context_json: ctxOut, replied_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     : { status: "failed", error_text: output.slice(0, 10000), context_json: ctxOut, updated_at: new Date().toISOString() }
