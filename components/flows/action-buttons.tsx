@@ -9,12 +9,14 @@ import {
   RotateCcw,
   Landmark,
   Flag,
+  ArrowRight,
 } from 'lucide-react'
+import type { StageAction } from '@/lib/flows/stage-layout'
 
 interface ActionButtonsProps {
   serviceDeliveryId: string
-  /** Action keys from stage_layout (e.g. ["approve", "request_changes"]). */
-  actions?: string[]
+  /** Actions from stage_layout — bare keys ("approve") or advance_next objects. */
+  actions?: StageAction[]
 }
 
 type Variant = 'primary' | 'secondary'
@@ -83,24 +85,60 @@ const ACTION_CONFIG: Record<string, ActionConfig> = {
   },
 }
 
+/** A render-ready action with a unique id, resolved label, and target stage. */
+interface ResolvedAction extends ActionConfig {
+  /** Unique id for busy-state keying (advance_next entries share one key, so we
+   *  suffix the target to disambiguate multiple on one stage). */
+  uid: string
+}
+
+/**
+ * Resolve a stage_layout action into a render-ready button.
+ *  - string → looked up in ACTION_CONFIG (fixed transitions). Unknown → null.
+ *  - { key:'advance_next', label, target } → a generic forward button to an
+ *    explicit target stage, with the layout-supplied label. Missing target → null.
+ *  - { key:'<known>', label? } → ACTION_CONFIG entry, with optional label override.
+ */
+function resolveAction(action: StageAction): ResolvedAction | null {
+  if (typeof action === 'string') {
+    const config = ACTION_CONFIG[action]
+    return config ? { ...config, uid: action } : null
+  }
+  if (action.key === 'advance_next') {
+    if (!action.target) return null
+    return {
+      uid: `advance_next:${action.target}`,
+      targetStage: action.target,
+      label: action.label ?? 'Advance to Next Stage',
+      busyLabel: 'Advancing…',
+      icon: ArrowRight,
+      variant: 'primary',
+    }
+  }
+  const config = ACTION_CONFIG[action.key]
+  if (!config) return null
+  return { ...config, uid: action.key, label: action.label ?? config.label }
+}
+
 export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps) {
   const router = useRouter()
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const validActions = (actions ?? []).filter((a) => a in ACTION_CONFIG)
-  if (validActions.length === 0) return null
+  const resolved = (actions ?? [])
+    .map(resolveAction)
+    .filter((a): a is ResolvedAction => a !== null)
+  if (resolved.length === 0) return null
 
-  async function runAction(actionKey: string) {
+  async function runAction(action: ResolvedAction) {
     if (busyKey) return
-    const config = ACTION_CONFIG[actionKey]
-    setBusyKey(actionKey)
+    setBusyKey(action.uid)
     setError(null)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/advance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_stage: config.targetStage }),
+        body: JSON.stringify({ target_stage: action.targetStage }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
@@ -116,30 +154,29 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
       <div className="flex flex-wrap gap-2">
-        {validActions.map((actionKey) => {
-          const config = ACTION_CONFIG[actionKey]
-          const Icon = config.icon
-          const isBusy = busyKey === actionKey
+        {resolved.map((action) => {
+          const Icon = action.icon
+          const isBusy = busyKey === action.uid
           const disabled = busyKey !== null
           const base =
             'inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors'
           const styles = disabled
-            ? config.variant === 'secondary'
+            ? action.variant === 'secondary'
               ? 'cursor-not-allowed border border-zinc-200 text-zinc-400'
               : 'cursor-not-allowed bg-zinc-200 text-zinc-400'
-            : config.variant === 'secondary'
+            : action.variant === 'secondary'
               ? 'cursor-pointer border border-amber-300 bg-white text-amber-700 hover:bg-amber-50'
               : 'cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700'
           return (
             <button
-              key={actionKey}
+              key={action.uid}
               type="button"
-              onClick={() => runAction(actionKey)}
+              onClick={() => runAction(action)}
               disabled={disabled}
               className={`${base} ${styles}`}
             >
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
-              {isBusy ? config.busyLabel : config.label}
+              {isBusy ? action.busyLabel : action.label}
             </button>
           )
         })}

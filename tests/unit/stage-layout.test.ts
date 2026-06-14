@@ -36,6 +36,33 @@ describe('parseStageLayout', () => {
     expect(layout).not.toBeNull()
     expect(layout!.components).toEqual([])
   })
+
+  it('parses an advance_next object action with label + target', () => {
+    const layout = parseStageLayout({
+      components: [
+        { type: 'action_buttons', actions: [{ key: 'advance_next', label: 'Open Wizard for Client', target: 'Wizard Available' }] },
+      ],
+    })
+    expect(layout!.components[0].actions).toEqual([
+      { key: 'advance_next', label: 'Open Wizard for Client', target: 'Wizard Available' },
+    ])
+  })
+
+  it('keeps mixed string + object actions and drops object actions with no string key', () => {
+    const layout = parseStageLayout({
+      components: [
+        { type: 'action_buttons', actions: ['approve', { key: 'advance_next', target: 'X' }, { label: 'no key' }, 42] },
+      ],
+    })
+    expect(layout!.components[0].actions).toEqual(['approve', { key: 'advance_next', target: 'X' }])
+  })
+
+  it('parses the waiting_notice component type with its label', () => {
+    const layout = parseStageLayout({
+      components: [{ type: 'waiting_notice', label: 'Waiting for the client to submit data.' }],
+    })
+    expect(layout!.components[0]).toMatchObject({ type: 'waiting_notice', label: 'Waiting for the client to submit data.' })
+  })
 })
 
 describe('daysSince', () => {
