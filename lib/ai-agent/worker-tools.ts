@@ -191,6 +191,21 @@ export const START_CODE_TASK_TOOL: ToolDef = {
 }
 
 /**
+ * promote_code_branch — ship the review branch of THIS thread's last completed
+ * code task to production. The code rail never auto-ships: a finished task pushes
+ * a review branch and stops. This tool, called ONLY on Antonio's explicit "ship
+ * it", queues a promote task (recipient='code_runner', context_json.promote_branch)
+ * that the Mac Mini runner merges into main and deploys (R104 — the production
+ * push lives there, gated on this human approval). Slack-only; same gating as
+ * START_CODE_TASK_TOOL so it never reaches the Hermes research worker (R108).
+ */
+export const PROMOTE_CODE_BRANCH_TOOL: ToolDef = {
+  name: "promote_code_branch",
+  description: "Ship to production the review branch from the most recently completed code task in THIS Slack thread. Use ONLY when Antonio explicitly says 'ship it' / 'deploy it' / 'push it to production' AFTER a code task finished and posted its branch. It merges that branch into main and deploys. Do NOT use to start new work (use start_code_task) and never speculatively.",
+  parameters: { type: "object", properties: {}, required: [] },
+}
+
+/**
  * send_portal_message — Slack-only direct send to a client's PORTAL CHAT.
  *
  * Unlike every other side-effecting capability the worker has (which must go
@@ -609,6 +624,37 @@ export async function executeWorkerTool(name: string, params: Record<string, unk
     if (error) return "Failed: " + error.message
     return "Code task queued (id:" + data.id + "). Mac Mini will implement it and post results back here."
   }
+  if (name === "promote_code_branch") {
+    const { _currentSlackCtx } = await import("./slack-claude")
+    const threadTs = _currentSlackCtx.threadTs ?? null
+    const channelId = _currentSlackCtx.channelId ?? null
+    if (!threadTs) return "No Slack thread context — can't tell which branch to ship."
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = supabaseAdmin as any
+    // Most recent COMPLETED code task in this thread that pushed a review branch.
+    const { data: done, error: selErr } = await sb
+      .from("agent_messages")
+      .select("id, context_json")
+      .eq("recipient", "code_runner")
+      .eq("status", "done")
+      .eq("context_json->>slack_thread_ts", threadTs)
+      .order("updated_at", { ascending: false })
+      .limit(5)
+    if (selErr) return "Failed to find the task to ship: " + selErr.message
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withBranch = (done || []).find((r: any) => r?.context_json?.code_branch)
+    if (!withBranch) return "Nothing to ship — no completed code task with a pushed review branch in this thread."
+    const branch = withBranch.context_json.code_branch as string
+    const title = (withBranch.context_json.title as string) || "Code change"
+    const { data, error } = await sb.from("agent_messages").insert({
+      sender: "slack", recipient: "code_runner", subject: ("Ship " + branch).slice(0, 200),
+      body: "Promote branch to production: " + branch,
+      status: "pending", context_json: { source: "slack_code_promote", title: "Ship " + title,
+        promote_branch: branch, slack_channel_id: channelId, slack_thread_ts: threadTs },
+    }).select("id").single()
+    if (error) return "Failed to queue the promotion: " + error.message
+    return "Promotion queued for `" + branch + "` (id:" + data.id + "). Mac Mini will merge it into main and deploy."
+  }
   if (name === "send_portal_message") {
     // Slack-only direct send (gated at the tool-list level via enableSlackSend).
     // Reaches here only when the model was actually handed the tool, same as
@@ -936,6 +982,10 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // the Hermes research worker (R108) and never double-adds.
   if (opts.enableCodeTasks && !tools.some((t) => t.name === START_CODE_TASK_TOOL.name)) {
     tools = [...tools, START_CODE_TASK_TOOL]
+  }
+  // Slack-only "ship it" promotion, gated the same way (enableCodeTasks).
+  if (opts.enableCodeTasks && !tools.some((t) => t.name === PROMOTE_CODE_BRANCH_TOOL.name)) {
+    tools = [...tools, PROMOTE_CODE_BRANCH_TOOL]
   }
 
   // Slack-only: append the portal-chat send tool the same way. Gated on
