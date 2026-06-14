@@ -115,6 +115,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
+  { id: 'code-tasks', name: 'Code Tasks', href: '/code-tasks', icon: Bot, adminOnly: true, tooltip: 'Live view of Claude code sessions started from Slack — watch in real time, type to steer, and end a session. Admin only.' },
   // Operator tools consolidated into one hub page (2026-05-20) to shorten the
   // sidebar. The individual pages still live at their own URLs; the hub links to them.
   { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — system health, exceptions, client health, config, dev tools, portal launch.' },
