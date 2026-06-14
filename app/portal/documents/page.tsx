@@ -101,29 +101,27 @@ export default async function PortalDocumentsPage() {
     }
 
     // Flow-linked docs — queried independently of category so any SD-stamped
-    // document is grouped, then removed from Company/My to avoid duplicates.
-    // `documents.service_delivery_id` isn't in the generated Supabase types yet
-    // (added by the flow migration), so the client is cast for this query.
+    // document can be grouped, then removed from Company/My to avoid duplicates.
+    // We do NOT filter portal_visible in SQL: flow docs are written
+    // portal_visible=false by default and the client sees a CURATED allowlist of
+    // client-safe stages (isClientSafeFlowDoc) — the unsigned "Tax Return
+    // Prepared" draft is excluded. `service_delivery_id` / `flow_stage` aren't in
+    // the generated Supabase types yet (flow migration), so the client is cast.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: flowData } = await (supabaseAdmin as any)
       .from('documents')
-      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
       .eq('account_id', selectedAccountId)
       .not('service_delivery_id', 'is', null)
-      .eq('portal_visible', true)
       .order('created_at', { ascending: false })
       .limit(200)
-    const flowDocs = (flowData ?? []) as DocRow[]
+    const flowDocsRaw = (flowData ?? []) as (DocRow & { flow_stage: string | null; portal_visible: boolean | null })[]
 
-    if (flowDocs.length > 0) {
-      const flowIds = new Set(flowDocs.map(d => d.id))
-      companyDocs = companyDocs.filter(d => !flowIds.has(d.id))
-      myDocs = myDocs.filter(d => !flowIds.has(d.id))
-
-      // Resolve a client-facing title per service_delivery (e.g. "Tax Return
-      // 2025") from the SD's type + best-effort cycle year.
-      const sdIds = Array.from(new Set(flowDocs.map(d => d.service_delivery_id).filter((v): v is string => !!v)))
+    if (flowDocsRaw.length > 0) {
+      // Resolve each SD's type + a client-facing title ("Tax Return 2025").
+      const sdIds = Array.from(new Set(flowDocsRaw.map(d => d.service_delivery_id).filter((v): v is string => !!v)))
       const { deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
+      const { isClientSafeFlowDoc } = await import('@/lib/flows/flow-doc-visibility')
       const { data: sdRows } = await supabaseAdmin
         .from('service_deliveries')
         .select('id, service_type, service_name, due_date, stage_entered_at, created_at')
@@ -131,8 +129,19 @@ export default async function PortalDocumentsPage() {
       const sdMeta = new Map((sdRows ?? []).map(sd => {
         const year = deriveFlowYear(sd)
         const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
-        return [sd.id as string, title as string]
+        return [sd.id as string, { title: title as string, serviceType: sd.service_type as string | null }]
       }))
+
+      // CURATED visibility: keep only flow docs from client-safe stages (or any
+      // an admin explicitly published). The unsigned prepared return is dropped.
+      const flowDocs = flowDocsRaw.filter(d => {
+        const meta = d.service_delivery_id ? sdMeta.get(d.service_delivery_id) : undefined
+        return isClientSafeFlowDoc(meta?.serviceType, d.flow_stage, d.portal_visible)
+      })
+
+      const flowIds = new Set(flowDocs.map(d => d.id))
+      companyDocs = companyDocs.filter(d => !flowIds.has(d.id))
+      myDocs = myDocs.filter(d => !flowIds.has(d.id))
 
       // Group, preserving the newest-first order SDs first appear in.
       const order: string[] = []
@@ -144,7 +153,7 @@ export default async function PortalDocumentsPage() {
       }
       flowGroups = order.map(id => ({
         id,
-        title: sdMeta.get(id) ?? 'Service',
+        title: sdMeta.get(id)?.title ?? 'Service',
         docs: byId.get(id)!,
       }))
     }

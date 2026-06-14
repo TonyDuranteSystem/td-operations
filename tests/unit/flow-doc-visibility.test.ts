@@ -1,0 +1,43 @@
+/**
+ * Unit tests for isClientSafeFlowDoc (lib/flows/flow-doc-visibility.ts) — the
+ * curated allowlist deciding which flow-stamped documents the client portal
+ * shows. The critical case: the unsigned "Tax Return Prepared" draft must NEVER
+ * be exposed unless an admin explicitly published it (portal_visible=true).
+ */
+
+import { describe, it, expect } from 'vitest'
+import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
+
+describe('isClientSafeFlowDoc', () => {
+  it('always shows a doc an admin explicitly published (portal_visible=true)', () => {
+    // Even a normally-internal stage is shown once published.
+    expect(isClientSafeFlowDoc('Tax Return', 'Tax Return Prepared', true)).toBe(true)
+    expect(isClientSafeFlowDoc(null, null, true)).toBe(true)
+  })
+
+  it('shows client-safe Tax Return receipt/output stages', () => {
+    expect(isClientSafeFlowDoc('Tax Return', 'Extension Due', false)).toBe(true)
+    expect(isClientSafeFlowDoc('Tax Return', 'Filed with IRS', false)).toBe(true)
+    expect(isClientSafeFlowDoc('Tax Return', 'IRS Receipt Uploaded', false)).toBe(true)
+    expect(isClientSafeFlowDoc('Tax Return', 'Signed', false)).toBe(true)
+  })
+
+  it('HIDES the unsigned prepared return draft (the key privacy case)', () => {
+    expect(isClientSafeFlowDoc('Tax Return', 'Tax Return Prepared', false)).toBe(false)
+    expect(isClientSafeFlowDoc('Tax Return', 'Tax Return Prepared', null)).toBe(false)
+  })
+
+  it('shows AR and RA client-facing deliverables', () => {
+    expect(isClientSafeFlowDoc('State Annual Report', 'Due Date', false)).toBe(true)
+    expect(isClientSafeFlowDoc('State Annual Report', 'Filing Receipt Uploaded', false)).toBe(true)
+    expect(isClientSafeFlowDoc('State RA Renewal', 'Renewal Due', false)).toBe(true)
+    expect(isClientSafeFlowDoc('State RA Renewal', 'Document Uploaded', false)).toBe(true)
+  })
+
+  it('fails closed for unknown service types, unknown stages, and null flow_stage', () => {
+    expect(isClientSafeFlowDoc('Tax Return', 'Under Review', false)).toBe(false) // internal review stage
+    expect(isClientSafeFlowDoc('Mystery Service', 'Due Date', false)).toBe(false)
+    expect(isClientSafeFlowDoc('Tax Return', null, false)).toBe(false)
+    expect(isClientSafeFlowDoc(null, 'Due Date', false)).toBe(false)
+  })
+})
