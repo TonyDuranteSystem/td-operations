@@ -57,6 +57,13 @@ import {
   repoWebUrlFromRemote,
   compareUrl,
 } from "./deploy-utils.mjs"
+import { randomUUID } from "node:crypto"
+import { formatUserMessage, isEndSignal, eventToRow } from "./code-task-stream.mjs"
+
+// Interactive (live-viewer) session pacing.
+const INPUT_POLL_MS = 3000              // how often to drain admin-typed turns
+const IDLE_END_MS = 3 * 60 * 1000       // auto-end if no input this long after a turn finishes
+const INTERACTIVE_MAX_MS = 60 * 60 * 1000 // hard ceiling so a stuck session can't run forever
 
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
@@ -120,94 +127,86 @@ async function postToSlack(token, channelId, threadTs, text) {
 }
 
 /**
- * Run a headless Claude Code session with stream-json output. Resolves with
- * { ok, output } — never rejects (a non-zero exit, an is_error result, or a
- * spawn failure becomes ok=false with the captured detail so the caller can
- * report it and mark the row failed).
- *
- * stream-json emits newline-delimited JSON events in real time. We buffer stdout
- * on newlines and parse each line:
- *   - assistant tool_use events → a coarse progress milestone (deduped against
- *     the last posted one) handed to onMilestone(text) so the runner can post it
- *     to the Slack thread as the work happens.
- *   - the terminal `result` event → the final answer text + is_error flag. With
- *     stream-json the reply is HERE, not raw stdout, so we resolve from it (and
- *     fall back to stderr only if the session crashed before emitting a result).
- *
- * onMilestone is best-effort: it's wrapped so a Slack post failure can never
- * break parsing or the session.
- *
- * isPaused() — when it returns true (a code-task question is pending Antonio's
- * answer), the kill-timer deadline is pushed forward so a human reply delay
- * never kills in-progress work. The ask-antonio CLI's own self-cap bounds the
- * total wait, so this can't keep a stuck session alive forever.
- *
- * taskEnv — extra env vars merged into the spawned session's environment
- * (CODE_TASK_ID / CODE_TASK_QUESTION_CHANNEL / CODE_TASK_QUESTION_THREAD_TS) so
- * the ask-antonio CLI the session may run knows which task/thread it's in.
+ * INTERACTIVE session (item 3, model B). Runs the headless `claude` with bidirectional
+ * stream-json so the admin can watch it live and type into it from the CRM viewer:
+ *   - assigns a known sessionId (also surfaced on every event so the viewer can map);
+ *   - writes the initial instructions as the first stdin turn, then keeps stdin OPEN;
+ *   - persists every output event to code_task_events (seq-ordered) for the live tail;
+ *   - polls code_task_inputs and writes each admin turn into stdin (marks delivered);
+ *   - ends the session (EOF on stdin) on the END sentinel OR after IDLE_END_MS with no
+ *     input following a completed turn — then the caller pushes the branch.
+ * isPaused() (an ask-antonio question pending) suspends the idle auto-end. Never throws;
+ * resolves { ok, output } from the LAST result event (with stream-json the reply is there).
  */
-function runClaude(cfg, instructions, onMilestone, isPaused, taskEnv, workdir) {
+function runInteractiveClaude(cfg, opts) {
+  const { instructions, workdir, taskId, sessionId, supabase, onMilestone, isPaused, taskEnv } = opts
   return new Promise((resolve) => {
-    const args = ["--print", "--output-format", "stream-json", "--verbose"]
+    const args = [
+      "--print",
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--session-id", sessionId,
+    ]
     if (cfg.extraArgs) args.push(...cfg.extraArgs.split(/\s+/))
-    args.push(instructions)
-
-    let lineBuf = ""        // NDJSON line buffer (a chunk may split a JSON line)
-    let rawStdout = ""      // full raw stdout, kept only for crash diagnostics
-    let stderr = ""
-    let finalText = ""      // from the `result` event
-    let finalIsError = null // null = no result event seen yet
-    let lastMilestoneKey = null
-    let settled = false
 
     let child
     try {
-      child = spawn(cfg.claudeBin, args, { cwd: workdir || cfg.repoDir, env: { ...process.env, ...(taskEnv || {}) } })
+      child = spawn(cfg.claudeBin, args, { cwd: workdir, env: { ...process.env, ...(taskEnv || {}) } })
     } catch (e) {
       resolve({ ok: false, output: `Failed to launch ${cfg.claudeBin}: ${e?.message || String(e)}` })
       return
     }
 
-    // Deadline watchdog (replaces a fixed setTimeout) so the kill can be deferred
-    // while a question is pending. Each tick: if paused, push the deadline out a
-    // full window; else fire once the deadline passes.
-    let deadline = Date.now() + cfg.timeoutMs
-    const timer = setInterval(() => {
-      if (settled) return
-      if (typeof isPaused === "function" && isPaused()) {
-        deadline = Date.now() + cfg.timeoutMs
-        return
-      }
-      if (Date.now() < deadline) return
-      settled = true
-      clearInterval(timer)
-      try { child.kill("SIGKILL") } catch { /* ignore */ }
-      resolve({
-        ok: false,
-        output: `Code task timed out after ${Math.round(cfg.timeoutMs / 60000)} min.\n\nPartial output:\n${(finalText || stderr || rawStdout).slice(-4000)}`,
-      })
-    }, 5000)
+    let lineBuf = ""
+    let stderr = ""
+    let finalText = ""
+    let finalIsError = null
+    let seq = 0
+    let lastMilestoneKey = null
+    let settled = false
+    let ended = false
+    let idleTimer = null
 
-    // Parse one NDJSON line: surface a milestone (deduped) and/or capture the
-    // final result. Pure helpers (code-task-progress.mjs) do the shape-matching.
+    const writeTurn = (text) => { try { child.stdin.write(formatUserMessage(text)) } catch { /* stdin closed */ } }
+    const endSession = () => { if (!ended) { ended = true; try { child.stdin.end() } catch { /* ignore */ } } }
+    const armIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        if (typeof isPaused === "function" && isPaused()) { armIdle(); return } // a question is pending — wait
+        endSession()
+      }, IDLE_END_MS)
+    }
+
+    const persist = (s, row) => {
+      try {
+        void supabase
+          .from("code_task_events")
+          .insert({ task_id: taskId, seq: s, event_type: row.event_type, payload: row.payload })
+          .then(() => {}, () => {})
+      } catch { /* best-effort */ }
+    }
+
     function handleLine(line) {
       const ev = parseStreamLine(line)
       if (!ev) return
       const m = milestoneFromEvent(ev)
       if (m && m.key !== lastMilestoneKey) {
         lastMilestoneKey = m.key
-        if (typeof onMilestone === "function") {
-          try { onMilestone(m.text) } catch { /* best-effort — never break parsing */ }
-        }
+        if (typeof onMilestone === "function") { try { onMilestone(m.text) } catch { /* best-effort */ } }
       }
+      const row = eventToRow(ev)
+      if (row) persist(seq++, row)
       const f = finalResultFromEvent(ev)
-      if (f) { finalText = f.text; finalIsError = f.isError }
+      if (f) {
+        finalText = f.text
+        finalIsError = f.isError
+        armIdle() // a turn just finished — start the no-input countdown
+      }
     }
 
     child.stdout?.on("data", (d) => {
-      const s = d.toString()
-      rawStdout += s
-      lineBuf += s
+      lineBuf += d.toString()
       let idx
       while ((idx = lineBuf.indexOf("\n")) >= 0) {
         const line = lineBuf.slice(0, idx)
@@ -217,28 +216,56 @@ function runClaude(cfg, instructions, onMilestone, isPaused, taskEnv, workdir) {
     })
     child.stderr?.on("data", (d) => { stderr += d.toString() })
 
+    const markDelivered = (id) => {
+      try {
+        void supabase
+          .from("code_task_inputs")
+          .update({ status: "delivered", delivered_at: new Date().toISOString() })
+          .eq("id", id)
+          .then(() => {}, () => {})
+      } catch { /* best-effort */ }
+    }
+
+    // Drain admin-typed turns from the viewer into the live session.
+    const poller = setInterval(async () => {
+      if (ended || settled) return
+      try {
+        const { data } = await supabase
+          .from("code_task_inputs")
+          .select("id, seq, text")
+          .eq("task_id", taskId)
+          .eq("status", "pending")
+          .order("seq", { ascending: true })
+        for (const inp of data || []) {
+          if (isEndSignal(inp.text)) { markDelivered(inp.id); endSession(); break }
+          if (idleTimer) clearTimeout(idleTimer) // active input cancels the idle countdown
+          writeTurn(inp.text)
+          markDelivered(inp.id)
+        }
+      } catch { /* best-effort */ }
+    }, INPUT_POLL_MS)
+
+    const hardTimer = setTimeout(endSession, INTERACTIVE_MAX_MS)
+    const cleanup = () => { if (idleTimer) clearTimeout(idleTimer); clearInterval(poller); clearTimeout(hardTimer) }
+
     child.on("error", (e) => {
       if (settled) return
       settled = true
-      clearInterval(timer)
+      cleanup()
       resolve({ ok: false, output: `Spawn error: ${e?.message || String(e)}` })
     })
-
     child.on("close", (code) => {
       if (settled) return
       settled = true
-      clearInterval(timer)
-      // Flush a trailing line (the last JSON object may arrive without a newline).
+      cleanup()
       if (lineBuf.trim()) handleLine(lineBuf)
-      // Final answer comes from the `result` event; fall back to stderr / raw
-      // stdout only if the session crashed before emitting one.
-      const body = finalText.trim() || stderr.trim() || rawStdout.trim() || "(no output)"
-      // Fail on a non-zero exit OR a result event that flagged is_error (e.g. an
-      // auth 401 or max-turns can exit 0 yet be a genuine failure).
+      const body = finalText.trim() || stderr.trim() || "(no output)"
       const ok = code === 0 && finalIsError !== true
-      const output = ok ? body : finalIsError === true ? body : `Claude exited ${code}.\n${body}`
-      resolve({ ok, output })
+      resolve({ ok, output: ok ? body : finalIsError === true ? body : `Claude exited ${code}.\n${body}` })
     })
+
+    // Kick off the session with the task instructions as the first turn.
+    writeTurn(instructions)
   })
 }
 
@@ -499,6 +526,20 @@ async function tick(cfg) {
     return true
   }
 
+  // 2b-ii) INTERACTIVE SESSION — assign a known session id and store it on the row
+  // so the CRM viewer can map this task to its live transcript + accept typed input.
+  const sessionId = randomUUID()
+  try {
+    await supabase
+      .from("agent_messages")
+      .update({ context_json: { ...ctx, session_id: sessionId }, updated_at: new Date().toISOString() })
+      .eq("id", row.id)
+  } catch (e) {
+    log("session_id store failed", row.id, ":", e?.message || String(e))
+  }
+  const viewerBase = process.env.CODE_TASK_VIEWER_BASE_URL || "https://td-operations.vercel.app"
+  await postToSlack(cfg.slackToken, channelId, threadTs, `👁 Watch + type into this session live: ${viewerBase}/code-tasks/${row.id}`)
+
   // 2c) Arm progress heartbeats for the duration of runClaude. Each setTimeout
   // fires once at its elapsed mark (5 min, 10 min); all are cleared the moment
   // the session settles, so a sub-5-min task posts none. These genuinely fire
@@ -538,16 +579,18 @@ async function tick(cfg) {
   // line. Best-effort: postToSlack never throws.
   let result
   try {
-    result = await runClaude(
-      cfg,
+    result = await runInteractiveClaude(cfg, {
       instructions,
-      (text) => {
+      workdir: wtPath,
+      taskId: row.id,
+      sessionId,
+      supabase,
+      onMilestone: (text) => {
         void postToSlack(cfg.slackToken, channelId, threadTs, `${text} _${title}_`)
       },
-      () => questionPending,
+      isPaused: () => questionPending,
       taskEnv,
-      wtPath,
-    )
+    })
   } finally {
     for (const t of heartbeatTimers) clearTimeout(t)
     if (questionWatcher) clearInterval(questionWatcher)
@@ -618,7 +661,7 @@ async function tick(cfg) {
   // 5) Finalize the row.
   // Record the pushed branch on the row so the "ship it" promotion step can find
   // exactly this task's branch (null if nothing was pushed).
-  const ctxOut = { ...ctx, code_branch: branchPushed ? branch : null }
+  const ctxOut = { ...ctx, session_id: sessionId, code_branch: branchPushed ? branch : null }
   const update = ok
     ? { status: "done", reply: output.slice(0, 100000), context_json: ctxOut, replied_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     : { status: "failed", error_text: output.slice(0, 10000), context_json: ctxOut, updated_at: new Date().toISOString() }
