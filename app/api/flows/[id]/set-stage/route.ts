@@ -1,16 +1,16 @@
 /**
- * Move a flow (service_delivery) DIRECTLY to any stage — forward or backward —
- * for the flow Workspace clickable stepper.
+ * Move a flow (service_delivery) to any stage — forward or backward — for the
+ * flow Workspace clickable stepper. The stepper is a SHORTCUT for the action
+ * buttons + Go Back, so this fires ALL real side effects (it is NOT a silent
+ * move):
  *
- * setServiceDeliveryStage (lib/operations/service-delivery.ts) is the single
- * source of truth for this lightweight move: it sets stage / stage_order /
- * stage_entered_at, appends a stage_history entry, and keeps status coherent
- * (terminal target → completed + end_date; otherwise active + cleared
- * end_date). It deliberately does NOT create auto-tasks, notify the client,
- * delete documents, or run the renewal-date bump — those belong to the action
- * buttons (/advance) and Go Back (/revert), which are unchanged.
+ *   - FORWARD  → advanceServiceDelivery (auto-tasks + client notification +
+ *     completion incl. the +1-year renewal-date bump).
+ *   - BACKWARD → iterative revertServiceDelivery (deletes the re-opened stages'
+ *     documents + undoes the renewal-date bump when leaving "Closed").
  *
- * Body: { target_stage: string }
+ * All orchestration lives in moveServiceDeliveryToStage
+ * (lib/operations/move-stage.ts). Body: { target_stage: string }.
  * [id] = service_delivery_id.
  */
 
@@ -18,7 +18,7 @@ export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { setServiceDeliveryStage } from '@/lib/operations/service-delivery'
+import { moveServiceDeliveryToStage } from '@/lib/operations/move-stage'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: 'Missing target_stage' }, { status: 400 })
     }
 
-    const result = await setServiceDeliveryStage({
+    const result = await moveServiceDeliveryToStage({
       delivery_id: params.id,
       target_stage: targetStage,
       actor: 'flow-stepper',
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           ? 404
           : result.outcome === 'stage_not_found'
             ? 400
-            : 409
+            : 409 // requires_approval / error
       return NextResponse.json(
         { success: false, error: result.error || 'Could not move the flow.', outcome: result.outcome },
         { status },
@@ -55,9 +55,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({
       success: true,
       outcome: result.outcome,
+      direction: result.direction,
       to_stage: result.to_stage,
       to_order: result.to_order,
       completed: result.completed ?? false,
+      documents_deleted: result.documents_deleted ?? 0,
+      renewal_date_reverted: result.renewal_date_reverted ?? false,
     })
   } catch (e) {
     return NextResponse.json(

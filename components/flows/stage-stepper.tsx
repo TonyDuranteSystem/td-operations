@@ -24,11 +24,12 @@ interface StageStepperProps {
  * service_type in order: past stages get a checkmark, the current stage is
  * highlighted, future stages are dimmed.
  *
- * Clicking any stage (other than the current one) moves the SD directly to that
- * stage — forward or backward — via POST /api/flows/[id]/set-stage, after a
- * confirm. This is a manual staff position-correction control: it does NOT
- * create auto-tasks, notify the client, or delete documents (see
- * setServiceDeliveryStage). Surfaces the server's real error (R099).
+ * Clicking any stage (other than the current one) moves the SD to that stage —
+ * forward or backward — via POST /api/flows/[id]/set-stage, after a confirm.
+ * This is a SHORTCUT for the action buttons + Go Back: it fires the FULL side
+ * effects (forward → auto-tasks + client notification + completion/renewal bump;
+ * backward → deletes the re-opened stages' documents + undoes the renewal bump)
+ * via moveServiceDeliveryToStage. Surfaces the server's real error (R099).
  */
 export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageStepperProps) {
   const router = useRouter()
