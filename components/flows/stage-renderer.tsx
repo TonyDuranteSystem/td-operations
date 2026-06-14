@@ -1,5 +1,5 @@
 import type { StageLayout, StageComponent } from '@/lib/flows/stage-layout'
-import type { WorkspaceServiceDelivery, WorkspaceAccount } from './types'
+import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from './types'
 import { InfoPanel } from './info-panel'
 import { DocumentUpload } from './document-upload'
 import { DocumentViewer } from './document-viewer'
@@ -15,6 +15,8 @@ interface StageRendererProps {
   layout: StageLayout | null
   serviceDelivery: WorkspaceServiceDelivery
   account: WorkspaceAccount
+  /** 2nd installment invoice — present only on Tax Return "Awaiting 2nd Payment". */
+  secondInstallment?: WorkspaceInvoice | null
 }
 
 /** Placeholder for component types built in later slices (S2–S4). */
@@ -33,11 +35,12 @@ function renderComponent(
   index: number,
   serviceDelivery: WorkspaceServiceDelivery,
   account: WorkspaceAccount,
+  secondInstallment?: WorkspaceInvoice | null,
 ) {
   const key = `${component.type}-${index}`
   switch (component.type) {
     case 'info_panel':
-      return <InfoPanel key={key} serviceDelivery={serviceDelivery} account={account} />
+      return <InfoPanel key={key} serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
     case 'document_upload':
       return (
         <DocumentUpload
@@ -85,14 +88,14 @@ function renderComponent(
  * layout (e.g. CMRA, not yet migrated), degrades to a default Overview panel so
  * the Workspace is never blank.
  */
-export function StageRenderer({ layout, serviceDelivery, account }: StageRendererProps) {
+export function StageRenderer({ layout, serviceDelivery, account, secondInstallment }: StageRendererProps) {
   const components = layout?.components ?? []
 
   if (components.length === 0) {
     return (
       <div className="space-y-4">
         {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
-        <InfoPanel serviceDelivery={serviceDelivery} account={account} />
+        <InfoPanel serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
         <StubPanel type="(no stage_layout)" note="This stage has no layout configured yet." />
       </div>
     )
@@ -101,7 +104,7 @@ export function StageRenderer({ layout, serviceDelivery, account }: StageRendere
   return (
     <div className="space-y-4">
       {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
-      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account))}
+      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment))}
     </div>
   )
 }

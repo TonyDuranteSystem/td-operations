@@ -1,10 +1,24 @@
-import { Building2, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck } from 'lucide-react'
-import type { WorkspaceServiceDelivery, WorkspaceAccount } from './types'
+import { Building2, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink } from 'lucide-react'
+import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from './types'
 import { daysSince, formatUploadDate } from '@/lib/flows/workspace-format'
 
 interface InfoPanelProps {
   serviceDelivery: WorkspaceServiceDelivery
   account: WorkspaceAccount
+  /** 2nd installment invoice — shown only on Tax Return "Awaiting 2nd Payment". */
+  secondInstallment?: WorkspaceInvoice | null
+}
+
+/** Format an invoice amount + currency, e.g. "$849.00". Falls back to a plain
+ *  "amount currency" string if the currency code isn't a valid ISO code. */
+function formatMoney(amount: number | null, currency: string | null): string {
+  if (amount == null) return '—'
+  const code = currency ?? 'USD'
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(amount)
+  } catch {
+    return `${amount} ${code}`
+  }
 }
 
 function Row({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
@@ -23,7 +37,7 @@ function Row({ icon, label, value }: { icon: React.ReactNode; label: string; val
  * Overview card for a flow Workspace: company, current stage, time-in-stage,
  * deadline (if any) and assignee. Pure display — no interactivity.
  */
-export function InfoPanel({ serviceDelivery: sd, account }: InfoPanelProps) {
+export function InfoPanel({ serviceDelivery: sd, account, secondInstallment }: InfoPanelProps) {
   const days = daysSince(sd.stage_entered_at)
   const stageLabel = sd.stage ?? '—'
   const clientLabel = sd.current_client_label
@@ -92,6 +106,59 @@ export function InfoPanel({ serviceDelivery: sd, account }: InfoPanelProps) {
           />
         )}
       </div>
+
+      {/* 2nd installment invoice — Awaiting 2nd Payment stage only. */}
+      {sd.stage === 'Awaiting 2nd Payment' && (
+        <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wide text-zinc-500">
+            <Receipt className="h-3.5 w-3.5" />
+            2nd Installment Invoice
+          </div>
+          {secondInstallment ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-zinc-900">
+                  Invoice {secondInstallment.invoice_number ? `#${secondInstallment.invoice_number}` : '—'}
+                </span>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                    secondInstallment.is_paid
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}
+                >
+                  {secondInstallment.is_paid
+                    ? 'Paid'
+                    : `Unpaid${secondInstallment.invoice_status ? ` · ${secondInstallment.invoice_status}` : ''}`}
+                </span>
+              </div>
+              <div className="text-sm text-zinc-700">
+                {formatMoney(secondInstallment.amount, secondInstallment.currency)}
+                {secondInstallment.is_paid
+                  ? secondInstallment.paid_date && (
+                      <span className="text-zinc-400"> · paid {formatUploadDate(secondInstallment.paid_date)}</span>
+                    )
+                  : secondInstallment.due_date && (
+                      <span className="text-zinc-400"> · due {secondInstallment.due_date}</span>
+                    )}
+              </div>
+              <a
+                href={`/api/invoices/${secondInstallment.id}/pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-700"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                View invoice
+              </a>
+            </div>
+          ) : (
+            <p className="text-sm text-zinc-500">
+              No 2nd installment invoice found for {new Date().getFullYear()} yet.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

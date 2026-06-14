@@ -7,7 +7,7 @@ import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { GoBackButton } from '@/components/flows/go-back-button'
-import type { WorkspaceServiceDelivery, WorkspaceAccount } from '@/components/flows/types'
+import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,6 +89,36 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     client_label: s.client_label,
   }))
 
+  // 2nd installment invoice — only on the Tax Return "Awaiting 2nd Payment"
+  // stage, where staff need to see the invoice the client must pay. Created by
+  // the annual-installments cron in `payments` (payment_category='installment_2'
+  // for the current calendar year). Scoped to this stage so no other stage/flow
+  // pays the extra query.
+  let secondInstallment: WorkspaceInvoice | null = null
+  if (sd.service_type === 'Tax Return' && sd.stage === 'Awaiting 2nd Payment' && sd.account_id) {
+    const { data: inv } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, invoice_status, status, amount, amount_currency, due_date, paid_date')
+      .eq('account_id', sd.account_id)
+      .eq('payment_category', 'installment_2')
+      .eq('year', new Date().getFullYear())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (inv) {
+      secondInstallment = {
+        id: inv.id as string,
+        invoice_number: (inv.invoice_number as string | null) ?? null,
+        invoice_status: (inv.invoice_status as string | null) ?? null,
+        amount: (inv.amount as number | null) ?? null,
+        currency: (inv.amount_currency as string | null) ?? null,
+        due_date: (inv.due_date as string | null) ?? null,
+        paid_date: (inv.paid_date as string | null) ?? null,
+        is_paid: inv.paid_date != null || inv.status === 'Paid',
+      }
+    }
+  }
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
       {/* Back link */}
@@ -128,7 +158,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       </div>
 
       {/* Stage content from stage_layout */}
-      <StageRenderer layout={layout} serviceDelivery={serviceDelivery} account={account} />
+      <StageRenderer layout={layout} serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
 
       {/* Go Back — every stage except the first */}
       {previousStageRow && (
