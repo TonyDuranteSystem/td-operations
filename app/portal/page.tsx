@@ -771,14 +771,18 @@ export default async function PortalDashboardPage() {
           </h2>
           {flowsForStatus.map(f =>
             f.steps ? (
-              <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} />
+              <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} />
             ) : (
-              <div key={f.id} className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2">
+              <Link
+                key={f.id}
+                href={`/portal/flows/${f.id}`}
+                className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2 hover:border-zinc-300 transition-colors"
+              >
                 <span className="text-sm font-medium text-zinc-900">{f.title}</span>
                 <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
                   {locale === 'it' ? 'Attivo' : 'Active'}
                 </span>
-              </div>
+              </Link>
             )
           )}
         </div>

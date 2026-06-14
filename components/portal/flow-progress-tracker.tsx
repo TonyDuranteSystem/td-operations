@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { Check } from 'lucide-react'
+import Link from 'next/link'
+import { Check, ChevronRight } from 'lucide-react'
 import type { FlowStep } from '@/lib/flows/flow-progress'
 
 /**
@@ -18,9 +19,12 @@ import type { FlowStep } from '@/lib/flows/flow-progress'
 export function FlowProgressTracker({
   title,
   steps,
+  href,
 }: {
   title: string
   steps: FlowStep[]
+  /** When set, the title links to the flow detail page with a "details" chevron. */
+  href?: string
 }) {
   const currentRef = useRef<HTMLLIElement | null>(null)
 
@@ -30,9 +34,19 @@ export function FlowProgressTracker({
 
   return (
     <div className="bg-white rounded-xl border shadow-sm p-5">
-      <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4">
-        {title}
-      </h2>
+      {href ? (
+        <Link
+          href={href}
+          className="group mb-4 flex items-center justify-between gap-2 text-sm font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800"
+        >
+          <span>{title}</span>
+          <ChevronRight className="h-4 w-4 text-zinc-400 group-hover:text-zinc-700" />
+        </Link>
+      ) : (
+        <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4">
+          {title}
+        </h2>
+      )}
       <div className="overflow-x-auto pb-2 -mx-1 px-1">
         <ol className="flex items-start min-w-max" aria-label={title}>
           {steps.map((step, i) => (
