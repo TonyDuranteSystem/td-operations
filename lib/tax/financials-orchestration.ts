@@ -15,6 +15,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 import { buildFinancialDraft, type DraftTransaction, type FinancialDraft } from "./financials-engine"
 import { evaluateGates, canConfirm, type GateResult } from "./verification-gates"
 import { resolveOwnership, type OwnershipResolution, type OwnershipSource } from "./ownership-resolution"
@@ -83,13 +84,15 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const submittedData = sub?.submitted_data ?? {}
   const priorReturn = sub?.prior_return_extracted ?? null
 
-  const { data: txRows, error: txErr } = await supabaseAdmin
-    .from("bank_transactions")
-    .select("id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, balance_after")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-  if (txErr) throw new Error(`Failed to load transactions: ${txErr.message}`)
-  const transactions = (txRows ?? []).map(r => ({ ...r, amount: Number(r.amount) })) as DraftTransaction[]
+  // Paginated read — buildFinancialDraft re-sorts internally, so `id` order is
+  // fine here; the point is to get EVERY row past the 1000-row cap (a >1000-tx
+  // account otherwise had its P&L/BS/gates computed on a truncated set).
+  const txRows = await fetchAllBankTransactionsByYear<Record<string, unknown>>(
+    accountId,
+    taxYear,
+    "id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, balance_after",
+  )
+  const transactions = txRows.map(r => ({ ...r, amount: Number(r.amount) })) as DraftTransaction[]
 
   const { data: links } = await supabaseAdmin
     .from("account_contacts")

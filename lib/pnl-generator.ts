@@ -12,6 +12,10 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
+import type { Database } from "@/lib/database.types"
+
+type BankTxRow = Database["public"]["Tables"]["bank_transactions"]["Row"]
 
 interface MemberInfo {
   name: string
@@ -134,26 +138,26 @@ export async function generatePnlExcel(
 ): Promise<PnlResult> {
   const ctx = await getAccountContext(accountId)
 
-  // Get current year transactions
-  const { data: transactions, error } = await supabaseAdmin
-    .from("bank_transactions")
-    .select("*")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-    .order("transaction_date", { ascending: true })
+  // Get current year transactions (paginated past the 1000-row cap; ordered by
+  // date so computeAccountBalances picks the true year-end balance_after).
+  const transactions = await fetchAllBankTransactionsByYear<BankTxRow>(
+    accountId,
+    taxYear,
+    "*",
+    { column: "transaction_date", ascending: true },
+  )
 
-  if (error) throw new Error(error.message)
-  if (!transactions || transactions.length === 0) {
+  if (transactions.length === 0) {
     throw new Error("No transactions found. Run bank_statement_process first.")
   }
 
   // Get prior year transactions (for comparative balance sheet)
-  const { data: priorTransactions } = await supabaseAdmin
-    .from("bank_transactions")
-    .select("*")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear - 1)
-    .order("transaction_date", { ascending: true })
+  const priorTransactions = await fetchAllBankTransactionsByYear<BankTxRow>(
+    accountId,
+    taxYear - 1,
+    "*",
+    { column: "transaction_date", ascending: true },
+  )
 
   const hasPriorYear = (priorTransactions?.length || 0) > 0
 
@@ -436,15 +440,14 @@ export async function generatePnlCsv(
 ): Promise<{ pnlCsv: string; balanceSheetCsv: string; transactionsCsv: string; companyName: string }> {
   const ctx = await getAccountContext(accountId)
 
-  const { data: transactions, error } = await supabaseAdmin
-    .from("bank_transactions")
-    .select("*")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-    .order("transaction_date", { ascending: true })
+  const transactions = await fetchAllBankTransactionsByYear<BankTxRow>(
+    accountId,
+    taxYear,
+    "*",
+    { column: "transaction_date", ascending: true },
+  )
 
-  if (error) throw new Error(error.message)
-  if (!transactions || transactions.length === 0) {
+  if (transactions.length === 0) {
     throw new Error("No transactions found. Run bank_statement_process first.")
   }
 
@@ -518,12 +521,12 @@ export async function generatePnlCsv(
   const csvTotalAssets = totalCash
 
   // Get prior year for CSV too
-  const { data: csvPriorTx } = await supabaseAdmin
-    .from("bank_transactions")
-    .select("bank_name, account_type, balance_after, category, amount")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear - 1)
-    .order("transaction_date", { ascending: true })
+  const csvPriorTx = await fetchAllBankTransactionsByYear<BankTxRow>(
+    accountId,
+    taxYear - 1,
+    "bank_name, account_type, balance_after, category, amount",
+    { column: "transaction_date", ascending: true },
+  )
 
   const csvHasPrior = (csvPriorTx?.length || 0) > 0
   const csvPriorBalances = csvHasPrior ? computeAccountBalances(csvPriorTx!) : {}

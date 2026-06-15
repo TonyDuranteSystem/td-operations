@@ -16,6 +16,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 
 // bank_categorization_rules is new (migration 20260611-1400/-1700) and not yet
 // in the generated database.types.ts — same untyped-client pattern as
@@ -112,6 +113,24 @@ export interface RecategorizeOptions {
   aiOptions?: AiCategorizeOptions
 }
 
+/** The bank_transactions columns this engine reads (matches the select below). */
+interface CategorizableRow {
+  id: string
+  transaction_date: string
+  description: string | null
+  counterparty: string | null
+  amount: number | string
+  currency: string | null
+  balance_after: number | null
+  transaction_ref: string | null
+  bank_name: string | null
+  account_type: string | null
+  category: string
+  subcategory: string | null
+  is_related_party: boolean | null
+  notes: string | null
+}
+
 /**
  * Re-categorize an account's tax-year transactions: rules pass + transfer-pair
  * pass (+ optional AI-assist pass), persisting only changed rows. Run after
@@ -127,13 +146,15 @@ export async function recategorizeAccountYear(
   taxYear: number,
   opts?: RecategorizeOptions,
 ): Promise<RecategorizeResult> {
-  const { data: rows, error } = await supabaseAdmin
-    .from("bank_transactions")
-    .select("id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes")
-    .eq("account_id", accountId)
-    .eq("tax_year", taxYear)
-  if (error) throw new Error(`Failed to load transactions: ${error.message}`)
-  if (!rows || rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
+  // Paginated read — a >1000-tx account otherwise had only the first 1000 rows
+  // recategorized, leaving the rest uncategorized and breaking transfer-pair
+  // matching across the full year.
+  const rows = await fetchAllBankTransactionsByYear<CategorizableRow>(
+    accountId,
+    taxYear,
+    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes",
+  )
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
 
   const rules = await getCategorizationRules(accountId)
 
