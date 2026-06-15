@@ -32,6 +32,37 @@ describe('computePnlTotals', () => {
     expect(t.totalExpenses).toBe(1150)
   })
 
+  it('F4: a POSITIVE amount inside the expense category is a contra-expense and REDUCES the total', () => {
+    // Antonio's Uxio case: a vendor payment (-4002) later reversed (+4002).
+    // The pair must net to zero expense, not be double-counted by Math.abs.
+    const t = computePnlTotals([
+      tx('expense', -4002),
+      tx('expense', 4002), // money returned / reversal
+    ])
+    expect(t.totalExpenses).toBe(0)
+  })
+
+  it('F4: returned money nets down a real expense total (no abs double-count)', () => {
+    const t = computePnlTotals([
+      tx('income', 10000),
+      tx('expense', -1000),
+      tx('expense', -2000),
+      tx('expense', 500), // partial refund from a vendor
+    ])
+    expect(t.totalExpenses).toBe(2500) // 1000 + 2000 − 500, NOT 3500
+    expect(t.netIncome).toBe(7500)
+  })
+
+  it('F4: a COGS refund reduces COGS rather than inflating it', () => {
+    const t = computePnlTotals([
+      tx('income', 5000),
+      tx('cogs', -2000),
+      tx('cogs', 300), // supplier credit
+    ])
+    expect(t.totalCogs).toBe(1700)
+    expect(t.grossProfit).toBe(3300)
+  })
+
   it('F3: contributions are excluded from revenue and tracked separately', () => {
     const t = computePnlTotals([
       tx('income', 5000),

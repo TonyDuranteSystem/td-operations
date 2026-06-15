@@ -94,13 +94,20 @@ export function computePnlTotals(txs: Array<{ category: string; amount: number |
   const uncategorized = txs.filter(t => t.category === "uncategorized")
 
   const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
-  const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  // F4 fix (2026-06-15): expenses and COGS are SIGNED, not Math.abs. Outflows
+  // are negative, so the magnitude is the NEGATED signed sum. A positive amount
+  // inside an expense/COGS category is money RETURNED (a vendor refund or a
+  // reversal) and is a contra-expense — it must REDUCE the total, exactly as a
+  // sales return reduces net revenue. The old Math.abs() flipped a returned
+  // +$X into +$X of spending, double-counting it (Uxio: 3 Aurora reversals
+  // totalling +$9,006 overstated expenses by $18,012 and understated net income
+  // by the same). Contra-expense treatment per QuickBooks / standard accounting.
+  const totalCogs = -cogs.reduce((s, t) => s + Number(t.amount), 0)
   const grossProfit = totalIncome - totalCogs
-  // F1 fix: refunds are SIGNED. A refund received (inflow, amount > 0)
-  // REDUCES expenses; a refund paid out (outflow) increases them. The old
-  // Math.abs() made received refunds inflate expenses.
+  // Refunds in the dedicated `refund` category are SIGNED too: a refund received
+  // (inflow, amount > 0) REDUCES expenses; a refund paid out (outflow) increases.
   const totalExpenses =
-    expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0) +
+    -expenses.reduce((s, t) => s + Number(t.amount), 0) +
     refunds.reduce((s, t) => s - Number(t.amount), 0)
   const netIncome = grossProfit - totalExpenses
   const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
