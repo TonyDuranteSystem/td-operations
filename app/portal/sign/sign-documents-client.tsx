@@ -128,13 +128,12 @@ function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }
 export function SignDocumentsClient({ documents, companyName }: Props) {
   const { locale } = useLocale()
 
-  // Split into what the client must act on vs. what's already done. The page
-  // builds the full list (OA / Lease / SS-4 / MSA / 8832 / generic signature
-  // requests incl. the flow Tax Return); here we surface the PENDING ones
-  // prominently and tuck the already-signed ones into a collapsed section so a
-  // client arriving from "Sign your tax return" sees only what needs signing.
+  // Show ONLY what the client must act on. The page builds the full list (OA /
+  // Lease / SS-4 / MSA / 8832 / generic signature requests incl. the flow Tax
+  // Return); already-signed documents are hidden entirely here — a client
+  // arriving from "Sign your tax return" sees only what needs signing. (Unsent
+  // drafts are already excluded upstream in page.tsx.)
   const pending = documents.filter(d => d.status !== 'signed')
-  const signed = documents.filter(d => d.status === 'signed')
   const allSigned = documents.length > 0 && pending.length === 0
 
   return (
@@ -178,19 +177,6 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
             {pending.map((doc) => <DocCard key={doc.href} doc={doc} locale={locale} />)}
           </div>
         </div>
-      )}
-
-      {/* Already signed — collapsed by default, available on expand */}
-      {signed.length > 0 && (
-        <details className="mb-8 group">
-          <summary className="cursor-pointer list-none flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-zinc-400 hover:text-zinc-600 select-none">
-            <ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" />
-            {locale === 'it' ? `Già firmati (${signed.length})` : `Already signed (${signed.length})`}
-          </summary>
-          <div className="space-y-4 mt-3 opacity-80">
-            {signed.map((doc) => <DocCard key={doc.href} doc={doc} locale={locale} />)}
-          </div>
-        </details>
       )}
 
       {/* Empty state — nothing pending and nothing signed */}
