@@ -161,6 +161,7 @@ export async function POST(req: NextRequest) {
       summary: `Fax sent to ${faxno} — ${fileName}`,
       details: {
         faxno,
+        recip_name: recipName || null,
         file_name: fileName,
         job_id: result.jobId,
         cover_message: coverMessage || null,

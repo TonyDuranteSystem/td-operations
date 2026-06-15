@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { Loader2, Send, Upload, FileText, CheckCircle2 } from 'lucide-react'
+import { Loader2, Send, Upload, FileText, CheckCircle2, History } from 'lucide-react'
 import { toast } from 'sonner'
 
 const MAX_FILE_MB = 10
@@ -114,12 +115,20 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         </div>
         <p className="text-sm text-green-700">The fax was submitted to Faxage for delivery.</p>
         <p className="text-xs text-green-600 mt-2 break-words font-mono">{sent}</p>
-        <button
-          onClick={() => { setSent(null); setFile(null); setDocumentId('') }}
-          className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700"
-        >
-          Send another fax
-        </button>
+        <div className="mt-4 flex items-center gap-4">
+          <button
+            onClick={() => { setSent(null); setFile(null); setDocumentId('') }}
+            className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            Send another fax
+          </button>
+          <Link
+            href="/tools/fax/history"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            <History className="h-3.5 w-3.5" /> View Fax History
+          </Link>
+        </div>
       </div>
     )
   }

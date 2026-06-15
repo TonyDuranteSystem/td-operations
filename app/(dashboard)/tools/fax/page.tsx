@@ -1,4 +1,6 @@
 import { Suspense } from 'react'
+import Link from 'next/link'
+import { History } from 'lucide-react'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -32,11 +34,19 @@ export default async function FaxToolPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-2xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Send a Fax</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Send a document by fax via Faxage. Enter the recipient fax number, attach a file or pick a recent document, and send.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Send a Fax</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Send a document by fax via Faxage. Enter the recipient fax number, attach a file or pick a recent document, and send.
+          </p>
+        </div>
+        <Link
+          href="/tools/fax/history"
+          className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 shrink-0"
+        >
+          <History className="h-4 w-4" /> Fax History
+        </Link>
       </div>
       <Suspense fallback={<div className="rounded-xl border bg-white p-6 text-sm text-muted-foreground">Loading…</div>}>
         <FaxForm recentDocuments={recentDocuments} irsNumber={irsNumber} />

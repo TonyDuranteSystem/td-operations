@@ -22,6 +22,8 @@ interface ToolTile {
   icon: LucideIcon
   adminOnly?: boolean
   comingSoon?: boolean
+  /** Optional secondary action links rendered as buttons at the bottom of the card. */
+  links?: { label: string; href: string }[]
 }
 
 // The operator tools, gathered out of the main sidebar into one hub.
@@ -31,6 +33,10 @@ const TOOLS: ToolTile[] = [
     href: '/tools/fax',
     description: 'Send a document by fax via Faxage — enter a number, attach a file, send.',
     icon: Printer,
+    links: [
+      { label: 'Send Fax', href: '/tools/fax' },
+      { label: 'Fax History', href: '/tools/fax/history' },
+    ],
   },
   {
     name: 'E-Sign',
@@ -135,6 +141,26 @@ export default async function ToolsPage() {
             return (
               <div key={tool.href} className="rounded-lg border bg-white p-5 opacity-60 cursor-default">
                 {inner}
+              </div>
+            )
+          }
+          // Tiles with multiple actions render secondary link buttons instead of
+          // wrapping the whole card in a single <Link> (no nested anchors).
+          if (tool.links && tool.links.length > 0) {
+            return (
+              <div key={tool.href} className="group rounded-lg border bg-white p-5 hover:border-blue-300 hover:shadow-sm transition-all">
+                {inner}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {tool.links.map(link => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className="inline-flex items-center rounded-md border px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                </div>
               </div>
             )
           }

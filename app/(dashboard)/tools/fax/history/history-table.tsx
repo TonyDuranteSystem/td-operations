@@ -1,0 +1,165 @@
+'use client'
+
+import { useState } from 'react'
+import { Loader2, FileText, RefreshCw, Download } from 'lucide-react'
+import { toast } from 'sonner'
+
+export interface FaxHistoryRow {
+  id: string
+  createdAt: string | null
+  faxno: string
+  recipName: string | null
+  fileName: string
+  jobId: string | null
+  /** Send-time outcome recorded in action_log ('submitted' once accepted). */
+  source: string | null
+}
+
+type LiveStatus = 'delivered' | 'pending' | 'failed' | 'unknown'
+
+interface StatusState {
+  loading: boolean
+  status?: LiveStatus
+  pages?: string
+  xmitTime?: string
+  completeTime?: string
+  error?: string
+}
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+}
+
+const STATUS_STYLES: Record<LiveStatus, string> = {
+  delivered: 'bg-green-100 text-green-700',
+  pending: 'bg-amber-100 text-amber-700',
+  failed: 'bg-red-100 text-red-700',
+  unknown: 'bg-zinc-100 text-zinc-600',
+}
+
+const STATUS_LABEL: Record<LiveStatus, string> = {
+  delivered: 'Delivered',
+  pending: 'Pending',
+  failed: 'Failed',
+  unknown: 'Unknown',
+}
+
+export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
+  const [statuses, setStatuses] = useState<Record<string, StatusState>>({})
+
+  const checkStatus = async (jobId: string) => {
+    setStatuses(prev => ({ ...prev, [jobId]: { loading: true } }))
+    try {
+      const res = await fetch(`/api/tools/fax/status?jobId=${encodeURIComponent(jobId)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not check status.')
+      const rec = Array.isArray(data.records) ? data.records[0] : undefined
+      if (!rec) {
+        setStatuses(prev => ({ ...prev, [jobId]: { loading: false, status: 'unknown' } }))
+        toast.message('No status record yet for this job.')
+        return
+      }
+      setStatuses(prev => ({
+        ...prev,
+        [jobId]: {
+          loading: false,
+          status: rec.status as LiveStatus,
+          pages: rec.pageCount,
+          xmitTime: rec.xmitTime,
+          completeTime: rec.completeTime,
+        },
+      }))
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Could not check status.'
+      setStatuses(prev => ({ ...prev, [jobId]: { loading: false, error: message } }))
+      toast.error(message)
+    }
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-xl border bg-white p-10 text-center text-sm text-muted-foreground">
+        No faxes have been sent yet. Sent faxes will appear here.
+      </div>
+    )
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border bg-white">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
+            <th className="px-4 py-3 font-medium">Date</th>
+            <th className="px-4 py-3 font-medium">Recipient</th>
+            <th className="px-4 py-3 font-medium">Document</th>
+            <th className="px-4 py-3 font-medium">Status</th>
+            <th className="px-4 py-3 font-medium">Job ID</th>
+            <th className="px-4 py-3 font-medium text-right">Receipt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => {
+            const st = row.jobId ? statuses[row.jobId] : undefined
+            return (
+              <tr key={row.id} className="border-b last:border-0 hover:bg-zinc-50/60">
+                <td className="px-4 py-3 whitespace-nowrap text-zinc-700">{fmtDate(row.createdAt)}</td>
+                <td className="px-4 py-3">
+                  <div className="font-medium text-zinc-800">{row.recipName || '—'}</div>
+                  <div className="text-xs text-zinc-500 font-mono">{row.faxno}</div>
+                </td>
+                <td className="px-4 py-3">
+                  <span className="inline-flex items-center gap-1.5 text-zinc-700">
+                    <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                    <span className="truncate max-w-[220px]">{row.fileName}</span>
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  {st?.status ? (
+                    <div className="space-y-0.5">
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[st.status]}`}>
+                        {STATUS_LABEL[st.status]}
+                      </span>
+                      {(st.pages || st.xmitTime) && (
+                        <div className="text-[11px] text-zinc-400">
+                          {st.pages ? `${st.pages} pg` : ''}{st.pages && st.xmitTime ? ' · ' : ''}{st.xmitTime || ''}
+                        </div>
+                      )}
+                    </div>
+                  ) : row.jobId ? (
+                    <button
+                      onClick={() => checkStatus(row.jobId as string)}
+                      disabled={st?.loading}
+                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+                    >
+                      {st?.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                      Check status
+                    </button>
+                  ) : (
+                    <span className="text-xs text-zinc-400">Submitted</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{row.jobId || '—'}</td>
+                <td className="px-4 py-3 text-right">
+                  {row.jobId ? (
+                    <a
+                      href={`/api/tools/fax/receipt/${encodeURIComponent(row.jobId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                    >
+                      <Download className="h-3 w-3" /> Receipt
+                    </a>
+                  ) : (
+                    <span className="text-xs text-zinc-400">—</span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
