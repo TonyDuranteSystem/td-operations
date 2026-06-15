@@ -80,7 +80,10 @@ interface SidebarProps {
 }
 
 const STORAGE_KEY = 'td-sidebar-order'
-const STORAGE_KEY_V2 = 'td-sidebar-order-v2'
+// Bumped v2→v3 on 2026-06-15: the previous saved order pinned 'tools' at the
+// bottom (below the scroll fold). Bumping the key resets everyone to the new
+// default once, surfacing Tools in the Pipeline cluster.
+const STORAGE_KEY_V2 = 'td-sidebar-order-v3'
 
 const defaultNavigation: NavItem[] = [
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
@@ -96,6 +99,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
   { id: 'pipeline-overview', name: 'Pipeline Overview', href: '/pipeline-overview', icon: LayoutGrid, tooltip: 'All active service deliveries across every pipeline in one view — oldest cards surface first.' },
+  { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — fax, e-sign, system health, exceptions, client health, config, dev tools, portal launch.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
@@ -116,9 +120,8 @@ const defaultNavigation: NavItem[] = [
   { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
   { id: 'code-tasks', name: 'Code Tasks', href: '/code-tasks', icon: Bot, adminOnly: true, tooltip: 'Live view of Claude code sessions started from Slack — watch in real time, type to steer, and end a session. Admin only.' },
-  // Operator tools consolidated into one hub page (2026-05-20) to shorten the
-  // sidebar. The individual pages still live at their own URLs; the hub links to them.
-  { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — system health, exceptions, client health, config, dev tools, portal launch.' },
+  // NOTE: 'tools' lives up in the Pipeline cluster (moved 2026-06-15 — it was
+  // buried last, below the scroll fold, so it read as "missing").
 ]
 
 function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
