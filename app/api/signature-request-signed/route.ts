@@ -121,6 +121,59 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 1b. Guaranteed flow-document registration (Drive-independent).
+    //
+    // The Drive upload above can fail — sandbox has no working Drive, an account
+    // may lack a drive_folder_id, or the API can hiccup — and its error is
+    // swallowed, leaving the signed PDF with NO `documents` row, so it never
+    // appears in the flow Workspace document viewer (the SD still advances to
+    // "Signed" via step 4, which is why this gap was invisible).
+    //
+    // For a flow-bound signature, register the signed PDF as a `documents` row
+    // served from storage (long-lived signed URL on the signed-documents bucket),
+    // stamped with the SD + flow_stage="Signed". Idempotent: skips if the Drive
+    // path already created the Signed doc for this SD, so production (where Drive
+    // works) does not get a duplicate.
+    if (sigReq.signed_pdf_path && sigReq.service_delivery_id) {
+      try {
+        const fileName = `${sigReq.document_name} - Signed.pdf`
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: existingDoc } = await (supabaseAdmin as any)
+          .from("documents")
+          .select("id")
+          .eq("service_delivery_id", sigReq.service_delivery_id)
+          .eq("flow_stage", "Signed")
+          .eq("file_name", fileName)
+          .maybeSingle()
+
+        if (existingDoc) {
+          results.push("flow_doc: exists")
+        } else {
+          const { data: signedUrl } = await supabaseAdmin.storage
+            .from("signed-documents")
+            .createSignedUrl(sigReq.signed_pdf_path, 60 * 60 * 24 * 365) // 1 year
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabaseAdmin as any).from("documents").insert({
+            account_id: sigReq.account_id,
+            contact_id: sigReq.contact_id,
+            file_name: fileName,
+            document_type_name: sigReq.document_name,
+            category: 5, // Correspondence — matches the Drive-path autoSaveDocument
+            drive_file_id: `storage:signed-documents/${sigReq.signed_pdf_path}`,
+            drive_link: signedUrl?.signedUrl ?? null,
+            service_delivery_id: sigReq.service_delivery_id,
+            flow_stage: "Signed",
+            portal_visible: true,
+            notify_client: false,
+          })
+          results.push("flow_doc: created")
+        }
+      } catch (err) {
+        results.push(`flow_doc: error - ${err instanceof Error ? err.message : "unknown"}`)
+      }
+    }
+
     // 2. Send email notification to support@
     try {
       const { gmailPost } = await import("@/lib/gmail")
