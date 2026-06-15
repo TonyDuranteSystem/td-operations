@@ -264,8 +264,10 @@ export async function generatePnlExcel(
   if (cogs.length > 0) {
     addRow(plSheet, "COST OF SERVICES", 0, true)
     const cogsBySubcat: Record<string, number> = {}
-    for (const t of cogs) { cogsBySubcat[t.subcategory || "other"] = (cogsBySubcat[t.subcategory || "other"] || 0) + Math.abs(Number(t.amount)) }
-    for (const [sub, amt] of Object.entries(cogsBySubcat)) addRow(plSheet, sub.replace(/_/g, " "), -amt, false, 1)
+    // SIGNED (F4): a supplier credit (positive) nets down its subcategory, so
+    // the displayed line items reconcile to the corrected Total COGS.
+    for (const t of cogs) { cogsBySubcat[t.subcategory || "other"] = (cogsBySubcat[t.subcategory || "other"] || 0) + Number(t.amount) }
+    for (const [sub, amt] of Object.entries(cogsBySubcat)) addRow(plSheet, sub.replace(/_/g, " "), amt, false, 1)
     addRow(plSheet, "Total COGS", -totalCogs, true)
     plSheet.addRow({})
   }
@@ -276,8 +278,11 @@ export async function generatePnlExcel(
   // Expenses
   addRow(plSheet, "OPERATING EXPENSES", 0, true)
   const expBySubcat: Record<string, number> = {}
-  for (const t of expenses) { expBySubcat[t.subcategory || "other"] = (expBySubcat[t.subcategory || "other"] || 0) + Math.abs(Number(t.amount)) }
-  for (const [sub, amt] of Object.entries(expBySubcat)) addRow(plSheet, sub.replace(/_/g, " "), -amt, false, 1)
+  // SIGNED (F4): returned money (positive) nets DOWN its subcategory, so the
+  // displayed line items sum exactly to the corrected Total Operating Expenses
+  // (with Math.abs a reversal showed as extra spend AND broke the reconciliation).
+  for (const t of expenses) { expBySubcat[t.subcategory || "other"] = (expBySubcat[t.subcategory || "other"] || 0) + Number(t.amount) }
+  for (const [sub, amt] of Object.entries(expBySubcat)) addRow(plSheet, sub.replace(/_/g, " "), amt, false, 1)
   addRow(plSheet, "Total Operating Expenses", -totalExpenses, true)
   plSheet.addRow({})
 
