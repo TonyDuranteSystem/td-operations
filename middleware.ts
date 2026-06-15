@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
 
 // --- Public paths (no auth required) ---
 const PUBLIC_PREFIXES = [
@@ -10,6 +11,9 @@ const PUBLIC_PREFIXES = [
   '/portal/forgot-password',
   '/portal/reset-password',
   '/portal/auth/callback',
+  // Admin read-only "View as client" entry/exit — token-gated, tears down/sets
+  // its own session, so must run without an existing portal session.
+  '/portal/view-as',
   // API: external webhooks, cron, sync, dashboard badges
   '/api/dashboard/badges',
   '/api/qb',
@@ -154,6 +158,28 @@ export async function middleware(request: NextRequest) {
   // --- Public paths: no auth required ---
   if (isPublicPath(pathname)) {
     return supabaseResponse
+  }
+
+  // --- Read-only "View as client" lock ---
+  // While a valid view-as marker is present, allow only safe reads (GET/HEAD)
+  // on portal surfaces and BLOCK every mutating request — API writes AND server
+  // actions (which POST to the page route). This is the single guard that makes
+  // the admin's client view read-only. The entry/exit routes are public above,
+  // so they are exempt. Forging/deleting the marker is not an escalation (see
+  // lib/portal/view-as.ts security note).
+  if (
+    (pathname.startsWith('/portal') || pathname.startsWith('/api/portal')) &&
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)
+  ) {
+    const marker = request.cookies.get(VIEW_AS_COOKIE)?.value
+    if (marker && (await verifyViewAs(marker))) {
+      return new NextResponse(
+        JSON.stringify({
+          error: 'Read-only view — actions are disabled while viewing as a client. Click Exit to leave.',
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } },
+      )
+    }
   }
 
   // --- No user: redirect to appropriate login ---

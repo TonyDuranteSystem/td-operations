@@ -1,5 +1,6 @@
 # Auth & OAuth
-_Last verified against code: 2026-05-29 — Claude (read middleware.ts, lib/auth.ts, lib/oauth.ts)_
+_Last verified against code: 2026-06-15 — Claude (added the read-only "View as client" lock to middleware.ts — see the new bullet + Gotchas; feature writeup lives in portal.md)_
+_Prior: 2026-05-29 — Claude (read middleware.ts, lib/auth.ts, lib/oauth.ts)_
 
 ## What it is
 Two completely separate authentication systems — don't confuse them:
@@ -17,6 +18,7 @@ Two completely separate authentication systems — don't confuse them:
   - **Portal paths** require role `client` (admins are allowed through for debugging).
   - **Dashboard paths**: a `client` is bounced to `/portal`; admin-only paths (`/dev-tools`, `/team-management`) require admin email/role, else redirected home with `?denied=admin_only`.
   - **Sandbox guard**: `SANDBOX_MODE=1` blocks all `/api/webhooks` (503) so external traffic can't mutate sandbox data.
+  - **Read-only "View as client" lock**: when a valid signed `td_view_as` marker cookie is present, middleware returns **403** for any mutating method (POST/PUT/PATCH/DELETE) on `/portal` + `/api/portal` — the single chokepoint that makes an admin's client view read-only (blocks API writes AND server actions). `/portal/view-as` is a public path (token-gated; mints/tears down its own session). Full feature in `portal.md`. Marker signing/verify: `lib/portal/view-as.ts` (HMAC over `API_SECRET_TOKEN`, edge+node safe).
 - `isDashboardUser()` is the staff guard reused by API routes (e.g. `requireStaff()` in the message-actions route).
 
 ## MCP server auth (Claude Code + Claude.ai)

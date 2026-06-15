@@ -3,11 +3,13 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
+import { isAdmin } from '@/lib/auth'
+import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
 
 export default async function ContactDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
-  await supabase.auth.getUser()
+  const { data: { user } } = await supabase.auth.getUser()
   const today = new Date().toISOString().split('T')[0]
 
   // Fetch contact
@@ -219,8 +221,16 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     }
   }
 
+  // Admin-only "View as client": only when this contact actually has a portal login.
+  const canViewAs = isAdmin(user) && portalAuth.exists
+
   return (
     <div className="p-6 lg:p-8">
+      {canViewAs && (
+        <div className="mb-4 flex justify-end">
+          <ViewAsClientButton contactId={contact.id} />
+        </div>
+      )}
       <ContactDetail
         contact={contact}
         accounts={accounts}
