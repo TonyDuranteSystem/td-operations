@@ -744,6 +744,7 @@ export default async function PortalDashboardPage() {
             submissionId={tr.submission_id ?? null}
             dataReceived={tr.data_received ?? false}
             sentToAccountant={tr.sent_to_accountant ?? false}
+            sdStage={tr.sd_stage ?? null}
           />
         )
       })}
