@@ -277,7 +277,10 @@ export async function advanceServiceDelivery(
   // pre-push schema-drift check regenerates types from production and would
   // strip the field otherwise. The cast collapses to the canonical row
   // shape once production is migrated and types refresh.
-  const targetStageWithNotify = targetStage as typeof targetStage & { notify_client_email?: boolean | null }
+  const targetStageWithNotify = targetStage as typeof targetStage & {
+    notify_client_email?: boolean | null
+    client_notification_message?: string | null
+  }
   if (!skip_notify && targetStageWithNotify.notify_client_email && (delivery.account_id || delivery.contact_id)) {
     try {
       const { notifyClientOfStageAdvance } = await import("@/lib/portal/notifications")
@@ -286,6 +289,7 @@ export async function advanceServiceDelivery(
         contact_id: delivery.contact_id ?? undefined,
         service_name: delivery.service_name || delivery.service_type,
         stage_name: targetStage.stage_name,
+        custom_message: targetStageWithNotify.client_notification_message ?? null,
       })
       autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed`)
     } catch (emailErr) {
