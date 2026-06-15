@@ -135,6 +135,24 @@ function computeAccountBalances(txs: Array<{ bank_name: string; account_type: st
 }
 
 /**
+ * Opening cash per bank account = the FIRST transaction's running balance minus
+ * that transaction's amount (the balance BEFORE the year's first movement).
+ * Requires the rows to be ordered by date ascending (they are — the read
+ * orders by transaction_date). Sum of these is the year's beginning capital on
+ * a cash basis, used to build real partners' equity instead of a plug.
+ */
+function computeOpeningBalances(txs: Array<{ bank_name: string; account_type: string | null; balance_after: number | null; amount: number | string }>) {
+  const opening: Record<string, number> = {}
+  for (const tx of txs) {
+    const key = `${tx.bank_name} ${tx.account_type || "Checking"}`
+    if (opening[key] === undefined && tx.balance_after !== null) {
+      opening[key] = Number(tx.balance_after) - Number(tx.amount)
+    }
+  }
+  return opening
+}
+
+/**
  * Generate P&L Excel from bank_transactions table.
  * Returns the Excel buffer + summary text.
  * Sheet 2 is a Comparative Balance Sheet (prior year vs current year).
@@ -216,10 +234,17 @@ export async function generatePnlExcel(
   }, {} as Record<string, number>)
   const primaryCurrency = Object.entries(currencyCounts).sort((a, b) => (b[1] as number) - (a[1] as number))[0]?.[0] || "USD"
   const irsRate = rates[primaryCurrency]
+  // The "original currency" column is only meaningful when the account actually
+  // holds more than one currency. For a single-currency account it just
+  // duplicates the USD column (Antonio's "two identical columns"). Collapse to
+  // one USD column unless there really are foreign-currency transactions.
+  const isMultiCurrency = Object.keys(currencyCounts).length > 1
 
   // Year-end balances (current + prior)
   const accountBalances = computeAccountBalances(transactions)
   const priorAccountBalances = hasPriorYear ? computeAccountBalances(priorTransactions!) : {}
+  const openingBalances = computeOpeningBalances(transactions)
+  const priorOpeningBalances = hasPriorYear ? computeOpeningBalances(priorTransactions!) : {}
 
   // Generate Excel
   const ExcelJS = (await import("exceljs")).default
@@ -228,25 +253,32 @@ export async function generatePnlExcel(
   // Helper
   const addRow = (sheet: import("exceljs").Worksheet, label: string, amount: number, bold = false, indent = 0) => {
     const prefix = "  ".repeat(indent)
-    const row = sheet.addRow({ label: `${prefix}${label}`, original: amount, usd: toUSD(amount, primaryCurrency) })
+    const rowData: Record<string, unknown> = { label: `${prefix}${label}`, usd: toUSD(amount, primaryCurrency) }
+    if (isMultiCurrency) rowData.original = amount
+    const row = sheet.addRow(rowData)
     if (bold) row.font = { bold: true }
-    row.getCell("original").numFmt = "#,##0.00"
+    if (isMultiCurrency) row.getCell("original").numFmt = "#,##0.00"
     row.getCell("usd").numFmt = "$#,##0.00"
     return row
   }
 
   // ── Sheet 1: P&L Statement ──
   const plSheet = workbook.addWorksheet("P&L Statement")
-  plSheet.columns = [
-    { header: "", key: "label", width: 40 },
-    { header: primaryCurrency, key: "original", width: 18 },
-    { header: "USD", key: "usd", width: 18 },
-  ]
+  plSheet.columns = isMultiCurrency
+    ? [
+        { header: "", key: "label", width: 40 },
+        { header: primaryCurrency, key: "original", width: 18 },
+        { header: "USD", key: "usd", width: 18 },
+      ]
+    : [
+        { header: "", key: "label", width: 40 },
+        { header: "USD", key: "usd", width: 18 },
+      ]
   plSheet.getRow(1).font = { bold: true }
 
   plSheet.addRow({ label: ctx.companyName }).font = { bold: true, size: 14 }
   plSheet.addRow({ label: `Profit & Loss Statement -- Tax Year ${taxYear}` }).font = { bold: true }
-  plSheet.addRow({ label: `IRS Exchange Rate: 1 ${primaryCurrency} / ${irsRate} = USD` })
+  if (isMultiCurrency) plSheet.addRow({ label: `IRS Exchange Rate: 1 ${primaryCurrency} / ${irsRate} = USD` })
   plSheet.addRow({})
 
   // Revenue
@@ -318,13 +350,19 @@ export async function generatePnlExcel(
 
   // ── Sheet 2: Comparative Balance Sheet ──
   const bsSheet = workbook.addWorksheet("Balance Sheet")
-  bsSheet.columns = [
-    { header: "", key: "label", width: 40 },
-    { header: `${taxYear - 1} ${primaryCurrency}`, key: "prior_orig", width: 18 },
-    { header: `${taxYear - 1} USD`, key: "prior_usd", width: 18 },
-    { header: `${taxYear} ${primaryCurrency}`, key: "curr_orig", width: 18 },
-    { header: `${taxYear} USD`, key: "curr_usd", width: 18 },
-  ]
+  bsSheet.columns = isMultiCurrency
+    ? [
+        { header: "", key: "label", width: 40 },
+        { header: `${taxYear - 1} ${primaryCurrency}`, key: "prior_orig", width: 18 },
+        { header: `${taxYear - 1} USD`, key: "prior_usd", width: 18 },
+        { header: `${taxYear} ${primaryCurrency}`, key: "curr_orig", width: 18 },
+        { header: `${taxYear} USD`, key: "curr_usd", width: 18 },
+      ]
+    : [
+        { header: "", key: "label", width: 40 },
+        { header: `${taxYear - 1} USD`, key: "prior_usd", width: 18 },
+        { header: `${taxYear} USD`, key: "curr_usd", width: 18 },
+      ]
   bsSheet.getRow(1).font = { bold: true }
   bsSheet.addRow({ label: `${ctx.companyName} -- Comparative Balance Sheet` }).font = { bold: true, size: 14 }
   bsSheet.addRow({ label: `As of 12/31/${taxYear - 1} vs 12/31/${taxYear}` }).font = { italic: true }
@@ -334,15 +372,16 @@ export async function generatePnlExcel(
   // Helper for comparative rows
   const addCompRow = (sheet: import("exceljs").Worksheet, label: string, priorAmt: number | null, currAmt: number, bold = false, indent = 0) => {
     const prefix = "  ".repeat(indent)
-    const row = sheet.addRow({
+    const rowData: Record<string, unknown> = {
       label: `${prefix}${label}`,
-      prior_orig: priorAmt,
       prior_usd: priorAmt !== null ? toPriorUSD(priorAmt, primaryCurrency) : null,
-      curr_orig: currAmt,
       curr_usd: toUSD(currAmt, primaryCurrency),
-    })
+    }
+    if (isMultiCurrency) { rowData.prior_orig = priorAmt; rowData.curr_orig = currAmt }
+    const row = sheet.addRow(rowData)
     if (bold) row.font = { bold: true }
-    for (const key of ["prior_orig", "prior_usd", "curr_orig", "curr_usd"]) {
+    const fmtKeys = isMultiCurrency ? ["prior_orig", "prior_usd", "curr_orig", "curr_usd"] : ["prior_usd", "curr_usd"]
+    for (const key of fmtKeys) {
       const cell = row.getCell(key)
       if (cell.value === null) cell.value = hasPriorYear ? 0 : "N/A"
       cell.numFmt = key.includes("usd") ? "$#,##0.00" : "#,##0.00"
@@ -370,31 +409,46 @@ export async function generatePnlExcel(
   addCompRow(bsSheet, "Total Liabilities", hasPriorYear ? 0 : null, 0, true)
   bsSheet.addRow({})
 
-  // PARTNERS' EQUITY
-  const equity = totalAssets
-  const priorEquity = priorTotalAssets
+  // PARTNERS' EQUITY — built from the IRS Form 1065 Schedule M-2 capital-account
+  // formula: Ending capital = Beginning capital + Contributions + Net income −
+  // Distributions. Beginning capital is REAL opening cash (cash basis, no
+  // liabilities), not a plug. Any gap between that build and ending cash is shown
+  // as an explicit, labelled "Unreconciled" line (FX moves / internal transfers
+  // not netting to zero / uncategorized) — never disguised as an "FX Adjustment".
+  const beginningCapital = Object.values(openingBalances).reduce((s, v) => s + v, 0)
+  const priorBeginningCapital = hasPriorYear ? Object.values(priorOpeningBalances).reduce((s, v) => s + v, 0) : 0
+  const computedEnding = beginningCapital + totalContributions + netIncome - totalDistributions
+  const priorComputedEnding = hasPriorYear ? priorBeginningCapital + priorTotals!.totalContributions + priorTotals!.netIncome - priorTotals!.totalDistributions : 0
+  const unreconciled = totalAssets - computedEnding
+  const priorUnreconciled = hasPriorYear ? priorTotalAssets - priorComputedEnding : 0
+
   addCompRow(bsSheet, "PARTNERS' EQUITY", null, 0, true)
+  addCompRow(bsSheet, "Beginning Capital (opening cash)", hasPriorYear ? priorBeginningCapital : null, beginningCapital, false, 1)
+  if (totalContributions !== 0 || (hasPriorYear && priorTotals!.totalContributions !== 0)) {
+    addCompRow(bsSheet, "Capital Contributions", hasPriorYear ? priorTotals!.totalContributions : null, totalContributions, false, 1)
+  }
   addCompRow(bsSheet, "Net Income", hasPriorYear ? priorTotals!.netIncome : null, netIncome, false, 1)
   addCompRow(bsSheet, "Less: Distributions", hasPriorYear ? -priorTotals!.totalDistributions : null, -totalDistributions, false, 1)
-  const fxAdj = equity - netIncome + totalDistributions
-  const priorFxAdj = hasPriorYear ? priorEquity - priorTotals!.netIncome + priorTotals!.totalDistributions : 0
-  if (Math.abs(fxAdj) > 0.01 || (hasPriorYear && Math.abs(priorFxAdj) > 0.01)) {
-    addCompRow(bsSheet, "Beginning Capital + FX Adjustment", hasPriorYear ? priorFxAdj : null, fxAdj, false, 1)
+  if (Math.abs(unreconciled) > 0.01 || (hasPriorYear && Math.abs(priorUnreconciled) > 0.01)) {
+    const warn = addCompRow(bsSheet, "Unreconciled (FX / internal transfers / uncategorized — review)", hasPriorYear ? priorUnreconciled : null, unreconciled, false, 1)
+    warn.font = { color: { argb: "FFCC0000" } }
   }
-  addCompRow(bsSheet, "Total Partners' Equity", hasPriorYear ? priorEquity : null, equity, true)
+  addCompRow(bsSheet, "Total Partners' Equity", hasPriorYear ? priorTotalAssets : null, totalAssets, true)
 
   // ── Sheet 3: Income Detail ──
   const incSheet = workbook.addWorksheet("Income Detail")
   incSheet.columns = [
     { header: "Date", key: "date", width: 12 }, { header: "Description", key: "desc", width: 45 },
     { header: "Counterparty", key: "cp", width: 25 }, { header: "Subcategory", key: "sub", width: 18 },
-    { header: primaryCurrency, key: "original", width: 15 }, { header: "USD", key: "usd", width: 15 },
+    ...(isMultiCurrency ? [{ header: primaryCurrency, key: "original", width: 15 }] : []),
+    { header: "USD", key: "usd", width: 15 },
     { header: "Related Party", key: "rp", width: 12 }, { header: "Reference", key: "ref", width: 20 },
   ]
   incSheet.getRow(1).font = { bold: true }
   for (const t of income) {
     const row = incSheet.addRow({ date: t.transaction_date, desc: t.description, cp: t.counterparty, sub: t.subcategory, original: Number(t.amount), usd: toUSD(Number(t.amount), t.currency), rp: t.is_related_party ? "Yes" : "", ref: t.transaction_ref })
-    row.getCell("original").numFmt = "#,##0.00"; row.getCell("usd").numFmt = "$#,##0.00"
+    if (isMultiCurrency) row.getCell("original").numFmt = "#,##0.00"
+    row.getCell("usd").numFmt = "$#,##0.00"
   }
 
   // ── Sheet 4: Expense Detail ──
@@ -402,7 +456,8 @@ export async function generatePnlExcel(
   expSheet.columns = [
     { header: "Date", key: "date", width: 12 }, { header: "Description", key: "desc", width: 45 },
     { header: "Counterparty", key: "cp", width: 25 }, { header: "Category", key: "cat", width: 15 },
-    { header: "Subcategory", key: "sub", width: 18 }, { header: primaryCurrency, key: "original", width: 15 },
+    { header: "Subcategory", key: "sub", width: 18 },
+    ...(isMultiCurrency ? [{ header: primaryCurrency, key: "original", width: 15 }] : []),
     { header: "USD", key: "usd", width: 15 }, { header: "Related Party", key: "rp", width: 12 },
     { header: "Reference", key: "ref", width: 20 },
   ]
@@ -410,21 +465,24 @@ export async function generatePnlExcel(
   for (const t of [...cogs, ...expenses]) {
     const amt = Number(t.amount)
     const row = expSheet.addRow({ date: t.transaction_date, desc: t.description, cp: t.counterparty, cat: t.category, sub: t.subcategory, original: amt, usd: toUSD(amt, t.currency), rp: t.is_related_party ? "Yes" : "", ref: t.transaction_ref })
-    row.getCell("original").numFmt = "#,##0.00"; row.getCell("usd").numFmt = "$#,##0.00"
+    if (isMultiCurrency) row.getCell("original").numFmt = "#,##0.00"
+    row.getCell("usd").numFmt = "$#,##0.00"
   }
 
   // ── Sheet 5: Distributions ──
   const distSheet = workbook.addWorksheet("Distributions")
   distSheet.columns = [
     { header: "Date", key: "date", width: 12 }, { header: "Member", key: "member", width: 30 },
-    { header: "Description", key: "desc", width: 40 }, { header: primaryCurrency, key: "original", width: 15 },
+    { header: "Description", key: "desc", width: 40 },
+    ...(isMultiCurrency ? [{ header: primaryCurrency, key: "original", width: 15 }] : []),
     { header: "USD", key: "usd", width: 15 }, { header: "Reference", key: "ref", width: 20 },
   ]
   distSheet.getRow(1).font = { bold: true }
   for (const t of distributions) {
     const amt = Number(t.amount)
     const row = distSheet.addRow({ date: t.transaction_date, member: t.counterparty, desc: t.description, original: amt, usd: toUSD(amt, t.currency), ref: t.transaction_ref })
-    row.getCell("original").numFmt = "#,##0.00"; row.getCell("usd").numFmt = "$#,##0.00"
+    if (isMultiCurrency) row.getCell("original").numFmt = "#,##0.00"
+    row.getCell("usd").numFmt = "$#,##0.00"
   }
 
   // Write buffer
