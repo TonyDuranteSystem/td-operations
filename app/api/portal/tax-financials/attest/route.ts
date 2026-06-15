@@ -13,6 +13,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { fetchAllPaged } from '@/lib/bank-transactions-fetch'
 import { isAccountOwner } from '@/lib/portal/owner-access'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -62,12 +63,21 @@ export async function POST(request: NextRequest) {
     // Coverage must be resolved too (§3.4) — gate 1 can't see what an export
     // left out; the client's answers are the completeness guarantee.
     const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
-    const { data: covRows } = await supabaseAdmin
-      .from('bank_transactions')
-      .select('bank_name, account_type, transaction_date')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-    const covQs = coverageQuestions(covRows ?? [], taxYear)
+    // Paginated — finalize-time coverage must see ALL rows, not the first 1000,
+    // or a >1000-tx client could attest on a truncated month-span (the gate
+    // that sends data toward filing).
+    const covRows = await fetchAllPaged(async (from, to) => {
+      const { data, error } = await supabaseAdmin
+        .from('bank_transactions')
+        .select('bank_name, account_type, transaction_date')
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        .order('id', { ascending: true })
+        .range(from, to)
+      if (error) throw new Error(error.message)
+      return data ?? []
+    })
+    const covQs = coverageQuestions(covRows, taxYear)
     const covAnswers = (sub.financials_meta?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
     const unanswered = unansweredCoverage(covQs, covAnswers)
     const incomplete = incompleteCoverage(covQs, covAnswers)

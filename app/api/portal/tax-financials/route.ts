@@ -10,6 +10,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { fetchAllPaged } from '@/lib/bank-transactions-fetch'
 import { isAccountOwner } from '@/lib/portal/owner-access'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -38,20 +39,35 @@ export async function GET(request: NextRequest) {
     // one answer covers every transaction from the same merchant; the 5b
     // benchmark showed the top 25 merchant groups cover most of the residual).
     const { groupUncategorized } = await import('@/lib/tax/question-groups')
-    const { data: uncatRows } = await supabaseAdmin
-      .from('bank_transactions')
-      .select('id, description, counterparty, amount, transaction_date, bank_name')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .eq('category', 'uncategorized')
-    const questions = groupUncategorized((uncatRows ?? []).map(r => ({ ...r, amount: Number(r.amount) })))
+    // Paginated — the 1000-row cap would hide questions / undercount files for
+    // any account with >1000 transactions in the year (same bug class as the
+    // financials reads). `id` order keeps range pages from skipping rows.
+    const uncatRows = await fetchAllPaged(async (from, to) => {
+      const { data, error } = await supabaseAdmin
+        .from('bank_transactions')
+        .select('id, description, counterparty, amount, transaction_date, bank_name')
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        .eq('category', 'uncategorized')
+        .order('id', { ascending: true })
+        .range(from, to)
+      if (error) throw new Error(error.message)
+      return data ?? []
+    })
+    const questions = groupUncategorized(uncatRows.map(r => ({ ...r, amount: Number(r.amount) })))
 
-    // Per-file sources for the delete/replace cards (§6).
-    const { data: sources } = await supabaseAdmin
-      .from('bank_transactions')
-      .select('source_file_id, bank_name, account_type, transaction_date')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
+    // Per-file sources for the delete/replace cards (§6) + coverage below.
+    const sources = await fetchAllPaged(async (from, to) => {
+      const { data, error } = await supabaseAdmin
+        .from('bank_transactions')
+        .select('source_file_id, bank_name, account_type, transaction_date')
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        .order('id', { ascending: true })
+        .range(from, to)
+      if (error) throw new Error(error.message)
+      return data ?? []
+    })
     const bySource = new Map<string, { bank_name: string; count: number; from: string; to: string }>()
     for (const r of sources ?? []) {
       const key = r.source_file_id ?? 'unknown'
