@@ -70,14 +70,49 @@ function flatten(row: ChatRow) {
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const serviceDeliveryId = params.id
-    const admin = supabaseAdmin as unknown as UntypedChat
 
-    const { data, error } = await admin
+    // Resolve the flow's account + topic so the Workspace thread shows EVERY
+    // message in this flow's topic — not only rows stamped with the SD. A client
+    // who types in the portal chat under the flow topic (without replying to a
+    // specific message) produces a row with the topic + account but NO
+    // service_delivery_id; matching on (topic + account) surfaces it here too.
+    const { data: sd } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, service_type, account_id, due_date, stage_entered_at, created_at')
+      .eq('id', serviceDeliveryId)
+      .single()
+
+    const topic = sd ? (buildFlowTopic(sd.service_type, deriveFlowYear(sd)) || null) : null
+    const accountId = (sd?.account_id as string | null) ?? null
+
+    // Match by SD stamp OR (flow topic + same account). The topic branch is only
+    // added when both are known. Topic is quoted to tolerate spaces; flow topics
+    // are plain ("Tax Return 2025") with no PostgREST-reserved chars.
+    const orFilter = topic && accountId
+      ? `service_delivery_id.eq.${serviceDeliveryId},and(topic.eq."${topic}",account_id.eq.${accountId})`
+      : `service_delivery_id.eq.${serviceDeliveryId}`
+
+    const { data, error } = (await (supabaseAdmin as unknown as {
+      from: (t: string) => {
+        select: (c: string) => {
+          or: (f: string) => {
+            is: (col: string, v: null) => {
+              not: (col: string, op: string, v: string) => {
+                order: (col: string, opts: { ascending: boolean }) => Promise<QueryResult>
+              }
+            }
+          }
+        }
+      }
+    })
       .from('portal_messages')
       .select('id, sender_type, sender_name, message, topic, created_at, contacts:contact_id(full_name)')
-      .eq('service_delivery_id', serviceDeliveryId)
+      .or(orFilter)
       .is('deleted_at', null)
-      .order('created_at', { ascending: true })
+      // Internal chat-event notes (`<!-- chat-event: -->`) are staff-only and
+      // must not leak into the client-facing flow thread.
+      .not('message', 'ilike', '%<!-- chat-event:%')
+      .order('created_at', { ascending: true })) as QueryResult
 
     if (error) {
       return NextResponse.json(
