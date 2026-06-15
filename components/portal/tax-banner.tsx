@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertTriangle, ArrowRight, CheckCircle, Clock, Pencil, Loader2 } from 'lucide-react'
 import type { ReviewStatus } from '@/lib/tax/review-status'
+import { flowStageBannerState } from '@/lib/tax/flow-banner'
 
 interface TaxBannerProps {
   taxYear: number
@@ -16,9 +17,13 @@ interface TaxBannerProps {
   /** Legacy fallback for pre-Slice-2 submissions */
   dataReceived?: boolean
   sentToAccountant?: boolean
+  /** Flow-workspace SD stage (e.g. "Sent for Signature"). Drives the banner
+   *  when there is no review_status — see lib/tax/flow-banner.ts. */
+  sdStage?: string | null
 }
 
 const editHref = '/portal/wizard?type=tax'
+const signHref = '/portal/sign'
 
 function EditButton({ cta }: { cta: string }) {
   return (
@@ -93,9 +98,11 @@ export function TaxBanner({
   submissionId,
   dataReceived = false,
   sentToAccountant = false,
+  sdStage = null,
 }: TaxBannerProps) {
   const router = useRouter()
   const returnLabel = returnType || 'Tax Return'
+  const isIt = locale === 'it'
 
   // ─── New review-status states ───
   if (reviewStatus !== undefined && reviewStatus !== null) {
@@ -262,6 +269,112 @@ export function TaxBanner({
         )
       }
     }
+  }
+
+  // ─── Flow-workspace SD-stage states ───
+  // Consulted ONLY after review_status (so production review_status clients are
+  // never affected) and before the legacy fallback. Fixes flow Tax Returns that
+  // have no review_status but a real SD stage (e.g. "Sent for Signature") and
+  // were wrongly showing the legacy "Edit submission" banner.
+  const flowState = sdStage ? flowStageBannerState(sdStage) : null
+  if (flowState) {
+    const y = taxYear
+    type Tone = 'amber' | 'blue' | 'emerald'
+    const cfg: {
+      tone: Tone
+      Icon: React.ComponentType<{ className?: string }>
+      title: string
+      desc: string
+      action?: { href: string; cta: string }
+    } = (() => {
+      switch (flowState) {
+        case 'complete_form':
+          return {
+            tone: 'amber', Icon: AlertTriangle,
+            title: isIt ? `Completa il modulo fiscale (${y})` : `Complete your tax form (${y})`,
+            desc: isIt ? `La procedura guidata per la tua ${returnLabel} ${y} è pronta. Compila il modulo per continuare.` : `Your tax wizard for ${returnLabel} ${y} is ready. Complete the form to continue.`,
+            action: { href: editHref, cta: isIt ? 'Compila il modulo' : 'Complete tax form' },
+          }
+        case 'under_review':
+          return {
+            tone: 'blue', Icon: Clock,
+            title: isIt ? `In revisione (${y})` : `Under review (${y})`,
+            desc: isIt ? `Il nostro team sta esaminando i tuoi dati per la ${returnLabel} ${y}. Ti avviseremo quando avremo finito.` : `Our team is reviewing your ${returnLabel} ${y} data. We'll notify you when we're done.`,
+          }
+        case 'preparing':
+          return {
+            tone: 'blue', Icon: Clock,
+            title: isIt ? `In preparazione (${y})` : `Being prepared (${y})`,
+            desc: isIt ? `I tuoi dati sono stati approvati. Stiamo preparando la tua ${returnLabel} ${y}.` : `Your data has been approved. We're preparing your ${returnLabel} ${y}.`,
+          }
+        case 'revision_requested':
+          return {
+            tone: 'amber', Icon: AlertTriangle,
+            title: isIt ? `Modifiche richieste — ${returnLabel} ${y}` : `Changes requested — ${returnLabel} ${y}`,
+            desc: isIt ? `Il nostro team ha richiesto alcune modifiche. Controlla la chat del portale, poi modifica il tuo invio.` : `Our team has requested changes. Check the portal chat, then edit your submission.`,
+            action: { href: editHref, cta: isIt ? 'Modifica il tuo invio' : 'Edit your submission' },
+          }
+        case 'sign':
+          return {
+            tone: 'emerald', Icon: Pencil,
+            title: isIt ? `Firma la tua dichiarazione (${y})` : `Sign your tax return (${y})`,
+            desc: isIt ? `La tua ${returnLabel} ${y} è pronta per la firma. Accedi al portale e firmala.` : `Your ${returnLabel} ${y} is ready for your signature. Sign it in the portal.`,
+            action: { href: signHref, cta: isIt ? 'Firma la dichiarazione' : 'Sign your tax return' },
+          }
+        case 'signed':
+          return {
+            tone: 'emerald', Icon: CheckCircle,
+            title: isIt ? `Firmata ✓ (${y})` : `Signed ✓ (${y})`,
+            desc: isIt ? `La tua ${returnLabel} ${y} è firmata. La presenteremo all'IRS.` : `Your ${returnLabel} ${y} is signed. We'll file it with the IRS.`,
+          }
+        case 'filed':
+          return {
+            tone: 'emerald', Icon: CheckCircle,
+            title: isIt ? `Presentata all'IRS (${y})` : `Filed with the IRS (${y})`,
+            desc: isIt ? `La tua ${returnLabel} ${y} è stata presentata all'IRS.` : `Your ${returnLabel} ${y} has been filed with the IRS.`,
+          }
+        case 'completed':
+          return {
+            tone: 'emerald', Icon: CheckCircle,
+            title: isIt ? `Completata ✓ (${y})` : `Completed ✓ (${y})`,
+            desc: isIt ? `La tua ${returnLabel} ${y} è completata.` : `Your ${returnLabel} ${y} is complete.`,
+          }
+      }
+    })()
+
+    const tones: Record<Tone, { card: string; iconWrap: string; icon: string; title: string; desc: string; btn: string }> = {
+      amber: { card: 'border-amber-400 bg-amber-50', iconWrap: 'bg-amber-100 border-amber-300', icon: 'text-amber-600', title: 'text-amber-900', desc: 'text-amber-700', btn: 'bg-amber-600 hover:bg-amber-700' },
+      blue: { card: 'border-blue-300 bg-blue-50', iconWrap: 'bg-blue-100 border-blue-300', icon: 'text-blue-600', title: 'text-blue-900', desc: 'text-blue-700', btn: 'bg-blue-600 hover:bg-blue-700' },
+      emerald: { card: 'border-emerald-300 bg-emerald-50', iconWrap: 'bg-emerald-100 border-emerald-300', icon: 'text-emerald-600', title: 'text-emerald-900', desc: 'text-emerald-700', btn: 'bg-emerald-600 hover:bg-emerald-700' },
+    }
+    const t = tones[cfg.tone]
+    const Icon = cfg.Icon
+    const inner = (
+      <div className="flex items-start gap-4">
+        <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${t.iconWrap}`}>
+          <Icon className={`h-5 w-5 ${t.icon}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className={`font-semibold text-sm sm:text-base ${t.title}`}>{cfg.title}</p>
+          <p className={`text-xs sm:text-sm mt-1 ${t.desc}`}>{cfg.desc}</p>
+        </div>
+        {cfg.action && (
+          <div className={`shrink-0 flex items-center gap-1.5 self-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${t.btn}`}>
+            <Pencil className="h-3.5 w-3.5" />
+            {cfg.action.cta}
+          </div>
+        )}
+      </div>
+    )
+    return cfg.action ? (
+      <a href={cfg.action.href} className={`block w-full rounded-xl border-2 px-5 py-4 mb-6 transition-all hover:shadow-md ${t.card}`}>
+        {inner}
+      </a>
+    ) : (
+      <div className={`block w-full rounded-xl border-2 px-5 py-4 mb-6 ${t.card}`}>
+        {inner}
+      </div>
+    )
   }
 
   // ─── Legacy fallback (pre-Slice-2 submissions: no review_status) ───

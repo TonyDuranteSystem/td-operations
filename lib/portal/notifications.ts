@@ -389,13 +389,54 @@ export async function notifyClientOfAdminMessage({
  * via contact_id (preferred) or all account_contacts links (so every member
  * of a Multi-Member LLC is notified).
  */
+/**
+ * Pure email-copy builder for the stage-advance notification. Returns RAW
+ * (unescaped) strings — the caller escapes before injecting into HTML. When
+ * `customMessage` is set (from pipeline_stages.client_notification_message), it
+ * becomes the email headline and the generic secondary line is dropped;
+ * otherwise the standard bilingual "service moved to stage" copy is used.
+ */
+export function buildStageAdvanceCopy(opts: {
+  locale: 'en' | 'it'
+  serviceName: string
+  stageName: string
+  firstName?: string | null
+  customMessage?: string | null
+}): { subject: string; greeting: string; headline: string; bodyText: string; ctaLabel: string; footerText: string } {
+  const { locale, serviceName, stageName, firstName, customMessage } = opts
+  const isIt = locale === 'it'
+  const greeting = firstName
+    ? (isIt ? `Ciao ${firstName},` : `Hi ${firstName},`)
+    : (isIt ? 'Ciao,' : 'Hi,')
+  const subject = isIt
+    ? `Aggiornamento servizio: ${serviceName} — ${stageName}`
+    : `Service update: ${serviceName} — ${stageName}`
+  const custom = customMessage?.trim()
+  const headline = custom
+    ? custom
+    : (isIt
+        ? `Il tuo servizio "${serviceName}" è passato alla fase "${stageName}".`
+        : `Your service "${serviceName}" has moved to the "${stageName}" stage.`)
+  // Custom message is self-contained — no generic secondary line under it.
+  const bodyText = custom
+    ? ''
+    : (isIt
+        ? 'Accedi al portale clienti per vedere i dettagli aggiornati.'
+        : 'Log in to the client portal to see the latest details.')
+  const ctaLabel = isIt ? 'Apri il Portale' : 'Open the Portal'
+  const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
+  return { subject, greeting, headline, bodyText, ctaLabel, footerText }
+}
+
 export async function notifyClientOfStageAdvance(params: {
   account_id?: string | null
   contact_id?: string | null
   service_name: string
   stage_name: string
+  /** Optional per-stage custom body (pipeline_stages.client_notification_message). */
+  custom_message?: string | null
 }): Promise<{ sent: number; failed: number }> {
-  const { account_id, contact_id, service_name, stage_name } = params
+  const { account_id, contact_id, service_name, stage_name, custom_message } = params
 
   type Recipient = { email: string; firstName: string | null; language: string }
   let recipients: Recipient[] = []
@@ -436,28 +477,24 @@ export async function notifyClientOfStageAdvance(params: {
   const { gmailPost } = await import('@/lib/gmail')
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const portalServicesUrl = `${PORTAL_BASE_URL}/portal/services`
-  const safeService = escHtml(service_name)
-  const safeStage = escHtml(stage_name)
 
   let sent = 0
   let failed = 0
 
   for (const recipient of recipients) {
-    const isIt = recipient.language === 'it'
-    const greeting = recipient.firstName
-      ? (isIt ? `Ciao ${escHtml(recipient.firstName)},` : `Hi ${escHtml(recipient.firstName)},`)
-      : (isIt ? 'Ciao,' : 'Hi,')
-    const subject = isIt
-      ? `Aggiornamento servizio: ${service_name} — ${stage_name}`
-      : `Service update: ${service_name} — ${stage_name}`
-    const headline = isIt
-      ? `Il tuo servizio "${safeService}" è passato alla fase "${safeStage}".`
-      : `Your service "${safeService}" has moved to the "${safeStage}" stage.`
-    const bodyText = isIt
-      ? 'Accedi al portale clienti per vedere i dettagli aggiornati.'
-      : 'Log in to the client portal to see the latest details.'
-    const ctaLabel = isIt ? 'Apri il Portale' : 'Open the Portal'
-    const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
+    const copy = buildStageAdvanceCopy({
+      locale: recipient.language === 'it' ? 'it' : 'en',
+      serviceName: service_name,
+      stageName: stage_name,
+      firstName: recipient.firstName,
+      customMessage: custom_message,
+    })
+    const subject = copy.subject
+    const greeting = escHtml(copy.greeting)
+    const headline = escHtml(copy.headline)
+    const bodyText = escHtml(copy.bodyText)
+    const ctaLabel = copy.ctaLabel
+    const footerText = copy.footerText
 
     const html = `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -467,7 +504,7 @@ export async function notifyClientOfStageAdvance(params: {
         <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px;">
           <p style="margin:0 0 16px;">${greeting}</p>
           <p style="margin:0 0 16px;color:#27272a;">${headline}</p>
-          <p style="margin:0 0 24px;color:#4b5563;">${bodyText}</p>
+          ${bodyText ? `<p style="margin:0 0 24px;color:#4b5563;">${bodyText}</p>` : ''}
           <a href="${portalServicesUrl}" style="display:inline-block;padding:12px 28px;background:#0A3161;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-family:Georgia,serif;">
             ${ctaLabel}
           </a>

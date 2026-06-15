@@ -1,5 +1,5 @@
 # Company Formation
-_Last verified against code: 2026-06-11 — Claude (entity-type resolution at materialization is now contract-first via resolveEntityTypeForFormation — no more silent SMLLC default (Adam Mihaly/LUMA incident); accounts.member_structure set in lockstep; SS-4 CRM regenerate for unsigned applications; prior 2026-06-10 uq_formation_sd_active_per_offer index)_
+_Last verified against code: 2026-06-14 — Claude (added `revertServiceDelivery()` — flow Workspace "← Go Back" inverse of advance: steps the SD back one stage by name, deletes the previous/target stage's documents, resets a completed final stage to active, and undoes the +1y renewal-date bump when leaving "Closed"; prior 2026-06-11 contract-first entity-type resolution via resolveEntityTypeForFormation (Adam Mihaly/LUMA incident); prior 2026-06-10 uq_formation_sd_active_per_offer index)_
 
 ## What it is
 The end-to-end flow of creating a client's US LLC: from a signed formation offer + payment, through filing the company with the state, to receiving the EIN — at which point the client becomes a fully active client. It's the core product, multi-step, and several automatic side-effects fire at each stage, so it's high-risk to touch blindly.
@@ -26,7 +26,7 @@ Canonical implementation: `triggerEINReceivedWorkflow()` in `lib/operations/ein-
 ## How it's built
 ### Key functions / files
 - `lib/operations/activation.ts` → `activateService()` — the top-level "payment confirmed → spin up the client" orchestrator.
-- `lib/operations/service-delivery.ts` → `createSD()` (central SD creator), `advanceStage()`, `completeSD()`.
+- `lib/operations/service-delivery.ts` → `createSD()` (central SD creator), `advanceStage()`, `completeSD()`, `revertServiceDelivery()` (flow Workspace "← Go Back" — inverse of advance: resolves prev stage by name, deletes the target stage's `flow_stage` documents, resets `completed`→`active`/clears `end_date`, and on leaving a "Closed" renewal final subtracts 1y from `ra_renewal_date`/`annual_report_due_date`). Backs `POST /api/flows/[id]/revert` + `components/flows/go-back-button.tsx`. Does NOT reopen auto-closed tasks or delete the underlying Drive file (only the documents row).
 - `lib/operations/ein-received.ts` → `triggerEINReceivedWorkflow()` — the EIN→active hand-off.
 - `lib/operations/sync-tier.ts` → `syncTier()` — the ONLY legal tier writer (R102).
 - `lib/portal/auto-create.ts` → `tierForContract()`, ensures a minimal CRM account for formation clients.

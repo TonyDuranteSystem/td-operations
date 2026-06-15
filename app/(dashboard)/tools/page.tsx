@@ -10,6 +10,8 @@ import {
   Settings,
   Workflow,
   Wrench,
+  Printer,
+  PenLine,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -19,10 +21,30 @@ interface ToolTile {
   description: string
   icon: LucideIcon
   adminOnly?: boolean
+  comingSoon?: boolean
+  /** Optional secondary action links rendered as buttons at the bottom of the card. */
+  links?: { label: string; href: string }[]
 }
 
 // The operator tools, gathered out of the main sidebar into one hub.
 const TOOLS: ToolTile[] = [
+  {
+    name: 'Fax',
+    href: '/tools/fax',
+    description: 'Send a document by fax via Faxage — enter a number, attach a file, send.',
+    icon: Printer,
+    links: [
+      { label: 'Send Fax', href: '/tools/fax' },
+      { label: 'Fax History', href: '/tools/fax/history' },
+    ],
+  },
+  {
+    name: 'E-Sign',
+    href: '/tools/esign',
+    description: 'Send documents for client e-signature.',
+    icon: PenLine,
+    comingSoon: true,
+  },
   {
     name: 'System Health',
     href: '/system-health',
@@ -94,25 +116,61 @@ export default async function ToolsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {visible.map(tool => {
           const Icon = tool.icon
+          const inner = (
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-zinc-100 group-hover:bg-blue-50 flex items-center justify-center shrink-0 transition-colors">
+                <Icon className="h-5 w-5 text-zinc-600 group-hover:text-blue-600 transition-colors" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-zinc-800 group-hover:text-blue-700 transition-colors flex items-center gap-2">
+                  {tool.name}
+                  {tool.comingSoon && (
+                    <span className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-500">
+                      Coming soon
+                    </span>
+                  )}
+                </h2>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  {tool.description}
+                </p>
+              </div>
+            </div>
+          )
+          // Placeholder tiles render as a non-navigating, dimmed card.
+          if (tool.comingSoon) {
+            return (
+              <div key={tool.href} className="rounded-lg border bg-white p-5 opacity-60 cursor-default">
+                {inner}
+              </div>
+            )
+          }
+          // Tiles with multiple actions render secondary link buttons instead of
+          // wrapping the whole card in a single <Link> (no nested anchors).
+          if (tool.links && tool.links.length > 0) {
+            return (
+              <div key={tool.href} className="group rounded-lg border bg-white p-5 hover:border-blue-300 hover:shadow-sm transition-all">
+                {inner}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {tool.links.map(link => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className="inline-flex items-center rounded-md border px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )
+          }
           return (
             <Link
               key={tool.href}
               href={tool.href}
               className="group rounded-lg border bg-white p-5 hover:border-blue-300 hover:shadow-sm transition-all"
             >
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-lg bg-zinc-100 group-hover:bg-blue-50 flex items-center justify-center shrink-0 transition-colors">
-                  <Icon className="h-5 w-5 text-zinc-600 group-hover:text-blue-600 transition-colors" />
-                </div>
-                <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-zinc-800 group-hover:text-blue-700 transition-colors">
-                    {tool.name}
-                  </h2>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    {tool.description}
-                  </p>
-                </div>
-              </div>
+              {inner}
             </Link>
           )
         })}

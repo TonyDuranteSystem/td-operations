@@ -10,7 +10,7 @@ import { getNewDocumentIds } from '@/lib/portal/document-alerts'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
-import { FileText, Mail, Building2, User } from 'lucide-react'
+import { FileText, Mail, Building2, User, Layers } from 'lucide-react'
 import { InvoiceArchive } from '@/components/portal/invoice-archive'
 
 export const dynamic = 'force-dynamic'
@@ -57,16 +57,21 @@ export default async function PortalDocumentsPage() {
     id: string; file_name: string; document_type_name: string | null
     category: number | null; drive_file_id: string | null
     processed_at: string | null; created_at: string
+    service_delivery_id: string | null
   }
 
   let companyDocs: DocRow[] = []
   let myDocs: DocRow[] = []
+  // Flow-linked documents (stamped with service_delivery_id by the flow upload
+  // route), grouped into per-flow sections ("Tax Return 2025", etc.). These are
+  // pulled OUT of the Company/My lists below so they never appear twice.
+  let flowGroups: { id: string; title: string; docs: DocRow[] }[] = []
 
   if (selectedAccountId) {
     // Company docs: shared categories (1,3,4,5) OR no contact assigned
     const { data: cdData } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
       .or(`category.in.(${COMPANY_CATEGORIES.join(',')}),contact_id.is.null`)
@@ -78,32 +83,90 @@ export default async function PortalDocumentsPage() {
     // They appear ONLY in "My Documents" for their owner; an ownerless personal
     // doc stays hidden from all clients until an admin assigns it. This closes a
     // multi-member leak where an unassigned passport could be shown to everyone.
-    companyDocs = (cdData ?? []).filter(d => d.category !== 2) as DocRow[]
+    companyDocs = ((cdData ?? []) as unknown as DocRow[]).filter(d => d.category !== 2)
 
     // My docs: personal category (Contacts = 2) belonging to this contact only.
     // Teammates have no contact id → they NEVER see anyone's personal docs.
     if (contactId) {
       const { data: mdData } = await supabaseAdmin
         .from('documents')
-        .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+        .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
         .eq('account_id', selectedAccountId)
         .eq('contact_id', contactId)
         .eq('category', 2)
         .eq('portal_visible', true)
         .order('created_at', { ascending: false })
         .limit(50)
-      myDocs = (mdData ?? []) as DocRow[]
+      myDocs = (mdData ?? []) as unknown as DocRow[]
+    }
+
+    // Flow-linked docs — queried independently of category so any SD-stamped
+    // document can be grouped, then removed from Company/My to avoid duplicates.
+    // We do NOT filter portal_visible in SQL: flow docs are written
+    // portal_visible=false by default and the client sees a CURATED allowlist of
+    // client-safe stages (isClientSafeFlowDoc) — the unsigned "Tax Return
+    // Prepared" draft is excluded. `service_delivery_id` / `flow_stage` aren't in
+    // the generated Supabase types yet (flow migration), so the client is cast.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: flowData } = await (supabaseAdmin as any)
+      .from('documents')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
+      .eq('account_id', selectedAccountId)
+      .not('service_delivery_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(200)
+    const flowDocsRaw = (flowData ?? []) as (DocRow & { flow_stage: string | null; portal_visible: boolean | null })[]
+
+    if (flowDocsRaw.length > 0) {
+      // Resolve each SD's type + a client-facing title ("Tax Return 2025").
+      const sdIds = Array.from(new Set(flowDocsRaw.map(d => d.service_delivery_id).filter((v): v is string => !!v)))
+      const { deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
+      const { isClientSafeFlowDoc } = await import('@/lib/flows/flow-doc-visibility')
+      const { data: sdRows } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('id, service_type, service_name, due_date, stage_entered_at, created_at')
+        .in('id', sdIds)
+      const sdMeta = new Map((sdRows ?? []).map(sd => {
+        const year = deriveFlowYear(sd)
+        const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
+        return [sd.id as string, { title: title as string, serviceType: sd.service_type as string | null }]
+      }))
+
+      // CURATED visibility: keep only flow docs from client-safe stages (or any
+      // an admin explicitly published). The unsigned prepared return is dropped.
+      const flowDocs = flowDocsRaw.filter(d => {
+        const meta = d.service_delivery_id ? sdMeta.get(d.service_delivery_id) : undefined
+        return isClientSafeFlowDoc(meta?.serviceType, d.flow_stage, d.portal_visible)
+      })
+
+      const flowIds = new Set(flowDocs.map(d => d.id))
+      companyDocs = companyDocs.filter(d => !flowIds.has(d.id))
+      myDocs = myDocs.filter(d => !flowIds.has(d.id))
+
+      // Group, preserving the newest-first order SDs first appear in.
+      const order: string[] = []
+      const byId = new Map<string, DocRow[]>()
+      for (const d of flowDocs) {
+        const key = d.service_delivery_id as string
+        if (!byId.has(key)) { byId.set(key, []); order.push(key) }
+        byId.get(key)!.push(d)
+      }
+      flowGroups = order.map(id => ({
+        id,
+        title: sdMeta.get(id)?.title ?? 'Service',
+        docs: byId.get(id)!,
+      }))
     }
   } else {
     // Contact-only clients (ITIN, no LLC) — all docs are personal
     const { data } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
       .eq('contact_id', contactId)
       .eq('portal_visible', true)
       .order('created_at', { ascending: false })
       .limit(100)
-    myDocs = (data ?? []) as DocRow[]
+    myDocs = (data ?? []) as unknown as DocRow[]
   }
 
   // Fetch correspondence (contact-centric for clients: direct + linked accounts;
@@ -128,7 +191,7 @@ export default async function PortalDocumentsPage() {
 
   // Which documents are "new" (alert-eligible + unopened) for THIS contact —
   // drives the "New" pill + tinted row. Teammates have no per-person state.
-  const allDocIds = [...companyDocs, ...myDocs].map(d => d.id)
+  const allDocIds = [...companyDocs, ...myDocs, ...flowGroups.flatMap(g => g.docs)].map(d => d.id)
   const newDocIds = contactId
     ? Array.from(await getNewDocumentIds(allDocIds, contactId))
     : []
@@ -164,8 +227,20 @@ export default async function PortalDocumentsPage() {
         <InvoiceArchive items={invoiceArchive} />
       )}
 
+      {/* Service Documents — grouped per flow (Tax Return 2025, Annual Report
+          2026, …) from documents stamped with a service_delivery_id. */}
+      {flowGroups.map(group => (
+        <div key={group.id}>
+          <div className="flex items-center gap-2 mb-3">
+            <Layers className="h-4 w-4 text-zinc-500" />
+            <h2 className="text-sm font-semibold text-zinc-700">{group.title}</h2>
+          </div>
+          <DocumentList documents={group.docs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} locale={locale} />
+        </div>
+      ))}
+
       {/* Documents — split into Company and My */}
-      {companyDocs.length === 0 && myDocs.length === 0 ? (
+      {companyDocs.length === 0 && myDocs.length === 0 && flowGroups.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
           <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('documents.noDocuments', locale)}</h3>

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
 import type { PortalAccount, PortalService } from '@/lib/types'
+import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -412,6 +413,86 @@ export async function getPortalServicesByContact(contactId: string): Promise<Por
     start_date: sd.start_date,
     current_stage: sd.stage,
   })) as PortalService[]
+}
+
+/**
+ * Client-facing "Service Status" flows for the active dashboard.
+ *
+ * Reads the account's ACTIVE service_deliveries of the four recurring flow
+ * types (Tax Return / State Annual Report / State RA Renewal / CMRA), and for
+ * each computes a client-facing progress fraction + the current stage's
+ * client_label from pipeline_stages. Read-only; reuses the flow resolver's pure
+ * helpers (FLOW_TYPES / deriveFlowYear / buildFlowTopic) and the pure
+ * computeFlowProgress stage-position logic so it stays consistent with the
+ * staff workspace and the Tax tracker.
+ *
+ * A flow whose stages carry no client_label (CMRA) returns totalStages=0 so the
+ * UI can show a neutral "Active" state without a 0-of-0 progress bar.
+ */
+export interface PortalFlow {
+  id: string
+  flow_type: string
+  title: string
+  currentLabel: string | null
+  completedStages: number
+  totalStages: number
+  dueDate: string | null
+  /** Ordered visual-stepper steps; null for flows with no client-facing stages. */
+  steps: FlowStep[] | null
+}
+
+export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Promise<PortalFlow[]> {
+  const { FLOW_TYPES, deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
+  const { computeFlowProgress, buildFlowSteps } = await import('@/lib/flows/flow-progress')
+
+  const { data: sds } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
+    .eq('account_id', accountId)
+    .in('service_type', FLOW_TYPES as unknown as string[])
+    .eq('status', 'active')
+    .order('updated_at', { ascending: false })
+
+  if (!sds || sds.length === 0) return []
+
+  const serviceTypes = Array.from(new Set(sds.map(s => s.service_type).filter((t): t is string => !!t)))
+  const { data: stageRows } = await supabaseAdmin
+    .from('pipeline_stages')
+    .select('service_type, stage_name, stage_order, client_label, client_label_it, icon')
+    .in('service_type', serviceTypes)
+
+  const stagesByType = new Map<string, FlowStageRow[]>()
+  for (const r of stageRows ?? []) {
+    if (!r.service_type) continue
+    const list = stagesByType.get(r.service_type) ?? []
+    list.push({
+      stage_name: r.stage_name as string,
+      stage_order: (r.stage_order as number | null) ?? 0,
+      client_label: (r.client_label as string | null) ?? null,
+      client_label_it: (r.client_label_it as string | null) ?? null,
+      icon: (r.icon as string | null) ?? null,
+    })
+    stagesByType.set(r.service_type, list)
+  }
+
+  return sds.map(sd => {
+    const serviceType = sd.service_type ?? ''
+    const stages = stagesByType.get(serviceType) ?? []
+    const progress = computeFlowProgress(stages, sd.stage ?? null, locale)
+    const steps = buildFlowSteps(stages, sd.stage ?? null, locale)
+    const year = deriveFlowYear(sd)
+    const title = buildFlowTopic(serviceType, year) || sd.service_name || serviceType || 'Service'
+    return {
+      id: sd.id as string,
+      flow_type: serviceType,
+      title,
+      currentLabel: progress.currentLabel,
+      completedStages: progress.completedStages,
+      totalStages: progress.totalStages,
+      dueDate: (sd.due_date as string | null) ?? null,
+      steps,
+    }
+  })
 }
 
 export async function getPortalDeadlines(accountId: string) {
