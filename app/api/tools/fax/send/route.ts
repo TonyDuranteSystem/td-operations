@@ -129,6 +129,7 @@ export async function POST(req: NextRequest) {
       recipName,
     })
   } catch (e) {
+    console.error('[fax] Faxage request failed (network/parse):', e)
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : 'Failed to reach the fax service.' },
       { status: 502 },
@@ -136,10 +137,16 @@ export async function POST(req: NextRequest) {
   }
 
   if (!result.ok) {
-    return NextResponse.json(
-      { success: false, error: `Faxage rejected the request: ${result.raw.slice(0, 300) || 'unknown error'}` },
-      { status: 502 },
-    )
+    // Log the FULL raw Faxage response so the cause is visible in server logs.
+    console.error('[fax] Faxage rejected the request. Raw response:', result.raw, '| faxno:', faxno, '| file:', fileName)
+    // Faxage auth failures come back as "ERR02: Login incorrect" — surface a
+    // credentials-specific message instead of a generic "rejected".
+    const low = result.raw.toLowerCase()
+    const isLogin = low.includes('login incorrect') || low.startsWith('err02') || low.includes('login failed')
+    const error = isLogin
+      ? `Faxage login failed — verify FAXAGE_USERNAME / FAXAGE_PASSWORD / FAXAGE_COMPANY in the Vercel env (these are the Faxage account's Company + Username, which are usually NOT the email). Faxage said: ${result.raw.slice(0, 200)}`
+      : `Faxage rejected the request: ${result.raw.slice(0, 300) || 'unknown error'}`
+    return NextResponse.json({ success: false, error }, { status: 502 })
   }
 
   // Audit trail (best-effort — never fail the send if logging fails).

@@ -16,6 +16,8 @@ A staff tool to send a document by fax via **Faxage** (faxage.com HTTPS API). Re
 - Credentials are NEVER sent from the client or committed to git.
 
 ## Gotchas / unverified
+- **Auth (2026-06-15): Faxage returns `ERR02: Login incorrect`** for `username=password=company=support@tonydurante.us` (verified live via read-only `operation=listfax` — fails in every combination tried, with and without `company`). The endpoint + request shaping are correct (Faxage parses far enough to reject the LOGIN). Faxage authenticates with the account's **Company** (account identifier — usually NOT the email) + **Username** + **Password**; the email-as-everything credentials are wrong. **The fax cannot send until the correct Faxage Company/Username/Password are set** in `FAXAGE_*`. The route now logs the full raw response to `console.error` and returns a credentials-specific error on `ERR02`/"login incorrect".
+
 - **The exact Faxage `sendfax` response format is UNVERIFIED** (no live API doc access at build time). `parseFaxageResponse` is heuristic; adjust the job-id/error parsing once a real response is observed.
 - **Cover message is recorded in `action_log` but NOT transmitted** — the documented Faxage fields have no cover-page param we can rely on. Wire it once confirmed from Faxage's docs.
 - **Sandbox `downloadFileBinary` returns a placeholder PDF** (it short-circuits when `SANDBOX_MODE=1`), so faxing a *selected document* in sandbox sends a mock PDF, not the real file. Upload path uses the real uploaded bytes.
