@@ -33,9 +33,20 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { downloadFileBinary } from '@/lib/google-drive'
-import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER } from '@/lib/fax/faxage'
+import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBase64Prefix } from '@/lib/fax/faxage'
 
 const MAX_COVER_LENGTH = 2000
+
+/** Best-effort MIME from a filename extension (uploads carry no MIME). */
+function mimeFromName(name: string): string {
+  const ext = name.toLowerCase().split('.').pop() || ''
+  if (ext === 'pdf') return 'application/pdf'
+  if (ext === 'png') return 'image/png'
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
+  if (ext === 'tif' || ext === 'tiff') return 'image/tiff'
+  if (ext === 'gif') return 'image/gif'
+  return 'application/octet-stream'
+}
 
 export async function POST(req: NextRequest) {
   // Staff auth — middleware lets logged-in clients reach /api, so gate here.
@@ -150,13 +161,60 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error }, { status: 502 })
   }
 
+  // Persist an UPLOADED file so it stays viewable from Fax History. A
+  // document-source fax already has a documents row (its id is `documentId`);
+  // an upload had no stored copy — the bytes were streamed to Faxage and lost.
+  // We now save the upload to the `onboarding-uploads` bucket and create a
+  // documents row (drive_file_id=`storage:<path>`, the same convention
+  // fetchFlowDocumentPdf / the preview route read), so every fax has a viewable
+  // attachment. Best-effort + AFTER a successful send (so a rejected fax never
+  // leaves an orphan file/row — Fax History only lists sent faxes anyway).
+  let uploadedDocId: string | null = null
+  if (!documentId && fileBase64) {
+    try {
+      const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
+      const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
+      const mime = mimeFromName(fileName)
+      const storagePath = `fax-attachments/${crypto.randomUUID()}-${safeName}`
+      const { error: upErr } = await supabaseAdmin.storage
+        .from('onboarding-uploads')
+        .upload(storagePath, bytes, { contentType: mime, upsert: false })
+      if (!upErr) {
+        const { data: signed } = await supabaseAdmin.storage
+          .from('onboarding-uploads')
+          .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
+        const { data: docRow } = await supabaseAdmin
+          .from('documents')
+          .insert({
+            file_name: fileName,
+            drive_file_id: `storage:${storagePath}`,
+            drive_link: signed?.signedUrl ?? `onboarding-uploads/${storagePath}`,
+            mime_type: mime,
+            file_size: bytes.length,
+            status: 'classified',
+            account_id: accountId,
+            portal_visible: false,
+            notify_client: false,
+          })
+          .select('id')
+          .single()
+        uploadedDocId = (docRow?.id as string | undefined) ?? null
+      }
+    } catch {
+      /* persistence is best-effort — never fail a sent fax */
+    }
+  }
+
   // Audit trail (best-effort — never fail the send if logging fails).
   try {
     await supabaseAdmin.from('action_log').insert({
       actor: user?.email || 'dashboard',
       action_type: 'fax_sent',
       table_name: 'documents',
-      record_id: documentId,
+      // record_id points at the viewable document — the selected doc for a
+      // document-source fax, or the just-persisted upload doc. Fax History links
+      // "View Document" whenever record_id is present.
+      record_id: documentId ?? uploadedDocId,
       account_id: accountId,
       service_delivery_id: serviceDeliveryId,
       summary: `Fax sent to ${faxno} — ${fileName}`,
@@ -168,6 +226,7 @@ export async function POST(req: NextRequest) {
         job_id: result.jobId,
         cover_message: coverMessage || null,
         source: documentId ? 'document' : 'upload',
+        document_id: documentId ?? uploadedDocId,
         faxage_response: result.raw.slice(0, 500),
       },
     })
