@@ -16,6 +16,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { getFaxStatus } from '@/lib/fax/faxage'
 
@@ -56,6 +57,44 @@ export async function GET(req: NextRequest) {
       ? `Faxage login failed — verify FAXAGE_USERNAME / FAXAGE_PASSWORD / FAXAGE_COMPANY in the Vercel env. Faxage said: ${(result.error || '').slice(0, 200)}`
       : `Faxage rejected the status request: ${(result.error || 'unknown error').slice(0, 300)}`
     return NextResponse.json({ error }, { status: 502 })
+  }
+
+  // Persist the live status onto the matching action_log row so Fax History
+  // shows it on page load without re-checking. Best-effort + non-blocking: a
+  // failure here never affects the response. Only when a specific jobId was
+  // requested and a meaningful (non-unknown) record came back. The details JSON
+  // is MERGED (other fields preserved); matched by details->>job_id.
+  const rec = result.records[0]
+  if (jobId && rec && rec.status !== 'unknown') {
+    try {
+      const { data: matches } = await supabaseAdmin
+        .from('action_log')
+        .select('id, details')
+        .eq('action_type', 'fax_sent')
+        .eq('details->>job_id', jobId)
+        .limit(1)
+      const row = matches?.[0]
+      if (row) {
+        const details = (row.details ?? {}) as Record<string, unknown>
+        await supabaseAdmin
+          .from('action_log')
+          .update({
+            details: {
+              ...details,
+              fax_status: {
+                status: rec.status,
+                pages: rec.pageCount || null,
+                xmit_time: rec.xmitTime || null,
+                complete_time: rec.completeTime || null,
+                checked_at: new Date().toISOString(),
+              },
+            },
+          })
+          .eq('id', row.id)
+      }
+    } catch (e) {
+      console.error('[fax] persist status to action_log failed (non-blocking):', e)
+    }
   }
 
   return NextResponse.json({ records: result.records })

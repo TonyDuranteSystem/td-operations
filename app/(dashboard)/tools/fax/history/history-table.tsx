@@ -17,6 +17,14 @@ export interface FaxHistoryRow {
   /** documents.id of the original file, when the fax was sent from a stored
    *  document; null for ad-hoc uploads (no persisted file to view). */
   documentId: string | null
+  /** Live delivery status persisted from a prior "Check status" (action_log
+   *  details.fax_status). Shown on load; null when never checked. */
+  savedStatus: {
+    status: 'delivered' | 'pending' | 'failed' | 'unknown'
+    pages: string | null
+    xmitTime: string | null
+    completeTime: string | null
+  } | null
 }
 
 type LiveStatus = 'delivered' | 'pending' | 'failed' | 'unknown'
@@ -51,7 +59,23 @@ const STATUS_LABEL: Record<LiveStatus, string> = {
 }
 
 export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
-  const [statuses, setStatuses] = useState<Record<string, StatusState>>({})
+  // Seed from persisted statuses so previously-checked faxes show their status
+  // on load without re-clicking.
+  const [statuses, setStatuses] = useState<Record<string, StatusState>>(() => {
+    const seed: Record<string, StatusState> = {}
+    for (const r of rows) {
+      if (r.jobId && r.savedStatus) {
+        seed[r.jobId] = {
+          loading: false,
+          status: r.savedStatus.status,
+          pages: r.savedStatus.pages ?? undefined,
+          xmitTime: r.savedStatus.xmitTime ?? undefined,
+          completeTime: r.savedStatus.completeTime ?? undefined,
+        }
+      }
+    }
+    return seed
+  })
 
   const checkStatus = async (jobId: string) => {
     setStatuses(prev => ({ ...prev, [jobId]: { loading: true } }))
@@ -140,29 +164,51 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                   </span>
                 </td>
                 <td className="px-4 py-3">
-                  {st?.status ? (
-                    <div className="space-y-0.5">
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[st.status]}`}>
-                        {STATUS_LABEL[st.status]}
-                      </span>
-                      {(st.pages || st.xmitTime) && (
-                        <div className="text-[11px] text-zinc-400">
-                          {st.pages ? `${st.pages} pg` : ''}{st.pages && st.xmitTime ? ' · ' : ''}{st.xmitTime || ''}
+                  {(() => {
+                    // Terminal (delivered/failed) = settled → show the badge, no
+                    // button. Pending or never-checked → keep the button so staff
+                    // can (re-)check; pending also shows its current badge.
+                    const isTerminal = st?.status === 'delivered' || st?.status === 'failed'
+                    const meta = st && (st.pages || st.xmitTime) ? (
+                      <div className="text-[11px] text-zinc-400">
+                        {st.pages ? `${st.pages} pg` : ''}{st.pages && st.xmitTime ? ' · ' : ''}{st.xmitTime || ''}
+                      </div>
+                    ) : null
+
+                    if (isTerminal && st?.status) {
+                      return (
+                        <div className="space-y-0.5">
+                          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[st.status]}`}>
+                            {STATUS_LABEL[st.status]}
+                          </span>
+                          {meta}
                         </div>
-                      )}
-                    </div>
-                  ) : row.jobId ? (
-                    <button
-                      onClick={() => checkStatus(row.jobId as string)}
-                      disabled={st?.loading}
-                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
-                    >
-                      {st?.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                      Check status
-                    </button>
-                  ) : (
-                    <span className="text-xs text-zinc-400">Submitted</span>
-                  )}
+                      )
+                    }
+                    if (!row.jobId) {
+                      return <span className="text-xs text-zinc-400">Submitted</span>
+                    }
+                    return (
+                      <div className="space-y-1">
+                        {st?.status === 'pending' && (
+                          <div className="space-y-0.5">
+                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES.pending}`}>
+                              {STATUS_LABEL.pending}
+                            </span>
+                            {meta}
+                          </div>
+                        )}
+                        <button
+                          onClick={() => checkStatus(row.jobId as string)}
+                          disabled={st?.loading}
+                          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+                        >
+                          {st?.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                          {st?.status === 'pending' ? 'Re-check' : 'Check status'}
+                        </button>
+                      </div>
+                    )
+                  })()}
                 </td>
                 <td className="px-4 py-3 font-mono text-xs text-zinc-500">{row.jobId || '—'}</td>
                 <td className="px-4 py-3 text-right">

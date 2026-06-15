@@ -30,6 +30,19 @@ export default async function FaxHistoryPage() {
     const source = (d.source as string | null) ?? null
     // Link "View Document" whenever a document was recorded (both sources now).
     const documentId = l.record_id ? (l.record_id as string) : null
+    // Persisted live status (written by the status route on a prior Check
+    // Status). When present we show it on load instead of the button.
+    const fs = (d.fax_status ?? null) as {
+      status?: string; pages?: string | null; xmit_time?: string | null; complete_time?: string | null
+    } | null
+    const savedStatus = fs && fs.status
+      ? {
+          status: fs.status as 'delivered' | 'pending' | 'failed' | 'unknown',
+          pages: fs.pages ?? null,
+          xmitTime: fs.xmit_time ?? null,
+          completeTime: fs.complete_time ?? null,
+        }
+      : null
     return {
       id: l.id as string,
       createdAt: (l.created_at as string | null) ?? null,
@@ -40,6 +53,7 @@ export default async function FaxHistoryPage() {
       jobId: (d.job_id as string | null) ?? null,
       source,
       documentId,
+      savedStatus,
     }
   })
 
