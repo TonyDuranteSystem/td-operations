@@ -2,7 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
-import { isDashboardUser } from '@/lib/auth'
+import { isDashboardUser, isAdmin } from '@/lib/auth'
+import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -433,8 +434,19 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     stagesByServiceType = grouped
   }
 
+  // Admin-only "View as client": resolve the account's primary contact (Owner,
+  // else first linked contact). Read-only portal view — admins only.
+  const canViewAs = user ? isAdmin(user) : false
+  const primaryContact =
+    contacts.find((c) => (c as Contact & { role?: string }).role === 'Owner') ?? contacts[0]
+
   return (
     <div className="p-6 lg:p-8">
+      {canViewAs && primaryContact && (
+        <div className="mb-4 flex justify-end">
+          <ViewAsClientButton contactId={primaryContact.id} />
+        </div>
+      )}
       <AccountDetail
         account={account as Account}
         contacts={contacts}
