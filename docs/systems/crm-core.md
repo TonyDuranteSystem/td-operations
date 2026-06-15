@@ -1,5 +1,6 @@
 # CRM Core — Accounts, Contacts, Tasks, Deals
-_Last verified against code: 2026-05-29 — Claude (read lib/mcp/tools/crm.ts, lib/operations/contact.ts, per-record-activity)_
+_Last verified against code: 2026-06-15 — Claude (contact email → portal LOGIN email auto-sync: changing a contact's email via crm_update_record, the core updateContact, OR the inline contact/account email field now also updates that client's portal login email, through the shared `lib/operations/portal-login-email.ts` helper — resolves the login by contact_id, conflict-guarded, notifies the client. See auth-oauth.md.)_
+_Prior: 2026-05-29 — Claude (read lib/mcp/tools/crm.ts, lib/operations/contact.ts, per-record-activity)_
 
 ## What it is
 The foundational records everything else hangs off: **accounts** (companies), **contacts** (people), the **`account_contacts`** junction that links them, plus **tasks**, **deals**, **leads**, **payments**, and **service_deliveries**. Almost every other system references these.
@@ -13,6 +14,7 @@ The foundational records everything else hangs off: **accounts** (companies), **
 - **Never use `execute_sql` to write CRM data — always `crm_update_record`** (R018), or the per-table operation-authority helpers.
 - `crm_update_record` (`lib/mcp/tools/crm.ts`) validates status/stage against `STATUS_VALIDATION_MAP` (ENUM-backed tables: `accounts.status`, `payments.status`, `tasks.status`, `leads.status`, `deals.stage`, `tax_returns.status` — constants in `lib/constants.ts`), writes the change, logs to `action_log`, and mirrors to Airtable (`syncSupabaseToAirtable`).
 - **Operation-authority layers** — `updateAccount` / `updateTask` / `updateContact` (`lib/operations/contact.ts` etc.) are single-entry helpers that add optimistic locking + `action_log` audit. The **P2.4 ESLint rule blocks raw `.insert/.update/.upsert` on protected tables** — go through these helpers (workflow handlers and the AI agent already do).
+- **Contact email is kept in sync with the portal LOGIN email.** Changing a contact's `email` (via `crm_update_record`, `updateContact`, or the inline contact/account email field) calls `syncPortalLoginEmail` (`lib/operations/portal-login-email.ts`): it finds the client's login **by `contact_id`** (never by email), and if the new email is free, updates the login and emails the client their new login (password unchanged). If the new email already belongs to **another** login it is a **conflict** — the contact email still updates but the login is left unchanged and flagged (never merges identities). Best-effort: a sync failure never blocks the contact update. This closes the historical drift where a contact's email changed but the login kept the old address.
 
 ## How it's built
 ### Tools (`lib/mcp/tools/crm.ts`)

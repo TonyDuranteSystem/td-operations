@@ -17,6 +17,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { syncPortalLoginEmail, type LoginEmailSyncResult } from "@/lib/operations/portal-login-email"
 import type { Database } from "@/lib/database.types"
 
 type ContactUpdate = Database["public"]["Tables"]["contacts"]["Update"]
@@ -40,6 +41,8 @@ export interface UpdateContactResult {
   contact_id?: string
   updated_at?: string
   error?: string
+  /** Present when the patch changed `email` — the result of syncing the portal login. */
+  loginEmailSync?: LoginEmailSyncResult
 }
 
 export async function updateContact(params: UpdateContactParams): Promise<UpdateContactResult> {
@@ -91,11 +94,35 @@ export async function updateContact(params: UpdateContactParams): Promise<Update
       details: params.details || { fields: changedFields, patch: params.patch },
     })
 
+    // Keep the portal LOGIN email in sync with the contact email. Best-effort:
+    // a sync failure/conflict NEVER fails the contact update — the outcome is
+    // surfaced in `loginEmailSync` for the caller to flag. (R: "when we update an
+    // email, the login must update automatically.")
+    let loginEmailSync: LoginEmailSyncResult | undefined
+    if (Object.prototype.hasOwnProperty.call(params.patch, "email") && params.patch.email) {
+      try {
+        const { data: c } = await supabaseAdmin
+          .from("contacts")
+          .select("full_name, language")
+          .eq("id", params.id)
+          .maybeSingle()
+        loginEmailSync = await syncPortalLoginEmail({
+          contactId: params.id,
+          newEmail: String(params.patch.email),
+          language: c?.language ?? null,
+          fullName: c?.full_name ?? null,
+        })
+      } catch (e) {
+        loginEmailSync = { status: "error", error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+
     return {
       success: true,
       outcome: "updated",
       contact_id: row.id,
       updated_at: row.updated_at ?? nowIso,
+      loginEmailSync,
     }
   } catch (err) {
     return {

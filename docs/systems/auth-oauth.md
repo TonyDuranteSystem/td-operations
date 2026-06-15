@@ -1,5 +1,6 @@
 # Auth & OAuth
-_Last verified against code: 2026-06-15 — Claude (added the read-only "View as client" lock to middleware.ts — see the new bullet + Gotchas; feature writeup lives in portal.md)_
+_Last verified against code: 2026-06-15 — Claude (portal LOGIN email now follows the CONTACT email: any contact-email change syncs the auth login email via `lib/operations/portal-login-email.ts` — by contact_id, conflict-guarded, client-notified. See "Portal login email vs contact email" below + crm-core.md.)_
+_Prior: 2026-06-15 — Claude (added the read-only "View as client" lock to middleware.ts — see the bullet + Gotchas; feature writeup lives in portal.md)_
 _Prior: 2026-05-29 — Claude (read middleware.ts, lib/auth.ts, lib/oauth.ts)_
 
 ## What it is
@@ -20,6 +21,11 @@ Two completely separate authentication systems — don't confuse them:
   - **Sandbox guard**: `SANDBOX_MODE=1` blocks all `/api/webhooks` (503) so external traffic can't mutate sandbox data.
   - **Read-only "View as client" lock**: when a valid signed `td_view_as` marker cookie is present, middleware returns **403** for any mutating method (POST/PUT/PATCH/DELETE) on `/portal` + `/api/portal` — the single chokepoint that makes an admin's client view read-only (blocks API writes AND server actions). `/portal/view-as` is a public path (token-gated; mints/tears down its own session). Full feature in `portal.md`. Marker signing/verify: `lib/portal/view-as.ts` (HMAC over `API_SECRET_TOKEN`, edge+node safe).
 - `isDashboardUser()` is the staff guard reused by API routes (e.g. `requireStaff()` in the message-actions route).
+
+## Portal login email vs contact email
+- The **login email** (`auth.users.email`) is the credential a client signs in with; the **contact email** (`contacts.email`) is the CRM/business address. They can legitimately differ.
+- **The login follows the contact email automatically.** Any contact-email change — `crm_update_record`, the core `updateContact`, or the inline contact/account email field — calls `syncPortalLoginEmail` (`lib/operations/portal-login-email.ts`): it resolves the login **by `contact_id`** (never by matching emails), and if the new email is free it updates the login (Supabase admin `updateUserById` migrates users+identities, so the client signs in with the new email and the **same password**) and emails the client their new login.
+- **Conflict guard:** if the new email already belongs to **another** login, the sync is **skipped + flagged** (the contact email still updates) — identities are never merged. Because some clients log in with an email different from their contact email on purpose (and some have two logins), a blanket "force every login = contact email" is unsafe — backfills are reviewed per-client.
 
 ## MCP server auth (Claude Code + Claude.ai)
 - `lib/oauth.ts` implements **OAuth 2.1 with PKCE** for the Claude.ai connector; **Bearer token stays active for Claude Code**.
@@ -49,6 +55,7 @@ Two completely separate authentication systems — don't confuse them:
 - **Don't touch the OAuth issuer domain** — auth breaks silently for the Claude.ai connector. (The QB redirect points here too, but QuickBooks is decommissioned/DEAD — no longer a reason.)
 - **The public-path allowlist is the attack surface** — anything listed there is unauthenticated. Audit additions.
 - **Admins are NOT blocked from the portal** (intentional, for debugging) — so "admin can see the client view" is expected, not a bug.
+- **Login email ≠ contact email is normal** — resolve a client's login by `contact_id`, NEVER by matching emails. An email-match check wrongly hid the View-as button for clients whose login email had drifted (e.g. Michele Cotti: contact `michelecotti@whalecotconsulting.com`, login `cotti_michele@libero.it`). `syncPortalLoginEmail` now keeps them aligned on contact-email change.
 - **MCP tool calls bypass the web sandbox guards entirely** (see `hooks-guardrails.md` / R096) — the `mcp__af7d85f2-*` connection hits production regardless of `SANDBOX_MODE`/`.env.local`.
 
 ## How to verify current state
