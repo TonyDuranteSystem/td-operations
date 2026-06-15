@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, FileText, RefreshCw, Download } from 'lucide-react'
+import { Loader2, FileText, RefreshCw, Download, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 
 export interface FaxHistoryRow {
@@ -14,6 +14,9 @@ export interface FaxHistoryRow {
   jobId: string | null
   /** Send-time outcome recorded in action_log ('submitted' once accepted). */
   source: string | null
+  /** documents.id of the original file, when the fax was sent from a stored
+   *  document; null for ad-hoc uploads (no persisted file to view). */
+  documentId: string | null
 }
 
 type LiveStatus = 'delivered' | 'pending' | 'failed' | 'unknown'
@@ -112,10 +115,24 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                   <div className="text-xs text-zinc-500 font-mono">{row.faxno}</div>
                 </td>
                 <td className="px-4 py-3">
-                  <span className="inline-flex items-center gap-1.5 text-zinc-700">
-                    <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                    <span className="truncate max-w-[220px]">{row.fileName}</span>
-                  </span>
+                  {row.documentId ? (
+                    <a
+                      href={`/api/documents/${encodeURIComponent(row.documentId)}/preview`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open the original document that was faxed"
+                      className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 hover:underline"
+                    >
+                      <FileText className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate max-w-[220px]">{row.fileName}</span>
+                      <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                    </a>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-zinc-700" title="Uploaded file — not stored, nothing to view">
+                      <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                      <span className="truncate max-w-[220px]">{row.fileName}</span>
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <span className="block max-w-[220px] truncate text-zinc-700" title={row.reason || undefined}>

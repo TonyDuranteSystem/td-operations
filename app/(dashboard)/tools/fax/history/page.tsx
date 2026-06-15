@@ -14,15 +14,22 @@ export default async function FaxHistoryPage() {
   if (!isDashboardUser(user)) redirect('/')
 
   // Sent faxes are recorded in action_log at send time (action_type='fax_sent').
+  // record_id holds the documents.id when the fax was sent FROM a stored document
+  // (details.source='document'); it is NULL for ad-hoc uploads (the uploaded file
+  // was streamed to Faxage but never persisted, so there's nothing to link to).
   const { data: logs } = await supabaseAdmin
     .from('action_log')
-    .select('id, created_at, summary, details')
+    .select('id, created_at, summary, details, record_id')
     .eq('action_type', 'fax_sent')
     .order('created_at', { ascending: false })
     .limit(200)
 
   const rows: FaxHistoryRow[] = (logs ?? []).map((l) => {
     const d = (l.details ?? {}) as Record<string, unknown>
+    const source = (d.source as string | null) ?? null
+    // Only a document-sourced fax has a viewable original file (its documents.id
+    // is on record_id). Uploads have no stored file → no link.
+    const documentId = source === 'document' && l.record_id ? (l.record_id as string) : null
     return {
       id: l.id as string,
       createdAt: (l.created_at as string | null) ?? null,
@@ -31,7 +38,8 @@ export default async function FaxHistoryPage() {
       reason: (d.reason as string | null) ?? null,
       fileName: (d.file_name as string | null) ?? 'document.pdf',
       jobId: (d.job_id as string | null) ?? null,
-      source: (d.source as string | null) ?? null,
+      source,
+      documentId,
     }
   })
 
