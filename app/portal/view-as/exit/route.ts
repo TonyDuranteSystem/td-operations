@@ -38,7 +38,10 @@ export async function GET(req: NextRequest) {
   )
 
   try {
-    await supabase.auth.signOut()
+    // LOCAL scope: revoke ONLY this view-as session's token, never the real
+    // client's other sessions. A global sign-out here would log the actual
+    // client out of their own portal on every device — see view-as bugfix.
+    await supabase.auth.signOut({ scope: 'local' })
   } catch (e) {
     console.error('[view-as] signOut on exit failed:', e)
   }
