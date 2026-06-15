@@ -99,6 +99,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
   { id: 'pipeline-overview', name: 'Pipeline Overview', href: '/pipeline-overview', icon: LayoutGrid, tooltip: 'All active service deliveries across every pipeline in one view — oldest cards surface first.' },
+  // DO NOT REMOVE - Tools sidebar entry. Operator tools hub lives here.
   { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — fax, e-sign, system health, exceptions, client health, config, dev tools, portal launch.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
@@ -390,8 +391,18 @@ export function Sidebar({
     setNavOrder(freshOrder)
   }, [])
 
+  // Render the saved order, then APPEND any default nav items missing from it.
+  // This guarantees every default entry (e.g. Tools) always renders even if a
+  // user's saved localStorage order is stale or predates a newly-added/moved
+  // item — a nav entry can never silently disappear again. (Bug: items absent
+  // from the saved order were previously dropped entirely.)
+  const mergedOrder = [
+    ...navOrder,
+    ...defaultNavigation.map(n => n.id).filter(id => !navOrder.includes(id)),
+  ]
+
   // Build ordered nav with badges applied
-  const orderedNav = navOrder
+  const orderedNav = mergedOrder
     .map(id => {
       const item = defaultNavigation.find(n => n.id === id)
       if (!item) return null
