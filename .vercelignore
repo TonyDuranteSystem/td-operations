@@ -6,4 +6,8 @@ node_modules
 *.log
 .env*.local
 playwright-report
-coverage
+# Anchored to root: the bare pattern `coverage` also matched the API route
+# dir app/api/portal/tax-financials/coverage/, stripping it from the deploy
+# upload → that route 404'd in production while building fine locally
+# (git tracks it; .vercelignore only affects the upload). 2026-06-15.
+/coverage
