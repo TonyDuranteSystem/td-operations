@@ -12,7 +12,8 @@ import type { WorkspaceAccount } from './types'
 export function FaxIrs({ account }: { account: WorkspaceAccount }) {
   const company = account.company_name ?? 'this client'
   const message = `Signed tax return for ${company}.`
-  const href = `/tools/fax?to=${encodeURIComponent('IRS')}&message=${encodeURIComponent(message)}`
+  const reason = `Tax Return filing - ${company}`
+  const href = `/tools/fax?to=${encodeURIComponent('IRS')}&message=${encodeURIComponent(message)}&reason=${encodeURIComponent(reason)}`
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">

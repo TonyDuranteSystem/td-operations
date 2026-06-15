@@ -28,6 +28,7 @@ export default async function FaxHistoryPage() {
       createdAt: (l.created_at as string | null) ?? null,
       faxno: (d.faxno as string | null) ?? '—',
       recipName: (d.recip_name as string | null) ?? null,
+      reason: (d.reason as string | null) ?? null,
       fileName: (d.file_name as string | null) ?? 'document.pdf',
       jobId: (d.job_id as string | null) ?? null,
       source: (d.source as string | null) ?? null,

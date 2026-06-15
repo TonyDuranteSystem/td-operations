@@ -52,6 +52,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
 
   const [faxno, setFaxno] = useState(initialFaxno)
   const [recipName, setRecipName] = useState(to)
+  const [reason, setReason] = useState(params.get('reason') ?? '')
   const [coverMessage, setCoverMessage] = useState(params.get('message') ?? '')
   const [source, setSource] = useState<Source>('upload')
   const [file, setFile] = useState<File | null>(null)
@@ -79,6 +80,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
       const payload: Record<string, unknown> = {
         faxno,
         recip_name: recipName || undefined,
+        reason: reason || undefined,
         cover_message: coverMessage || undefined,
       }
       if (source === 'upload' && file) {
@@ -161,6 +163,19 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
           placeholder="e.g. IRS"
           className="w-full h-10 rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+      </div>
+
+      <div>
+        <label htmlFor="reason" className="block text-sm font-medium text-zinc-700 mb-1">Reason <span className="text-zinc-400 font-normal">(optional)</span></label>
+        <input
+          id="reason"
+          type="text"
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder="e.g. Tax Return filing for Profit Harbor LLC"
+          className="w-full h-10 rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <p className="text-xs text-muted-foreground mt-1">Why this fax is being sent — shown in the Fax History.</p>
       </div>
 
       <div>

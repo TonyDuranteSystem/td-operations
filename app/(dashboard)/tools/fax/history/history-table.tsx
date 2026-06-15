@@ -9,6 +9,7 @@ export interface FaxHistoryRow {
   createdAt: string | null
   faxno: string
   recipName: string | null
+  reason: string | null
   fileName: string
   jobId: string | null
   /** Send-time outcome recorded in action_log ('submitted' once accepted). */
@@ -94,6 +95,7 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
             <th className="px-4 py-3 font-medium">Date</th>
             <th className="px-4 py-3 font-medium">Recipient</th>
             <th className="px-4 py-3 font-medium">Document</th>
+            <th className="px-4 py-3 font-medium">Reason</th>
             <th className="px-4 py-3 font-medium">Status</th>
             <th className="px-4 py-3 font-medium">Job ID</th>
             <th className="px-4 py-3 font-medium text-right">Receipt</th>
@@ -113,6 +115,11 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                   <span className="inline-flex items-center gap-1.5 text-zinc-700">
                     <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                     <span className="truncate max-w-[220px]">{row.fileName}</span>
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <span className="block max-w-[220px] truncate text-zinc-700" title={row.reason || undefined}>
+                    {row.reason || <span className="text-zinc-400">—</span>}
                   </span>
                 </td>
                 <td className="px-4 py-3">

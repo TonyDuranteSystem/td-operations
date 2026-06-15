@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
     ? body.document_id.trim()
     : null
   const coverMessage = typeof body.cover_message === 'string' ? body.cover_message.slice(0, MAX_COVER_LENGTH) : ''
+  const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : ''
   const recipName = typeof body.recip_name === 'string' && body.recip_name.trim() ? body.recip_name.trim() : undefined
   const serviceDeliveryId: string | null = typeof body.service_delivery_id === 'string' && body.service_delivery_id.trim()
     ? body.service_delivery_id.trim()
@@ -162,6 +163,7 @@ export async function POST(req: NextRequest) {
       details: {
         faxno,
         recip_name: recipName || null,
+        reason: reason || null,
         file_name: fileName,
         job_id: result.jobId,
         cover_message: coverMessage || null,
