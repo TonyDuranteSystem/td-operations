@@ -49,11 +49,93 @@ interface Props {
   companyName: string
 }
 
+function DocCard({ doc, locale }: { doc: SignableDocument; locale: 'en' | 'it' }) {
+  const info = DOC_INFO[doc.type]
+  const isSigned = doc.status === 'signed'
+  // Legacy docs from documents table: show as signed but non-interactive
+  // (clients view the actual file in the Documents tab, not here)
+  const isLegacyDoc = isSigned && !!doc.driveLink
+
+  const cardClass = `rounded-xl border transition-all ${
+    isSigned
+      ? 'border-green-200 bg-green-50/50' + (isLegacyDoc ? '' : ' hover:bg-green-50')
+      : 'border-zinc-200 bg-white hover:border-blue-300 hover:shadow-md'
+  }`
+
+  const cardContent = (
+    <div className="flex items-center gap-4 p-5">
+      {/* Icon */}
+      <div className={`flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center ${
+        isSigned ? 'bg-green-100' : 'bg-blue-50'
+      }`}>
+        {isSigned
+          ? <CheckCircle2 className="h-6 w-6 text-green-600" />
+          : <PenLine className="h-6 w-6 text-blue-600" />
+        }
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <h3 className={`font-semibold ${isSigned ? 'text-green-800' : 'text-zinc-900'}`}>
+            {doc.type === 'document' && doc.documentName ? doc.documentName : (info[locale]?.title || info.en.title)}
+          </h3>
+          {doc.suiteNumber && (
+            <span className="text-xs bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full">
+              Suite {doc.suiteNumber}
+            </span>
+          )}
+        </div>
+        <p className={`text-sm mt-0.5 ${isSigned ? 'text-green-600' : 'text-zinc-500'}`}>
+          {info[locale]?.desc || info.en.desc}
+        </p>
+
+        {/* Status */}
+        <div className="flex items-center gap-1.5 mt-2">
+          {isSigned ? (
+            <>
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+              <span className="text-xs font-medium text-green-600">
+                {STATUS_LABELS.signed[locale] || STATUS_LABELS.signed.en}
+                {doc.signedAt && ` — ${new Date(doc.signedAt).toLocaleDateString(locale === 'it' ? 'it-IT' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`}
+              </span>
+            </>
+          ) : (
+            <>
+              <Clock className="h-3.5 w-3.5 text-amber-500" />
+              <span className="text-xs font-medium text-amber-600">
+                {STATUS_LABELS[doc.status]?.[locale] || STATUS_LABELS[doc.status]?.en || doc.status}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Arrow — hidden for legacy docs (non-navigable) */}
+      {!isLegacyDoc && (
+        <ChevronRight className={`h-5 w-5 flex-shrink-0 ${isSigned ? 'text-green-400' : 'text-zinc-300'}`} />
+      )}
+    </div>
+  )
+
+  return isLegacyDoc ? (
+    <div className={cardClass}>{cardContent}</div>
+  ) : (
+    <Link href={doc.href} className={`block ${cardClass}`}>{cardContent}</Link>
+  )
+}
+
 export function SignDocumentsClient({ documents, companyName }: Props) {
   const { locale } = useLocale()
 
-  const pendingCount = documents.filter(d => d.status !== 'signed').length
-  const allSigned = documents.length > 0 && pendingCount === 0
+  // Split into what the client must act on vs. what's already done. The page
+  // builds the full list (OA / Lease / SS-4 / MSA / 8832 / generic signature
+  // requests incl. the flow Tax Return); here we surface the PENDING ones
+  // prominently and tuck the already-signed ones into a collapsed section so a
+  // client arriving from "Sign your tax return" sees only what needs signing.
+  const pending = documents.filter(d => d.status !== 'signed')
+  const signed = documents.filter(d => d.status === 'signed')
+  const allSigned = documents.length > 0 && pending.length === 0
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -86,110 +168,32 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
         </div>
       )}
 
-      {/* Progress bar */}
-      {documents.length > 0 && !allSigned && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between text-sm text-zinc-500 mb-2">
-            <span>
-              {locale === 'it' ? 'Progresso' : 'Progress'}
-            </span>
-            <span>
-              {documents.length - pendingCount} / {documents.length} {locale === 'it' ? 'firmati' : 'signed'}
-            </span>
-          </div>
-          <div className="w-full bg-zinc-100 rounded-full h-2">
-            <div
-              className="bg-blue-600 h-2 rounded-full transition-all duration-500"
-              style={{ width: `${((documents.length - pendingCount) / documents.length) * 100}%` }}
-            />
+      {/* Pending — what needs signing, prominent at the top */}
+      {pending.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-700 mb-3">
+            {locale === 'it' ? `Da firmare (${pending.length})` : `To sign (${pending.length})`}
+          </h2>
+          <div className="space-y-4">
+            {pending.map((doc) => <DocCard key={doc.href} doc={doc} locale={locale} />)}
           </div>
         </div>
       )}
 
-      {/* Document cards */}
-      <div className="space-y-4">
-        {documents.map((doc) => {
-          const info = DOC_INFO[doc.type]
-          const isSigned = doc.status === 'signed'
-          // Legacy docs from documents table: show as signed but non-interactive
-          // (clients view the actual file in the Documents tab, not here)
-          const isLegacyDoc = isSigned && !!doc.driveLink
+      {/* Already signed — collapsed by default, available on expand */}
+      {signed.length > 0 && (
+        <details className="mb-8 group">
+          <summary className="cursor-pointer list-none flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-zinc-400 hover:text-zinc-600 select-none">
+            <ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" />
+            {locale === 'it' ? `Già firmati (${signed.length})` : `Already signed (${signed.length})`}
+          </summary>
+          <div className="space-y-4 mt-3 opacity-80">
+            {signed.map((doc) => <DocCard key={doc.href} doc={doc} locale={locale} />)}
+          </div>
+        </details>
+      )}
 
-          const cardClass = `rounded-xl border transition-all ${
-            isSigned
-              ? 'border-green-200 bg-green-50/50' + (isLegacyDoc ? '' : ' hover:bg-green-50')
-              : 'border-zinc-200 bg-white hover:border-blue-300 hover:shadow-md'
-          }`
-
-          const cardContent = (
-            <div className="flex items-center gap-4 p-5">
-              {/* Icon */}
-              <div className={`flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center ${
-                isSigned ? 'bg-green-100' : 'bg-blue-50'
-              }`}>
-                {isSigned
-                  ? <CheckCircle2 className="h-6 w-6 text-green-600" />
-                  : <PenLine className="h-6 w-6 text-blue-600" />
-                }
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className={`font-semibold ${isSigned ? 'text-green-800' : 'text-zinc-900'}`}>
-                    {doc.type === 'document' && doc.documentName ? doc.documentName : (info[locale]?.title || info.en.title)}
-                  </h3>
-                  {doc.suiteNumber && (
-                    <span className="text-xs bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full">
-                      Suite {doc.suiteNumber}
-                    </span>
-                  )}
-                </div>
-                <p className={`text-sm mt-0.5 ${isSigned ? 'text-green-600' : 'text-zinc-500'}`}>
-                  {info[locale]?.desc || info.en.desc}
-                </p>
-
-                {/* Status */}
-                <div className="flex items-center gap-1.5 mt-2">
-                  {isSigned ? (
-                    <>
-                      <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-                      <span className="text-xs font-medium text-green-600">
-                        {STATUS_LABELS.signed[locale] || STATUS_LABELS.signed.en}
-                        {doc.signedAt && ` — ${new Date(doc.signedAt).toLocaleDateString(locale === 'it' ? 'it-IT' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Clock className="h-3.5 w-3.5 text-amber-500" />
-                      <span className="text-xs font-medium text-amber-600">
-                        {STATUS_LABELS[doc.status]?.[locale] || STATUS_LABELS[doc.status]?.en || doc.status}
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Arrow — hidden for legacy docs (non-navigable) */}
-              {!isLegacyDoc && (
-                <ChevronRight className={`h-5 w-5 flex-shrink-0 ${isSigned ? 'text-green-400' : 'text-zinc-300'}`} />
-              )}
-            </div>
-          )
-
-          return isLegacyDoc ? (
-            <div key={doc.type} className={cardClass}>
-              {cardContent}
-            </div>
-          ) : (
-            <Link key={doc.type} href={doc.href} className={`block ${cardClass}`}>
-              {cardContent}
-            </Link>
-          )
-        })}
-      </div>
-
-      {/* Empty state */}
+      {/* Empty state — nothing pending and nothing signed */}
       {documents.length === 0 && (
         <div className="rounded-xl border border-zinc-200 bg-white p-12 text-center">
           <FileSignature className="h-12 w-12 text-zinc-300 mx-auto mb-4" />
