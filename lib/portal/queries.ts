@@ -446,13 +446,17 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
   const { computeFlowProgress, buildFlowSteps } = await import('@/lib/flows/flow-progress')
 
   // Account-scoped flows (Tax Return, State Annual Report, State RA Renewal, CMRA).
-  const { data: accountSds } = await supabaseAdmin
-    .from('service_deliveries')
-    .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
-    .eq('account_id', accountId)
-    .in('service_type', FLOW_TYPES as unknown as string[])
-    .eq('status', 'active')
-    .order('updated_at', { ascending: false })
+  // Skipped when there's no account (accountId === '' for no-account/ITIN-only
+  // clients) — `.eq('account_id', '')` would be an invalid-uuid error.
+  const accountSds = accountId
+    ? (await supabaseAdmin
+        .from('service_deliveries')
+        .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
+        .eq('account_id', accountId)
+        .in('service_type', FLOW_TYPES as unknown as string[])
+        .eq('status', 'active')
+        .order('updated_at', { ascending: false })).data
+    : null
 
   // Contact-scoped flows (ITIN) — these SDs have account_id NULL + a contact_id,
   // so the account query never matches them. Only when a contactId is known, and

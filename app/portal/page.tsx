@@ -305,11 +305,41 @@ export default async function PortalDashboardPage() {
       ? await getPortalActionItemsByContact(contactId)
       : { items: [], counts: { red: 0, orange: 0, blue: 0, total: 0 } }
 
+    // ITIN-only clients (no account/LLC) still have a contact-scoped ITIN flow.
+    // Surface it as a Service Status section above the welcome dashboard so they
+    // can track it. Passing '' as accountId makes getPortalFlows skip the
+    // account query and return only the contact-scoped (ITIN) flows.
+    const noAccountFlows = contactId ? await getPortalFlows('', locale, contactId) : []
+
     return (
       <>
         {noAccountActionItems.items.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
             <ActionItems data={noAccountActionItems} locale={locale} />
+          </div>
+        )}
+        {noAccountFlows.length > 0 && (
+          <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0 space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide flex items-center gap-2 px-1">
+              <ListChecks className="h-4 w-4 text-zinc-400" />
+              {locale === 'it' ? 'Stato dei Servizi' : 'Service Status'}
+            </h2>
+            {noAccountFlows.map(f =>
+              f.steps ? (
+                <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} />
+              ) : (
+                <Link
+                  key={f.id}
+                  href={`/portal/flows/${f.id}`}
+                  className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2 hover:border-zinc-300 transition-colors"
+                >
+                  <span className="text-sm font-medium text-zinc-900">{f.title}</span>
+                  <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
+                    {locale === 'it' ? 'Attivo' : 'Active'}
+                  </span>
+                </Link>
+              )
+            )}
           </div>
         )}
         <WelcomeDashboard
