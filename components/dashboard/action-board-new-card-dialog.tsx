@@ -6,7 +6,7 @@
  * staff-only message_actions card (message_id NULL). See sysdoc notification-center-plan.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { X, Search, Building2, Plus } from 'lucide-react'
 import { createManualCard } from './action-board-actions'
 
@@ -55,18 +55,26 @@ export function NewCardDialog({
 
   const isPreset = !!preset
 
+  // Reset the form ONLY on the closed→open transition. Previously this ran on
+  // every change of `columns`/`preset` too — and the board re-fetches `columns`
+  // as a brand-new array every 30s (action-board.tsx poll), so an open dialog
+  // had the client + text wiped mid-typing every 30s (Luca's bug, 2026-06-16).
+  // We keep `columns`/`preset` in the dep list (read fresh at open time) but a
+  // ref gates the body so only a real open fires the reset.
+  const wasOpenRef = useRef(false)
   useEffect(() => {
-    if (open) {
-      setQ(''); setResults([]); setError(null)
-      setRemind(''); setPriority('normal')
-      setCol(columns.find((c) => !c.terminal)?.slug ?? '')
-      if (preset) {
-        // Client is known — show it fixed; pre-fill the suggested next step.
-        setSelected({ id: preset.accountId || preset.contactId || 'preset', company_name: preset.clientName, contact_name: null })
-        setLabel(preset.label ?? '')
-      } else {
-        setSelected(null); setLabel('')
-      }
+    const justOpened = open && !wasOpenRef.current
+    wasOpenRef.current = open
+    if (!justOpened) return
+    setQ(''); setResults([]); setError(null)
+    setRemind(''); setPriority('normal')
+    setCol(columns.find((c) => !c.terminal)?.slug ?? '')
+    if (preset) {
+      // Client is known — show it fixed; pre-fill the suggested next step.
+      setSelected({ id: preset.accountId || preset.contactId || 'preset', company_name: preset.clientName, contact_name: null })
+      setLabel(preset.label ?? '')
+    } else {
+      setSelected(null); setLabel('')
     }
   }, [open, columns, preset])
 
