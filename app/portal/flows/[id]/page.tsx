@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, MessageSquare, Layers } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Layers, ClipboardList } from 'lucide-react'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -67,7 +67,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   // ── Flow progress ──
   const { data: stageRows } = await supabaseAdmin
     .from('pipeline_stages')
-    .select('stage_name, stage_order, client_label, client_label_it, icon')
+    .select('stage_name, stage_order, client_label, client_label_it, icon, client_description')
     .eq('service_type', sd.service_type)
 
   const stages: FlowStageRow[] = (stageRows ?? []).map(r => ({
@@ -81,6 +81,14 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   const steps = buildFlowSteps(stages, sd.stage ?? null, locale)
   const year = deriveFlowYear(sd)
   const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
+
+  // Current stage's client-facing instructions (pipeline_stages.client_description)
+  // — e.g. ITIN "Client Signing" → "Print the W-7 and 1040-NR in double copy,
+  // sign them, …, mail to …". Shown as a "what to do now" card above the
+  // documents to print. Single-language field (no _it variant yet).
+  const currentInstructions =
+    ((stageRows ?? []) as Array<{ stage_name: string; client_description: string | null }>)
+      .find(r => r.stage_name === sd.stage)?.client_description?.trim() || null
 
   // ── Curated client-safe documents for this flow ──
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -139,6 +147,26 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       ) : (
         <div className="bg-white rounded-xl border shadow-sm p-5">
           <span className="text-sm text-zinc-600">{locale === 'it' ? 'Servizio attivo' : 'Service active'}</span>
+        </div>
+      )}
+
+      {/* What to do now — current stage's client-facing instructions */}
+      {currentInstructions && sd.status !== 'completed' && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-5">
+          <div className="flex items-center gap-2 mb-2">
+            <ClipboardList className="h-4 w-4 text-blue-600" />
+            <h2 className="text-sm font-semibold text-blue-900">
+              {locale === 'it' ? 'Cosa fare adesso' : 'What to do now'}
+            </h2>
+          </div>
+          <p className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">{currentInstructions}</p>
+          {docs.length > 0 && (
+            <p className="mt-2 text-xs text-blue-700">
+              {locale === 'it'
+                ? 'I documenti da stampare sono qui sotto.'
+                : 'The documents to print are below.'}
+            </p>
+          )}
         </div>
       )}
 
