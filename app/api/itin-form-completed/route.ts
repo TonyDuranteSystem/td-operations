@@ -401,7 +401,7 @@ export async function POST(req: NextRequest) {
 <ol>
 <li>Review the generated W-7, 1040-NR, and Schedule OI in Drive</li>
 <li>If correct, send to client for signature: <code>itin_prepare_documents(token="${token}", send_email=true)</code></li>
-<li>Client prints, signs, prints passport copies, mails to Largo FL</li>
+<li>Client prints, signs, prints passport copies, mails to Seminole FL</li>
 </ol>
 
 <p style="font-size:12px;color:#6b7280">Token: ${token} | Admin: ${APP_BASE_URL}/itin-form/${token}?preview=td</p>
@@ -522,7 +522,7 @@ export async function POST(req: NextRequest) {
             supabaseAdmin.from("tasks").insert({
               task_title: taskTitle,
               description: docsGenerated
-                ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Largo FL.`
+                ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Seminole FL.`
                 : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
               assigned_to: defaultTaskAssignee(),
               priority: "High",

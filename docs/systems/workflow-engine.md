@@ -1,5 +1,6 @@
 # Workflow / Catalog Engine
-_Last verified against code: 2026-05-29 — Claude (read framework.ts, dispatch-workflow-for-event.ts, trigger/snapshot schemas, catalog-validity.ts)_
+_Last verified against code: 2026-06-16 — Claude (ITIN approve-and-send handler (`lib/tasks/workflow-handlers/itin-approve-and-send.ts`) mailing instructions — both the email block and the EN/IT portal chat messages — now point clients to TD's document-receiving office **Seminole, 11125 Park Blvd Suite 104-153, FL 33772** (was the old Largo address). The CMRA business address used in client legal docs is intentionally unchanged.)_
+_Earlier 2026-05-29 — Claude (read framework.ts, dispatch-workflow-for-event.ts, trigger/snapshot schemas, catalog-validity.ts)_
 
 ## What it is
 The catalog-driven engine that powers most service operations. Two layers:

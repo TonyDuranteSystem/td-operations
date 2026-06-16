@@ -28,8 +28,8 @@ export const dynamic = 'force-dynamic'
 // regulatory destination, not a per-account value.
 const CAA_ADDRESS = {
   name: 'Tony Durante LLC',
-  line1: '10225 Ulmerton Rd, Suite 3D',
-  line2: 'Largo, FL 33771',
+  line1: '11125 Park Blvd, Suite 104-153',
+  line2: 'Seminole, FL 33772',
   country: 'USA',
 }
 

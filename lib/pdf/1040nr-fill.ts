@@ -71,17 +71,17 @@ const PREPARER = {
   ein: "83-4299021",
   ptin: "P02389222",
   phone: "+1 (727) 452-1093",
-  address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+  address: "11125 Park Blvd, Suite 104-153, Seminole, FL 33772",
 }
 
 // CAA mailing address used as the taxpayer's "home address" for ITIN apps —
 // the IRS routes correspondence to the CAA. No "c/o" prefix per 2026-05-13.
 const CAA_HOME = {
-  street: "10225 Ulmerton Rd",
-  apt: "3D",
-  city: "Largo",
+  street: "11125 Park Blvd",
+  apt: "104-153",
+  city: "Seminole",
   state: "FL",
-  zip: "33771",
+  zip: "33772",
 }
 
 export interface F1040NRFillData {

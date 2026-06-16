@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeFlowProgress, buildFlowSteps, type FlowStageRow } from '@/lib/flows/flow-progress'
+import { computeFlowProgress, buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flows/flow-progress'
 
 // Minimal Tax-Return-like labelled flow (subset of the real catalog).
 const TAX_STAGES: FlowStageRow[] = [
@@ -97,5 +97,53 @@ describe('buildFlowSteps', () => {
       { stage_name: 'A', stage_order: 10, client_label: 'Step A', client_label_it: null, icon: '📝' },
     ]
     expect(buildFlowSteps(withIcon, 'A', 'en')![0].icon).toBe('📝')
+  })
+})
+
+// ITIN-like flow: descriptions on every stage. Sandbox has NO client_label;
+// production DOES — buildJourneySteps must work either way.
+const ITIN_SANDBOX: FlowStageRow[] = [
+  { stage_name: 'Document Preparation', stage_order: 2, client_label: null, client_label_it: null, client_description: 'Preparing your W-7 and tax forms.' },
+  { stage_name: 'Client Signing', stage_order: 3, client_label: null, client_label_it: null, client_description: 'Print, sign, and mail to our office.' },
+  { stage_name: 'Documents Received', stage_order: 4, client_label: null, client_label_it: null, client_description: 'We received your signed documents.' },
+]
+
+const ITIN_PROD: FlowStageRow[] = [
+  { stage_name: 'Document Preparation', stage_order: 2, client_label: 'Documents being prepared', client_label_it: null, client_description: 'Preparing your W-7 and tax forms.' },
+  { stage_name: 'Client Signing', stage_order: 3, client_label: 'Print, sign & mail documents', client_label_it: 'Stampa e spedisci', client_description: 'Print, sign, and mail to our office.' },
+  { stage_name: 'Documents Received', stage_order: 4, client_label: 'Documents received', client_label_it: null, client_description: 'We received your signed documents.' },
+]
+
+describe('buildJourneySteps', () => {
+  it('includes EVERY stage (unlike buildFlowSteps) with description + state', () => {
+    const steps = buildJourneySteps(ITIN_SANDBOX, 'Client Signing', 'en')
+    expect(steps.map(s => s.stageName)).toEqual(['Document Preparation', 'Client Signing', 'Documents Received'])
+    expect(steps.map(s => s.state)).toEqual(['completed', 'current', 'future'])
+    expect(steps[1].description).toBe('Print, sign, and mail to our office.')
+  })
+
+  it('falls back to stage_name as the label when no client_label (sandbox ITIN)', () => {
+    const steps = buildJourneySteps(ITIN_SANDBOX, 'Client Signing', 'en')
+    expect(steps[1].label).toBe('Client Signing')
+  })
+
+  it('uses client_label when present (production ITIN), IT then EN fallback', () => {
+    expect(buildJourneySteps(ITIN_PROD, 'Client Signing', 'en')[1].label).toBe('Print, sign & mail documents')
+    expect(buildJourneySteps(ITIN_PROD, 'Client Signing', 'it')[1].label).toBe('Stampa e spedisci')
+    // Document Preparation has no IT label → EN fallback.
+    expect(buildJourneySteps(ITIN_PROD, 'Client Signing', 'it')[0].label).toBe('Documents being prepared')
+  })
+
+  it('marks all stages future for an unknown/legacy current stage', () => {
+    expect(buildJourneySteps(ITIN_PROD, 'Nonexistent', 'en').every(s => s.state === 'future')).toBe(true)
+  })
+
+  it('handles a null current stage without throwing', () => {
+    expect(buildJourneySteps(ITIN_PROD, null, 'en').every(s => s.state === 'future')).toBe(true)
+  })
+
+  it('marks the last stage current+completed-before when at the end', () => {
+    const steps = buildJourneySteps(ITIN_PROD, 'Documents Received', 'en')
+    expect(steps.map(s => s.state)).toEqual(['completed', 'completed', 'current'])
   })
 })
