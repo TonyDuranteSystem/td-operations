@@ -689,17 +689,32 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         ? (m.member_company_name ?? `Company Member ${i + 1}`)
         : ([m.member_first_name, m.member_last_name].filter(Boolean).join(' ') || `Member ${i + 1}`)
     ).join(', ')
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    await supabaseAdmin.from('tasks').insert({
-      task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
-      description: `Create portal accounts for:\n${additionalMembers.map(m => {
-        if (m.member_type === 'company') return `• ${m.member_company_name ?? 'Company'} (rep: ${m.member_rep_email ?? 'no email'})`
-        return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
-      }).join('\n')}`,
-      assigned_to: 'Luca', priority: 'Low', category: 'Formation',
-      status: 'To Do', account_id,
-    })
-    result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
+    // Idempotency guard (LT Program runaway-loop fix 2026-06-16): if this
+    // handler is ever re-invoked for the same account, do NOT create a second
+    // identical "create portal accounts" task. A single open copy is enough.
+    const { data: existingInviteTask } = await supabaseAdmin
+      .from('tasks')
+      .select('id')
+      .eq('account_id', account_id as string)
+      .eq('task_title', 'Create portal accounts for MMLLC members after LLC confirmation')
+      .neq('status', 'Done')
+      .limit(1)
+      .maybeSingle()
+    if (existingInviteTask) {
+      result.steps.push(step('portal_invite_task', 'skipped', `Open task already exists (${existingInviteTask.id}) — not duplicating`))
+    } else {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      await supabaseAdmin.from('tasks').insert({
+        task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
+        description: `Create portal accounts for:\n${additionalMembers.map(m => {
+          if (m.member_type === 'company') return `• ${m.member_company_name ?? 'Company'} (rep: ${m.member_rep_email ?? 'no email'})`
+          return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
+        }).join('\n')}`,
+        assigned_to: 'Luca', priority: 'Low', category: 'Formation',
+        status: 'To Do', account_id,
+      })
+      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
+    }
 
     await updateJobProgress(job.id, result)
   }
@@ -1266,18 +1281,32 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // ─── 10. PORTAL NOTIFICATION TO CONTACT ───
   if (contact_id) {
     try {
-      const { createPortalNotification } = await import("@/lib/portal/notifications")
-      await createPortalNotification({
-        contact_id,
-        account_id: account_id || undefined,
-        type: "service",
-        title: "We received your onboarding data",
-        body: company_name
-          ? `Thanks — we've received everything for ${company_name}. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).`
-          : "Thanks — we've received your onboarding data. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).",
-        link: "/portal",
-      })
-      result.steps.push(step("portal_notification", "ok", "Contact notified in portal"))
+      // Idempotency guard (LT Program runaway-loop fix 2026-06-16): createPortalNotification
+      // also fires a device push, so a re-invoked handler would spam the client's phone.
+      // Skip if this onboarding-received notification already exists for the contact.
+      const { data: existingNotif } = await supabaseAdmin
+        .from("portal_notifications")
+        .select("id")
+        .eq("contact_id", contact_id)
+        .eq("title", "We received your onboarding data")
+        .limit(1)
+        .maybeSingle()
+      if (existingNotif) {
+        result.steps.push(step("portal_notification", "skipped", "Onboarding-received notification already sent — not duplicating"))
+      } else {
+        const { createPortalNotification } = await import("@/lib/portal/notifications")
+        await createPortalNotification({
+          contact_id,
+          account_id: account_id || undefined,
+          type: "service",
+          title: "We received your onboarding data",
+          body: company_name
+            ? `Thanks — we've received everything for ${company_name}. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).`
+            : "Thanks — we've received your onboarding data. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).",
+          link: "/portal",
+        })
+        result.steps.push(step("portal_notification", "ok", "Contact notified in portal"))
+      }
     } catch (e) {
       result.steps.push(step("portal_notification", "error", e instanceof Error ? e.message : String(e)))
     }
@@ -1286,22 +1315,38 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // ─── 10b. PORTAL CHAT WELCOME MESSAGE ───
   if (contact_id && account_id) {
     try {
-      const welcomeMsg = company_name
-        ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup (Relay USD + Payset EUR) is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
-        : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
-      const { error: chatErr } = await supabaseAdmin
+      // Idempotency guard (LT Program runaway-loop fix 2026-06-16): a re-invoked
+      // handler must NOT post a second welcome chat. Skip if an admin welcome
+      // message already exists for this account (deleted or not — a tombstoned
+      // one still means it was sent once).
+      const { data: existingWelcome } = await supabaseAdmin
         .from("portal_messages")
-        .insert({
-          account_id,
-          contact_id,
-          sender_type: "admin",
-          sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
-          message: welcomeMsg,
-        })
-      if (chatErr) {
-        result.steps.push(step("portal_welcome_chat", "error", chatErr.message))
+        .select("id")
+        .eq("account_id", account_id)
+        .eq("sender_type", "admin")
+        .like("message", "Welcome to Tony Durante LLC! We%")
+        .limit(1)
+        .maybeSingle()
+      if (existingWelcome) {
+        result.steps.push(step("portal_welcome_chat", "skipped", "Welcome chat already sent for this account — not duplicating"))
       } else {
-        result.steps.push(step("portal_welcome_chat", "ok", "Welcome message sent via portal chat"))
+        const welcomeMsg = company_name
+          ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup (Relay USD + Payset EUR) is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
+          : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
+        const { error: chatErr } = await supabaseAdmin
+          .from("portal_messages")
+          .insert({
+            account_id,
+            contact_id,
+            sender_type: "admin",
+            sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+            message: welcomeMsg,
+          })
+        if (chatErr) {
+          result.steps.push(step("portal_welcome_chat", "error", chatErr.message))
+        } else {
+          result.steps.push(step("portal_welcome_chat", "ok", "Welcome message sent via portal chat"))
+        }
       }
     } catch (e) {
       result.steps.push(step("portal_welcome_chat", "error", e instanceof Error ? e.message : String(e)))
@@ -1319,8 +1364,24 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         .eq("id", account_id)
         .single()
 
+      // Idempotency guard (LT Program runaway-loop fix 2026-06-16): welcome_package_status
+      // only flips once the welcome-package job RUNS. While those jobs sit pending,
+      // a re-invoked handler would keep enqueuing more — that is exactly how 200+
+      // welcome_package_prepare jobs piled up. Also short-circuit if one is already
+      // queued/running for this account.
+      const { data: existingWP } = await supabaseAdmin
+        .from("job_queue")
+        .select("id")
+        .eq("job_type", "welcome_package_prepare")
+        .in("status", ["pending", "processing"])
+        .eq("payload->>account_id", account_id)
+        .limit(1)
+        .maybeSingle()
+
       if (acctWP?.welcome_package_status) {
         result.steps.push(step("welcome_package", "skipped", `Already ${acctWP.welcome_package_status}`))
+      } else if (existingWP) {
+        result.steps.push(step("welcome_package", "skipped", `Welcome-package job already queued (${existingWP.id}) — not duplicating`))
       } else if (!acctWP?.ein_number) {
         result.steps.push(step("welcome_package", "skipped", "No EIN yet — will be triggered when formation reaches Post-Formation stage"))
       } else {
