@@ -40,6 +40,8 @@ import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { FlowChips } from '@/components/flows/flow-chips'
+import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 
 // ─── Constants ───
 
@@ -252,6 +254,8 @@ interface ContactDetailProps {
   wizardProgress: WizardProgressRecord[]
   stepperDeliveries?: ServiceDeliveryForStepper[]
   stagesByServiceType?: Record<string, PipelineStage[]>
+  /** Contact-scoped flows (ITIN, …) — rendered as flow chips. */
+  flows?: ResolvedFlow[]
 }
 
 // ─── Main Component ───
@@ -270,6 +274,7 @@ export function ContactDetail({
   wizardProgress = [],
   stepperDeliveries = [],
   stagesByServiceType = {},
+  flows = [],
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
@@ -460,7 +465,10 @@ export function ContactDetail({
         />
       )}
       {activeTab === 'services' && (
-        <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} contactId={contact.id} />
+        <div className="space-y-6">
+          {flows.length > 0 && <FlowChips flows={flows} />}
+          <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} contactId={contact.id} />
+        </div>
       )}
       {activeTab === 'invoices' && (
         <InvoicesTab invoices={invoices} accounts={accounts} />
