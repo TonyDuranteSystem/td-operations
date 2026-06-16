@@ -7,6 +7,8 @@ import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { GoBackButton } from '@/components/flows/go-back-button'
+import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
+import { APP_BASE_URL } from '@/lib/config'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
 
 export const dynamic = 'force-dynamic'
@@ -20,7 +22,7 @@ export const dynamic = 'force-dynamic'
 export default async function FlowWorkspacePage({ params }: { params: { id: string } }) {
   const { data: sd } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_type, stage, stage_order, status, assigned_to, due_date, stage_entered_at, created_at, account_id')
+    .select('id, service_type, stage, stage_order, status, assigned_to, due_date, stage_entered_at, created_at, account_id, contact_id')
     .eq('id', params.id)
     .single()
 
@@ -119,6 +121,58 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     }
   }
 
+  // Purchase Origin (ITIN only) — where this ITIN came from: the offer/contract
+  // it was sold under + the invoice. ITIN SDs are contact-scoped, so the offer is
+  // matched by contact_id OR via the contact's originating lead (offers.lead_id);
+  // the invoice is the contact's most recent payment.
+  let itinOrigin: ItinOrigin | null = null
+  let itinContractUrl: string | null = null
+  if (sd.service_type === 'ITIN' && sd.contact_id) {
+    const { data: leadRows } = await supabaseAdmin
+      .from('leads')
+      .select('id')
+      .eq('converted_to_contact_id', sd.contact_id)
+    const leadIds = (leadRows ?? []).map((l) => l.id as string)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let offerQ = (supabaseAdmin as any)
+      .from('offers')
+      .select('token, contract_type, bundled_pipelines, status, created_at')
+    offerQ = leadIds.length
+      ? offerQ.or(`contact_id.eq.${sd.contact_id},lead_id.in.(${leadIds.join(',')})`)
+      : offerQ.eq('contact_id', sd.contact_id)
+    const { data: offer } = await offerQ.order('created_at', { ascending: false }).limit(1).maybeSingle()
+
+    const { data: pay } = await supabaseAdmin
+      .from('payments')
+      .select('invoice_number, amount, amount_currency, status, paid_date, created_at')
+      .eq('contact_id', sd.contact_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    itinOrigin = {
+      offer: offer
+        ? {
+            token: (offer.token as string | null) ?? null,
+            bundled: Array.isArray(offer.bundled_pipelines) && offer.bundled_pipelines.length > 0,
+            contractType: (offer.contract_type as string | null) ?? null,
+            status: (offer.status as string | null) ?? null,
+          }
+        : null,
+      invoice: pay
+        ? {
+            invoice_number: (pay.invoice_number as string | null) ?? null,
+            amount: (pay.amount as number | null) ?? null,
+            currency: (pay.amount_currency as string | null) ?? null,
+            paid: pay.status === 'Paid' || pay.paid_date != null,
+            status: (pay.status as string | null) ?? null,
+          }
+        : null,
+    }
+    itinContractUrl = offer?.token ? `${APP_BASE_URL}/offer/${offer.token}?preview=td` : null
+  }
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
       {/* Back link */}
@@ -147,6 +201,9 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
           )}
         </p>
       </div>
+
+      {/* Purchase Origin — ITIN only, above the stepper */}
+      {itinOrigin && <ItinOriginCard origin={itinOrigin} contractUrl={itinContractUrl} />}
 
       {/* Stage stepper */}
       <div className="mb-6 overflow-x-auto pb-1">
