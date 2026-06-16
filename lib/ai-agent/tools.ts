@@ -192,14 +192,15 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'send_email',
-    description: 'Send an email from support@tonydurante.us. IMPORTANT: When replying to an email, ALWAYS include reply_to_message_id to keep it in the same thread. The message_id comes from the email context or gmail_read results.',
+    description: "Send an email from support@tonydurante.us (default) or antonio.durante@tonydurante.us (set from:'antonio'). IMPORTANT: When replying to an email, ALWAYS include reply_to_message_id to keep it in the same thread, and set `from` to the SAME mailbox the original email is in. The message_id comes from the email context or gmail_read results.",
     parameters: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'Recipient email address' },
         subject: { type: 'string', description: 'Email subject line' },
         body: { type: 'string', description: 'Email body in plain text (will be formatted as HTML)' },
-        reply_to_message_id: { type: 'string', description: 'Gmail message ID to reply to (keeps email in the same thread). ALWAYS use this when replying to an existing email.' },
+        from: { type: 'string', enum: ['support', 'antonio'], description: "Which mailbox to send from: 'support' (support@tonydurante.us, default) or 'antonio' (antonio.durante@tonydurante.us). When replying, use the mailbox the original email came into." },
+        reply_to_message_id: { type: 'string', description: 'Gmail message ID to reply to (keeps email in the same thread). ALWAYS use this when replying to an existing email — and it must belong to the mailbox named in `from`.' },
       },
       required: ['to', 'subject', 'body'],
     },
@@ -931,19 +932,33 @@ async function createTask(p: any) {
 async function sendEmail(p: any) {
   const { gmailPost, gmailGet, getHeader } = await import('@/lib/gmail')
 
-  // Escape HTML in body text
-  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const escapedBody = escHtml(p.body)
+  // Sender mailbox selection: 'support' (default) or 'antonio'. The threading
+  // read (gmailGet) and the send (gmailPost) BOTH run as this mailbox, so a reply
+  // stays in the thread that actually lives in that inbox.
+  const SENDERS: Record<string, { email: string; name: string }> = {
+    support: { email: 'support@tonydurante.us', name: 'Tony Durante' },
+    antonio: { email: 'antonio.durante@tonydurante.us', name: 'Antonio Durante' },
+  }
+  const fromKey = typeof p.from === 'string' ? p.from.toLowerCase() : 'support'
+  const sender = SENDERS[fromKey] ?? SENDERS.support
 
-  const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <div style="border: 1px solid #e5e7eb; padding: 24px; border-radius: 12px;">
-        ${escapedBody.split('\n').map((line: string) => `<p style="margin: 0 0 12px;">${line}</p>`).join('')}
-        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
-        <p style="color: #6b7280; font-size: 12px;">Tony Durante LLC — Business Formation &amp; Tax Consulting</p>
-      </div>
-    </div>
-  `
+  // Branded HTML — the Tony Durante banner logo (hosted at APP_BASE_URL/images),
+  // the body, a sender-based sign-off, and a contact footer. Scoped to the worker's
+  // email so it doesn't change other emails. plainTextToParagraphs handles escaping.
+  const { plainTextToParagraphs } = await import('@/lib/operations/email')
+  const { APP_BASE_URL } = await import('@/lib/config')
+  const signoff = fromKey === 'antonio' ? 'Antonio Durante' : 'The Tony Durante LLC Team'
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
+<div style="text-align:center;padding:4px 0 18px 0;border-bottom:1px solid #e5e7eb;margin-bottom:24px">
+<img src="${APP_BASE_URL}/images/tony-logos.png" alt="Tony Durante LLC — Your Way to Freedom" style="width:100%;max-width:540px;height:auto;display:inline-block" />
+</div>
+${plainTextToParagraphs(p.body)}
+<p style="margin-top:24px">Best regards,<br />${signoff}</p>
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px">
+<p style="margin:4px 0"><strong style="color:#1a1a1a">Tony Durante LLC</strong></p>
+<p style="margin:4px 0"><a href="mailto:support@tonydurante.us" style="color:#2563eb;text-decoration:none">support@tonydurante.us</a></p>
+</div>
+</div>`
 
   // If replying, get original message headers for threading
   let inReplyTo = ''
@@ -954,7 +969,7 @@ async function sendEmail(p: any) {
       const origMsg = await gmailGet(`/messages/${p.reply_to_message_id}`, {
         format: 'metadata',
         metadataHeaders: 'Message-ID,References',
-      }) as { threadId: string; payload: { headers: Array<{ name: string; value: string }> } }
+      }, sender.email) as { threadId: string; payload: { headers: Array<{ name: string; value: string }> } }
 
       threadId = origMsg.threadId
       const msgId = getHeader(origMsg.payload.headers, 'Message-ID')
@@ -972,7 +987,7 @@ async function sendEmail(p: any) {
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const boundary = `boundary_${Date.now()}`
   const headers = [
-    `From: Tony Durante <support@tonydurante.us>`,
+    `From: ${sender.name} <${sender.email}>`,
     `To: ${p.to}`,
     `Subject: ${encodedSubject}`,
   ]
@@ -997,8 +1012,8 @@ async function sendEmail(p: any) {
   const sendPayload: Record<string, string> = { raw: Buffer.from(rawEmail).toString('base64url') }
   if (threadId) sendPayload.threadId = threadId
 
-  await gmailPost('/messages/send', sendPayload)
-  return JSON.stringify({ success: true, message: `Email sent to ${p.to} with subject "${p.subject}"${threadId ? ' (in thread)' : ''}` })
+  await gmailPost('/messages/send', sendPayload, sender.email)
+  return JSON.stringify({ success: true, message: `Email sent from ${sender.email} to ${p.to} with subject "${p.subject}"${threadId ? ' (in thread)' : ''}` })
 }
 
 async function getDashboardStats() {

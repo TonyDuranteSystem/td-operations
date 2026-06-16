@@ -5,6 +5,7 @@
 
 import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
 import { logAction } from "@/lib/mcp/action-log"
+import { syncPortalLoginEmail } from "@/lib/operations/portal-login-email"
 import {
   ACCOUNT_STATUS, PAYMENT_STATUS, TASK_STATUS,
   LEAD_STATUS, DEAL_STAGE, TAX_RETURN_STATUS,
@@ -898,6 +899,26 @@ export function registerCrmTools(server: McpServer) {
           details: { fields_changed: Object.keys(updates), new_values: updates },
         })
 
+        // Post-update hook: keep the portal LOGIN email in sync with the contact email.
+        let loginSyncMsg = ""
+        if (table === "contacts" && updates.email) {
+          try {
+            const rec = data as Record<string, unknown>
+            const r = await syncPortalLoginEmail({
+              contactId: id,
+              newEmail: String(updates.email),
+              language: (rec.language as string | null) ?? null,
+              fullName: (rec.full_name as string | null) ?? null,
+            })
+            if (r.status === "synced") loginSyncMsg = `\n\n🔑 Portal login email updated to ${r.newEmail} (client notified).`
+            else if (r.status === "conflict") loginSyncMsg = `\n\n⚠️ Portal login NOT changed: ${r.newEmail} is already another login. Contact email updated; login left as ${r.oldEmail}.`
+            else if (r.status === "error") loginSyncMsg = `\n\n⚠️ Portal login sync failed: ${r.error}`
+            // no_login / no_change → silent
+          } catch {
+            // Non-blocking
+          }
+        }
+
         // Post-update hook: auto-advance pipeline when task marked Done
         let autoAdvanceMsg = ""
         if (table === "tasks" && updates.status === "Done") {
@@ -950,7 +971,7 @@ export function registerCrmTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${autoAdvanceMsg}${installmentMsg}`,
+            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${loginSyncMsg}${autoAdvanceMsg}${installmentMsg}`,
           }],
         }
       } catch (err: any) {

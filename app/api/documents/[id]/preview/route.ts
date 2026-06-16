@@ -1,6 +1,9 @@
 /**
  * Document Preview API
- * Streams a file from Google Drive via service account.
+ * Streams a document's file inline. Handles BOTH storage shapes:
+ *   - Google Drive (real `drive_file_id`) via the service account, and
+ *   - Supabase Storage (synthetic `storage:<path>` id in `onboarding-uploads`)
+ *     used by flow uploads and persisted fax-upload attachments.
  * No Google login required — the SA has access to the Shared Drive.
  */
 
@@ -26,9 +29,27 @@ export async function GET(
   }
 
   try {
-    const { buffer, mimeType } = await downloadFileBinary(doc.drive_file_id)
+    let bytes: Buffer
+    let mimeType: string | null = (doc.mime_type as string | null) ?? null
 
-    return new NextResponse(new Uint8Array(buffer), {
+    if ((doc.drive_file_id as string).startsWith("storage:")) {
+      // Supabase Storage shape: `storage:<path-within-onboarding-uploads>`.
+      const path = (doc.drive_file_id as string).slice("storage:".length)
+      const { data, error: dlErr } = await supabaseAdmin.storage
+        .from("onboarding-uploads")
+        .download(path)
+      if (dlErr || !data) {
+        return NextResponse.json({ error: "Document file not found" }, { status: 404 })
+      }
+      bytes = Buffer.from(await data.arrayBuffer())
+      mimeType = mimeType || data.type || "application/pdf"
+    } else {
+      const drive = await downloadFileBinary(doc.drive_file_id as string)
+      bytes = drive.buffer
+      mimeType = mimeType || drive.mimeType
+    }
+
+    return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "Content-Type": mimeType || "application/pdf",
         "Content-Disposition": `inline; filename="${doc.file_name || "document"}"`,

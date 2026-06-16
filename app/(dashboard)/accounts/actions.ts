@@ -8,6 +8,7 @@ import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/acco
 import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
+import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
 import type { Json } from '@/lib/database.types'
 
@@ -157,65 +158,29 @@ export async function updateContactField(
   }
 
   return safeAction(async () => {
-    // ─── Email change: sync contacts.email → auth.users.email ───
+    // ─── Email change: update contacts.email, then sync the portal login ───
     if (field === 'email' && value) {
-      // Step 1: Capture old email for potential revert
-      const { data: currentContact } = await supabaseAdmin
-        .from('contacts')
-        .select('email')
-        .eq('id', contactId)
-        .single()
-      const oldEmail = currentContact?.email || null
-
-      // Step 2: Look up portal user by contact_id
-      // NOTE: supabaseAdmin.auth.admin.listUsers() return type destructures to
-      // a union where `data` can be `never` under strict TS if not narrowed.
-      // Cast the inner users array to the expected User shape for type safety.
-      const listUsersResult = await supabaseAdmin.auth.admin.listUsers()
-      const users = (listUsersResult.data?.users ?? []) as Array<{
-        id: string
-        app_metadata?: { contact_id?: string }
-      }>
-      const authUser = users.find(u => u.app_metadata?.contact_id === contactId)
-
-      // Step 3: If portal user exists, update auth email FIRST
-      if (authUser) {
-        const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(
-          authUser.id,
-          { email: value }
-        )
-        if (authError) {
-          throw new Error(`Cannot change email: ${authError.message}`)
-        }
-      }
-
-      // Step 4: Update contacts.email
+      // Update the contact email first (source of truth).
       const result = await updateWithLock('contacts', contactId, { email: value }, updatedAt)
-      if (!result.success) {
-        // Step 5: Revert auth if contacts update failed
-        if (authUser && oldEmail) {
-          const { error: revertError } = await supabaseAdmin.auth.admin.updateUserById(
-            authUser.id,
-            { email: oldEmail }
-          )
-          if (revertError) {
-            // Desync: auth has new email, contacts has old email — log for remediation
-            try {
-              await supabaseAdmin.from('action_log').insert({
-                actor: 'system',
-                action_type: 'update',
-                table_name: 'contacts',
-                record_id: contactId,
-                summary: `DESYNC: auth.users.email updated to ${value} but contacts.email update failed and auth revert failed. Manual remediation needed.`,
-                details: { contact_id: contactId, auth_user_id: authUser.id, old_email: oldEmail, new_email: value, revert_error: revertError.message },
-              })
-            } catch { /* non-blocking — best effort logging */ }
-          }
-        }
-        throw new Error(result.error)
-      }
+      if (!result.success) throw new Error(result.error)
 
-      // Step 6: Cross-account revalidation for email changes
+      // Keep the portal LOGIN email in sync via the shared helper: resolves the
+      // login by contact_id, guards against conflicts, and notifies the client.
+      // Best-effort — a conflict/failure does NOT roll back the contact email
+      // (it's surfaced/flagged), matching the core updateContact behavior.
+      const { data: c } = await supabaseAdmin
+        .from('contacts')
+        .select('full_name, language')
+        .eq('id', contactId)
+        .maybeSingle()
+      await syncPortalLoginEmail({
+        contactId,
+        newEmail: value,
+        language: c?.language ?? null,
+        fullName: c?.full_name ?? null,
+      })
+
+      // Cross-account revalidation for email changes
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id')

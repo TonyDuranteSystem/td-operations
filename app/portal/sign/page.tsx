@@ -131,7 +131,10 @@ export default async function PortalSignPage() {
     })
   }
 
-  if (oaResult.data) {
+  // Only surface an OA the client can actually act on. An OA is created 'draft'
+  // and becomes 'sent' when sent for signature (lib/mcp/tools/oa.ts), so a draft
+  // (or voided) OA was never sent — it must not appear on the client's sign page.
+  if (oaResult.data && oaResult.data.status !== 'draft' && oaResult.data.status !== 'voided') {
     const oa = oaResult.data as typeof oaResult.data & { total_signers?: number; signed_count?: number; entity_type?: string; id?: string }
     const isMultiSigner = oa.entity_type === 'MMLLC' && (oa.total_signers || 1) > 1
     let oaStatus: SignableDocument['status'] = oa.status === 'signed' ? 'signed' : 'awaiting'
@@ -159,7 +162,8 @@ export default async function PortalSignPage() {
     })
   }
 
-  if (leaseResult.data) {
+  // Same as OA: a 'draft' lease was never sent to the client.
+  if (leaseResult.data && leaseResult.data.status !== 'draft' && leaseResult.data.status !== 'voided') {
     const lease = leaseResult.data
     documents.push({
       type: 'lease',

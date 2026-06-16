@@ -22,6 +22,9 @@ import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
 import { DashboardInstallBanner } from '@/components/portal/dashboard-install-banner'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
+import { ViewAsBanner } from '@/components/portal/view-as-banner'
+import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import Script from 'next/script'
 
@@ -130,6 +133,20 @@ export default async function PortalLayout({
   const cookieStore = await cookies()
   const cookieAccountId = cookieStore.get('portal_account_id')?.value
   const cookieFormation = cookieStore.get('portal_formation')?.value
+
+  // Read-only "View as client": if a valid marker cookie is present, render the
+  // persistent banner. The minted session is the client's, so the rest of the
+  // layout already reflects exactly what the client sees.
+  const viewAsMarker = await verifyViewAs(cookieStore.get(VIEW_AS_COOKIE)?.value)
+  let viewAsName = ''
+  if (viewAsMarker) {
+    const { data: vc } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name')
+      .eq('id', viewAsMarker.contactId)
+      .maybeSingle()
+    viewAsName = vc?.full_name || 'client'
+  }
   const [contactTier, portalRole] = contactId
     ? await Promise.all([getPortalTierByContact(contactId), getPortalRoleByContact(contactId)])
     : [(user.app_metadata?.portal_tier as string) || 'lead', null]
@@ -186,6 +203,7 @@ export default async function PortalLayout({
   return (
     <Providers>
       <SandboxBanner />
+      {viewAsMarker && <ViewAsBanner clientName={viewAsName} />}
       <PortalSwRegister locale={locale} />
       <LocaleProvider locale={locale}>
         <PasswordGate mustChangePassword={mustChangePassword} />

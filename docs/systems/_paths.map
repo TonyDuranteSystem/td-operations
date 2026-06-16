@@ -20,6 +20,7 @@ docs/systems/tax-returns.md|lib/tax/,lib/mcp/tools/tax.ts,lib/mcp/tools/tax-quot
 docs/systems/portal.md|lib/portal/tier-config.ts,lib/portal/auto-create.ts,lib/portal/queries.ts,lib/portal/notifications.ts,lib/operations/sync-tier.ts,lib/mcp/tools/portal.ts,app/portal/,components/portal/wizard/
 docs/systems/referrals-circleback.md|lib/operations/referral.ts,lib/referral-utils.ts,lib/bank-referrals.ts,lib/portal/credit-notes.ts,lib/calendly/,lib/mcp/tools/referrals.ts,app/api/webhooks/calendly/
 docs/systems/workflow-engine.md|lib/catalog/,lib/tasks/,lib/mcp/tools/catalog.ts,app/(dashboard)/workflows/
+docs/systems/flows.md|lib/flows/,components/flows/,app/api/flows/,app/(dashboard)/flows/
 docs/systems/crm-core.md|lib/mcp/tools/crm.ts,lib/operations/contact.ts,lib/operations/task.ts,lib/operations/account.ts,lib/per-record-activity/,lib/sync-airtable.ts
 docs/systems/hooks-guardrails.md|.claude/hooks/,.claude/settings.json,.husky/,scripts/check-system-docs-freshness.sh,scripts/dev-setup.sh,lib/supabase-admin.ts
 docs/systems/auth-oauth.md|middleware.ts,lib/auth.ts,lib/oauth.ts,app/api/oauth/,app/api/[transport]/
@@ -32,3 +33,4 @@ docs/systems/partners-team.md|lib/partners/,app/(dashboard)/partners/,app/portal
 docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/
 docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/,lib/ai-agent/thread-summaries.ts,lib/ai-agent/thread-routing.ts,lib/ai-agent/thread-context.ts,lib/mcp/tools/agent-threads.ts,lib/ai-agent/approval-env.ts,lib/ai-agent/approval-executor.ts,lib/mcp/tools/agent-approvals.ts,lib/ai-agent/telegram-notify.ts
 docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/
+docs/systems/fax.md|app/api/tools/fax/,app/(dashboard)/tools/fax/,components/flows/fax-irs.tsx
