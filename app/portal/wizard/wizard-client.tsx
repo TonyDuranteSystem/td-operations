@@ -346,42 +346,73 @@ export function WizardClient({
 
     setIsSubmitting(true)
     setFieldErrors([])
-    try {
-      const res = await fetch('/api/portal/wizard-submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          wizard_type: wizardType,
-          entity_type: entityType,
-          data: formData,
-          account_id: accountId || null,
-          contact_id: contactId || null,
-          lead_id: leadId || null,
-          progress_id: currentProgressId,
-          allow_resubmit: isResubmitMode || undefined,
-        }),
-      })
 
-      if (res.ok) {
-        setIsSubmitted(true)
-        toast.success(locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')
-        return
-      }
+    // The submit endpoint is IDEMPOTENT: it marks wizard_progress 'submitted'
+    // before anything else, and a repeat call with the same progress_id returns
+    // "already submitted" success WITHOUT re-enqueuing the job. So a transient
+    // delivery failure — the server processed the submission and returned 200,
+    // but the response never reached the browser — is safe to retry. Without
+    // this, that lost response showed a hard "Submission failed", isSubmitted
+    // stayed false, and the client was STRANDED with no path to the P&L /
+    // Balance Sheet screen even though the submission had gone through
+    // (Luca/Dynamiq, 2026-06-16). Retries cover network errors and 5xx; a real
+    // validation error (400 + fields) is never retried.
+    const MAX_ATTEMPTS = 3
+    let lastError = ''
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const res = await fetch('/api/portal/wizard-submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            wizard_type: wizardType,
+            entity_type: entityType,
+            data: formData,
+            account_id: accountId || null,
+            contact_id: contactId || null,
+            lead_id: leadId || null,
+            progress_id: currentProgressId,
+            // Attempt 1 carries the caller's flag; retries force the idempotent
+            // dedup path (attempt 1 already marked it submitted), so a retry
+            // confirms success rather than re-processing / duplicating the job.
+            allow_resubmit: attempt === 1 ? (isResubmitMode || undefined) : false,
+          }),
+        })
 
-      // Try to parse structured validation error: { error, fields: [{ field, message }] }
-      const err = await res.json().catch(() => ({} as { error?: string; fields?: FieldError[] }))
-      if (res.status === 400 && Array.isArray(err?.fields) && err.fields.length > 0) {
-        setFieldErrors(err.fields)
-        const first = err.fields[0]
-        toast.error(`${first.field}: ${first.message}`)
-      } else {
-        toast.error(err?.error || (locale === 'it' ? 'Invio fallito' : 'Submission failed'))
+        if (res.ok) {
+          setIsSubmitting(false)
+          setIsSubmitted(true)
+          toast.success(locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')
+          return
+        }
+
+        // Structured validation error ({ error, fields }) — a real client
+        // problem, never retried.
+        const err = await res.json().catch(() => ({} as { error?: string; fields?: FieldError[] }))
+        if (res.status === 400 && Array.isArray(err?.fields) && err.fields.length > 0) {
+          setFieldErrors(err.fields)
+          const first = err.fields[0]
+          toast.error(`${first.field}: ${first.message}`)
+          setIsSubmitting(false)
+          return
+        }
+        // 5xx / other non-ok → retryable.
+        lastError = err?.error || ''
+      } catch {
+        lastError = '' // network / lost-response — retryable
       }
-    } catch {
-      toast.error(locale === 'it' ? 'Invio fallito' : 'Submission failed')
-    } finally {
-      setIsSubmitting(false)
+      if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 700 * attempt))
     }
+
+    // All attempts failed. The data may have been saved server-side, so guide
+    // the user to refresh instead of implying the work is lost.
+    setIsSubmitting(false)
+    toast.error(
+      lastError ||
+      (locale === 'it'
+        ? "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine."
+        : "Submit didn't go through after a few tries. Refresh the page — if it shows as already submitted, it worked."),
+    )
   }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, validateStep, locale, isResubmitMode, itinCount, memberCount])
 
   // Auto-save on step change
