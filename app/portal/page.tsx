@@ -573,7 +573,7 @@ export default async function PortalDashboardPage() {
   // Service Status — client-facing flow progress (Tax Return / Annual Report /
   // RA Renewal / CMRA) driven by active service_deliveries + per-stage
   // client_label. Distinct from the services-table "Services" card below.
-  const flows = await getPortalFlows(selectedAccountId, locale)
+  const flows = await getPortalFlows(selectedAccountId, locale, contactId)
   // The dedicated Slice-5 Tax tracker (below) already renders the Tax Return
   // journey, so drop Tax Return from Service Status when it's showing to avoid
   // two Tax Return steppers on the same page.
