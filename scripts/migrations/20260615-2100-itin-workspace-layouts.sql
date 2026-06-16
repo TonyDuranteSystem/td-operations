@@ -22,15 +22,17 @@ UPDATE pipeline_stages SET stage_layout = '{
   "description": "Collect the client''s identity documents and W-7 information."
 }'::jsonb WHERE service_type = 'ITIN' AND stage_name = 'Data Collection';
 
+-- Document Preparation: the W-7 / 1040-NR / Schedule OI are AUTO-GENERATED from
+-- the wizard data — staff REVIEW them (document_viewer), they do not upload. The
+-- Approve button uses advance_next (NOT the bare `approve` key, which hardcodes a
+-- Tax-Return "Review Completed" target that isn't an ITIN stage).
 UPDATE pipeline_stages SET stage_layout = '{
   "components": [
-    { "type": "info_panel" },
-    { "type": "document_upload", "label": "Upload Prepared W-7 + Documents", "autoAdvance": false },
     { "type": "document_viewer" },
-    { "type": "chat" },
-    { "type": "action_buttons", "actions": [ { "key": "advance_next", "label": "Send for Client Signing", "target": "Client Signing" } ] }
+    { "type": "action_buttons", "actions": [ { "key": "advance_next", "label": "Approve Documents", "target": "Client Signing" } ] },
+    { "type": "chat" }
   ],
-  "description": "Prepare the Form W-7 and supporting documents for the client to sign."
+  "description": "Review the auto-generated W-7, 1040-NR, and Schedule OI. Approve to send the client for signing."
 }'::jsonb WHERE service_type = 'ITIN' AND stage_name = 'Document Preparation';
 
 UPDATE pipeline_stages SET stage_layout = '{
