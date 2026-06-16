@@ -807,7 +807,11 @@ function QuickActionsBar({
 
   // Determine which actions to show
   const showCreatePortal = !portalAuth.exists && !!contact.email
-  const showResendWelcome = portalAuth.exists && !portalAuth.lastLogin
+  // Resend credentials is available for ANY client who has a portal login —
+  // NOT just those who never logged in. Staff must be able to send a new
+  // password whenever a client forgets it or something goes wrong.
+  const showResendCredentials = portalAuth.exists
+  const portalCredsSentAt = (contact as { portal_email_sent_at?: string | null }).portal_email_sent_at ?? null
   const showWizardReminder = contact.portal_tier === 'onboarding' && !hasWizard && (hasPaidOffer || pendingActivations.some(pa => pa.payment_confirmed_at))
   const showAdvanceStage = activeSds.length > 0
   const awaitingPayment = pendingActivations.find(pa => pa.status === 'awaiting_payment')
@@ -816,7 +820,7 @@ function QuickActionsBar({
   // existing-contact re-entry, e.g. Mojo Labs LLC).
   const showConfirmPaymentBtn = !!awaitingPayment && (!!lead || offers.length > 0)
 
-  const hasActions = showCreatePortal || showResendWelcome || showWizardReminder || showAdvanceStage || showConfirmPaymentBtn
+  const hasActions = showCreatePortal || showResendCredentials || showWizardReminder || showAdvanceStage || showConfirmPaymentBtn
 
   const handlePortalAction = async (action: string, extra?: Record<string, string>) => {
     setLoading(action)
@@ -907,18 +911,26 @@ function QuickActionsBar({
           </button>
         )}
 
-        {showResendWelcome && (
-          <button
-            onClick={() => {
-              if (!confirm('Resend welcome email with new password?')) return
-              handlePortalAction('reset_password')
-            }}
-            disabled={loading === 'reset_password'}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 transition-colors"
-          >
-            {loading === 'reset_password' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
-            Resend Welcome
-          </button>
+        {showResendCredentials && (
+          <div className="flex flex-col gap-1">
+            <button
+              onClick={() => {
+                if (!confirm('Send the client a NEW temporary password? Their current password will stop working.')) return
+                handlePortalAction('reset_password')
+              }}
+              disabled={loading === 'reset_password'}
+              className="inline-flex items-center gap-1.5 self-start px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+            >
+              {loading === 'reset_password' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+              Send new password
+            </button>
+            <p className="max-w-xs text-[11px] leading-snug text-zinc-500">
+              {portalCredsSentAt
+                ? `Welcome email with login details was sent on ${new Date(portalCredsSentAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}. `
+                : 'No original credentials email is on record. '}
+              This sends a <strong>new temporary password</strong> only — the old password stops working and the client sets their own at next login.
+            </p>
+          </div>
         )}
 
         {showWizardReminder && (
@@ -2465,15 +2477,21 @@ function PortalTab({
               {/* Reset Password */}
               <button
                 onClick={() => {
-                  if (!confirm('Reset portal password? New credentials will be sent via email.')) return
+                  if (!confirm('Send the client a NEW temporary password? Their current password will stop working.')) return
                   handleAction('reset_password')
                 }}
                 disabled={loading === 'reset_password'}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors"
               >
                 {loading === 'reset_password' ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                Reset Password
+                Send new password
               </button>
+              <p className="mt-1 max-w-md text-xs leading-snug text-zinc-500">
+                {(contact as { portal_email_sent_at?: string | null }).portal_email_sent_at
+                  ? `Welcome email with login details was originally sent on ${new Date((contact as { portal_email_sent_at?: string | null }).portal_email_sent_at as string).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}. `
+                  : 'No original credentials email is on record. '}
+                This sends a <strong>new temporary password</strong> only (not the full welcome email) — the old password stops working and the client sets their own at next login.
+              </p>
             </div>
           )}
 
