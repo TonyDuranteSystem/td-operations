@@ -33,6 +33,12 @@ export async function GET(req: NextRequest) {
   const clientUser = authUsers.find((u) => u.app_metadata?.role === 'client')
   if (!clientUser?.email) return fail('no_login')
 
+  // Capture the client's real last-login BEFORE we mint a session. verifyOtp
+  // below stamps last_sign_in_at = now(); we restore this value afterwards so an
+  // admin's View-as never counts as the client logging in (which would hide the
+  // "Resend Welcome" button + misreport "Last login"). Null = never logged in.
+  const priorLastSignIn = clientUser.last_sign_in_at ?? null
+
   // Mint a one-time magiclink token for the client (does NOT send email).
   const { data: link, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
     type: 'magiclink',
@@ -62,6 +68,25 @@ export async function GET(req: NextRequest) {
 
   const { error: otpErr } = await supabase.auth.verifyOtp({ type: 'email', token_hash: tokenHash })
   if (otpErr) return fail('session_failed')
+
+  // Restore the client's real last-login — verifyOtp just stamped it to now().
+  // Best-effort: a failure here must not block the view. (See migration
+  // 20260615-2100-viewas-restore-last-sign-in.sql.)
+  try {
+    // The fn is added by migration 20260615-2100 and isn't in the generated
+    // Supabase types — type the call inline so one new fn doesn't need a full
+    // types regen.
+    const restore = supabaseAdmin.rpc as unknown as (
+      fn: string,
+      args: { p_user_id: string; p_ts: string | null },
+    ) => Promise<{ error: { message: string } | null }>
+    await restore('viewas_restore_last_sign_in', {
+      p_user_id: clientUser.id,
+      p_ts: priorLastSignIn,
+    })
+  } catch (e) {
+    console.error('[view-as] failed to restore last_sign_in_at:', e)
+  }
 
   // Drop the read-only marker cookie (signed, httpOnly, portal domain).
   const markerToken = await signViewAs(
