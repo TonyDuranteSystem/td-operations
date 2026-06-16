@@ -185,11 +185,16 @@ export const WORKER_SQL_BLOCKED_PATTERNS: RegExp[] = [
   // Any write / DDL / session-mutating keyword (also catches write-CTEs like WITH x AS (DELETE ...)).
   /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|MERGE|CALL|DO|VACUUM|REFRESH|REINDEX|LOCK|SET|RESET)\b/i,
   /\bauth\.\w+/i, // auth schema — password hashes, sessions, identities
-  /\boauth_\w+/i, // oauth_tokens / oauth_codes / oauth_clients
+  /\boauth_\w+/i, // oauth_tokens / oauth_codes / oauth_clients / oauth_users
   /\bqb_tokens\b/i, // QuickBooks tokens
+  /\bhc_tokens\b/i, // Harbor Compliance tokens
+  /\bportal_welcome_tokens\b/i, // one-time portal welcome links
   /\bpush_subscriptions\b/i, // web-push endpoint secrets
   /\bencrypted_password\b/i,
 ]
+// Kept in sync with the DB-side credential block in exec_sql_readonly
+// (scripts/migrations/20260602-1600-crm-readonly-exec.sql) so the app layer rejects
+// the same tables with a clearer message; the DB remains the authoritative backstop.
 
 /** Cap on the JSON result string returned to the model — keeps replies bounded. */
 export const WORKER_SQL_RESULT_CAP = 8000
@@ -228,9 +233,12 @@ export function assertWorkerReadOnlySql(
 }
 
 /**
- * Execute a worker read-only SQL query. Guards with assertWorkerReadOnlySql, runs via
- * the exec_sql RPC, audit-logs the query, and caps the returned JSON. Never throws —
- * returns a JSON string (rows or { error }). Exported for unit tests.
+ * Execute a worker read-only SQL query. Two layers of safety: (1) the pure
+ * assertWorkerReadOnlySql guard (single-statement SELECT/WITH, write/DDL + auth/token
+ * blocklist), then (2) the DB-enforced exec_sql_readonly RPC, which runs the query with
+ * transaction_read_only=on, blocks credential/token tables server-side, caps at 500
+ * rows, and applies an 8s statement timeout. Audit-logs the query; caps the returned
+ * JSON. Never throws — returns a JSON string (rows or { error }). Exported for unit tests.
  */
 export async function runReadOnlySqlForWorker(params: Record<string, unknown>): Promise<string> {
   const { sql, error: guardError } = assertWorkerReadOnlySql(params.query)
@@ -244,8 +252,10 @@ export async function runReadOnlySqlForWorker(params: Record<string, unknown>): 
     summary: `Worker read-only SQL: ${sql.slice(0, 200)}${sql.length > 200 ? "…" : ""}`,
   })
 
-  // eslint-disable-next-line no-restricted-syntax -- read-only SELECT via exec_sql, guarded above
-  const { data, error } = await supabaseAdmin.rpc("exec_sql", { sql_query: sql })
+  // exec_sql_readonly enforces read-only AT THE DB (transaction_read_only=on) + its own
+  // credential-table block + LIMIT 500 + 8s timeout — strictly safer than exec_sql.
+  // eslint-disable-next-line no-restricted-syntax -- read-only RPC, double-guarded above
+  const { data, error } = await supabaseAdmin.rpc("exec_sql_readonly", { sql_query: sql })
   if (error) return JSON.stringify({ error: error.message })
   const json = JSON.stringify(data ?? [])
   return json.length > WORKER_SQL_RESULT_CAP

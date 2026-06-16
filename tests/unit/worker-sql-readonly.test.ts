@@ -94,7 +94,10 @@ describe("assertWorkerReadOnlySql — blocks protected tables", () => {
     "SELECT raw_app_meta_data FROM auth.users WHERE email = 'x'",
     "SELECT * FROM oauth_tokens",
     "SELECT * FROM oauth_codes",
+    "SELECT * FROM oauth_users",
     "SELECT * FROM qb_tokens",
+    "SELECT * FROM hc_tokens",
+    "SELECT * FROM portal_welcome_tokens",
     "SELECT * FROM push_subscriptions",
     "SELECT encrypted_password FROM contacts",
   ]) {
