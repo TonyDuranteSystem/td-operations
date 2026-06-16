@@ -136,9 +136,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // → 3500 (2026-06-12, plain-English rule) → 3800 (2026-06-13, PORTAL CHAT
     // REPLIES block — send_portal_message guidance) → 5600 (2026-06-15, TWO GEARS
     // dig-in investigation discipline: verify-before-asserting, trace-the-code,
-    // confirmed/unconfirmed hand-off format, run_sql_query + sensitive-data guidance).
+    // confirmed/unconfirmed hand-off format, run_sql_query + sensitive-data guidance)
+    // → 6200 (2026-06-15, EMAIL block: send_email from support@/antonio@ with
+    // same-thread replies + show-draft-then-explicit-"send it" guardrail).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(5600)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(6200)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
@@ -334,6 +336,7 @@ describe("processSlackEvent", () => {
       enableCodeTasks: true,
       enableSlackSend: true,
       enableDbRead: true,
+      enableEmailSend: true,
       maxIterations: 12,
     })
 

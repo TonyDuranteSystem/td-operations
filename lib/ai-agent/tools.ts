@@ -192,14 +192,15 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'send_email',
-    description: 'Send an email from support@tonydurante.us. IMPORTANT: When replying to an email, ALWAYS include reply_to_message_id to keep it in the same thread. The message_id comes from the email context or gmail_read results.',
+    description: "Send an email from support@tonydurante.us (default) or antonio.durante@tonydurante.us (set from:'antonio'). IMPORTANT: When replying to an email, ALWAYS include reply_to_message_id to keep it in the same thread, and set `from` to the SAME mailbox the original email is in. The message_id comes from the email context or gmail_read results.",
     parameters: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'Recipient email address' },
         subject: { type: 'string', description: 'Email subject line' },
         body: { type: 'string', description: 'Email body in plain text (will be formatted as HTML)' },
-        reply_to_message_id: { type: 'string', description: 'Gmail message ID to reply to (keeps email in the same thread). ALWAYS use this when replying to an existing email.' },
+        from: { type: 'string', enum: ['support', 'antonio'], description: "Which mailbox to send from: 'support' (support@tonydurante.us, default) or 'antonio' (antonio.durante@tonydurante.us). When replying, use the mailbox the original email came into." },
+        reply_to_message_id: { type: 'string', description: 'Gmail message ID to reply to (keeps email in the same thread). ALWAYS use this when replying to an existing email — and it must belong to the mailbox named in `from`.' },
       },
       required: ['to', 'subject', 'body'],
     },
@@ -931,6 +932,16 @@ async function createTask(p: any) {
 async function sendEmail(p: any) {
   const { gmailPost, gmailGet, getHeader } = await import('@/lib/gmail')
 
+  // Sender mailbox selection: 'support' (default) or 'antonio'. The threading
+  // read (gmailGet) and the send (gmailPost) BOTH run as this mailbox, so a reply
+  // stays in the thread that actually lives in that inbox.
+  const SENDERS: Record<string, { email: string; name: string }> = {
+    support: { email: 'support@tonydurante.us', name: 'Tony Durante' },
+    antonio: { email: 'antonio.durante@tonydurante.us', name: 'Antonio Durante' },
+  }
+  const fromKey = typeof p.from === 'string' ? p.from.toLowerCase() : 'support'
+  const sender = SENDERS[fromKey] ?? SENDERS.support
+
   // Escape HTML in body text
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const escapedBody = escHtml(p.body)
@@ -954,7 +965,7 @@ async function sendEmail(p: any) {
       const origMsg = await gmailGet(`/messages/${p.reply_to_message_id}`, {
         format: 'metadata',
         metadataHeaders: 'Message-ID,References',
-      }) as { threadId: string; payload: { headers: Array<{ name: string; value: string }> } }
+      }, sender.email) as { threadId: string; payload: { headers: Array<{ name: string; value: string }> } }
 
       threadId = origMsg.threadId
       const msgId = getHeader(origMsg.payload.headers, 'Message-ID')
@@ -972,7 +983,7 @@ async function sendEmail(p: any) {
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const boundary = `boundary_${Date.now()}`
   const headers = [
-    `From: Tony Durante <support@tonydurante.us>`,
+    `From: ${sender.name} <${sender.email}>`,
     `To: ${p.to}`,
     `Subject: ${encodedSubject}`,
   ]
@@ -997,8 +1008,8 @@ async function sendEmail(p: any) {
   const sendPayload: Record<string, string> = { raw: Buffer.from(rawEmail).toString('base64url') }
   if (threadId) sendPayload.threadId = threadId
 
-  await gmailPost('/messages/send', sendPayload)
-  return JSON.stringify({ success: true, message: `Email sent to ${p.to} with subject "${p.subject}"${threadId ? ' (in thread)' : ''}` })
+  await gmailPost('/messages/send', sendPayload, sender.email)
+  return JSON.stringify({ success: true, message: `Email sent from ${sender.email} to ${p.to} with subject "${p.subject}"${threadId ? ' (in thread)' : ''}` })
 }
 
 async function getDashboardStats() {

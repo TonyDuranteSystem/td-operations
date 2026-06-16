@@ -40,6 +40,24 @@ describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
     expect(WORKER_READ_ONLY_TOOL_NAMES.has("run_sql_query")).toBe(false)
   })
 
+  it("excludes send_email from the base set + WORKER_TOOLS (Hermes worker can never email — R108)", () => {
+    // send_email is a real external send. It reaches ONLY the Slack worker, via the
+    // call-time enableEmailSend gate (tool-list) AND an executor-level gate in
+    // executeWorkerTool. It must never be in the base set or the Hermes/Telegram worker
+    // could send email.
+    expect(WORKER_READ_ONLY_TOOL_NAMES.has("send_email")).toBe(false)
+    expect(WORKER_TOOLS.some((t) => t.name === "send_email")).toBe(false)
+  })
+
+  it("executor refuses send_email unless it was offered to the model this call (defense-in-depth)", async () => {
+    // No availableNames → refused. With send_email in availableNames it would route to
+    // the real sender (network) — not exercised here; the reject path is the security gate.
+    const blocked = await executeWorkerTool("send_email", { to: "x@y.z", subject: "x", body: "x" })
+    expect(blocked).toContain("not permitted")
+    const stillBlocked = await executeWorkerTool("send_email", { to: "x@y.z", subject: "x", body: "x" }, new Set<string>())
+    expect(stillBlocked).toContain("not permitted")
+  })
+
   it("every allow-listed name resolves to a real tool in AGENT_TOOLS", () => {
     const realNames = new Set(AGENT_TOOLS.map((t) => t.name))
     for (const name of WORKER_READ_ONLY_TOOL_NAMES) {

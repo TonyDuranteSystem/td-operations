@@ -349,6 +349,35 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
 }
 
 /**
+ * send_email — Slack-only direct email send (gated via enableEmailSend), mirroring
+ * SEND_PORTAL_MESSAGE_TOOL. Delegates to the shared `send_email` AGENT_TOOL (which
+ * supports sender selection support@/antonio@ + same-thread replies). Like the portal
+ * send, it is NOT in WORKER_TOOLS, so the Hermes/Telegram research worker never gets it
+ * (R108). MANDATORY discipline (enforced by the prompt): show the full draft (from / to /
+ * subject / body / which thread) and send ONLY after Antonio's explicit "send it".
+ */
+export const SEND_EMAIL_TOOL: ToolDef = {
+  name: "send_email",
+  description: [
+    "Send a real email via Gmail — from support@tonydurante.us (default) or antonio.durante@tonydurante.us (from:'antonio').",
+    "Use ONLY after Antonio has explicitly approved the draft in THIS Slack thread ('send it', 'go', 'send'). FIRST show him the full draft — from mailbox, to, subject, body, and whether it's a reply in an existing thread — then wait for his OK, then call this ONCE.",
+    "When replying to an email that came in, set reply_to_message_id (from gmail_read/gmail_search) AND set `from` to the SAME mailbox that email is in, so the reply stays in the original thread.",
+    "Do NOT call this speculatively or without an explicit approval in the thread.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      to: { type: "string", description: "Recipient email address." },
+      subject: { type: "string", description: "Email subject line." },
+      body: { type: "string", description: "Email body in plain text." },
+      from: { type: "string", enum: ["support", "antonio"], description: "Mailbox to send from: 'support' (default) or 'antonio'." },
+      reply_to_message_id: { type: "string", description: "Gmail message ID to reply to (keeps it in the same thread). Must belong to the `from` mailbox." },
+    },
+    required: ["to", "subject", "body"],
+  },
+}
+
+/**
  * Antonio's admin auth user id — stamped as sender_id on portal_messages so the
  * client sees the message as coming from the Tony Durante team (sender_type
  * 'admin'). Same constant the MCP portal_chat_send tool uses
@@ -716,7 +745,11 @@ interface ApprovalQueueRow {
  * propose_action is handled here (it queues, never executes); the read-only
  * subset delegates to executeTool; everything else is rejected.
  */
-export async function executeWorkerTool(name: string, params: Record<string, unknown>): Promise<string> {
+export async function executeWorkerTool(
+  name: string,
+  params: Record<string, unknown>,
+  availableNames?: Set<string>,
+): Promise<string> {
   if (name === "start_code_task") {
     const { _currentSlackCtx } = await import("./slack-claude")
     const instructions = typeof params.instructions === "string" ? params.instructions : ""
@@ -762,6 +795,17 @@ export async function executeWorkerTool(name: string, params: Record<string, unk
     }).select("id").single()
     if (error) return "Failed to queue the promotion: " + error.message
     return "Promotion queued for `" + branch + "` (id:" + data.id + "). Mac Mini will merge it into main and deploy."
+  }
+  if (name === "send_email") {
+    // Executor-level gate (defense-in-depth): a real external send must NEVER fire
+    // un-gated. Only run when send_email was actually offered to the model this call
+    // (enableEmailSend injected it into availableNames). Without that, refuse even if
+    // the model names it — so the Hermes research worker can never send email (R108).
+    if (!availableNames?.has("send_email")) {
+      return `❌ Tool "send_email" is not permitted in this worker call (email send not enabled).`
+    }
+    // Delegates to the shared send_email tool (sender selection support@/antonio@ + threading).
+    return executeTool("send_email", params)
   }
   if (name === "send_portal_message") {
     // Slack-only direct send (gated at the tool-list level via enableSlackSend).
@@ -924,6 +968,13 @@ export interface CallWorkerOptions {
    * its worker keeps the curated read-only subset (R108) and never gets raw SQL.
    */
   enableDbRead?: boolean
+  /**
+   * Expose the Slack-only send_email tool for this call. Set by the Slack worker
+   * (processSlackEvent). When true, SEND_EMAIL_TOOL is appended to the resolved tool
+   * list. The Hermes/Telegram path never sets this, so its worker can never send email
+   * (R108). Sending still requires Antonio's explicit "send it" — enforced by the prompt.
+   */
+  enableEmailSend?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -970,6 +1021,9 @@ async function runWorkerLoop(
     input_schema: t.parameters,
   }))
 
+  // The exact tool names offered to the model this call — used to executor-gate
+  // real-send tools (send_email) so they can't fire when they weren't injected.
+  const availableToolNames = new Set(tools.map((t) => t.name))
   const toolsUsed: string[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let currentMessages: any[] = [{ role: "user", content: userContent }]
@@ -1022,7 +1076,7 @@ async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
-      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {})
+      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -1122,6 +1176,13 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // and never double-adds. Hardened + audit-logged in runReadOnlySqlForWorker.
   if (opts.enableDbRead && !tools.some((t) => t.name === RUN_SQL_QUERY_TOOL.name)) {
     tools = [...tools, RUN_SQL_QUERY_TOOL]
+  }
+
+  // Slack-only: append the direct email-send tool. Gated on enableEmailSend so it
+  // NEVER reaches the Hermes research worker (R108) and never double-adds. Sending
+  // still requires Antonio's explicit "send it" — enforced by the prompt.
+  if (opts.enableEmailSend && !tools.some((t) => t.name === SEND_EMAIL_TOOL.name)) {
+    tools = [...tools, SEND_EMAIL_TOOL]
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send
