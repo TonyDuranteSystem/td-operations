@@ -19,11 +19,28 @@ type AddrRow = MailingAddressRow & {
 }
 
 /**
+ * Where clients mail physical documents TO Tony Durante (the office receiving
+ * address). Hardcoded ON PURPOSE: this is NOT the `is_td_provided` business_mailing
+ * row in the `addresses` table — that row is the CMRA business address ASSIGNED to
+ * clients (their own mailing address), which is a different thing. This constant
+ * must stay in sync with the ITIN "Client Signing" stage instruction.
+ */
+const TD_DOC_MAILING = {
+  name: 'Tony Durante LLC',
+  address_line1: '11125 Park Blvd',
+  address_line2: 'Suite 104-153',
+  city: 'Seminole',
+  state: 'FL',
+  zip: '33772',
+}
+
+/**
  * Portal Addresses — the client's key addresses in one place:
- *   1. Tony Durante's mailing address (TD-provided business_mailing) — where the
- *      client sends physical mail / signed originals to TD.
+ *   1. Mail documents to Tony Durante — TD's office receiving address (Seminole,
+ *      TD_DOC_MAILING). Where the client sends physical mail / signed originals.
  *   2. Their Registered Agent address.
- *   3. Their mailing / CMRA address (the account's business_mailing_address_id).
+ *   3. Their mailing / CMRA address (the account's business_mailing_address_id) —
+ *      the client's OWN business mailing address that TD provides.
  *
  * Read-only. Access is account-scoped: a client contact resolves via their
  * accounts; a teammate via their granted account.
@@ -49,18 +66,6 @@ export default async function PortalAddressesPage() {
     selectedAccountId = tmAccountId
   }
 
-  // TD-provided mailing address (where the client mails things to TD).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: tdAddr } = await (supabaseAdmin as any)
-    .from('addresses')
-    .select('name, agent_name, provider, address_line1, address_line2, city, state, zip, country')
-    .eq('is_td_provided', true)
-    .eq('kind', 'business_mailing')
-    .eq('active', true)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
   // The client's account: RA address (free-text + provider) + the FK-joined
   // mailing address (business_mailing_address_id = their CMRA mailing address).
   let raAddress: string | null = null
@@ -81,7 +86,7 @@ export default async function PortalAddressesPage() {
   }
 
   const it = locale === 'it'
-  const tdLine = formatAddressString(tdAddr as MailingAddressRow | null)
+  const tdLine = formatAddressString(TD_DOC_MAILING)
   const cmraLine = formatAddressString(cmra as MailingAddressRow | null)
 
   return (
@@ -97,17 +102,17 @@ export default async function PortalAddressesPage() {
         </p>
       </div>
 
-      {/* TD mailing address */}
+      {/* Mail documents TO Tony Durante — TD's office receiving address (Seminole) */}
       <AddressCard
         icon={Building2}
         accent="blue"
-        title={it ? 'Indirizzo postale di Tony Durante' : 'Tony Durante Mailing Address'}
+        title={it ? 'Invia documenti a Tony Durante' : 'Mail Documents to Tony Durante'}
         subtitle={it
           ? 'Usa questo indirizzo per inviarci documenti o posta fisica.'
           : 'Use this address to send us documents or physical mail.'}
-        name={(tdAddr?.name as string | null) ?? 'Tony Durante LLC'}
+        name={TD_DOC_MAILING.name}
         line={tdLine}
-        country={(tdAddr?.country as string | null) ?? null}
+        country={null}
         empty={it ? 'Non disponibile.' : 'Not available.'}
       />
 
