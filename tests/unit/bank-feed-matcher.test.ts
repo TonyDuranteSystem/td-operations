@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, isMatchableInvoiceStatus } from "@/lib/bank-feed-matcher"
+import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, isMatchableInvoiceStatus, partitionInvoicesForMultiMatch } from "@/lib/bank-feed-matcher"
 
 describe("isStripePayoutFeed", () => {
   // mercury (Plaid) pattern: full text in memo and sender_name
@@ -115,5 +115,33 @@ describe("resolveInvoiceStatusAfterPayment", () => {
     const result = resolveInvoiceStatusAfterPayment(1000, 900, 200)
     expect(result.newStatus).toBe("Paid")
     expect(result.newAmountDue).toBe(0)
+  })
+})
+
+describe("partitionInvoicesForMultiMatch", () => {
+  it("applies non-terminal invoices and skips terminal ones", () => {
+    const { applicable, skippedIds } = partitionInvoicesForMultiMatch([
+      { id: "a", invoice_status: "Sent" },
+      { id: "b", invoice_status: "Paid" },
+      { id: "c", invoice_status: "Partial" },
+      { id: "d", invoice_status: "Voided" },
+      { id: "e", invoice_status: "Cancelled" },
+      { id: "f", invoice_status: "Credit" },
+      { id: "g", invoice_status: "Draft" },
+    ])
+    expect(applicable.map((i) => i.id)).toEqual(["a", "c", "g"])
+    expect(skippedIds).toEqual(["b", "d", "e", "f"])
+  })
+
+  it("treats null status as applicable", () => {
+    const { applicable, skippedIds } = partitionInvoicesForMultiMatch([{ id: "a", invoice_status: null }])
+    expect(applicable.map((i) => i.id)).toEqual(["a"])
+    expect(skippedIds).toEqual([])
+  })
+
+  it("handles an empty selection", () => {
+    const { applicable, skippedIds } = partitionInvoicesForMultiMatch([])
+    expect(applicable).toEqual([])
+    expect(skippedIds).toEqual([])
   })
 })
