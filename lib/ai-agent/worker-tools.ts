@@ -1042,7 +1042,14 @@ async function runWorkerLoop(
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 16384,
-        system: systemPrompt,
+        // Prompt caching: the system prompt + tool definitions are the large, stable
+        // prefix re-sent on EVERY tool-use iteration of this loop (a dig-in question
+        // can be ~10 iterations). A cache_control breakpoint on the system block caches
+        // tools + system together (tools render before system), so iterations 2..N — and
+        // repeat calls within the 5-min TTL — read that prefix at ~0.1x instead of full
+        // price. Verify via usage.cache_read_input_tokens. (Model is fixed sonnet-4-6, so
+        // the cache is never invalidated by a model switch.)
+        system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
         tools: claudeTools,
         messages: currentMessages,
       }),
@@ -1056,6 +1063,11 @@ async function runWorkerLoop(
     }
 
     const data = await res.json()
+    // Gated prompt-cache observability — off unless WORKER_CACHE_DEBUG=1. Confirms the
+    // system+tools prefix is being read from cache (usage.cache_read_input_tokens) rather
+    // than re-billed each iteration. eslint-disable-next-line no-console -- diagnostic only
+    // eslint-disable-next-line no-console
+    if (process.env.WORKER_CACHE_DEBUG === "1") console.log(`[cache] iter ${i}:`, JSON.stringify(data.usage))
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const toolUseBlocks = data.content.filter((b: any) => b.type === "tool_use")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
