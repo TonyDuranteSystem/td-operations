@@ -1,5 +1,5 @@
 # Documents & Storage
-_Last verified against code: 2026-06-11 — Claude (unified share-path alerting via updateDocument choke point + chat-on-share flag + document_reprocess self-heal job + OCR audit CHECK 40; prior 2026-06-06 new-document client alerts)_
+_Last verified against code: 2026-06-16 — Claude (`autoSaveDocument` (`lib/portal/auto-save-document.ts`) gained an optional `serviceDeliveryId` param, written to `documents.service_delivery_id` on insert (untyped — column not in generated types). Lets flow-generated docs link to their service_delivery so they surface on the flow workspace / portal flow page (which query by `service_delivery_id`). Used by the ITIN doc generator (`app/api/itin-form-completed`) for W-7/1040-NR/Schedule OI. Prior 2026-06-11: unified share-path alerting via updateDocument choke point + chat-on-share flag + document_reprocess self-heal job + OCR audit CHECK 40; 2026-06-06 new-document client alerts.)_
 
 ## What it is
 How files are stored, processed, classified, indexed, and generated. Three storage surfaces + a processing pipeline + PDF generation.
