@@ -23,7 +23,7 @@ export async function createUnifiedInvoiceDraft(input: {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
     const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
 
-    // Resolve bank details from preference. For settings_bank_N values (from the
+    // Resolve bank details from preference. For settings_bank:<id> values (from the
     // dynamic Invoice Settings dropdown), fall back to 'auto' for the inline payment
     // instructions — the PDF/email bank details are resolved correctly by
     // resolveBankDetails() in invoice-auto-send.ts when the invoice is sent.

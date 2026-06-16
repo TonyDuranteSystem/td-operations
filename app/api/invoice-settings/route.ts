@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,6 +30,16 @@ export async function PUT(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
+
+  // Ensure every bank account carries a stable id. Invoices reference a specific
+  // bank by identity (`settings_bank:<id>`), not by list position, so reordering or
+  // deleting a bank never repoints existing invoices. Assign an id to any bank
+  // missing one (covers banks created before the id-based scheme).
+  if (Array.isArray(body.bank_accounts)) {
+    body.bank_accounts = body.bank_accounts.map((b: Record<string, unknown>) =>
+      b && typeof b === 'object' && !b.id ? { ...b, id: randomUUID() } : b,
+    )
+  }
 
   // Get existing settings ID
   const { data: existing } = await supabaseAdmin

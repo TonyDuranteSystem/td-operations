@@ -21,6 +21,7 @@ import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
 import { TD_COMPANY } from "@/lib/config"
 
 type SettingsBank = {
+  id?: string
   name: string
   currency: string
   bank_name: string
@@ -30,6 +31,37 @@ type SettingsBank = {
   swift: string
   active: boolean
   is_default?: boolean
+}
+
+/**
+ * Select a specific Invoice-Settings bank from a payments.bank_preference value.
+ * Pure (no I/O) so it is unit-testable.
+ *
+ * Supported reference forms:
+ *  - `settings_bank:<id>` — stable id (preferred). Robust to reorder/delete.
+ *  - `settings_bank_<N>`  — LEGACY positional index. No stored invoice uses this
+ *    (the constraint blocked it before the id-based scheme), kept only as a
+ *    harmless fallback.
+ *
+ * Returns the matched bank, or null when the preference is not a settings_bank
+ * reference / the bank is missing — callers then fall through to default resolution.
+ */
+export function selectSettingsBank(
+  preference: string | null | undefined,
+  banks: SettingsBank[],
+): SettingsBank | null {
+  if (!preference) return null
+  // Stable-id form: settings_bank:<id>
+  if (preference.startsWith("settings_bank:")) {
+    const id = preference.slice("settings_bank:".length)
+    return banks.find((b) => b.id === id) ?? null
+  }
+  // Legacy positional form: settings_bank_<N>
+  if (preference.startsWith("settings_bank_")) {
+    const idx = parseInt(preference.replace("settings_bank_", ""), 10)
+    if (!isNaN(idx)) return banks[idx] ?? null
+  }
+  return null
 }
 
 async function fetchSettingsBanks(): Promise<SettingsBank[]> {
@@ -72,15 +104,13 @@ async function resolveBankDetails(
   preference: string | null | undefined,
   currency: "USD" | "EUR",
 ): Promise<NonNullable<InvoicePdfInput["bankDetails"]>> {
-  // settings_bank_N — specific bank from Invoice Settings by index
-  if (preference?.startsWith("settings_bank_")) {
-    const idx = parseInt(preference.replace("settings_bank_", ""), 10)
-    if (!isNaN(idx)) {
-      const banks = await fetchSettingsBanks()
-      const bank = banks[idx]
-      if (bank?.active) return settingsBankToDetails(bank, currency)
-    }
-    // Fall through to default resolution
+  // settings_bank:<id> (preferred) or legacy settings_bank_N — a specific bank
+  // from Invoice Settings, resolved by stable id via selectSettingsBank().
+  if (preference?.startsWith("settings_bank")) {
+    const banks = await fetchSettingsBanks()
+    const bank = selectSettingsBank(preference, banks)
+    if (bank?.active) return settingsBankToDetails(bank, currency)
+    // not found / inactive → fall through to default resolution
   }
 
   // null or "auto" — look up the default bank from Invoice Settings

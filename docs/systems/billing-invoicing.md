@@ -1,5 +1,5 @@
 # Billing & Invoicing
-_Last verified against code: 2026-06-12 — Claude (bank_preference now free-form string with three-tier resolution via invoice_settings.bank_accounts; is_default per currency; Invoice Settings UI radio buttons; dialog loads dynamic bank list from /api/invoice-settings)_
+_Last verified against code: 2026-06-16 — Claude (bank_preference references a configured bank by STABLE ID `settings_bank:<uuid>`, resolved by id via selectSettingsBank(); each invoice_settings.bank_account carries an `id` auto-assigned on add + server backfill; DB CHECK constraint allows null / 5 legacy enum / `settings_bank:<uuid>`. Replaced the fragile positional `settings_bank_N` scheme, which had an active-filter index-mismatch bug)_
 
 ## What it is
 Everything about money on invoices. There are **four separate money "worlds"** that look similar but must never be mixed up — confusing them is the #1 source of billing bugs:
@@ -34,13 +34,13 @@ Both creators accept an optional `idempotency_key`; if a row with that key exist
 - `payments.status` = Pending/Paid (+ Partial/Overdue/Cancelled/Split); `payments.invoice_status` = Draft/Paid.
 - `syncTDInvoiceStatus()` keeps the `client_expenses` mirror in step with the payment (maps payment status → expense status; partial payment stays Pending). `reconcileTDInvoiceMirror()` repairs a drifted mirror.
 - `installment` uses `payment_type_enum`: Setup Fee, Installment 1 (Jan), Installment 2 (Jun), Annual Payment, One-Time Service, Custom.
-- Currency USD/EUR; `bank_preference` is a free-form string. Three-tier resolution in `lib/invoice-auto-send.ts::resolveBankDetails`: (1) `settings_bank_N` — N-th active bank from `invoice_settings.bank_accounts`; (2) `auto`/null — `is_default` bank from invoice_settings for matching currency, then first bank of that currency, then Mercury/Airwallex fallback; (3) legacy enum (`relay/mercury/revolut/airwallex`) → hardcoded constants. `is_default` is scoped per currency (radio button in Invoice Settings UI). Index N is 0-based into ACTIVE-ONLY banks — both dialog and resolver filter to `active === true` to keep indices aligned.
+- Currency USD/EUR; `bank_preference` is a free-form string. Resolution in `lib/invoice-auto-send.ts::resolveBankDetails` via the pure helper `selectSettingsBank()`: (1) `settings_bank:<uuid>` — the bank whose stable `id` matches in `invoice_settings.bank_accounts` (preferred; robust to reorder/delete); (2) `auto`/null — `is_default` bank from invoice_settings for matching currency, then first bank of that currency, then Mercury/Airwallex fallback; (3) legacy enum (`relay/mercury/revolut/airwallex`) → hardcoded constants. The legacy positional `settings_bank_N` form is still parsed as a harmless fallback but is no longer produced by the dialog nor accepted by the DB constraint. `is_default` is scoped per currency (radio button in Invoice Settings UI). DB guard `payments_bank_preference_check` allows null / the 5 enum values / `^settings_bank:[0-9a-fA-F-]{36}$`.
 
 ### Key files
 - `lib/portal/td-invoice.ts` (now stamps `client_expenses.amount_due/amount_paid` on the mirror) · `lib/portal/unified-invoice.ts` · `lib/portal/invoice-number.ts` (`generateInvoiceNumber` + `generateCreditNoteNumber`)
 - `lib/operations/credit-netting.ts` — `computeCreditApplication`/`consumeCredits` (at-creation) + `reconcileAccountCredits`/`allocateCredits` (existing-invoice reconcile) · `lib/portal/invoice-audit.ts`
 - `lib/billing/installment-defaults.ts` · `lib/billing/renewal-guard.ts`
-- `lib/invoice-auto-send.ts` — `resolveBankDetails()` (bank resolution at send time), `fetchSettingsBanks()` (active-only from invoice_settings), `sendPaidReceipt()`, `sendInvoiceEmail()`
+- `lib/invoice-auto-send.ts` — `resolveBankDetails()` (bank resolution at send time), `selectSettingsBank()` (pure id/legacy matcher, unit-tested), `fetchSettingsBanks()` (all banks from invoice_settings), `sendPaidReceipt()`, `sendInvoiceEmail()`
 - MCP tools: `portal_invoice_create`, `portal_invoice_send`. CRM: Finance pages, `/payments`, `/invoice-aging`, `/invoice-settings`.
 - `app/(dashboard)/invoice-settings/page.tsx` — Invoice Settings UI with is_default radio buttons per currency
 - `components/payments/invoice-dialog.tsx` — dynamic bank dropdown loaded from `/api/invoice-settings`
@@ -55,6 +55,7 @@ Both creators accept an optional `idempotency_key`; if a row with that key exist
 - **Credit netting is automatic** on real unpaid bills. To create a credit note itself (or any invoice that must not net), pass `skip_credit_netting: true` — otherwise a credit can wrongly net into it. A bill fully covered by credit is marked **Paid, $0 due** with an explicit "service − credit = $0" description.
 - **Keep the `client_expenses` mirror in sync** via `syncTDInvoiceStatus` / `reconcileTDInvoiceMirror` — don't update the mirror by hand.
 - **Invoice emails → portal Pay only** (R092). No Stripe/wire in the email body.
+- **Banks are referenced by stable id, not list position.** An invoice stores `settings_bank:<uuid>`; each bank in `invoice_settings.bank_accounts` carries an `id` (assigned on add in the settings UI via `crypto.randomUUID()` + backfilled server-side in `app/api/invoice-settings/route.ts`). This replaced the old positional `settings_bank_N` (2026-06-16) which had a latent bug: the dialog indexed the active-filtered list while `resolveBankDetails` indexed the unfiltered list, so an inactive bank could put the wrong bank on an invoice. The DB CHECK constraint (`payments_bank_preference_check`) was widened to accept `settings_bank:<uuid>` via `scripts/migrations/20260616-1410-widen-payments-bank-preference-constraint.sql` (production DDL applied via Supabase dashboard — the MCP tool blocks DDL).
 
 ## How to verify current state
 - Read the three creators: `lib/portal/td-invoice.ts` (`createTDInvoice`), `lib/portal/unified-invoice.ts` (`createUnifiedInvoice`), `lib/portal/invoice-number.ts`.
