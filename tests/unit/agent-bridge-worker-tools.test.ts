@@ -32,9 +32,11 @@ describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
     }
   })
 
-  it("explicitly excludes run_sql_query (raw SQL is unnecessary for research surface)", () => {
-    // search_* tools cover the legitimate use cases; raw SQL would bypass
-    // schema-level validation and add risk for no upside.
+  it("excludes run_sql_query from the base set (Hermes research worker stays raw-SQL-free)", () => {
+    // The BASE worker surface (and therefore the Hermes/Telegram research worker) never
+    // gets raw SQL. The Slack worker DOES get a hardened, read-only run_sql_query for
+    // dig-in investigations, but only via the call-time enableDbRead gate — it is NOT in
+    // WORKER_READ_ONLY_TOOL_NAMES or WORKER_TOOLS, so this invariant still holds.
     expect(WORKER_READ_ONLY_TOOL_NAMES.has("run_sql_query")).toBe(false)
   })
 

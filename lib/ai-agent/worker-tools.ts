@@ -172,6 +172,104 @@ export const CODEBASE_SEARCH_TOOL: ToolDef = {
 }
 
 /**
+ * run_sql_query — READ-ONLY SQL for deep client investigation (Slack worker only).
+ *
+ * Gated behind CallWorkerOptions.enableDbRead so it reaches ONLY the Slack worker,
+ * never the Hermes/Telegram research worker (R108). Hardened beyond the in-dashboard
+ * runSqlQuery (lib/ai-agent/tools.ts): single statement only, SELECT/WITH only, a
+ * write-keyword blocklist, AND the auth schema + token/password tables are blocked so
+ * login hashes and tokens can never be read into a Slack reply. Every accepted query is
+ * audit-logged; output is capped so a wide query can't blow up the reply.
+ */
+export const WORKER_SQL_BLOCKED_PATTERNS: RegExp[] = [
+  // Any write / DDL / session-mutating keyword (also catches write-CTEs like WITH x AS (DELETE ...)).
+  /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|MERGE|CALL|DO|VACUUM|REFRESH|REINDEX|LOCK|SET|RESET)\b/i,
+  /\bauth\.\w+/i, // auth schema — password hashes, sessions, identities
+  /\boauth_\w+/i, // oauth_tokens / oauth_codes / oauth_clients
+  /\bqb_tokens\b/i, // QuickBooks tokens
+  /\bpush_subscriptions\b/i, // web-push endpoint secrets
+  /\bencrypted_password\b/i,
+]
+
+/** Cap on the JSON result string returned to the model — keeps replies bounded. */
+export const WORKER_SQL_RESULT_CAP = 8000
+
+/**
+ * Validate a worker SQL string is a SINGLE read-only SELECT/WITH that touches no
+ * blocked table. Pure (no DB) so it is unit-testable. Returns the cleaned SQL
+ * (trailing ';' stripped) or a plain-English error.
+ */
+export function assertWorkerReadOnlySql(
+  raw: unknown,
+): { sql: string | null; error: string | null } {
+  // Nullable-fields shape (not a discriminated union) so callers don't depend on
+  // literal-boolean narrowing — strictNullChecks is off in this project's tsconfig,
+  // which breaks `if (r.ok)` discrimination. Check `error` / `sql` directly instead.
+  if (typeof raw !== "string" || !raw.trim()) return { sql: null, error: "query is required" }
+  let sql = raw.trim()
+  // Strip ONE trailing semicolon, then reject any remaining one (multi-statement attack).
+  if (sql.endsWith(";")) sql = sql.slice(0, -1).trim()
+  if (sql.includes(";")) {
+    return { sql: null, error: "Only a single SELECT statement is allowed (no ';' / stacked statements)." }
+  }
+  if (!/^(SELECT|WITH)\b/i.test(sql)) {
+    return { sql: null, error: "Only read-only SELECT (or WITH … SELECT) queries are allowed." }
+  }
+  for (const re of WORKER_SQL_BLOCKED_PATTERNS) {
+    if (re.test(sql)) {
+      return {
+        sql: null,
+        error:
+          "Query rejected: it writes data or touches a protected (auth / token / password) table. Read-only client/business tables only.",
+      }
+    }
+  }
+  return { sql, error: null }
+}
+
+/**
+ * Execute a worker read-only SQL query. Guards with assertWorkerReadOnlySql, runs via
+ * the exec_sql RPC, audit-logs the query, and caps the returned JSON. Never throws —
+ * returns a JSON string (rows or { error }). Exported for unit tests.
+ */
+export async function runReadOnlySqlForWorker(params: Record<string, unknown>): Promise<string> {
+  const { sql, error: guardError } = assertWorkerReadOnlySql(params.query)
+  if (guardError || !sql) return JSON.stringify({ error: guardError ?? "Invalid query." })
+
+  // Audit every accepted worker query (fire-and-forget; logAction never throws).
+  logAction({
+    actor: "claude.slack",
+    action_type: "read",
+    table_name: "(sql)",
+    summary: `Worker read-only SQL: ${sql.slice(0, 200)}${sql.length > 200 ? "…" : ""}`,
+  })
+
+  // eslint-disable-next-line no-restricted-syntax -- read-only SELECT via exec_sql, guarded above
+  const { data, error } = await supabaseAdmin.rpc("exec_sql", { sql_query: sql })
+  if (error) return JSON.stringify({ error: error.message })
+  const json = JSON.stringify(data ?? [])
+  return json.length > WORKER_SQL_RESULT_CAP
+    ? `${json.slice(0, WORKER_SQL_RESULT_CAP)}…(truncated; ${json.length} chars — narrow the query with specific columns + a LIMIT)`
+    : json
+}
+
+export const RUN_SQL_QUERY_TOOL: ToolDef = {
+  name: "run_sql_query",
+  description: [
+    "Run a READ-ONLY SQL query (SELECT or WITH … SELECT, single statement) to investigate client/business data the search tools cannot reach — e.g. account_contacts links, ss4_applications, service_deliveries, payments, wizard/portal state.",
+    "Writes and DDL are rejected. The auth schema and token/password tables are blocked and cannot be read.",
+    "Use this in DIG-IN gear to verify a claim against the real data, and pair it with codebase_read to confirm how a feature behaves. Prefer specific columns + a LIMIT.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "A single read-only SELECT (or WITH … SELECT) statement." },
+    },
+    required: ["query"],
+  },
+}
+
+/**
  * start_code_task — queue a code implementation task for the Mac Mini runner.
  *
  * Slack-only: surfaced when Antonio asks Claude-in-Slack to implement/build/fix/
@@ -683,6 +781,12 @@ export async function executeWorkerTool(name: string, params: Record<string, unk
       typeof params.extension === "string" ? params.extension : undefined,
     )
   }
+  // Read-only SQL — Slack-only (gated via enableDbRead at the tool-list level, same
+  // as start_code_task / send_portal_message). Reaches here only when the model was
+  // handed the tool. Hardened + audit-logged inside runReadOnlySqlForWorker.
+  if (name === "run_sql_query") {
+    return runReadOnlySqlForWorker(params)
+  }
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
@@ -803,6 +907,13 @@ export interface CallWorkerOptions {
    * client-send tool must never reach the Hermes worker.
    */
   enableSlackSend?: boolean
+  /**
+   * Expose the Slack-only read-only run_sql_query tool for this call (dig-in gear).
+   * Set by the Slack worker (processSlackEvent). When true, RUN_SQL_QUERY_TOOL is
+   * appended to the resolved tool list. The Hermes/Telegram path never sets this, so
+   * its worker keeps the curated read-only subset (R108) and never gets raw SQL.
+   */
+  enableDbRead?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -994,6 +1105,13 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // every other action still routes through propose_action.
   if (opts.enableSlackSend && !tools.some((t) => t.name === SEND_PORTAL_MESSAGE_TOOL.name)) {
     tools = [...tools, SEND_PORTAL_MESSAGE_TOOL]
+  }
+
+  // Slack-only: append the read-only SQL tool for deep client investigation (dig-in
+  // gear). Gated on enableDbRead so it NEVER reaches the Hermes research worker (R108)
+  // and never double-adds. Hardened + audit-logged in runReadOnlySqlForWorker.
+  if (opts.enableDbRead && !tools.some((t) => t.name === RUN_SQL_QUERY_TOOL.name)) {
+    tools = [...tools, RUN_SQL_QUERY_TOOL]
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send
