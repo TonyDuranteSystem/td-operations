@@ -340,15 +340,19 @@ export async function POST(req: NextRequest) {
           // ITINs (no account_id) now register portal documents scoped to the
           // contact. If the contact also owns an LLC (sub.account_id set),
           // file under that account so other account members can see the docs.
+          // Stamp the generated docs with the active ITIN SD (deliveryId) so they
+          // surface on the flow workspace / portal flow page (which query by
+          // service_delivery_id). portal_visible=true: W-7/1040-NR/Schedule OI are
+          // client-facing (no internal COA is generated on this path).
           if (sub.account_id) {
-            await autoSaveDocument({ accountId: sub.account_id, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true })
-            await autoSaveDocument({ accountId: sub.account_id, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true })
-            await autoSaveDocument({ accountId: sub.account_id, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true })
+            await autoSaveDocument({ accountId: sub.account_id, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
+            await autoSaveDocument({ accountId: sub.account_id, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
+            await autoSaveDocument({ accountId: sub.account_id, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
             results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated, uploaded to Drive/ITIN/, and registered in portal documents (account-scoped)` })
           } else if (contactId) {
-            await autoSaveDocument({ contactId, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true })
-            await autoSaveDocument({ contactId, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true })
-            await autoSaveDocument({ contactId, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true })
+            await autoSaveDocument({ contactId, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
+            await autoSaveDocument({ contactId, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
+            await autoSaveDocument({ contactId, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
             results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated, uploaded to Drive/ITIN/, and registered in portal documents (contact-scoped)` })
           } else {
             results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/ (no account or contact — portal documents skipped)` })

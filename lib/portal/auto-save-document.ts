@@ -23,6 +23,9 @@ interface AutoSaveDocumentParams {
   category: number      // 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence
   driveFileId?: string
   portalVisible?: boolean  // true = visible to client in portal Documents page
+  /** Link the document to a service_delivery (flow) so it appears in the flow
+   *  workspace / portal flow detail page (which query by service_delivery_id). */
+  serviceDeliveryId?: string | null
 }
 
 export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<{ id?: string; error?: string }> {
@@ -58,6 +61,9 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       confidence: 1.0,
       processed_at: new Date().toISOString(),
       portal_visible: params.portalVisible ?? false,
+      // service_delivery_id isn't in the generated DB types yet; included in the
+      // untyped record (insert is cast `as never`).
+      ...(params.serviceDeliveryId ? { service_delivery_id: params.serviceDeliveryId } : {}),
     }
 
     const { data, error } = await supabaseAdmin
