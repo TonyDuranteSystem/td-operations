@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
-import { isDashboardUser, isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
@@ -439,9 +439,9 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   // date-derived scheduled placeholders for RA/AR). Read-only; additive.
   const flows = await resolveFlows(params.id)
 
-  // Admin-only "View as client": resolve the account's primary contact (Owner,
-  // else first linked contact). Read-only portal view — admins only.
-  const canViewAs = user ? isAdmin(user) : false
+  // "View as client" (admin + staff): resolve the account's primary contact (Owner,
+  // else first linked contact). Read-only portal view.
+  const canViewAs = admin
   const primaryContact =
     contacts.find((c) => (c as Contact & { role?: string }).role === 'Owner') ?? contacts[0]
 

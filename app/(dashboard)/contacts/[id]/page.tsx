@@ -4,7 +4,7 @@ import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
 import { resolveFlowsByContact } from '@/lib/flows/resolve-flows'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
 
@@ -222,8 +222,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     }
   }
 
-  // Admin-only "View as client": only when this contact actually has a portal login.
-  const canViewAs = isAdmin(user) && portalAuth.exists
+  // "View as client" (admin + staff): only when this contact actually has a portal login.
+  const canViewAs = isDashboardUser(user) && portalAuth.exists
 
   // Contact-scoped flows (ITIN, etc.) — these SDs have no account, so the
   // account page can't surface them; show their chips here instead.
