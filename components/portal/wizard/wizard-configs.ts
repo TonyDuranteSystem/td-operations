@@ -318,7 +318,10 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
 // ─── TAX SMLLC documents (all optional — different from MMLLC/Corp) ──
 
 const TAX_SMLLC_DOCUMENTS: FieldConfig[] = [
-  { name: 'bank_statements', label: 'Bank Statements (optional)', labelIt: 'Estratti Conto (opzionale)', type: 'file', required: false, accept: '.pdf,.csv,.jpg,.jpeg,.png', hint: 'Optional. Upload bank statements for the tax year if available. CSV format is welcome but not required.', hintIt: 'Facoltativo. Carica gli estratti conto dell\'anno fiscale se disponibili. Il formato CSV è benvenuto ma non obbligatorio.' },
+  // Bank-statement upload removed (2026-06-17, Antonio): a single-member LLC's
+  // figures are entered as numbers in the Financial step, so it does not need
+  // bank statements here — the upload only added confusion (it was never
+  // ingested either; only the MMLLC per-bank CSV upload feeds the engine).
   { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false, hint: 'Optional. Profit & loss statement or balance sheet if your accountant has prepared one.', hintIt: 'Facoltativo. Conto economico o stato patrimoniale se il tuo commercialista ne ha preparato uno.' },
   { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false, hint: 'Optional. Upload last year\'s filed tax return (Form 5472 or 1120) if available.', hintIt: 'Facoltativo. Carica la dichiarazione dell\'anno scorso (Modulo 5472 o 1120) se disponibile.' },
   { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
