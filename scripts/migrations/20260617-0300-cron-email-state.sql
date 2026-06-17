@@ -1,16 +1,24 @@
 -- cron_email_state — durable per-cron "last emailed" snapshot, so noisy crons
 -- only email when something actually changed (and at most once / 24h).
 --
--- key             = cron identifier (e.g. 'audit-health-check')
--- snapshot        = the set of findings last communicated, as { key: {severity,count} }
--- last_emailed_at = when the last alert email actually went out (drives the 24h throttle)
+-- Canonical schema MIRRORS the production table (created manually 2026-06-17):
+--   id              uuid PK default gen_random_uuid()
+--   cron_name       text NOT NULL UNIQUE   (upsert conflict target)
+--   last_payload    jsonb                  (the set of findings last emailed)
+--   last_emailed_at timestamptz            (drives the 24h throttle)
 --
--- First consumer: /api/cron/audit-health-check. Reusable by any future cron that
--- wants change-detected, throttled email alerts.
+-- DROP+CREATE realigns SANDBOX, whose first cut of this table used a different
+-- shape (key/snapshot). The table is empty in every environment, so this is a
+-- no-data-loss reset. PRODUCTION already exists in exactly this shape and this
+-- migration is NOT re-applied there (the DDL guard blocks prod DDL anyway).
+--
+-- First consumer: /api/cron/audit-health-check (cron_name='audit-health-check').
 
-CREATE TABLE IF NOT EXISTS cron_email_state (
-  key             text PRIMARY KEY,
-  snapshot        jsonb NOT NULL DEFAULT '{}'::jsonb,
-  last_emailed_at timestamptz,
-  updated_at      timestamptz NOT NULL DEFAULT now()
+DROP TABLE IF EXISTS cron_email_state;
+
+CREATE TABLE cron_email_state (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  cron_name       text NOT NULL UNIQUE,
+  last_payload    jsonb,
+  last_emailed_at timestamptz
 );

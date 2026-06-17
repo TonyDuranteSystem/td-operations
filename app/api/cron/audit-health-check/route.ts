@@ -83,18 +83,18 @@ export async function GET(req: NextRequest) {
     // email, and at most once per 24h. The audit finds the same persistent
     // issues every run, so emailing every run is pure noise. The last emailed
     // set of findings + timestamp lives in cron_email_state.
-    const EMAIL_STATE_KEY = "audit-health-check"
+    const EMAIL_CRON_NAME = "audit-health-check"
     let previousSnapshot: FindingSnapshot = {}
     let lastEmailedAt: string | null = null
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: stateRow } = await (supabaseAdmin as any)
         .from("cron_email_state")
-        .select("snapshot, last_emailed_at")
-        .eq("key", EMAIL_STATE_KEY)
+        .select("last_payload, last_emailed_at")
+        .eq("cron_name", EMAIL_CRON_NAME)
         .maybeSingle()
       if (stateRow) {
-        previousSnapshot = (stateRow.snapshot as FindingSnapshot) ?? {}
+        previousSnapshot = (stateRow.last_payload as FindingSnapshot) ?? {}
         lastEmailedAt = (stateRow.last_emailed_at as string | null) ?? null
       }
     } catch (stateErr) {
@@ -190,12 +190,14 @@ export async function GET(req: NextRequest) {
         // NEW the next time we actually email.
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (supabaseAdmin as any).from("cron_email_state").upsert({
-            key: EMAIL_STATE_KEY,
-            snapshot: toSnapshot(findings),
-            last_emailed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
+          await (supabaseAdmin as any).from("cron_email_state").upsert(
+            {
+              cron_name: EMAIL_CRON_NAME,
+              last_payload: toSnapshot(findings),
+              last_emailed_at: new Date().toISOString(),
+            },
+            { onConflict: "cron_name" },
+          )
         } catch (stateWriteErr) {
           console.warn("[audit-health-check] cron_email_state write failed:", stateWriteErr)
         }
