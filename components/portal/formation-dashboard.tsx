@@ -1,6 +1,6 @@
 'use client'
 
-import { CheckCircle, Clock, AlertCircle, ArrowRight, Building2, MapPin, Calendar, Shield, MessageCircle, PenSquare, FileText } from 'lucide-react'
+import { CheckCircle, Clock, AlertCircle, ArrowRight, Building2, MapPin, Calendar, Shield, MessageCircle, FileText } from 'lucide-react'
 import Link from 'next/link'
 
 interface FormationAccount {
@@ -27,13 +27,16 @@ interface FormationDashboardProps {
    * NEW LLC being formed AND an external LLC being wound down). Patrick
    * Covelli is the canonical case. */
   closureData?: { id: string } | null
-  /** Lead the in-progress formation is anchored on. When set, the "Complete
-   * Your Formation Details" CTA links to /portal/wizard?lead=<leadId>. Required
-   * for returning clients who already own an account — without it the wizard
-   * page falls through to that account's context and opens the wrong wizard
-   * (tax/onboarding) instead of this new company's formation. */
+  /** Lead the in-progress formation is anchored on. When set, the step-2
+   * "Fill In Your LLC Details" action links to /portal/wizard?lead=<leadId>.
+   * Required for returning clients who already own an account — without it the
+   * wizard page falls through to that account's context and opens the wrong
+   * wizard (tax/onboarding) instead of this new company's formation. */
   formationLeadId?: string | null
 }
+
+/** Visual state of a single tracker milestone. */
+type MilestoneState = 'completed' | 'action' | 'waiting' | 'upcoming'
 
 export function FormationDashboard({
   firstName,
@@ -55,10 +58,9 @@ export function FormationDashboard({
     ? `/portal/wizard?lead=${formationLeadId}`
     : '/portal/wizard'
 
-  // Derive milestone completion
+  // ── Raw signals (unchanged) ──
   const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed'
   const stateConfirmed = !!account?.filing_id || !!account?.formation_date
-  const ss4Ready = !!ss4Data
   const ss4AwaitingSignature = ss4Data?.status === 'awaiting_signature'
   const ss4Signed = ss4Data?.status === 'signed' || ss4Data?.status === 'submitted' || ss4Data?.status === 'confirmed'
   const ss4Faxed = ss4Data?.status === 'submitted' || ss4Data?.status === 'confirmed'
@@ -66,19 +68,38 @@ export function FormationDashboard({
   const oaSigned = oaData?.status === 'signed'
   const leaseSigned = leaseData?.status === 'signed'
 
-  // Determine current active CTA
-  const needsWizard = !wizardSubmitted
-  const needsSS4Signature = !needsWizard && ss4AwaitingSignature
+  // ── Milestone completion (monotonic cascade) ──
+  // A later milestone being reached implies every earlier one is done, so a
+  // backstop (||einReceived etc.) prevents an upstream step from rendering gray
+  // when a downstream one is already complete (e.g. EIN entered manually).
+  const m2Done = wizardSubmitted || stateConfirmed || einReceived
+  const m345Done = stateConfirmed || einReceived
+  const m6Done = ss4Signed || einReceived
+  const m7Done = ss4Faxed || einReceived
+  const m8Done = einReceived
+
+  // ── Per-step visual state ──
+  const m2State: MilestoneState = m2Done ? 'completed' : 'action'
+  const m3State: MilestoneState = m345Done ? 'completed' : m2Done ? 'waiting' : 'upcoming'
+  const m4State: MilestoneState = m345Done ? 'completed' : 'upcoming'
+  const m5State: MilestoneState = m345Done ? 'completed' : 'upcoming'
+  // Once the LLC is approved, the SS-4 is being prepared by our team until it's
+  // ready for the client's signature — show that as a blue "waiting" dot (mirrors
+  // steps 7 & 8) rather than a gray "upcoming" one.
+  const m6State: MilestoneState = m6Done ? 'completed' : ss4AwaitingSignature ? 'action' : m345Done ? 'waiting' : 'upcoming'
+  const m7State: MilestoneState = m7Done ? 'completed' : m6Done ? 'waiting' : 'upcoming'
+  const m8State: MilestoneState = m8Done ? 'completed' : m7Done ? 'waiting' : 'upcoming'
+
+  // ── Post-EIN CTAs (kept; independent of the tracker) ──
   const needsOA = einReceived && !oaSigned && oaData && oaData.status !== 'signed'
   const needsLease = einReceived && !leaseSigned && leaseData && leaseData.status !== 'signed'
   // Closure is INDEPENDENT of the formation milestone chain — it surfaces
-  // whenever an active Closure SD exists on the contact, regardless of the
-  // formation's stage.
+  // whenever an active Closure SD exists on the contact, regardless of stage.
   const needsClosure = !!closureData
 
-  // Status message for waiting states
-  const waitingForState = wizardSubmitted && !stateConfirmed
-  const waitingForEIN = ss4Faxed && !einReceived
+  // Informational waiting banners (timelines the tracker dots can't convey)
+  const waitingForState = m2Done && !m345Done
+  const waitingForEIN = m7Done && !einReceived
 
   function formatDate(d: string | null): string {
     if (!d) return '—'
@@ -92,6 +113,18 @@ export function FormationDashboard({
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
+      {/* Soft amber glow for client-action steps */}
+      <style jsx global>{`
+        @keyframes formationActionGlow {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+          50% { box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.18); }
+        }
+        .formation-action-glow { animation: formationActionGlow 2.4s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .formation-action-glow { animation: none; }
+        }
+      `}</style>
+
       {/* Welcome header */}
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 rounded-2xl p-6 sm:p-8 text-white">
         <h1 className="text-2xl sm:text-3xl font-bold mb-2">
@@ -100,39 +133,8 @@ export function FormationDashboard({
         <p className="text-indigo-100 text-sm sm:text-base">{tr.subtitle}</p>
       </div>
 
-      {/* Active CTA — prominent card for the next required action */}
-      {needsWizard && (
-        <Link
-          href={wizardHref}
-          className="flex items-center gap-4 p-5 bg-indigo-50 border-2 border-indigo-300 rounded-xl hover:bg-indigo-100 transition-colors group"
-        >
-          <div className="h-12 w-12 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0">
-            <PenSquare className="h-6 w-6 text-white" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-base font-semibold text-indigo-900">{tr.ctaWizardTitle}</p>
-            <p className="text-sm text-indigo-700 mt-0.5">{tr.ctaWizardDesc}</p>
-          </div>
-          <ArrowRight className="h-5 w-5 text-indigo-500 shrink-0 group-hover:translate-x-1 transition-transform" />
-        </Link>
-      )}
-
-      {needsSS4Signature && (
-        <Link
-          href="/portal/sign/ss4"
-          className="flex items-center gap-4 p-5 bg-amber-50 border-2 border-amber-300 rounded-xl hover:bg-amber-100 transition-colors group"
-        >
-          <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shrink-0">
-            <FileText className="h-6 w-6 text-white" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-base font-semibold text-amber-900">{tr.ctaSS4Title}</p>
-            <p className="text-sm text-amber-700 mt-0.5">{tr.ctaSS4Desc}</p>
-          </div>
-          <ArrowRight className="h-5 w-5 text-amber-500 shrink-0 group-hover:translate-x-1 transition-transform" />
-        </Link>
-      )}
-
+      {/* Post-EIN CTAs — the wizard (step 2) and SS-4 (step 6) actions now live
+          inside the tracker; only the post-EIN document signings float here. */}
       {needsOA && (
         <Link
           href="/portal/sign/oa"
@@ -206,60 +208,21 @@ export function FormationDashboard({
       <div className="bg-white rounded-xl border shadow-sm p-6">
         <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-5">{tr.progressTitle}</h2>
         <div className="space-y-1">
-          <Milestone
-            label={tr.m1Label}
-            desc={tr.m1Desc}
-            completed={true}
-          />
+          <Milestone label={tr.m1Label} desc={tr.m1Desc} state="completed" actionLabel={tr.actionRequired} />
           <MilestoneConnector completed={true} />
-          <Milestone
-            label={tr.m2Label}
-            desc={tr.m2Desc}
-            completed={wizardSubmitted}
-            active={!wizardSubmitted}
-          />
-          <MilestoneConnector completed={wizardSubmitted} />
-          <Milestone
-            label={tr.m3Label}
-            desc={tr.m3Desc}
-            completed={wizardSubmitted}
-            active={wizardSubmitted && !stateConfirmed}
-          />
-          <MilestoneConnector completed={stateConfirmed} />
-          <Milestone
-            label={tr.m4Label}
-            desc={tr.m4Desc}
-            completed={stateConfirmed}
-            active={wizardSubmitted && !stateConfirmed}
-          />
-          <MilestoneConnector completed={ss4Ready} />
-          <Milestone
-            label={tr.m5Label}
-            desc={tr.m5Desc}
-            completed={ss4Signed}
-            active={ss4AwaitingSignature}
-          />
-          <MilestoneConnector completed={ss4Faxed} />
-          <Milestone
-            label={tr.m6Label}
-            desc={tr.m6Desc}
-            completed={ss4Faxed}
-            active={ss4Signed && !ss4Faxed}
-          />
-          <MilestoneConnector completed={einReceived} />
-          <Milestone
-            label={tr.m7Label}
-            desc={tr.m7Desc}
-            completed={einReceived}
-            active={ss4Faxed && !einReceived}
-          />
-          <MilestoneConnector completed={oaSigned && leaseSigned} />
-          <Milestone
-            label={tr.m8Label}
-            desc={tr.m8Desc}
-            completed={oaSigned && leaseSigned}
-            active={einReceived && (!oaSigned || !leaseSigned)}
-          />
+          <Milestone label={tr.m2Label} desc={tr.m2Desc} state={m2State} href={wizardHref} actionLabel={tr.actionRequired} />
+          <MilestoneConnector completed={m2Done} />
+          <Milestone label={tr.m3Label} desc={tr.m3Desc} state={m3State} actionLabel={tr.actionRequired} />
+          <MilestoneConnector completed={m345Done} />
+          <Milestone label={tr.m4Label} desc={tr.m4Desc} state={m4State} actionLabel={tr.actionRequired} />
+          <MilestoneConnector completed={m345Done} />
+          <Milestone label={tr.m5Label} desc={tr.m5Desc} state={m5State} actionLabel={tr.actionRequired} />
+          <MilestoneConnector completed={m6Done} />
+          <Milestone label={tr.m6Label} desc={tr.m6Desc} state={m6State} href="/portal/sign/ss4" actionLabel={tr.actionRequired} />
+          <MilestoneConnector completed={m6Done} />
+          <Milestone label={tr.m7Label} desc={tr.m7Desc} state={m7State} actionLabel={tr.actionRequired} />
+          <MilestoneConnector completed={m7Done} />
+          <Milestone label={tr.m8Label} desc={tr.m8Desc} state={m8State} actionLabel={tr.actionRequired} />
         </div>
       </div>
 
@@ -321,24 +284,90 @@ export function FormationDashboard({
 
 // ─── Sub-components ───
 
-function Milestone({ label, desc, completed, active = false }: { label: string; desc: string; completed: boolean; active?: boolean }) {
-  return (
-    <div className={`flex items-center gap-3 p-3 rounded-lg ${active ? 'bg-indigo-50 border border-indigo-200' : completed ? 'bg-emerald-50/60' : 'bg-zinc-50'}`}>
-      <div className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 ${completed ? 'bg-emerald-500' : active ? 'bg-indigo-500' : 'bg-zinc-200'}`}>
-        {completed ? (
-          <CheckCircle className="h-4 w-4 text-white" />
-        ) : active ? (
-          <AlertCircle className="h-4 w-4 text-white" />
-        ) : (
-          <span className="h-2.5 w-2.5 rounded-full bg-zinc-400" />
-        )}
-      </div>
+/**
+ * One tracker milestone. `state` drives the visual:
+ *  - completed → green check
+ *  - action    → amber glow + "Action required" badge + clickable (needs href)
+ *  - waiting   → blue pulsing dot (we're working / waiting on a third party)
+ *  - upcoming  → gray dot
+ */
+function Milestone({
+  label,
+  desc,
+  state,
+  href,
+  actionLabel,
+}: {
+  label: string
+  desc: string
+  state: MilestoneState
+  href?: string
+  actionLabel: string
+}) {
+  const isCompleted = state === 'completed'
+  const isAction = state === 'action'
+  const isWaiting = state === 'waiting'
+
+  const circle = (
+    <div
+      className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 ${
+        isCompleted ? 'bg-emerald-500' : isAction ? 'bg-amber-500' : isWaiting ? 'bg-blue-500' : 'bg-zinc-200'
+      }`}
+    >
+      {isCompleted ? (
+        <CheckCircle className="h-4 w-4 text-white" />
+      ) : isAction ? (
+        <AlertCircle className="h-4 w-4 text-white" />
+      ) : isWaiting ? (
+        <span className="h-2.5 w-2.5 rounded-full bg-white animate-pulse" />
+      ) : (
+        <span className="h-2.5 w-2.5 rounded-full bg-zinc-400" />
+      )}
+    </div>
+  )
+
+  const inner = (
+    <>
+      {circle}
       <div className="flex-1 min-w-0">
-        <p className={`text-sm font-medium ${completed ? 'text-emerald-700' : active ? 'text-indigo-700' : 'text-zinc-400'}`}>
-          {label}
-        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <p
+            className={`text-sm font-medium ${
+              isCompleted ? 'text-emerald-700' : isAction ? 'text-amber-800' : isWaiting ? 'text-blue-700' : 'text-zinc-400'
+            }`}
+          >
+            {label}
+          </p>
+          {isAction && (
+            <span className="inline-flex items-center rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+              {actionLabel}
+            </span>
+          )}
+        </div>
         <p className="text-xs text-zinc-500">{desc}</p>
       </div>
+      {isAction && <ArrowRight className="h-4 w-4 text-amber-500 shrink-0" />}
+    </>
+  )
+
+  const base = 'flex items-center gap-3 p-3 rounded-lg'
+
+  if (isAction && href) {
+    return (
+      <Link
+        href={href}
+        className={`${base} formation-action-glow border border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors`}
+      >
+        {inner}
+      </Link>
+    )
+  }
+
+  return (
+    <div
+      className={`${base} ${isCompleted ? 'bg-emerald-50/60' : isWaiting ? 'bg-blue-50 border border-blue-200' : 'bg-zinc-50'}`}
+    >
+      {inner}
     </div>
   )
 }
@@ -369,26 +398,23 @@ const EN = {
   welcome: 'Welcome',
   subtitle: 'We\'re forming your LLC. Here\'s where things stand.',
   progressTitle: 'Formation Progress',
+  actionRequired: 'Action required',
   m1Label: 'Payment Confirmed',
   m1Desc: 'Your formation order is active',
-  m2Label: 'Formation Data Submitted',
-  m2Desc: 'Your details submitted to our team',
-  m3Label: 'State Filing Submitted',
-  m3Desc: 'Articles of Organization filed with the Secretary of State',
-  m4Label: 'LLC Officially Formed',
-  m4Desc: 'State has approved and confirmed your LLC',
-  m5Label: 'SS-4 Signed',
-  m5Desc: 'IRS EIN application form signed by you',
-  m6Label: 'SS-4 Faxed to IRS',
-  m6Desc: 'Application submitted to the IRS',
-  m7Label: 'EIN Received',
-  m7Desc: 'Your federal Employer Identification Number is assigned',
-  m8Label: 'Post-Formation Setup',
-  m8Desc: 'Operating Agreement, Lease Agreement, and banking setup',
-  ctaWizardTitle: 'Complete Your Formation Details',
-  ctaWizardDesc: 'We need your information to file your LLC with the state',
-  ctaSS4Title: 'Sign Your SS-4 Form',
-  ctaSS4Desc: 'Your EIN application is ready — sign to proceed',
+  m2Label: 'Fill In Your LLC Details',
+  m2Desc: 'We need your company info to file with the state',
+  m3Label: 'We\'re Preparing Your Filing',
+  m3Desc: 'Our team is reviewing your details',
+  m4Label: 'Filed with the State',
+  m4Desc: 'Articles sent to Secretary of State',
+  m5Label: 'LLC Approved',
+  m5Desc: 'Your LLC is officially registered',
+  m6Label: 'Sign Your SS-4',
+  m6Desc: 'Sign the IRS form for your EIN',
+  m7Label: 'EIN Application Sent',
+  m7Desc: 'We submitted your EIN application',
+  m8Label: 'EIN Received — You\'re All Set',
+  m8Desc: 'Your LLC is fully operational',
   ctaOATitle: 'Sign Your Operating Agreement',
   ctaOADesc: 'Your LLC\'s governing document is ready for your signature',
   ctaLeaseTitle: 'Sign Your Lease Agreement',
@@ -416,26 +442,23 @@ const IT = {
   welcome: 'Benvenuto',
   subtitle: 'Stiamo costituendo la tua LLC. Ecco a che punto siamo.',
   progressTitle: 'Avanzamento Costituzione',
+  actionRequired: 'Azione richiesta',
   m1Label: 'Pagamento Confermato',
   m1Desc: 'Il tuo ordine di costituzione è attivo',
-  m2Label: 'Dati di Costituzione Inviati',
-  m2Desc: 'I tuoi dati sono stati inviati al nostro team',
-  m3Label: 'Deposito Statale Inviato',
-  m3Desc: 'Articles of Organization depositati presso il Segretario di Stato',
-  m4Label: 'LLC Ufficialmente Costituita',
-  m4Desc: 'Lo Stato ha approvato e confermato la tua LLC',
-  m5Label: 'SS-4 Firmato',
-  m5Desc: 'Modulo di richiesta EIN firmato da te',
-  m6Label: 'SS-4 Inviato all\'IRS',
-  m6Desc: 'Domanda presentata all\'IRS',
-  m7Label: 'EIN Ricevuto',
-  m7Desc: 'Il tuo Employer Identification Number federale è assegnato',
-  m8Label: 'Setup Post-Costituzione',
-  m8Desc: 'Operating Agreement, Contratto di Locazione e apertura conto corrente',
-  ctaWizardTitle: 'Completa i Dati di Costituzione',
-  ctaWizardDesc: 'Abbiamo bisogno delle tue informazioni per registrare la LLC presso lo Stato',
-  ctaSS4Title: 'Firma il Tuo Modulo SS-4',
-  ctaSS4Desc: 'La tua richiesta di EIN è pronta — firma per procedere',
+  m2Label: 'Inserisci i Dati della tua LLC',
+  m2Desc: 'Ci servono le informazioni della tua società per registrarla presso lo Stato',
+  m3Label: 'Stiamo Preparando la Registrazione',
+  m3Desc: 'Il nostro team sta esaminando i tuoi dati',
+  m4Label: 'Depositata presso lo Stato',
+  m4Desc: 'Articles inviati al Segretario di Stato',
+  m5Label: 'LLC Approvata',
+  m5Desc: 'La tua LLC è ufficialmente registrata',
+  m6Label: 'Firma il Modulo SS-4',
+  m6Desc: 'Firma il modulo IRS per il tuo EIN',
+  m7Label: 'Richiesta EIN Inviata',
+  m7Desc: 'Abbiamo inviato la tua richiesta di EIN',
+  m8Label: 'EIN Ricevuto — Tutto Pronto',
+  m8Desc: 'La tua LLC è pienamente operativa',
   ctaOATitle: 'Firma il Tuo Operating Agreement',
   ctaOADesc: 'Il documento costitutivo della tua LLC è pronto per la firma',
   ctaLeaseTitle: 'Firma il Tuo Contratto di Locazione',
