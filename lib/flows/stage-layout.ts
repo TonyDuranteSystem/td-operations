@@ -20,6 +20,7 @@ export const STAGE_COMPONENT_TYPES = [
   'signature_status',
   'waiting_notice',
   'fax_irs',
+  'shipping_info',
   'notes',
 ] as const
 

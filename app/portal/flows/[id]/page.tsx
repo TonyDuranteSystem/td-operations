@@ -28,6 +28,7 @@ const CATEGORY_LABELS: Record<number, string> = {
 function buildItinShippingCard(
   locale: 'en' | 'it',
   documents: { id: string; file_name: string }[],
+  shippingForm: ShippingCard['shippingForm'],
 ): ShippingCard {
   const addressLines = ['Tony Durante LLC', '11125 Park Blvd, Suite 104-153', 'Seminole, FL 33772', 'United States']
   if (locale === 'it') {
@@ -45,6 +46,7 @@ function buildItinShippingCard(
       documentsHeading: 'I tuoi documenti da stampare:',
       downloadLabel: 'Scarica',
       documents,
+      shippingForm,
     }
   }
   return {
@@ -61,6 +63,7 @@ function buildItinShippingCard(
     documentsHeading: 'Your documents to print:',
     downloadLabel: 'Download',
     documents,
+    shippingForm,
   }
 }
 
@@ -150,10 +153,27 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
 
   // ITIN "Client Signing" card embeds the actual prepared documents (W-7 /
   // 1040-NR / Schedule OI) as download links — the SD-linked client-safe docs
-  // above are exactly those generated forms.
+  // above are exactly those generated forms. When the SD is AT the Client
+  // Signing stage, it also gets the client shipping-tracking form (current
+  // courier/tracking come from the untyped shipping_* columns on the SD).
+  let shippingForm: ShippingCard['shippingForm'] = null
+  if (sd.service_type === 'ITIN' && sd.stage === 'Client Signing') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: shipRow } = await (supabaseAdmin as any)
+      .from('service_deliveries')
+      .select('shipping_courier, shipping_tracking_number')
+      .eq('id', sd.id)
+      .maybeSingle()
+    shippingForm = {
+      serviceDeliveryId: sd.id,
+      initialCourier: (shipRow?.shipping_courier as string | null) ?? null,
+      initialTracking: (shipRow?.shipping_tracking_number as string | null) ?? null,
+      locale,
+    }
+  }
   const shipping: ShippingCard | null =
     sd.service_type === 'ITIN'
-      ? buildItinShippingCard(locale, docs.map(d => ({ id: d.id, file_name: d.file_name })))
+      ? buildItinShippingCard(locale, docs.map(d => ({ id: d.id, file_name: d.file_name })), shippingForm)
       : null
 
   // ── Flow chat messages (read-only) — same scoping as the portal chat client

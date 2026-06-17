@@ -28,6 +28,15 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
   if (!sd || !sd.service_type) notFound()
 
+  // Client-submitted shipping info (ITIN). Untyped: shipping_* columns were added
+  // by 20260616-2300-itin-shipping-tracking.sql and aren't in the generated types.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: shipRow } = await (supabaseAdmin as any)
+    .from('service_deliveries')
+    .select('shipping_courier, shipping_tracking_number, shipping_submitted_at')
+    .eq('id', params.id)
+    .maybeSingle()
+
   const [{ data: accountRow }, { data: stageRows }] = await Promise.all([
     sd.account_id
       ? supabaseAdmin.from('accounts').select('id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date').eq('id', sd.account_id).single()
@@ -82,6 +91,9 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     stage_entered_at: sd.stage_entered_at ?? null,
     account_id: sd.account_id ?? '',
     current_client_label: currentStageRow?.client_label ?? null,
+    shipping_courier: (shipRow?.shipping_courier as string | null) ?? null,
+    shipping_tracking_number: (shipRow?.shipping_tracking_number as string | null) ?? null,
+    shipping_submitted_at: (shipRow?.shipping_submitted_at as string | null) ?? null,
   }
 
   const stepperStages: StepperStage[] = stages.map((s) => ({

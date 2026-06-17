@@ -1369,3 +1369,32 @@ export async function revertServiceDelivery(
     renewal_date_reverted: renewalDateReverted,
   }
 }
+
+/**
+ * Persist the client-entered shipping info (courier + tracking number) for the
+ * signed ITIN package mailed to the TD office (Client Signing stage). Centralised
+ * here because service_deliveries is a protected table — raw `.update()` is only
+ * allowed inside lib/operations/. Stamps `shipping_submitted_at = now()`.
+ *
+ * The caller (the portal API route) is responsible for authorization and for
+ * validating the courier/tracking values before calling this.
+ */
+export async function setServiceDeliveryShipping(
+  serviceDeliveryId: string,
+  shipping: { courier: string; trackingNumber: string },
+): Promise<void> {
+  // shipping_* columns were added by 20260616-2300-itin-shipping-tracking.sql and
+  // aren't in the generated DB types yet — Record<string, unknown> bypasses the
+  // column-name check (same pattern as revertServiceDelivery's patch).
+  const patch: Record<string, unknown> = {
+    shipping_courier: shipping.courier,
+    shipping_tracking_number: shipping.trackingNumber,
+    shipping_submitted_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }
+
+  await dbWrite(
+    supabaseAdmin.from("service_deliveries").update(patch).eq("id", serviceDeliveryId),
+    "service_deliveries.update.shipping",
+  )
+}

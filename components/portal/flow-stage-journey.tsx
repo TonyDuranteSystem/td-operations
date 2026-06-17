@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Check, ChevronDown, MapPin, FileText, Download } from 'lucide-react'
 import type { JourneyStep } from '@/lib/flows/flow-progress'
+import { ItinShippingForm } from './itin-shipping-form'
 
 /**
  * Rich, clickable client-facing flow journey for the portal flow detail page.
@@ -32,6 +33,14 @@ export interface ShippingCard {
   /** The actual prepared documents (W-7 / 1040-NR / Schedule OI) for this SD,
    *  rendered as download links. May be empty if not generated yet. */
   documents: { id: string; file_name: string }[]
+  /** When set (the SD is currently at this stage), render the client
+   *  shipping-tracking form below the documents — shown only at the live stage. */
+  shippingForm?: {
+    serviceDeliveryId: string
+    initialCourier: string | null
+    initialTracking: string | null
+    locale: 'en' | 'it'
+  } | null
 }
 
 export function FlowStageJourney({
@@ -176,6 +185,15 @@ export function FlowStageJourney({
                             ))}
                           </ul>
                         </div>
+                      )}
+
+                      {shipping.shippingForm && (
+                        <ItinShippingForm
+                          serviceDeliveryId={shipping.shippingForm.serviceDeliveryId}
+                          initialCourier={shipping.shippingForm.initialCourier}
+                          initialTracking={shipping.shippingForm.initialTracking}
+                          locale={shipping.shippingForm.locale}
+                        />
                       )}
                     </div>
                   )}

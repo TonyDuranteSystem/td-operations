@@ -16,6 +16,11 @@ export interface WorkspaceServiceDelivery {
   account_id: string
   /** Resolved client label for the current stage, if any. */
   current_client_label?: string | null
+  /** Client-submitted shipping info (ITIN signed-package tracking). Null until
+   *  the client fills it in on the portal Client Signing stage. */
+  shipping_courier?: string | null
+  shipping_tracking_number?: string | null
+  shipping_submitted_at?: string | null
 }
 
 /**
