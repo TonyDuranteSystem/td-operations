@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, isMatchableInvoiceStatus, partitionInvoicesForMultiMatch } from "@/lib/bank-feed-matcher"
+import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, isMatchableInvoiceStatus, partitionInvoicesForMultiMatch, planWaterfallAllocation } from "@/lib/bank-feed-matcher"
 
 describe("isStripePayoutFeed", () => {
   // mercury (Plaid) pattern: full text in memo and sender_name
@@ -143,5 +143,78 @@ describe("partitionInvoicesForMultiMatch", () => {
     const { applicable, skippedIds } = partitionInvoicesForMultiMatch([])
     expect(applicable).toEqual([])
     expect(skippedIds).toEqual([])
+  })
+})
+
+describe("planWaterfallAllocation", () => {
+  it("pays every invoice in full when the wire exactly covers the total", () => {
+    const { allocations, leftover } = planWaterfallAllocation(1000, [
+      { id: "a", total: 500, amount_paid: 0 },
+      { id: "b", total: 300, amount_paid: 0 },
+      { id: "c", total: 200, amount_paid: 0 },
+    ])
+    expect(allocations).toEqual([
+      { payment_id: "a", applied: 500, balance: 500, status: "Paid" },
+      { payment_id: "b", applied: 300, balance: 300, status: "Paid" },
+      { payment_id: "c", applied: 200, balance: 200, status: "Paid" },
+    ])
+    expect(leftover).toBe(0)
+  })
+
+  it("UNDERPAYMENT: client owes 3000 but pays 2000 — last invoice left as debt", () => {
+    // Two invoices of 1500 each (total owed 3000), wire of 2000.
+    const { allocations, leftover } = planWaterfallAllocation(2000, [
+      { id: "a", total: 1500, amount_paid: 0 },
+      { id: "b", total: 1500, amount_paid: 0 },
+    ])
+    expect(allocations).toEqual([
+      { payment_id: "a", applied: 1500, balance: 1500, status: "Paid" },
+      { payment_id: "b", applied: 500, balance: 1500, status: "Partial" }, // 1000 stays as debt
+    ])
+    expect(leftover).toBe(0)
+    const totalApplied = allocations.reduce((s, x) => s + x.applied, 0)
+    expect(totalApplied).toBe(2000) // exactly the wire
+  })
+
+  it("stops funding once the wire is exhausted — trailing invoices get nothing (debt)", () => {
+    const { allocations, leftover } = planWaterfallAllocation(500, [
+      { id: "a", total: 500, amount_paid: 0 },
+      { id: "b", total: 300, amount_paid: 0 }, // wire already spent — absent
+    ])
+    expect(allocations).toEqual([{ payment_id: "a", applied: 500, balance: 500, status: "Paid" }])
+    expect(leftover).toBe(0)
+  })
+
+  it("OVERPAYMENT: wire exceeds total owed — all paid, surplus reported as leftover", () => {
+    const { allocations, leftover } = planWaterfallAllocation(1000, [
+      { id: "a", total: 300, amount_paid: 0 },
+      { id: "b", total: 200, amount_paid: 0 },
+    ])
+    expect(allocations.map((a) => a.status)).toEqual(["Paid", "Paid"])
+    expect(leftover).toBe(500)
+  })
+
+  it("uses remaining balance (total - amount_paid) for already-partial invoices", () => {
+    const { allocations } = planWaterfallAllocation(300, [
+      { id: "a", total: 1000, amount_paid: 800 }, // 200 remaining
+      { id: "b", total: 500, amount_paid: 0 }, // gets the other 100
+    ])
+    expect(allocations).toEqual([
+      { payment_id: "a", applied: 200, balance: 200, status: "Paid" },
+      { payment_id: "b", applied: 100, balance: 500, status: "Partial" },
+    ])
+  })
+
+  it("skips zero-balance invoices without burning the wire", () => {
+    const { allocations } = planWaterfallAllocation(300, [
+      { id: "a", total: 100, amount_paid: 100 }, // nothing owed — skipped
+      { id: "b", total: 300, amount_paid: 0 },
+    ])
+    expect(allocations).toEqual([{ payment_id: "b", applied: 300, balance: 300, status: "Paid" }])
+  })
+
+  it("returns nothing for a zero/empty wire", () => {
+    expect(planWaterfallAllocation(0, [{ id: "a", total: 500, amount_paid: 0 }])).toEqual({ allocations: [], leftover: 0 })
+    expect(planWaterfallAllocation(500, [])).toEqual({ allocations: [], leftover: 500 })
   })
 })
