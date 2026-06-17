@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { findAuthUsersByContactId } from '@/lib/auth-admin-helpers'
 import { signViewAs, AUTH_TOKEN_TTL_MS } from '@/lib/portal/view-as'
 import { PORTAL_BASE_URL } from '@/lib/config'
 
 /**
- * POST /api/admin/view-as  — ADMIN ONLY.
+ * POST /api/admin/view-as  — STAFF ONLY (admin or team — NOT clients).
  *
- * Step 1 of the read-only "View as client" flow. The admin (Antonio) clicks the
- * button on an account/contact page; this endpoint:
- *   1. verifies the caller is an admin (NOT just any dashboard user),
+ * Step 1 of the read-only "View as client" flow. A dashboard user (admin or
+ * staff) clicks the button on an account/contact page; this endpoint:
+ *   1. verifies the caller is a dashboard user (admin or team, never a client),
  *   2. confirms the target contact has a CLIENT portal login,
  *   3. mints a short-lived signed authorization token, and
  *   4. returns the portal entry URL the browser opens in a new tab.
@@ -24,8 +24,8 @@ export async function POST(req: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  if (!isAdmin(user)) {
-    return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
+  if (!isDashboardUser(user)) {
+    return NextResponse.json({ ok: false, error: 'Staff only' }, { status: 403 })
   }
 
   let contactId: string | undefined
