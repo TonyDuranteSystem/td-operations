@@ -25,7 +25,8 @@ A full-page stage-driven workspace for Company Formation service deliveries. Sam
 
 ### 3. Filed with State (stage_order 3) — LOOP STAGE
 - **What happens:** Staff filed the chosen name on the SOS website AND activated the Registered Agent on Harbor Compliance. Now waiting for SOS to confirm (can take ~1 week). Two outcomes: approved (Articles arrive) or rejected (pick new name, refile).
-- **Components:** info_panel (shows chosen name), external_link (SOS filing page, per state), "Activate RA on Harbor Compliance" button (calls `hc_sync_company` API), document_upload ("Upload filing receipt"), document_upload ("Upload Articles of Organization"), chat, action_buttons
+- **Components:** info_panel (shows chosen name), external_link (SOS filing page, per state), document_upload ("Upload filing receipt"), document_upload ("Upload Articles of Organization"), chat, action_buttons
+- **NOTE:** Do NOT activate the Registered Agent here. The company doesn't exist yet (name not confirmed) — RA activation happens at stage 4 once Articles are received.
 - **Two actions:**
   - "Articles Received — Company Created" → advances to stage 4
   - "Name Rejected — Choose New Name" → stays at stage 3, allows changing the name and refiling
@@ -35,13 +36,14 @@ A full-page stage-driven workspace for Company Formation service deliveries. Sam
 
 ### 4. Articles Received (stage_order 4) — THE MILESTONE
 - **What happens:** SOS approved the company. Articles of Organization received and uploaded. This is when the company becomes real.
-- **Components:** document_upload ("Upload Articles of Organization" — if not already), document_viewer, info_panel, chat, action_buttons
+- **Components:** document_upload ("Upload Articles of Organization" — if not already), "Activate RA on Harbor Compliance" button (calls `hc_sync_company` API), document_viewer, info_panel, chat, action_buttons
 - **Action:** "Articles Uploaded — Prepare SS-4" → advances to stage 5
 - **TRIGGERS at this stage:**
+  - Upload Articles of Organization
   - CRM account creation (company_name from the confirmed name)
+  - Activate RA on Harbor Compliance (`hc_sync_company`)
   - Compliance dates set (annual_report_due_date, ra_renewal_date)
   - Welcome package sent
-  - Harbor Compliance sync (`hc_sync_company`)
 - **Client label EN:** "Articles received"
 - **Client label IT:** "Atto costitutivo ricevuto"
 
@@ -78,7 +80,7 @@ Already available as MCP tools:
 - `hc_list_licenses` — see licenses and registration dates
 - `hc_sync_license_deadlines` — pull expiration dates into CRM deadlines
 
-In the workspace, the "Activate RA" button on the "Filed with State" stage should call `hc_sync_company` via an API route.
+In the workspace, the "Activate RA" button on the "Articles Received" stage should call `hc_sync_company` via an API route — RA activation only happens once the company is confirmed (Articles received), never at filing time.
 
 ## SOS Links (per state)
 
