@@ -291,7 +291,11 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
   // CSVs here instead of into the bank's own box during the Dynamiq MMLLC test). The
   // P&L/Balance-Sheet engine ONLY reads the per-bank `bank_accounts_*_statements`
   // files — this field was never ingested by anything (verified: zero downstream
-  // readers). Shared by MMLLC + Corp/S-Corp (both use TAX_DOCUMENTS_BASE).
+  // readers). TAX_DOCUMENTS_BASE backs the MMLLC config and the Corp config
+  // (TAX_CORP_FIELDS). Real entity types in the data: Single Member LLC,
+  // Multi Member LLC, C-Corp Elected (no S-Corp). In practice this removal
+  // affects the multi-member wizard — C-Corp Elected does not normalize to a
+  // Corp routing value today, so it currently falls through to the SMLLC steps.
   // ── Prior-year return decision matrix (master plan §5). We need last year's
   // balance sheet to start this year's books from the right numbers.
   { name: 'prior_return_case', label: 'Last year\'s tax return', labelIt: 'Dichiarazione dei redditi dell\'anno scorso', type: 'select', required: true,
