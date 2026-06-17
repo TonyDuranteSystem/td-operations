@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, ChevronDown, MapPin } from 'lucide-react'
+import { Check, ChevronDown, MapPin, FileText, Download } from 'lucide-react'
 import type { JourneyStep } from '@/lib/flows/flow-progress'
 
 /**
@@ -25,7 +25,13 @@ export interface ShippingCard {
   addressLines: string[]
   checklist: string[]
   tracking: string
-  docsHint: string
+  /** Heading above the embedded download list (e.g. "Your documents to print:"). */
+  documentsHeading: string
+  /** Per-document download button label (e.g. "Download"). */
+  downloadLabel: string
+  /** The actual prepared documents (W-7 / 1040-NR / Schedule OI) for this SD,
+   *  rendered as download links. May be empty if not generated yet. */
+  documents: { id: string; file_name: string }[]
 }
 
 export function FlowStageJourney({
@@ -143,7 +149,34 @@ export function FlowStageJourney({
                         ))}
                       </ul>
                       <p className="mt-3 text-xs font-medium text-amber-800">{shipping.tracking}</p>
-                      <p className="mt-1 text-xs text-zinc-500">{shipping.docsHint}</p>
+
+                      {shipping.documents.length > 0 && (
+                        <div className="mt-4 border-t border-amber-200 pt-3">
+                          <div className="mb-2 flex items-center gap-1.5">
+                            <FileText className="h-4 w-4 text-amber-700" />
+                            <span className="text-sm font-semibold text-amber-900">{shipping.documentsHeading}</span>
+                          </div>
+                          <ul className="space-y-1.5">
+                            {shipping.documents.map(d => (
+                              <li key={d.id}>
+                                <a
+                                  href={`/api/portal/documents/${d.id}`}
+                                  className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-white px-3 py-2 hover:bg-amber-50"
+                                >
+                                  <span className="flex min-w-0 items-center gap-2">
+                                    <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
+                                    <span className="truncate text-sm text-zinc-800">{d.file_name}</span>
+                                  </span>
+                                  <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-blue-700">
+                                    <Download className="h-3.5 w-3.5" />
+                                    {shipping.downloadLabel}
+                                  </span>
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

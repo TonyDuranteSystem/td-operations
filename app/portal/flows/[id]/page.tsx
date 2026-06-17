@@ -25,7 +25,10 @@ const CATEGORY_LABELS: Record<number, string> = {
  * business address. Keep in sync with the itin_prepare_documents email
  * (lib/mcp/tools/itin-form.ts) and itin-approve-and-send.ts.
  */
-function buildItinShippingCard(locale: 'en' | 'it'): ShippingCard {
+function buildItinShippingCard(
+  locale: 'en' | 'it',
+  documents: { id: string; file_name: string }[],
+): ShippingCard {
   const addressLines = ['Tony Durante LLC', '11125 Park Blvd, Suite 104-153', 'Seminole, FL 33772', 'United States']
   if (locale === 'it') {
     return {
@@ -39,7 +42,9 @@ function buildItinShippingCard(locale: 'en' | 'it'): ShippingCard {
         '2 copie a colori del passaporto (pagina dati + pagina firma)',
       ],
       tracking: 'Usa un corriere tracciabile (FedEx, DHL, UPS) e condividi con noi il numero di tracking.',
-      docsHint: 'Trovi i documenti da stampare nella sezione Documenti qui sotto.',
+      documentsHeading: 'I tuoi documenti da stampare:',
+      downloadLabel: 'Scarica',
+      documents,
     }
   }
   return {
@@ -53,7 +58,9 @@ function buildItinShippingCard(locale: 'en' | 'it'): ShippingCard {
       '2× color copies of your passport (data page + signature page)',
     ],
     tracking: 'Use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.',
-    docsHint: 'The documents to print are listed under Documents below.',
+    documentsHeading: 'Your documents to print:',
+    downloadLabel: 'Download',
+    documents,
   }
 }
 
@@ -124,8 +131,6 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   const isContactFlow = (CONTACT_FLOW_TYPES as readonly string[]).includes(sd.service_type)
   const steps = isContactFlow ? null : buildFlowSteps(stages, sd.stage ?? null, locale)
   const journey = isContactFlow ? buildJourneySteps(stages, sd.stage ?? null, locale) : null
-  const shipping: ShippingCard | null =
-    sd.service_type === 'ITIN' ? buildItinShippingCard(locale) : null
   const year = deriveFlowYear(sd)
   const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
 
@@ -142,6 +147,14 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     drive_file_id: string | null; processed_at: string | null; created_at: string
     flow_stage: string | null; portal_visible: boolean | null
   }>).filter(d => isClientSafeFlowDoc(sd.service_type, d.flow_stage, d.portal_visible))
+
+  // ITIN "Client Signing" card embeds the actual prepared documents (W-7 /
+  // 1040-NR / Schedule OI) as download links — the SD-linked client-safe docs
+  // above are exactly those generated forms.
+  const shipping: ShippingCard | null =
+    sd.service_type === 'ITIN'
+      ? buildItinShippingCard(locale, docs.map(d => ({ id: d.id, file_name: d.file_name })))
+      : null
 
   // ── Flow chat messages (read-only) — same scoping as the portal chat client
   // view: never show soft-deleted rows or internal chat-event notes. ──
