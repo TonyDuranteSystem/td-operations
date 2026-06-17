@@ -258,9 +258,8 @@ export function SS4PipelineCard({
               <p className="font-medium mb-1">What happens:</p>
               <ul className="list-disc list-inside space-y-0.5 text-xs">
                 <li>SS-4 status set to &quot;submitted&quot;</li>
-                <li>Pipeline advances to &quot;EIN Submitted&quot;</li>
+                <li>Pipeline stays at &quot;SS-4 Signed&quot; until the EIN arrives</li>
                 <li>Open fax tasks marked as Done</li>
-                <li>New tasks created for EIN follow-up</li>
               </ul>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">
@@ -293,9 +292,8 @@ export function SS4PipelineCard({
               <ul className="list-disc list-inside space-y-0.5 text-xs">
                 <li>EIN saved to account record</li>
                 <li>SS-4 application marked as done</li>
-                <li>Pipeline advances to Post-Formation + Banking</li>
-                <li>Welcome package auto-generated (OA, Lease, Banking)</li>
-                <li>Client notified via portal</li>
+                <li>Pipeline advances to EIN Received (final stage)</li>
+                <li>Client tier set to active; client notified via portal</li>
               </ul>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">

@@ -826,26 +826,30 @@ export async function GET(req: NextRequest) {
 
       const hasEIN = !!acct.ein_number
 
-      // Stage thresholds for Company Formation pipeline:
-      const STAGE_EIN_APPLICATION = 3
-      const STAGE_POST_FORMATION = 5
+      // Stage thresholds for the 7-stage v2 Company Formation pipeline:
+      //   Articles Received = 4 (company is real once Articles arrive),
+      //   SS-4 Prepared = 5 (the SS-4 should exist from here on),
+      //   EIN Received = 7 (final stage).
+      const STAGE_ARTICLES_RECEIVED = 4
+      const STAGE_SS4_PREPARED = 5
+      const STAGE_EIN_RECEIVED = 7
 
       // ── Pipeline position indicator ──
       if (formationSD) {
         // Check if the stage is BEHIND actual progress
         const hasFormationDate = !!acct.formation_date
-        const stageBehind = hasFormationDate && formationStageOrder < STAGE_EIN_APPLICATION
-        const hasEINButEarly = hasEIN && formationStageOrder < STAGE_POST_FORMATION
+        const stageBehind = hasFormationDate && formationStageOrder < STAGE_ARTICLES_RECEIVED
+        const hasEINButEarly = hasEIN && formationStageOrder < STAGE_EIN_RECEIVED
 
         if (stageBehind || hasEINButEarly) {
-          // Stage is behind — formation date exists but SD hasn't been advanced
-          const targetStage = hasEIN ? "Post-Formation + Banking" : "EIN Application"
-          const targetStageNum = hasEIN ? 5 : 3
+          // Stage is behind — formation date / EIN exists but SD hasn't advanced
+          const targetStage = hasEIN ? "EIN Received" : "Articles Received"
+          const targetStageNum = hasEIN ? STAGE_EIN_RECEIVED : STAGE_ARTICLES_RECEIVED
           const expectedLabel = `${targetStage} (Stage ${targetStageNum})`
           acctChecks.push({
             id: `pipeline_${acct.id.slice(0, 8)}`,
             category: "Formation Pipeline",
-            label: `Stage ${formationStageOrder} of 6 — ${formationStage} ⚠️ BEHIND`,
+            label: `Stage ${formationStageOrder} of 7 — ${formationStage} ⚠️ BEHIND`,
             status: "error",
             detail: `${hasFormationDate ? `Articles received (${acct.formation_date})` : ""}${hasEIN ? `, EIN: ${acct.ein_number}` : ""} — but SD is still at Stage ${formationStageOrder}. Should be at ${expectedLabel}.`,
             fix: {
@@ -865,7 +869,7 @@ export async function GET(req: NextRequest) {
           acctChecks.push({
             id: `pipeline_${acct.id.slice(0, 8)}`,
             category: "Formation Pipeline",
-            label: `Stage ${formationStageOrder} of 6 — ${formationStage}`,
+            label: `Stage ${formationStageOrder} of 7 — ${formationStage}`,
             status: "info",
             detail: `Company Formation is in progress. Current stage determines which checks are relevant below.`,
           })
@@ -1036,8 +1040,8 @@ export async function GET(req: NextRequest) {
             detail: `Status: ${ss4.status}${ss4.ein_number ? ` — EIN: ${ss4.ein_number}` : ""}`,
           })
         } else if (!hasEIN) {
-          // Only show SS-4 warning if formation is at EIN Application stage or later, or no formation SD
-          if (!classification.formationInProgress || formationStageOrder >= STAGE_EIN_APPLICATION || classification.formationComplete) {
+          // Only show SS-4 warning if formation is at SS-4 Prepared or later, or no formation SD
+          if (!classification.formationInProgress || formationStageOrder >= STAGE_SS4_PREPARED || classification.formationComplete) {
             acctChecks.push({
               id: `ss4_missing_${acct.id.slice(0, 8)}`,
               category: "EIN Pipeline",
@@ -1049,9 +1053,9 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // ── Portal transition — only for legacy clients OR post-formation (stage 5+) ──
-      // For formation in progress (stages 1-4): portal transition is premature
-      const isFormationEarlyStage = classification.formationInProgress && formationStageOrder < STAGE_POST_FORMATION
+      // ── Portal transition — only for legacy clients OR once EIN is received ──
+      // For a formation still in progress (before EIN Received): portal transition is premature
+      const isFormationEarlyStage = classification.formationInProgress && formationStageOrder < STAGE_EIN_RECEIVED
       if (!acct.portal_account && acct.status === "Active" && acct.account_type === "Client") {
         if (isFormationEarlyStage) {
           // Don't show portal transition for formation clients in early stages

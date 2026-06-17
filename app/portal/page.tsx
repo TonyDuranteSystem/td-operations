@@ -3,7 +3,8 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
@@ -126,6 +127,10 @@ export default async function PortalDashboardPage() {
     if (selectedFormation) {
       const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
       const ctx = await getFormationContext(contactId)
+      const tracker = await getFormationTracker({ sdId: selectedFormation.sdId })
+      const trackerSteps = tracker?.currentStage
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+        : null
       return (
         <FormationDashboard
           firstName={firstName}
@@ -135,6 +140,7 @@ export default async function PortalDashboardPage() {
           ss4Data={ctx.ss4}
           oaData={ctx.oa}
           leaseData={ctx.lease}
+          trackerSteps={trackerSteps}
           formationLeadId={selectedFormation.leadId}
         />
       )
@@ -249,6 +255,10 @@ export default async function PortalDashboardPage() {
             .limit(1)
             .maybeSingle(),
         ])
+        const tracker = await getFormationTracker({ accountId: formationAccount.id, contactId })
+        const trackerSteps = tracker?.currentStage
+          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+          : null
         return (
           <FormationDashboard
             firstName={firstName}
@@ -259,12 +269,17 @@ export default async function PortalDashboardPage() {
             oaData={oaRes.data}
             leaseData={leaseRes.data}
             closureData={closureSd}
+            trackerSteps={trackerSteps}
           />
         )
       }
 
       // Post-PR1 path: no account, contact-scoped reads.
       const ctx = await getFormationContext(contactId)
+      const tracker = await getFormationTracker({ contactId })
+      const trackerSteps = tracker?.currentStage
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+        : null
       return (
         <FormationDashboard
           firstName={firstName}
@@ -275,6 +290,7 @@ export default async function PortalDashboardPage() {
           oaData={ctx.oa}
           leaseData={ctx.lease}
           closureData={closureSd}
+          trackerSteps={trackerSteps}
         />
       )
     }
@@ -389,6 +405,10 @@ export default async function PortalDashboardPage() {
         .limit(1)
         .maybeSingle(),
     ])
+    const tracker = await getFormationTracker({ accountId: selectedAccountId, contactId })
+    const trackerSteps = tracker?.currentStage
+      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+      : null
     return (
       <FormationDashboard
         firstName={firstName}
@@ -407,6 +427,7 @@ export default async function PortalDashboardPage() {
         ss4Data={ss4Res.data}
         oaData={oaRes.data}
         leaseData={leaseRes.data}
+        trackerSteps={trackerSteps}
       />
     )
   }

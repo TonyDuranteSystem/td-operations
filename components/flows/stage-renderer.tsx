@@ -10,6 +10,7 @@ import { SignatureSend } from './signature-send'
 import { SignatureStatus } from './signature-status'
 import { WaitingNotice } from './waiting-notice'
 import { FaxIrs } from './fax-irs'
+import { ActivateRa } from './activate-ra'
 import { FlowChat } from './flow-chat'
 import { ShippingInfo } from './shipping-info'
 
@@ -60,6 +61,7 @@ function renderComponent(
           label={component.label}
           url={component.url}
           stateOfFormation={account.state_of_formation}
+          serviceType={serviceDelivery.service_type}
         />
       )
     case 'document_viewer':
@@ -74,6 +76,8 @@ function renderComponent(
       return <WaitingNotice key={key} label={component.label} />
     case 'fax_irs':
       return <FaxIrs key={key} account={account} />
+    case 'activate_ra':
+      return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'shipping_info':
       return <ShippingInfo key={key} serviceDelivery={serviceDelivery} />
     case 'chat':

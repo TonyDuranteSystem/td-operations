@@ -5,16 +5,15 @@ import Link from 'next/link'
 import { Users, CheckCircle2, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
+// 7-stage v2 Company Formation pipeline (migration 20260617-formation-workspace-v2.sql).
 const FORMATION_STAGES = [
-  'New',
-  'Data Collection',
-  'State Filing',
-  'Articles Ready',
-  'Articles Filed',
-  'EIN Application',
-  'EIN Submitted',
-  'Post-Formation',
-  'Closing',
+  'Payment Confirmed',
+  'Wizard Submitted',
+  'Filed with State',
+  'Articles Received',
+  'SS-4 Prepared',
+  'SS-4 Signed',
+  'EIN Received',
 ]
 
 const ONBOARDING_STAGES = [

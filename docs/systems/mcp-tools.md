@@ -1,5 +1,6 @@
 # MCP Tool Server
-_Last verified against code: 2026-06-05 — Claude (WP3: agent approvals group += approval_execute (now 6 tools); approve no longer instant-fires the server — see the Agent approvals group bullet + agent-bridge.md WP3)_
+_Last verified against code: 2026-06-17 — Claude (doc note: `lib/mcp/instructions.ts` formation-pipeline text updated to the 7-stage Workspace v2 (Payment Confirmed → Wizard Submitted → Filed with State → Articles Received → SS-4 Prepared → SS-4 Signed → EIN Received; account created at Articles Received) and the auto-advance line now lists "all Company Formation stages" as auto_advance=false. No tool added/removed — instructions text only. See formation.md/flows.md.)_
+_Earlier 2026-06-05 — Claude (WP3: agent approvals group += approval_execute (now 6 tools); approve no longer instant-fires the server — see the Agent approvals group bullet + agent-bridge.md WP3)_
 
 ## What it is
 The MCP server that exposes TD Operations to Claude (Claude Code + the Claude.ai connector) as callable tools. One endpoint, dual auth, and ~221 tools across 42 active groups. This doc is about the *server infrastructure*; each tool's behaviour is documented in its subsystem doc.

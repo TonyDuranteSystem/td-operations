@@ -104,7 +104,9 @@ export async function triggerEINReceivedWorkflow(
   try {
     const advance = await advanceStage({
       delivery_id: formationSD.id,
-      target_stage: 'Post-Formation + Banking',
+      // "EIN Received" = final stage of the 7-stage v2 pipeline (replaced the
+      // removed "Post-Formation + Banking").
+      target_stage: 'EIN Received',
       actor,
       notes: `EIN recorded: ${einNumber}`,
     })
@@ -149,7 +151,7 @@ export async function triggerEINReceivedWorkflow(
     table_name: 'accounts',
     record_id: accountId,
     account_id: accountId,
-    summary: `EIN ${einNumber} workflow triggered for ${account.company_name}. Tier: ${previousTier ?? 'null'} → active. SD: ${previousStage ?? 'unknown'} → Post-Formation + Banking.`,
+    summary: `EIN ${einNumber} workflow triggered for ${account.company_name}. Tier: ${previousTier ?? 'null'} → active. SD: ${previousStage ?? 'unknown'} → EIN Received.`,
     details: {
       ein_number: einNumber,
       formation_sd_id: formationSD.id,

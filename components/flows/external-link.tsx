@@ -1,5 +1,5 @@
 import { ExternalLink as ExternalLinkIcon } from 'lucide-react'
-import { resolveSecretaryOfStateLink } from '@/lib/flows/state-links'
+import { resolveSecretaryOfStateLink, resolveFormationFilingLink } from '@/lib/flows/state-links'
 
 interface ExternalLinkCardProps {
   /** Button label from stage_layout, e.g. "File on Secretary of State Portal". */
@@ -13,22 +13,40 @@ interface ExternalLinkCardProps {
   url?: string
   /** Account state_of_formation, used for dynamic SoS resolution. */
   stateOfFormation?: string | null
+  /** SD service_type — Company Formation uses the formation-filing portal map. */
+  serviceType?: string
 }
 
 /**
- * Prominent external link button. Two modes:
+ * Prominent external link button. Modes:
  *  - literal `url` present → open it directly (Harbor Compliance case).
- *  - no `url` → resolve the Secretary of State portal from the account's state.
- *    New Mexico has no annual report (shows a note instead of a dead link);
- *    unrecognized/unmapped states show a muted "not available" note.
+ *  - Company Formation, no `url` → the formation-filing / name-search portal,
+ *    resolved from state and ALWAYS available (defaults to New Mexico).
+ *  - otherwise, no `url` → the annual-report Secretary of State portal from the
+ *    account's state (NM has no annual report; unmapped states show a note).
  */
-export function ExternalLinkCard({ label, url, stateOfFormation }: ExternalLinkCardProps) {
+export function ExternalLinkCard({ label, url, stateOfFormation, serviceType }: ExternalLinkCardProps) {
   // Mode 1 — explicit URL from the layout.
   if (url) {
     return <LinkButton href={url} label={label || 'Open link'} />
   }
 
-  // Mode 2 — resolve the Secretary of State portal from the account's state.
+  // Mode 2 — Company Formation: the formation-filing portal (always resolves).
+  if (serviceType === 'Company Formation') {
+    const f = resolveFormationFilingLink(stateOfFormation)
+    return (
+      <div>
+        <LinkButton href={f.url} label={label || 'Open the Secretary of State site'} />
+        {f.defaulted && (
+          <p className="mt-1.5 text-[11px] text-zinc-400">
+            Defaulted to New Mexico — set the account&apos;s state of formation for the exact state portal.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // Mode 3 — resolve the annual-report Secretary of State portal from the state.
   const resolved = resolveSecretaryOfStateLink(stateOfFormation)
 
   if (resolved.url) {

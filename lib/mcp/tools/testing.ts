@@ -90,6 +90,7 @@ async function createLead(overrides: Record<string, unknown> = {}): Promise<stri
 }
 
 async function createContact(overrides: Record<string, unknown> = {}): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- isolated test fixture setup
   const { data, error } = await supabaseAdmin
     .from('contacts')
     .insert({ ...TEST_CONTACT, ...overrides })
@@ -100,6 +101,7 @@ async function createContact(overrides: Record<string, unknown> = {}): Promise<s
 }
 
 async function createAccount(overrides: Record<string, unknown> = {}): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- isolated test fixture setup
   const { data, error } = await supabaseAdmin
     .from('accounts')
     .insert({ ...TEST_ACCOUNT, ...overrides })
@@ -124,6 +126,7 @@ async function createSD(params: {
   stageOrder: number
   serviceName?: string
 }): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- isolated test fixture setup
   const { data, error } = await supabaseAdmin
     .from('service_deliveries')
     .insert({
@@ -153,6 +156,7 @@ async function createPayment(params: {
   status?: string
   currency?: string
 }): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- isolated test fixture setup
   const { data, error } = await supabaseAdmin
     .from('payments')
     .insert({
@@ -238,8 +242,8 @@ async function scenarioFormationStage2(): Promise<TestScenarioResult> {
     accountId,
     contactId,
     serviceType: 'Company Formation',
-    stage: 'State Filing',
-    stageOrder: 2,
+    stage: 'Filed with State',
+    stageOrder: 3,
   })
   const paymentId = await createPayment({ accountId, contactId, amount: 3250, description: 'TEST - Formation fee' })
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
@@ -254,7 +258,7 @@ async function scenarioFormationStage2(): Promise<TestScenarioResult> {
       'Lead: Converted',
       'Contact: TEST - Mario Rossi',
       'Account: TEST - Rossi LLC (Pending Formation)',
-      'SD: Company Formation - stage 2 (State Filing)',
+      'SD: Company Formation - stage 3 (Filed with State)',
       'Payment: EUR 3,250',
     ],
   }
@@ -272,8 +276,8 @@ async function scenarioFormationStage3(): Promise<TestScenarioResult> {
     accountId,
     contactId,
     serviceType: 'Company Formation',
-    stage: 'EIN Application',
-    stageOrder: 3,
+    stage: 'SS-4 Prepared',
+    stageOrder: 5,
   })
   const paymentId = await createPayment({ accountId, contactId, amount: 3250, description: 'TEST - Formation fee' })
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
@@ -288,7 +292,7 @@ async function scenarioFormationStage3(): Promise<TestScenarioResult> {
       'Lead: Converted',
       'Contact: TEST - Mario Rossi',
       'Account: TEST - Rossi LLC (formation_date: 2026-03-01)',
-      'SD: Company Formation - stage 3 (EIN Application)',
+      'SD: Company Formation - stage 5 (SS-4 Prepared)',
       'Ready to test: SS-4 generation and signing',
     ],
   }
@@ -307,8 +311,8 @@ async function scenarioFormationStage4(): Promise<TestScenarioResult> {
     accountId,
     contactId,
     serviceType: 'Company Formation',
-    stage: 'Post-Formation + Banking',
-    stageOrder: 4,
+    stage: 'EIN Received',
+    stageOrder: 7,
   })
   const paymentId = await createPayment({ accountId, contactId, amount: 3250, description: 'TEST - Formation fee' })
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
@@ -323,7 +327,7 @@ async function scenarioFormationStage4(): Promise<TestScenarioResult> {
       'Lead: Converted',
       'Contact: TEST - Mario Rossi (portal_tier: active)',
       'Account: TEST - Rossi LLC (Active, EIN: 00-0000001)',
-      'SD: Company Formation - stage 4 (Post-Formation + Banking)',
+      'SD: Company Formation - stage 7 (EIN Received)',
       'Ready to test: Welcome package, OA, Lease, Banking forms',
     ],
   }
@@ -349,6 +353,7 @@ async function scenarioFormationCompleted(): Promise<TestScenarioResult> {
     serviceName: 'Company Formation - TEST (Completed)',
   })
   // Mark SD as completed
+  // eslint-disable-next-line no-restricted-syntax -- isolated test fixture setup
   await supabaseAdmin.from('service_deliveries').update({ status: 'completed' }).eq('id', sdId)
   const paymentId = await createPayment({ accountId, contactId, amount: 3250, description: 'TEST - Formation fee' })
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
@@ -407,6 +412,7 @@ async function scenarioOnboardingCompleted(): Promise<TestScenarioResult> {
     stageOrder: 5,
     serviceName: 'Onboarding - TEST (Completed)',
   })
+  // eslint-disable-next-line no-restricted-syntax -- isolated test fixture setup
   await supabaseAdmin.from('service_deliveries').update({ status: 'completed' }).eq('id', sdId)
   const paymentId = await createPayment({ accountId, contactId, amount: 2000, description: 'TEST - Onboarding fee' })
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)

@@ -72,10 +72,28 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
         .sort((a, b) => b.stage_order - a.stage_order)[0] ?? null
     : null
 
+  // In-flight Company Formations are contact-scoped (no account yet), so the
+  // state of formation lives on the formation wizard, not the account. Surface
+  // it so the SoS external_link resolves the right state (defaults to NM).
+  let formationState: string | null = null
+  if (sd.service_type === 'Company Formation' && !sd.account_id && sd.contact_id) {
+    const { data: wp } = await supabaseAdmin
+      .from('wizard_progress')
+      .select('data')
+      .eq('contact_id', sd.contact_id)
+      .eq('wizard_type', 'formation')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const wpData = (wp?.data ?? null) as Record<string, unknown> | null
+    const s = wpData?.state_of_formation ?? wpData?.state_of_incorporation
+    formationState = typeof s === 'string' && s.trim() ? s.trim() : null
+  }
+
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
     company_name: (accountRow?.company_name as string | null) ?? null,
-    state_of_formation: (accountRow?.state_of_formation as string | null) ?? null,
+    state_of_formation: (accountRow?.state_of_formation as string | null) ?? formationState,
     annual_report_due_date: (accountRow?.annual_report_due_date as string | null) ?? null,
     ra_renewal_date: (accountRow?.ra_renewal_date as string | null) ?? null,
   }

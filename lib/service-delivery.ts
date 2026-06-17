@@ -16,8 +16,8 @@
  *   5. Tax Return sync (SD stage → tax_returns status + date fields)
  *   6. RA Renewal date +1 year on completion
  *   7. Annual Report deadline +1 year on completion
- *   8. Company Formation renewal date initialization
- *   9. Welcome package enqueue on Post-Formation
+ *   8. Company Formation renewal date initialization (on Articles Received)
+ *   9. Welcome package enqueue (on Articles Received)
  *   10. Company Closure cascade (cancel SDs, deactivate account/portal, closure tasks)
  *   11. Action log entry
  */
@@ -453,10 +453,14 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 12. Company Formation — set initial renewal dates on closing stages
+  // 12. Company Formation — set initial renewal dates when the company becomes
+  // real. Fires on advance into "Articles Received" (the milestone where the
+  // state-approved company exists and the CRM account is materialized) — moved
+  // here from the old "Post-Formation + Banking"/"Closing" stages in the 7-stage
+  // v2 pipeline (migration 20260617-formation-workspace-v2.sql).
   if (
     delivery.service_type === "Company Formation" &&
-    (targetStage.stage_name === "Post-Formation + Banking" || targetStage.stage_name === "Closing") &&
+    targetStage.stage_name === "Articles Received" &&
     delivery.account_id
   ) {
     try {
@@ -503,10 +507,14 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 13. Welcome Package on "Post-Formation + Banking"
+  // 13. Welcome Package — enqueued when the company becomes real. Fires on
+  // advance into "Articles Received" (moved from "Post-Formation + Banking" in
+  // the 7-stage v2 pipeline). Idempotent: the handler dedupes via
+  // accounts.welcome_package_status, and the EIN-received handlers re-enqueue it
+  // (also idempotent) as a safety net.
   if (
     delivery.service_type === "Company Formation" &&
-    targetStage.stage_name === "Post-Formation + Banking" &&
+    targetStage.stage_name === "Articles Received" &&
     delivery.account_id
   ) {
     try {

@@ -60,3 +60,42 @@ export function resolveSecretaryOfStateLink(state: string | null | undefined): R
     noAnnualReport: stateCode === 'NM',
   }
 }
+
+/**
+ * Secretary of State FORMATION-FILING / name-search portals by 2-letter code.
+ * Distinct from SOS_PORTAL_URL above (the annual-report portal, which excludes
+ * NM): formation filing includes New Mexico, the primary filing state. Used by
+ * the Company Formation Workspace "Wizard Submitted" (name check) and "Filed
+ * with State" stages.
+ */
+const FORMATION_SOS_URL: Record<string, string> = {
+  NM: 'https://portal.sos.state.nm.us/BFS/online/',
+  WY: 'https://wyobiz.wyo.gov/Business/FilingSearch.aspx',
+  FL: 'https://dos.fl.gov/sunbiz/start-business/efile/fl-llc/',
+  DE: 'https://icis.corp.delaware.gov/ecorp/logintax.aspx',
+}
+
+/** Default filing state for new formations when the state is unknown. */
+export const DEFAULT_FORMATION_STATE = 'NM'
+
+export interface ResolvedFormationLink {
+  /** Normalized 2-letter code actually used (falls back to NM). */
+  stateCode: string
+  /** Formation-filing / name-search portal URL (always resolves — defaults NM). */
+  url: string
+  /** True when the state was unrecognized and we fell back to New Mexico. */
+  defaulted: boolean
+}
+
+/**
+ * Resolve the formation-filing portal for a state, DEFAULTING to New Mexico when
+ * the state is missing/unrecognized (in-flight formations are contact-scoped and
+ * have no account state yet; NM is the primary filing state).
+ */
+export function resolveFormationFilingLink(state: string | null | undefined): ResolvedFormationLink {
+  const code = normalizeStateCode(state)
+  if (code && FORMATION_SOS_URL[code]) {
+    return { stateCode: code, url: FORMATION_SOS_URL[code], defaulted: false }
+  }
+  return { stateCode: DEFAULT_FORMATION_STATE, url: FORMATION_SOS_URL[DEFAULT_FORMATION_STATE], defaulted: true }
+}

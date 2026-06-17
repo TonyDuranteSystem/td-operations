@@ -2,6 +2,8 @@
 
 import { CheckCircle, Clock, AlertCircle, ArrowRight, Building2, MapPin, Calendar, Shield, MessageCircle, PenSquare, FileText } from 'lucide-react'
 import Link from 'next/link'
+import { FormationProgressTracker } from '@/components/portal/formation-progress-tracker'
+import type { FormationTrackerStep } from '@/lib/portal/formation-progress'
 
 interface FormationAccount {
   id: string
@@ -27,6 +29,14 @@ interface FormationDashboardProps {
    * NEW LLC being formed AND an external LLC being wound down). Patrick
    * Covelli is the canonical case. */
   closureData?: { id: string } | null
+  /**
+   * Client-facing progress tracker steps, built from the formation SD's current
+   * pipeline stage + Company Formation pipeline_stages (client_label /
+   * client_label_it). When present, the SD-driven tracker replaces the legacy
+   * signal-derived milestone list. Absent → the legacy milestones still render
+   * (e.g. when no formation SD/stages resolve).
+   */
+  trackerSteps?: FormationTrackerStep[] | null
   /** Lead the in-progress formation is anchored on. When set, the "Complete
    * Your Formation Details" CTA links to /portal/wizard?lead=<leadId>. Required
    * for returning clients who already own an account — without it the wizard
@@ -44,6 +54,7 @@ export function FormationDashboard({
   oaData,
   leaseData,
   closureData,
+  trackerSteps,
   formationLeadId,
 }: FormationDashboardProps) {
   const tr = locale === 'it' ? IT : EN
@@ -202,7 +213,16 @@ export function FormationDashboard({
         </div>
       )}
 
-      {/* Progress tracker */}
+      {/* Progress tracker — SD-stage-driven (preferred) or legacy milestones. */}
+      {trackerSteps && trackerSteps.length > 0 ? (
+        <FormationProgressTracker
+          steps={trackerSteps}
+          locale={locale}
+          wizardHref={wizardHref}
+          signHref="/portal/sign"
+          title={tr.progressTitle}
+        />
+      ) : (
       <div className="bg-white rounded-xl border shadow-sm p-6">
         <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-5">{tr.progressTitle}</h2>
         <div className="space-y-1">
@@ -262,6 +282,7 @@ export function FormationDashboard({
           />
         </div>
       </div>
+      )}
 
       {/* Company info */}
       {account && (

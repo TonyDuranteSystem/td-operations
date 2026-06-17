@@ -93,7 +93,7 @@ beforeEach(() => {
   advanceStageCalls.length = 0
   syncTierCalls.length = 0
   nextAccount = { id: 'acct-1', company_name: 'Test LLC', portal_tier: 'formation' }
-  nextFormationSDs = [{ id: 'fsd-1', stage: 'EIN Application', contact_id: 'cont-1' }]
+  nextFormationSDs = [{ id: 'fsd-1', stage: 'SS-4 Signed', contact_id: 'cont-1' }]
   nextExistingBankingSD = null
 })
 
@@ -117,7 +117,7 @@ describe('triggerEINReceivedWorkflow — happy path', () => {
 
     expect(advanceStageCalls).toHaveLength(1)
     expect(advanceStageCalls[0].delivery_id).toBe('fsd-1')
-    expect(advanceStageCalls[0].target_stage).toBe('Post-Formation + Banking')
+    expect(advanceStageCalls[0].target_stage).toBe('EIN Received')
 
     expect(syncTierCalls).toHaveLength(1)
     expect(syncTierCalls[0].accountId).toBe('acct-1')
