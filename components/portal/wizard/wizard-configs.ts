@@ -286,7 +286,12 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
       { name: 'statements', label: 'CSV export — entire year', labelIt: 'Export CSV — anno intero', type: 'file', required: true, accept: '.csv,text/csv', hint: 'Only CSV. The entire year, not a piece of it.', hintIt: 'Solo CSV. L\'anno intero, non una parte.' },
     ],
   },
-  { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false },
+  // "Financial Statements (optional)" upload REMOVED (2026-06-17, Antonio): it sat
+  // beside the per-bank CSV repeater and confused clients (Luca dropped Relay's 12
+  // CSVs here instead of into the bank's own box during the Dynamiq MMLLC test). The
+  // P&L/Balance-Sheet engine ONLY reads the per-bank `bank_accounts_*_statements`
+  // files — this field was never ingested by anything (verified: zero downstream
+  // readers). Shared by MMLLC + Corp/S-Corp (both use TAX_DOCUMENTS_BASE).
   // ── Prior-year return decision matrix (master plan §5). We need last year's
   // balance sheet to start this year's books from the right numbers.
   { name: 'prior_return_case', label: 'Last year\'s tax return', labelIt: 'Dichiarazione dei redditi dell\'anno scorso', type: 'select', required: true,
