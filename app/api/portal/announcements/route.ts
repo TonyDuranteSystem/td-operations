@@ -1,6 +1,12 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextResponse } from 'next/server'
 
+// This route hits the DB on every request and must never be statically
+// prerendered. Without this, Next's build-time static export invokes the
+// handler with placeholder Supabase env (as CI does) and intermittently fails
+// with "No response is returned from route handler", breaking CI builds.
+export const dynamic = 'force-dynamic'
+
 /**
  * GET /api/portal/announcements
  * Returns active portal announcements for display in the client portal.

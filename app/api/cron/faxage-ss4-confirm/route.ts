@@ -40,6 +40,7 @@ interface CronResults {
   skipped_not_success: number
   failures_detected: number
   no_ss4_match: number
+  skipped_already_alerted: number
   errors: string[]
 }
 
@@ -58,6 +59,7 @@ export async function GET(request: NextRequest) {
     skipped_not_success: 0,
     failures_detected: 0,
     no_ss4_match: 0,
+    skipped_already_alerted: 0,
     errors: [],
   }
 
@@ -166,7 +168,25 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
   if (!ss4Records || ss4Records.length === 0) {
     console.warn(`[faxage-ss4] No SS-4 with status=signed found for company "${companyName}"`)
     results.no_ss4_match++
-    await sendAlertEmail(jobId, companyName, messageId)
+    // Alert ONCE per unmatched job. The same FaxAge email is re-scanned on
+    // every 2-hourly run, so without this guard the same alert went out every
+    // few hours (Coragem LLC / Job 1094353720 incident). We dedup the ALERT
+    // only — the message is NOT marked fully processed, so if the SS-4 record
+    // is created later it can still auto-confirm on a future run.
+    if (await alreadyAlertedNoMatch(jobId, messageId)) {
+      results.skipped_already_alerted++
+    } else {
+      await sendAlertEmail(jobId, companyName, messageId)
+      await supabaseAdmin.from('action_log').insert({
+        actor: 'system',
+        action_type: 'ss4_fax_no_match_alerted',
+        table_name: 'ss4_applications',
+        record_id: null,
+        account_id: null,
+        summary: `FaxAge no-match alert sent for "${companyName}" (Job ${jobId || 'Unknown'})`,
+        details: { job_id: jobId, message_id: messageId, company_name: companyName },
+      })
+    }
     return
   }
 
@@ -274,6 +294,21 @@ async function handleFaxFailure(
   })
 
   results.failures_detected++
+}
+
+// ─── Has a no-match alert already been sent for this fax? ────────────────────
+// Dedup on job_id (semantic "one alert per job") when present, else message_id.
+// Reads the marker written after a successful alert send below.
+async function alreadyAlertedNoMatch(jobId: string | null, messageId: string): Promise<boolean> {
+  const query = supabaseAdmin
+    .from('action_log')
+    .select('id')
+    .eq('action_type', 'ss4_fax_no_match_alerted')
+    .limit(1)
+  const { data } = jobId
+    ? await query.filter('details->>job_id', 'eq', jobId)
+    : await query.filter('details->>message_id', 'eq', messageId)
+  return !!(data && data.length > 0)
 }
 
 // ─── Alert email when SS-4 can't be matched ──────────────────────────────────
