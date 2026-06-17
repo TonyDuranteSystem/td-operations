@@ -139,20 +139,16 @@ export function registerCirclebackTools(server: McpServer) {
           }
         }
 
-        // Transcript (truncate to avoid huge responses)
+        // Transcript — FULL (every speaking turn). Capped only by an overall char
+        // limit below, so a normal call comes back complete (no fixed turn cap).
         const transcript = data.transcript as unknown as Array<Record<string, unknown>> | null
         if (Array.isArray(transcript) && transcript.length > 0) {
           lines.push("")
-          lines.push("── Transcript ──")
-          const maxEntries = 50
-          const entries = transcript.slice(0, maxEntries)
-          for (const entry of entries) {
+          lines.push(`── Transcript (${transcript.length} turns) ──`)
+          for (const entry of transcript) {
             const speaker = (entry.speaker as string) || (entry.name as string) || "?"
             const text = (entry.text as string) || (entry.content as string) || ""
             lines.push(`  [${speaker}]: ${text}`)
-          }
-          if (transcript.length > maxEntries) {
-            lines.push(`  ... (${transcript.length - maxEntries} more entries)`)
           }
         }
 
@@ -160,7 +156,19 @@ export function registerCirclebackTools(server: McpServer) {
         lines.push(`ID: ${data.id}`)
         if (data.circleback_id) lines.push(`Circleback ID: ${data.circleback_id}`)
 
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        // Safety cap on total response size — a pathologically long transcript could
+        // otherwise blow the MCP response. 120k chars covers every real call (longest
+        // in production ~364 turns) with wide margin; on overflow we point to the recording.
+        const MAX_CHARS = 120_000
+        let out = lines.join("\n")
+        if (out.length > MAX_CHARS) {
+          out =
+            out.slice(0, MAX_CHARS) +
+            (data.recording_url
+              ? `\n  …(truncated at ${MAX_CHARS} chars — full recording: ${data.recording_url})`
+              : `\n  …(truncated at ${MAX_CHARS} chars)`)
+        }
+        return { content: [{ type: "text" as const, text: out }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }

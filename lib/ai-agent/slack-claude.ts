@@ -95,6 +95,8 @@ TWO GEARS — match effort to the question:
 
 SENSITIVE DATA: run_sql_query is read-only and cannot touch logins, passwords, or tokens. Never paste raw secrets, full bank/card numbers, or password data into Slack even if a lookup returns them — summarize instead.
 
+CALLS (Circleback): you can read recorded calls (sales/intake/client calls). Use search_calls (by keyword) or list_calls (filter by account_id / lead_id / date) to find a call, then get_call with its id to read it IN FULL — notes, action items, attendees, and the complete word-for-word transcript (every speaking turn, not a preview). Reach for this when Antonio asks what was said/promised/decided on a call, or to ground a client answer in the actual conversation. To find a client's calls, resolve the client to an account_id or lead_id first with the CRM search tools, then list_calls. Read-only; summarize for Slack and quote the key lines rather than pasting an entire transcript.
+
 MEMORY: Use memory_recall to see how a similar situation was handled before; use memory_save
 to remember a durable lesson (a correction, decision, or pricing/policy rule). memory_save
 writes only to the knowledge store — no approval needed.
@@ -713,6 +715,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Direct email send (support@/antonio@, same-thread replies) — only after
     // Antonio's explicit "send it" in the thread (enforced by the prompt).
     enableEmailSend: true,
+    // Read Circleback calls in full (transcript/notes/action items) — Slack-only.
+    enableCallReads: true,
     maxIterations: 12,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
@@ -804,6 +808,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableSlackSend: true,
           enableDbRead: true,
           enableEmailSend: true,
+          enableCallReads: true,
           maxIterations: 12,
         }
         ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
