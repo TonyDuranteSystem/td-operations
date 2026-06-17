@@ -441,17 +441,40 @@ export interface PortalFlow {
   steps: FlowStep[] | null
 }
 
-export async function getPortalFlows(accountId: string, locale: 'en' | 'it'): Promise<PortalFlow[]> {
-  const { FLOW_TYPES, deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
+export async function getPortalFlows(accountId: string, locale: 'en' | 'it', contactId?: string | null): Promise<PortalFlow[]> {
+  const { FLOW_TYPES, CONTACT_FLOW_TYPES, deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
   const { computeFlowProgress, buildFlowSteps } = await import('@/lib/flows/flow-progress')
 
-  const { data: sds } = await supabaseAdmin
-    .from('service_deliveries')
-    .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
-    .eq('account_id', accountId)
-    .in('service_type', FLOW_TYPES as unknown as string[])
-    .eq('status', 'active')
-    .order('updated_at', { ascending: false })
+  // Account-scoped flows (Tax Return, State Annual Report, State RA Renewal, CMRA).
+  // Skipped when there's no account (accountId === '' for no-account/ITIN-only
+  // clients) — `.eq('account_id', '')` would be an invalid-uuid error.
+  const accountSds = accountId
+    ? (await supabaseAdmin
+        .from('service_deliveries')
+        .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
+        .eq('account_id', accountId)
+        .in('service_type', FLOW_TYPES as unknown as string[])
+        .eq('status', 'active')
+        .order('updated_at', { ascending: false })).data
+    : null
+
+  // Contact-scoped flows (ITIN) — these SDs have account_id NULL + a contact_id,
+  // so the account query never matches them. Only when a contactId is known, and
+  // filtered by CONTACT_FLOW_TYPES (FLOW_TYPES is account-only by design).
+  let contactSds: typeof accountSds = []
+  if (contactId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
+      .eq('contact_id', contactId)
+      .is('account_id', null)
+      .in('service_type', CONTACT_FLOW_TYPES as unknown as string[])
+      .eq('status', 'active')
+      .order('updated_at', { ascending: false })
+    contactSds = data ?? []
+  }
+
+  const sds = [...(accountSds ?? []), ...(contactSds ?? [])]
 
   if (!sds || sds.length === 0) return []
 

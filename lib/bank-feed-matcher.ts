@@ -574,8 +574,153 @@ export function resolveInvoiceStatusAfterPayment(
 }
 
 /**
+ * Settle ONE invoice from a bank feed: apply `appliedAmount` to it (Paid/Partial),
+ * mirror the status to the client_expenses table, and run the activation chain
+ * if the invoice is linked to a pending_activation.
+ *
+ * Extracted VERBATIM from the original manualMatch body so single-match behaviour
+ * is unchanged. Shared by `manualMatch` (applies the full feed amount to one
+ * invoice) and `manualMatchMulti` (applies each invoice's own balance). Does NOT
+ * touch the td_bank_feeds row — the caller owns the feed update.
+ *
+ * @returns the invoice_number for the caller's MatchResult, or undefined.
+ */
+async function settleInvoiceFromFeed(
+  feedId: string,
+  paymentId: string,
+  appliedAmount: number,
+  now: string,
+  today: string,
+): Promise<string | undefined> {
+  // Check if this is an invoice payment
+  const { data: payment } = await supabaseAdmin
+    .from("payments")
+    .select("invoice_status, invoice_number, total, amount_paid")
+    .eq("id", paymentId)
+    .single()
+
+  // Update invoice status — partial if applied amount < remaining balance, paid otherwise
+  if (payment?.invoice_status && !["Paid", "Voided", "Credit"].includes(payment.invoice_status)) {
+    const { newStatus, newAmountPaid, newAmountDue } = resolveInvoiceStatusAfterPayment(
+      Number(payment.total ?? 0),
+      Number(payment.amount_paid ?? 0),
+      appliedAmount,
+    )
+
+    // eslint-disable-next-line no-restricted-syntax
+    await supabaseAdmin
+      .from("payments")
+      .update({
+        invoice_status: newStatus,
+        // status column has a stricter enum — only update to "Paid"; Partial keeps current status
+        ...(newStatus === "Paid" ? { status: "Paid", paid_date: today } : {}),
+        amount_paid: newAmountPaid,
+        amount_due: newAmountDue,
+        payment_method: "Wire (Manual Match)",
+        updated_at: now,
+      })
+      .eq("id", paymentId)
+
+    // Sync status to client_expenses mirror
+    const { syncTDInvoiceStatus } = await import("@/lib/portal/td-invoice")
+    await syncTDInvoiceStatus(
+      paymentId,
+      newStatus,
+      newStatus === "Paid" ? today : undefined,
+      newAmountPaid,
+    )
+
+    if (newStatus === "Paid") {
+      syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
+    }
+  }
+
+  // Check if this invoice is linked to a pending_activation → trigger activation chain
+  // Path A: direct link via portal_invoice_id (Stripe/Whop payment flow)
+  const { data: pendingAct } = await supabaseAdmin
+    .from("pending_activations")
+    .select("id, status")
+    .eq("portal_invoice_id", paymentId)
+    .eq("status", "awaiting_payment")
+    .maybeSingle()
+
+  if (pendingAct) {
+    await supabaseAdmin
+      .from("pending_activations")
+      .update({
+        status: "payment_confirmed",
+        payment_confirmed_at: now,
+        updated_at: now,
+      })
+      .eq("id", pendingAct.id)
+
+    // Trigger activate-service directly (no HTTP hop). Awaited so failures
+    // are logged; the caller still gets `matched: true` because the match
+    // itself succeeded.
+    try {
+      const activateResult = await runActivation(pendingAct.id)
+      if (!activateResult.ok) {
+        console.error(`[settleInvoiceFromFeed] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
+      }
+    } catch (err) {
+      console.error(`[settleInvoiceFromFeed] runActivation threw for pending ${pendingAct.id}:`, err)
+    }
+  } else {
+    // Path B: bank-feed-created invoices have no portal_invoice_id.
+    // Look up by account_id → offer token → pending_activation.
+    // Only backfills payment_confirmed_at — does NOT re-trigger activation.
+    const { data: paymentFull } = await supabaseAdmin
+      .from("payments")
+      .select("account_id")
+      .eq("id", paymentId)
+      .single()
+
+    if (paymentFull?.account_id) {
+      const { data: offer } = await supabaseAdmin
+        .from("offers")
+        .select("token")
+        .eq("account_id", paymentFull.account_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (offer?.token) {
+        const { data: pendingActByAccount } = await supabaseAdmin
+          .from("pending_activations")
+          .select("id, status")
+          .eq("offer_token", offer.token)
+          .is("payment_confirmed_at", null)
+          .in("status", ["awaiting_payment", "payment_confirmed", "activated"])
+          .maybeSingle()
+
+        if (pendingActByAccount) {
+          // Use the bank feed's transaction_date as the payment timestamp
+          const { data: feedRow } = await supabaseAdmin
+            .from("td_bank_feeds")
+            .select("transaction_date")
+            .eq("id", feedId)
+            .single()
+
+          const txTimestamp = feedRow?.transaction_date
+            ? new Date(feedRow.transaction_date).toISOString()
+            : now
+
+          await supabaseAdmin
+            .from("pending_activations")
+            .update({ payment_confirmed_at: txTimestamp, updated_at: now })
+            .eq("id", pendingActByAccount.id)
+        }
+      }
+    }
+  }
+
+  return payment?.invoice_number ?? undefined
+}
+
+/**
  * Manual match — used from the reconciliation UI.
  * Links a bank feed to a specific payment and marks both as reconciled.
+ * Applies the FULL feed amount to the one invoice (Paid or Partial).
  */
 export async function manualMatch(feedId: string, paymentId: string): Promise<MatchResult> {
   try {
@@ -603,133 +748,185 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       })
       .eq("id", feedId)
 
-    // Check if this is an invoice payment
-    const { data: payment } = await supabaseAdmin
-      .from("payments")
-      .select("invoice_status, invoice_number, total, amount_paid")
-      .eq("id", paymentId)
-      .single()
-
-    // Update invoice status — partial if feed amount < remaining balance, paid otherwise
-    if (payment?.invoice_status && !["Paid", "Voided", "Credit"].includes(payment.invoice_status)) {
-      const { newStatus, newAmountPaid, newAmountDue } = resolveInvoiceStatusAfterPayment(
-        Number(payment.total ?? 0),
-        Number(payment.amount_paid ?? 0),
-        feedAmount,
-      )
-
-      // eslint-disable-next-line no-restricted-syntax
-      await supabaseAdmin
-        .from("payments")
-        .update({
-          invoice_status: newStatus,
-          // status column has a stricter enum — only update to "Paid"; Partial keeps current status
-          ...(newStatus === "Paid" ? { status: "Paid", paid_date: today } : {}),
-          amount_paid: newAmountPaid,
-          amount_due: newAmountDue,
-          payment_method: "Wire (Manual Match)",
-          updated_at: now,
-        })
-        .eq("id", paymentId)
-
-      // Sync status to client_expenses mirror
-      const { syncTDInvoiceStatus } = await import("@/lib/portal/td-invoice")
-      await syncTDInvoiceStatus(
-        paymentId,
-        newStatus,
-        newStatus === "Paid" ? today : undefined,
-        newAmountPaid,
-      )
-
-      if (newStatus === "Paid") {
-        syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
-      }
-    }
-
-    // Check if this invoice is linked to a pending_activation → trigger activation chain
-    // Path A: direct link via portal_invoice_id (Stripe/Whop payment flow)
-    const { data: pendingAct } = await supabaseAdmin
-      .from("pending_activations")
-      .select("id, status")
-      .eq("portal_invoice_id", paymentId)
-      .eq("status", "awaiting_payment")
-      .maybeSingle()
-
-    if (pendingAct) {
-      await supabaseAdmin
-        .from("pending_activations")
-        .update({
-          status: "payment_confirmed",
-          payment_confirmed_at: now,
-          updated_at: now,
-        })
-        .eq("id", pendingAct.id)
-
-      // Trigger activate-service directly (no HTTP hop). Awaited so failures
-      // are logged; the manualMatch caller still gets `matched: true` because
-      // the match itself succeeded.
-      try {
-        const activateResult = await runActivation(pendingAct.id)
-        if (!activateResult.ok) {
-          console.error(`[manualMatch] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
-        }
-      } catch (err) {
-        console.error(`[manualMatch] runActivation threw for pending ${pendingAct.id}:`, err)
-      }
-    } else {
-      // Path B: bank-feed-created invoices have no portal_invoice_id.
-      // Look up by account_id → offer token → pending_activation.
-      // Only backfills payment_confirmed_at — does NOT re-trigger activation.
-      const { data: paymentFull } = await supabaseAdmin
-        .from("payments")
-        .select("account_id")
-        .eq("id", paymentId)
-        .single()
-
-      if (paymentFull?.account_id) {
-        const { data: offer } = await supabaseAdmin
-          .from("offers")
-          .select("token")
-          .eq("account_id", paymentFull.account_id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        if (offer?.token) {
-          const { data: pendingActByAccount } = await supabaseAdmin
-            .from("pending_activations")
-            .select("id, status")
-            .eq("offer_token", offer.token)
-            .is("payment_confirmed_at", null)
-            .in("status", ["awaiting_payment", "payment_confirmed", "activated"])
-            .maybeSingle()
-
-          if (pendingActByAccount) {
-            // Use the bank feed's transaction_date as the payment timestamp
-            const { data: feedRow } = await supabaseAdmin
-              .from("td_bank_feeds")
-              .select("transaction_date")
-              .eq("id", feedId)
-              .single()
-
-            const txTimestamp = feedRow?.transaction_date
-              ? new Date(feedRow.transaction_date).toISOString()
-              : now
-
-            await supabaseAdmin
-              .from("pending_activations")
-              .update({ payment_confirmed_at: txTimestamp, updated_at: now })
-              .eq("id", pendingActByAccount.id)
-          }
-        }
-      }
-    }
+    const invoiceNumber = await settleInvoiceFromFeed(feedId, paymentId, feedAmount, now, today)
 
     return {
       matched: true,
       paymentId,
-      invoiceNumber: payment?.invoice_number ?? undefined,
+      invoiceNumber,
       confidence: "manual",
+    }
+  } catch (err) {
+    return { matched: false, error: (err as Error).message }
+  }
+}
+
+/**
+ * Partition selected invoices into the ones a multi-match should APPLY vs SKIP.
+ * Terminal statuses (already paid/closed) are skipped so a stale or duplicate
+ * selection can never double-charge `amount_paid`. Pure — exported for tests.
+ */
+export function partitionInvoicesForMultiMatch<T extends { id: string; invoice_status: string | null }>(
+  invoices: T[],
+): { applicable: T[]; skippedIds: string[] } {
+  const terminal = new Set(["Paid", "Voided", "Cancelled", "Credit"])
+  const applicable: T[] = []
+  const skippedIds: string[] = []
+  for (const inv of invoices) {
+    if (inv.invoice_status && terminal.has(inv.invoice_status)) skippedIds.push(inv.id)
+    else applicable.push(inv)
+  }
+  return { applicable, skippedIds }
+}
+
+type WaterfallAllocation = { payment_id: string; applied: number; balance: number; status: "Paid" | "Partial" }
+
+/**
+ * Plan how a single incoming wire is spread across selected invoices, IN THE
+ * GIVEN ORDER (the staff's selection order). Each invoice receives
+ * `min(remaining wire, its balance)`: fully Paid if the wire covers its balance,
+ * Partial if the wire runs out mid-invoice. Once the wire is exhausted the rest
+ * receive nothing (they stay open as debt and are simply absent from the result).
+ * Total applied across allocations always equals `min(feedAmount, sum of balances)`
+ * — no invoice is ever over-credited. Pure — exported for tests.
+ *
+ * `leftover` = wire remaining after every funded invoice is covered (0 in the
+ * typical underpayment/debt case; positive only when the wire exceeds total owed).
+ */
+export function planWaterfallAllocation<T extends { id: string; total: number | null; amount_paid: number | null }>(
+  feedAmount: number,
+  invoicesInOrder: T[],
+): { allocations: WaterfallAllocation[]; leftover: number } {
+  const EPS = 0.005 // sub-cent floor so float dust doesn't fund a phantom allocation
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  let remaining = Number(feedAmount) || 0
+  const allocations: WaterfallAllocation[] = []
+  for (const row of invoicesInOrder) {
+    if (remaining <= EPS) break // wire exhausted — remaining invoices stay open as debt
+    const balance = Math.max(Number(row.total ?? 0) - Number(row.amount_paid ?? 0), 0)
+    if (balance <= EPS) continue // nothing owed — skip, don't burn wire
+    const toApply = Math.min(remaining, balance)
+    allocations.push({
+      payment_id: row.id,
+      applied: round2(toApply),
+      balance: round2(balance),
+      status: toApply >= balance - EPS ? "Paid" : "Partial",
+    })
+    remaining -= toApply
+  }
+  return { allocations, leftover: round2(Math.max(remaining, 0)) }
+}
+
+/**
+ * Multi-invoice manual match — one incoming transaction that settles SEVERAL
+ * invoices (e.g. a single wire paying invoices for two different companies the
+ * same person owns: "Partner Alliance" paying for itself + "Morgan & Taylor").
+ *
+ * WATERFALL allocation: the wire amount is applied across the selected invoices
+ * IN SELECTION ORDER. Each invoice receives `min(remaining wire, its balance)` —
+ * fully Paid if the wire covers its balance, Partial if the wire runs out
+ * mid-invoice (the unpaid remainder stays as `amount_due`, i.e. debt). Once the
+ * wire is exhausted the remaining selected invoices receive nothing and stay
+ * fully open (debt). Total applied = the wire amount exactly; no invoice is ever
+ * over-credited. This is the "client owes $3,000 but pays $2,000 → record the
+ * difference as debt" rule. The feed links to the first FUNDED invoice via
+ * `matched_payment_id` (keeps every existing single-FK read valid) and records
+ * the full funded set + per-invoice allocation in `review_metadata`.
+ *
+ * Guards: no-op if the feed is already matched; silently skips invoices already
+ * in a terminal status (Paid/Voided/Cancelled/Credit) so a double-click or a
+ * stale selection can't double-charge `amount_paid`. A single id falls through
+ * to `manualMatch` unchanged.
+ */
+export async function manualMatchMulti(
+  feedId: string,
+  paymentIds: string[],
+): Promise<MatchResult & { appliedPaymentIds?: string[]; skippedPaymentIds?: string[] }> {
+  try {
+    const ids = Array.from(new Set((paymentIds ?? []).filter(Boolean)))
+    if (ids.length === 0) return { matched: false, error: "No invoices selected." }
+    if (ids.length === 1) return manualMatch(feedId, ids[0])
+
+    const now = new Date().toISOString()
+    const today = new Date().toISOString().split("T")[0]
+
+    // Guard: never re-apply an already-matched feed (would double amount_paid).
+    const { data: feed } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("status, review_metadata, amount")
+      .eq("id", feedId)
+      .single()
+    if (feed?.status === "matched") {
+      return { matched: false, error: "This transaction is already matched." }
+    }
+    const feedAmount = Number(feed?.amount ?? 0)
+
+    // Fetch all selected invoices at once, then partition into applicable vs
+    // terminal (already paid/closed) so a stale/duplicate selection can't double-pay.
+    const { data: payments } = await supabaseAdmin
+      .from("payments")
+      .select("id, invoice_status, total, amount_paid")
+      .in("id", ids)
+    const rows = (payments ?? []) as Array<{ id: string; invoice_status: string | null; total: number | null; amount_paid: number | null }>
+    const foundIds = new Set(rows.map((r) => r.id))
+    const missing = ids.filter((id) => !foundIds.has(id))
+    const { applicable, skippedIds } = partitionInvoicesForMultiMatch(rows)
+    const skipped = [...missing, ...skippedIds]
+
+    // Order the applicable invoices by the caller's selection order, then plan the
+    // waterfall: the wire is spread top-to-bottom, each invoice gets min(remaining
+    // wire, its balance). Pure + unit-tested so the money math is verifiable.
+    const applicableById = new Map(applicable.map((r) => [r.id, r]))
+    const orderedApplicable = ids.map((id) => applicableById.get(id)).filter((r): r is typeof applicable[number] => Boolean(r))
+    const { allocations, leftover } = planWaterfallAllocation(feedAmount, orderedApplicable)
+
+    if (allocations.length === 0) {
+      return { matched: false, error: "Nothing to apply — selected invoices are already paid/closed or the transaction amount is zero." }
+    }
+
+    const applied: string[] = []
+    let firstInvoiceNumber: string | undefined
+    for (const alloc of allocations) {
+      const invNum = await settleInvoiceFromFeed(feedId, alloc.payment_id, alloc.applied, now, today)
+      if (!firstInvoiceNumber) firstInvoiceNumber = invNum
+      applied.push(alloc.payment_id)
+    }
+
+    // Link the feed: primary FK = first applied invoice (keeps existing single-read
+    // code valid); full set recorded in review_metadata for the audit trail.
+    const existingMeta =
+      feed?.review_metadata && typeof feed.review_metadata === "object"
+        ? (feed.review_metadata as Record<string, unknown>)
+        : {}
+    await supabaseAdmin
+      .from("td_bank_feeds")
+      .update({
+        matched_payment_id: applied[0],
+        match_confidence: "manual",
+        matched_at: now,
+        matched_by: "staff",
+        status: "matched",
+        review_metadata: {
+          ...existingMeta,
+          multi_match: true,
+          matched_payment_ids: applied,
+          multi_match_allocations: allocations,
+          // Positive = wire left over after covering every funded invoice;
+          // 0 when the wire was fully consumed (typical underpayment/debt case).
+          multi_match_leftover: leftover,
+          ...(skipped.length ? { multi_match_skipped: skipped } : {}),
+        },
+        updated_at: now,
+      })
+      .eq("id", feedId)
+
+    return {
+      matched: true,
+      paymentId: applied[0],
+      invoiceNumber: firstInvoiceNumber,
+      confidence: "manual",
+      appliedPaymentIds: applied,
+      skippedPaymentIds: skipped,
     }
   } catch (err) {
     return { matched: false, error: (err as Error).message }

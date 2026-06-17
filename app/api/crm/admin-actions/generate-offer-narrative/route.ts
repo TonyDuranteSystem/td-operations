@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 import { validateNarrative } from '@/lib/offer-narrative'
+import { callAI } from '@/lib/portal/ai-provider'
 
 // ── System prompt ──
 
@@ -94,11 +95,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY
-    if (!apiKey) {
-      return NextResponse.json({ error: 'AI provider not configured' }, { status: 503 })
-    }
-
     const lang: 'en' | 'it' = language === 'it' ? 'it' : 'en'
     const systemPrompt = buildSystemPrompt(lang)
     const userPrompt = buildUserPrompt(
@@ -109,73 +105,52 @@ export async function POST(req: NextRequest) {
       contract_type || 'formation',
     )
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000)
-
+    // AI generation via the shared provider (lib/portal/ai-provider.ts):
+    // single source of truth for the model id (ANTHROPIC_MODELS.sonnet) PLUS
+    // automatic Anthropic→OpenAI failover + timeout handling. Replaces the old
+    // hardcoded fetch whose model string 404'd the day claude-sonnet-4-20250514
+    // retired (2026-06-15) — with failover, a retired/broken model now degrades
+    // to the fallback provider instead of erroring the offer dialog.
+    let rawText: string
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2048,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-          temperature: 0.7,
-        }),
-        signal: controller.signal,
+      const ai = await callAI({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 2048,
+        temperature: 0.7,
+        model: 'sonnet',
       })
-
-      clearTimeout(timeout)
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        console.error('[generate-offer-narrative] Anthropic API error:', res.status, err)
-        return NextResponse.json(
-          { error: `AI generation failed (${res.status})` },
-          { status: 502 },
-        )
-      }
-
-      const data = await res.json()
-      const rawText = data.content?.[0]?.text?.trim()
-
-      if (!rawText) {
-        return NextResponse.json({ error: 'AI returned empty response' }, { status: 502 })
-      }
-
-      // Parse JSON — strip markdown fences if present
-      const jsonStr = rawText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(jsonStr)
-      } catch {
-        console.error('[generate-offer-narrative] Failed to parse AI response:', rawText.substring(0, 500))
-        return NextResponse.json({ error: 'AI returned invalid JSON' }, { status: 502 })
-      }
-
-      // Validate structure (language-aware: only require the matching intro)
-      const validation = validateNarrative(parsed, lang)
-      if ('result' in validation) {
-        return NextResponse.json({ success: true, narrative: validation.result })
-      }
-      const errMsg = 'error' in validation ? validation.error : 'Unknown validation error'
-      console.error('[generate-offer-narrative] Validation failed:', errMsg)
-      return NextResponse.json(
-        { error: `AI response validation failed: ${errMsg}` },
-        { status: 502 },
-      )
-    } catch (err: unknown) {
-      clearTimeout(timeout)
-      if (err instanceof Error && err.name === 'AbortError') {
-        return NextResponse.json({ error: 'AI generation timed out (30s)' }, { status: 504 })
-      }
-      throw err
+      rawText = ai.text
+    } catch (err) {
+      console.error('[generate-offer-narrative] AI generation failed:', err instanceof Error ? err.message : err)
+      return NextResponse.json({ error: 'AI generation failed' }, { status: 502 })
     }
+
+    if (!rawText) {
+      return NextResponse.json({ error: 'AI returned empty response' }, { status: 502 })
+    }
+
+    // Parse JSON — strip markdown fences if present
+    const jsonStr = rawText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(jsonStr)
+    } catch {
+      console.error('[generate-offer-narrative] Failed to parse AI response:', rawText.substring(0, 500))
+      return NextResponse.json({ error: 'AI returned invalid JSON' }, { status: 502 })
+    }
+
+    // Validate structure (language-aware: only require the matching intro)
+    const validation = validateNarrative(parsed, lang)
+    if ('result' in validation) {
+      return NextResponse.json({ success: true, narrative: validation.result })
+    }
+    const errMsg = 'error' in validation ? validation.error : 'Unknown validation error'
+    console.error('[generate-offer-narrative] Validation failed:', errMsg)
+    return NextResponse.json(
+      { error: `AI response validation failed: ${errMsg}` },
+      { status: 502 },
+    )
   } catch (err) {
     console.error('[generate-offer-narrative] Error:', err)
     return NextResponse.json(

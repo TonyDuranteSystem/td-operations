@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { FileText, Landmark, ShieldCheck, Mailbox, ChevronRight, CalendarClock } from 'lucide-react'
+import { FileText, Landmark, ShieldCheck, Mailbox, ChevronRight, CalendarClock, UserCheck } from 'lucide-react'
 import type { ResolvedFlow, FlowType } from '@/lib/flows/resolve-flows'
 
 const FLOW_ICON: Record<FlowType, React.ComponentType<{ className?: string }>> = {
@@ -9,6 +9,7 @@ const FLOW_ICON: Record<FlowType, React.ComponentType<{ className?: string }>> =
   'State Annual Report': Landmark,
   'State RA Renewal': ShieldCheck,
   'CMRA Mailing Address': Mailbox,
+  'ITIN': UserCheck,
 }
 
 interface FlowChipsProps {

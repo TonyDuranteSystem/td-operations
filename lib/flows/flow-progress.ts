@@ -23,6 +23,9 @@ export interface FlowStageRow {
   stage_order: number
   client_label: string | null
   client_label_it: string | null
+  /** Longer client-facing "what's happening / what to do" copy for this stage.
+   *  Optional — only some flows (e.g. ITIN) populate it. EN-only today. */
+  client_description?: string | null
   icon?: string | null
 }
 
@@ -50,6 +53,62 @@ export interface FlowProgress {
 function labelFor(stage: FlowStageRow, locale: 'en' | 'it'): string | null {
   if (locale === 'it') return stage.client_label_it ?? stage.client_label ?? null
   return stage.client_label ?? null
+}
+
+/** One stage of the rich, clickable client journey (portal flow detail page). */
+export interface JourneyStep {
+  /** Catalog stage_name (internal key, also used to anchor the shipping card). */
+  stageName: string
+  /** Locale-resolved label — client_label when present, else the stage_name so
+   *  flows without client labels (e.g. sandbox ITIN) still read sensibly. */
+  label: string
+  /** Locale-resolved "what's happening / what to do" copy, or null. */
+  description: string | null
+  state: 'completed' | 'current' | 'future'
+}
+
+/**
+ * Build the full ordered journey for the flow detail page: EVERY stage (not
+ * just client_label-bearing ones, unlike buildFlowSteps) carrying its label and
+ * description, marked completed / current / future. Used for flows whose stages
+ * carry client_description (ITIN) so the client can click each stage and read
+ * what it means / what to do.
+ *
+ * "current" = the highest stage at or below the SD's current stage order. When
+ * the current stage is unknown/legacy, nothing is marked current (all future).
+ * Pure; never throws.
+ */
+export function buildJourneySteps(
+  stages: FlowStageRow[],
+  currentStageName: string | null,
+  locale: 'en' | 'it',
+): JourneyStep[] {
+  const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order)
+
+  const current = currentStageName
+    ? ordered.find(s => s.stage_name === currentStageName) ?? null
+    : null
+
+  let currentIdx = -1
+  if (current) {
+    for (let i = 0; i < ordered.length; i++) {
+      if (ordered[i].stage_order <= current.stage_order) currentIdx = i
+    }
+  }
+
+  return ordered.map((s, i) => ({
+    stageName: s.stage_name,
+    label: labelFor(s, locale) ?? s.stage_name,
+    description: s.client_description ?? null,
+    state:
+      currentIdx === -1
+        ? 'future'
+        : i < currentIdx
+          ? 'completed'
+          : i === currentIdx
+            ? 'current'
+            : 'future',
+  }))
 }
 
 export function computeFlowProgress(

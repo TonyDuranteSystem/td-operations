@@ -23,7 +23,7 @@ export async function createUnifiedInvoiceDraft(input: {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
     const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
 
-    // Resolve bank details from preference. For settings_bank_N values (from the
+    // Resolve bank details from preference. For settings_bank:<id> values (from the
     // dynamic Invoice Settings dropdown), fall back to 'auto' for the inline payment
     // instructions — the PDF/email bank details are resolved correctly by
     // resolveBankDetails() in invoice-auto-send.ts when the invoice is sent.
@@ -596,6 +596,27 @@ export async function matchBankFeedToInvoice(
     table_name: 'td_bank_feeds',
     record_id: feedId,
     summary: `Manual match: feed → payment ${paymentId}`,
+  })
+}
+
+// Match ONE incoming transaction to MULTIPLE invoices (e.g. a single wire that
+// pays invoices for several companies the same person owns). Each selected
+// invoice is settled for its own balance; the feed records the full set.
+export async function matchBankFeedToInvoices(
+  feedId: string,
+  paymentIds: string[]
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { manualMatchMulti } = await import('@/lib/bank-feed-matcher')
+    const result = await manualMatchMulti(feedId, paymentIds)
+    if (!result.matched) throw new Error(result.error ?? 'Match failed')
+    revalidatePath('/finance')
+    revalidatePath('/reconciliation')
+  }, {
+    action_type: 'update',
+    table_name: 'td_bank_feeds',
+    record_id: feedId,
+    summary: `Multi-match: feed → ${paymentIds.length} invoices`,
   })
 }
 

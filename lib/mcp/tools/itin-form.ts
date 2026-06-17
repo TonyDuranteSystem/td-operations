@@ -480,6 +480,7 @@ export function registerITINFormTools(server: McpServer) {
             if (submitted.dob) contactUpdates.date_of_birth = submitted.dob
 
             if (Object.keys(contactUpdates).length > 0) {
+              // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write, out of scope for the address fix; lib/operations migration tracked separately
               await supabaseAdmin
                 .from("contacts")
                 .update(contactUpdates)
@@ -490,6 +491,7 @@ export function registerITINFormTools(server: McpServer) {
 
           // Create task for W-7 preparation
           const accountId = sub.account_id || null
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write, out of scope for the address fix; lib/operations migration tracked separately
           await supabaseAdmin
             .from("tasks")
             .insert({
@@ -707,8 +709,8 @@ INSTRUCTIONS:
 4. Mail all signed documents to:
 
    Tony Durante LLC
-   10225 Ulmerton Rd, Suite 3D
-   Largo, FL 33771
+   11125 Park Blvd, Suite 104-153
+   Seminole, FL 33772
    United States
 
 Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.
@@ -954,7 +956,7 @@ ${hr}
 
 <p style="font-size:16px"><strong>Indirizzo di spedizione</strong></p>
 <div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0">
-<strong>Tony Durante LLC</strong><br/>10225 Ulmerton Rd, Suite 3D<br/>Largo, FL 33771<br/>United States
+<strong>Tony Durante LLC</strong><br/>11125 Park Blvd, Suite 104-153<br/>Seminole, FL 33772<br/>United States
 </div>
 <p style="color:#b8292f;font-weight:600">Utilizza un metodo di spedizione tracciabile (FedEx, DHL, UPS) e condividi il numero di tracking con noi.</p>
 
@@ -1037,7 +1039,7 @@ ${hr}
 
 <p style="font-size:16px"><strong>Mailing address</strong></p>
 <div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0">
-<strong>Tony Durante LLC</strong><br/>10225 Ulmerton Rd, Suite 3D<br/>Largo, FL 33771<br/>United States
+<strong>Tony Durante LLC</strong><br/>11125 Park Blvd, Suite 104-153<br/>Seminole, FL 33772<br/>United States
 </div>
 <p style="color:#b8292f;font-weight:600">Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.</p>
 

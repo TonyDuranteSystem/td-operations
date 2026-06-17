@@ -52,6 +52,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'card' | 'both'>('both')
   const [bankPreference, setBankPreference] = useState<string>('auto')
   const [settingsBanks, setSettingsBanks] = useState<Array<{
+    id?: string
     name: string
     currency: string
     bank_name: string
@@ -590,7 +591,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
                     >
                       <option value="auto">Default (from settings)</option>
                       {settingsBanks.map((bank, i) => (
-                        <option key={i} value={`settings_bank_${i}`}>
+                        <option key={bank.id ?? i} value={bank.id ? `settings_bank:${bank.id}` : 'auto'}>
                           {bank.name || bank.bank_name} ({bank.currency})
                         </option>
                       ))}

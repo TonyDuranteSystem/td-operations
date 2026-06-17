@@ -17,7 +17,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
-/** The four recurring flow types anchored on the annual renewal. */
+/** The four recurring, ACCOUNT-scoped flow types anchored on the annual renewal. */
 export const FLOW_TYPES = [
   'Tax Return',
   'State Annual Report',
@@ -25,7 +25,15 @@ export const FLOW_TYPES = [
   'CMRA Mailing Address',
 ] as const
 
-export type FlowType = (typeof FLOW_TYPES)[number]
+/** CONTACT-scoped flow types — their SDs carry a contact_id and frequently have
+ *  account_id = NULL (e.g. ITIN, which can exist before/without an LLC). They are
+ *  resolved by contact, never by account. */
+export const CONTACT_FLOW_TYPES = ['ITIN'] as const
+
+/** Every flow type that has a Workspace (account-scoped + contact-scoped). */
+export const ALL_FLOW_TYPES = [...FLOW_TYPES, ...CONTACT_FLOW_TYPES] as const
+
+export type FlowType = (typeof ALL_FLOW_TYPES)[number]
 
 /** Flow types whose SD is created lazily by a date-cron — eligible for a
  *  date-derived "scheduled" placeholder when no SD exists yet. */
@@ -193,4 +201,33 @@ export async function resolveFlows(accountId: string): Promise<ResolvedFlow[]> {
   }
 
   return assembleFlows(account, (sdRows ?? []) as SdRow[])
+}
+
+/**
+ * Resolve CONTACT-scoped flows for a contact: live SDs of the contact-scoped
+ * flow types (ITIN), which frequently have account_id = NULL. Read-only. No
+ * scheduled placeholders — these flows aren't date-derived. Surfaces the flow
+ * chips on the CRM contact-detail page (the account page can't show them because
+ * the SDs have no account).
+ */
+export async function resolveFlowsByContact(contactId: string): Promise<ResolvedFlow[]> {
+  const { data: sdRows } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_type, stage, stage_order, status, due_date, stage_entered_at, created_at, account_id')
+    .eq('contact_id', contactId)
+    .in('service_type', CONTACT_FLOW_TYPES as unknown as string[])
+    .neq('status', 'cancelled')
+    .order('updated_at', { ascending: false })
+
+  return ((sdRows ?? []) as SdRow[]).map((sd) => ({
+    flow_type: sd.service_type as FlowType,
+    service_delivery_id: sd.id,
+    stage_name: sd.stage,
+    stage_order: sd.stage_order,
+    year: deriveFlowYear(sd),
+    status: flowStatusFromSd(sd.status),
+    due_date: sd.due_date,
+    account_id: sd.account_id ?? '',
+    company_name: null,
+  }))
 }

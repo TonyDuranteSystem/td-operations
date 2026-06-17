@@ -11,6 +11,7 @@ import { SignatureStatus } from './signature-status'
 import { WaitingNotice } from './waiting-notice'
 import { FaxIrs } from './fax-irs'
 import { FlowChat } from './flow-chat'
+import { ShippingInfo } from './shipping-info'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -73,6 +74,8 @@ function renderComponent(
       return <WaitingNotice key={key} label={component.label} />
     case 'fax_irs':
       return <FaxIrs key={key} account={account} />
+    case 'shipping_info':
+      return <ShippingInfo key={key} serviceDelivery={serviceDelivery} />
     case 'chat':
       return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':

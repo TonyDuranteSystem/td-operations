@@ -11,7 +11,7 @@ import {
   Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
   Search, Building2, User, Trash2, Check, RotateCw,
 } from 'lucide-react'
-import { matchBankFeedToInvoice, ignoreBankFeed, deleteDuplicateBankFeed } from './actions'
+import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed } from './actions'
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
@@ -505,12 +505,49 @@ function UnmatchedRow({
     return () => clearTimeout(t)
   }, [searchQuery, isMatching])
 
-  const handleMatch = (paymentId: string) => {
+  // ── Multi-invoice selection (one wire that pays several companies' invoices) ──
+  // Clicking an invoice adds it to a selection tray that PERSISTS as you search
+  // different clients, so you can pick e.g. Partner Alliance's invoice AND Morgan
+  // & Taylor's. The tray shows a running total vs the feed amount; "Match" settles
+  // each selected invoice for its own balance.
+  const invoiceApplied = (inv: OpenInvoice) =>
+    inv.invoice_status === 'Partial'
+      ? Number(inv.amount_due ?? inv.total ?? 0)
+      : Number(inv.total ?? inv.amount ?? 0)
+  const [selected, setSelected] = useState<Map<string, { id: string; invoice_number: string | null; appliedAmount: number; currency: string | null; party: string }>>(new Map())
+  const toggleSelect = (inv: OpenInvoice) => {
+    setSelected(prev => {
+      const next = new Map(prev)
+      if (next.has(inv.id)) next.delete(inv.id)
+      else next.set(inv.id, { id: inv.id, invoice_number: inv.invoice_number, appliedAmount: invoiceApplied(inv), currency: inv.amount_currency, party: invoicePartyName(inv) })
+      return next
+    })
+  }
+  const removeSelect = (id: string) => setSelected(prev => { const next = new Map(prev); next.delete(id); return next })
+  const selectedArr = Array.from(selected.values())
+  const selectedTotal = selectedArr.reduce((sum, x) => sum + x.appliedAmount, 0)
+  // Waterfall preview (matches the backend): the wire is applied in selection
+  // order, each invoice gets min(remaining wire, its balance). Map preserves
+  // insertion = selection order, so this mirrors what manualMatchMulti will do.
+  const EPS = 0.005
+  let _remaining = amount
+  const selectedPreview = selectedArr.map(s => {
+    const willApply = Math.max(Math.min(_remaining, s.appliedAmount), 0)
+    _remaining -= willApply
+    const willStatus: 'Paid' | 'Partial' | 'Unpaid' =
+      willApply >= s.appliedAmount - EPS ? 'Paid' : willApply > EPS ? 'Partial' : 'Unpaid'
+    return { ...s, willApply, willStatus }
+  })
+  const shortfall = Math.max(selectedTotal - amount, 0) // wire < owed → stays as debt
+  const leftover = Math.max(amount - selectedTotal, 0) // wire > owed → unallocated surplus
+  const handleMatchSelected = () => {
+    const ids = selectedArr.map(s => s.id)
+    if (ids.length === 0) return
     startTransition(async () => {
       try {
-        const result = await matchBankFeedToInvoice(feed.id, paymentId)
+        const result = await matchBankFeedToInvoices(feed.id, ids)
         if (!result.success) throw new Error(result.error)
-        toast.success('Transaction matched to invoice')
+        toast.success(`Transaction matched to ${ids.length} invoice${ids.length > 1 ? 's' : ''}`)
         onCancelMatch()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Match failed')
@@ -797,14 +834,14 @@ function UnmatchedRow({
                               <button
                                 key={inv.id}
                                 type="button"
-                                onClick={() => handleMatch(inv.id)}
+                                onClick={() => toggleSelect(inv)}
                                 disabled={isPending}
-                                className="w-full flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-blue-50 disabled:opacity-50"
+                                className={cn("w-full flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-blue-50 disabled:opacity-50", selected.has(inv.id) && "bg-blue-100")}
                               >
+                                {selected.has(inv.id) ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
                                 <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
                                 <span className="truncate flex-1 text-left">{inv.description ?? ''}</span>
                                 <span className="font-medium">{formatCurrency(invAmount, inv.amount_currency)}</span>
-                                <ArrowRight className="h-3 w-3 text-muted-foreground" />
                               </button>
                             )
                           })}
@@ -831,10 +868,11 @@ function UnmatchedRow({
                 return (
                   <button
                     key={inv.id}
-                    onClick={() => handleMatch(inv.id)}
+                    onClick={() => toggleSelect(inv)}
                     disabled={isPending}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50"
+                    className={cn("w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50", selected.has(inv.id) && "bg-blue-100 border-blue-300")}
                   >
+                    {selected.has(inv.id) ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
                     <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
                     <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                     {inv.invoice_status === 'Partial' && (
@@ -870,20 +908,77 @@ function UnmatchedRow({
                   .map(inv => (
                     <button
                       key={inv.id}
-                      onClick={() => handleMatch(inv.id)}
+                      onClick={() => toggleSelect(inv)}
                       disabled={isPending}
-                      className="w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50"
+                      className={cn("w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50", selected.has(inv.id) && "bg-blue-100 border-blue-300")}
                     >
+                      {selected.has(inv.id) ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
                       <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
                       <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                       <span className="font-medium">{formatCurrency(Number(inv.total ?? inv.amount), inv.amount_currency)}</span>
-                      <ArrowRight className="h-3 w-3 text-muted-foreground" />
                     </button>
                   ))}
               </div>
             </details>
           )}
           </div>
+
+          {/* Selection tray — one feed → several invoices (persists across searches) */}
+          {selected.size > 0 && (
+            <div className="sticky bottom-0 -mx-4 border-t bg-white px-4 pt-2">
+              <div className="rounded-md border border-blue-300 bg-blue-50 p-2 space-y-1.5">
+                <p className="text-xs font-semibold text-blue-900">Selected to match ({selected.size}) — applied in this order:</p>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {selectedPreview.map(s => (
+                    <div key={s.id} className="flex items-center gap-2 text-xs">
+                      <span className="font-mono text-blue-600">{s.invoice_number ?? '—'}</span>
+                      <span className="truncate flex-1">{s.party}</span>
+                      <span className={cn(
+                        "rounded px-1 text-[10px] font-medium",
+                        s.willStatus === 'Paid' ? "bg-green-100 text-green-700"
+                          : s.willStatus === 'Partial' ? "bg-amber-100 text-amber-700"
+                          : "bg-zinc-100 text-zinc-500",
+                      )}>{s.willStatus}</span>
+                      <span className="font-medium tabular-nums">
+                        {formatCurrency(s.willApply, s.currency)}
+                        {s.willApply < s.appliedAmount - EPS && (
+                          <span className="text-zinc-400"> / {formatCurrency(s.appliedAmount, s.currency)}</span>
+                        )}
+                      </span>
+                      <button type="button" onClick={() => removeSelect(s.id)} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" title="Remove">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between border-t border-blue-200 pt-1 text-xs">
+                  <span className="text-blue-900">Owed selected / wire</span>
+                  <span className="font-semibold tabular-nums text-blue-900">
+                    {formatCurrency(selectedTotal, feed.currency)} / {formatCurrency(amount, feed.currency)}
+                  </span>
+                </div>
+                {shortfall > EPS && (
+                  <p className="text-[11px] text-amber-700">
+                    ⚠ The wire covers {formatCurrency(amount, feed.currency)} of {formatCurrency(selectedTotal, feed.currency)} owed. It&apos;s applied top-to-bottom; {formatCurrency(shortfall, feed.currency)} stays as an outstanding balance (debt) on the invoice(s) the wire didn&apos;t reach.
+                  </p>
+                )}
+                {leftover > EPS && (
+                  <p className="text-[11px] text-amber-700">
+                    ⚠ The wire is {formatCurrency(leftover, feed.currency)} more than the selected invoices owe. Every selected invoice will be fully paid; the extra {formatCurrency(leftover, feed.currency)} is left unallocated.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleMatchSelected}
+                  disabled={isPending}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Match {selected.size} invoice{selected.size > 1 ? 's' : ''}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

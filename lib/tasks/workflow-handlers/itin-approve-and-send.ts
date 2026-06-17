@@ -61,8 +61,8 @@ function buildEmailBody(meta: ItinReviewV1Meta): { subject: string; html: string
   <li>Includi una <strong>copia del passaporto</strong> (faremo noi la certificazione CAA).</li>
   <li>Spedisci tutto a:<br/>
     <pre style="background:#f4f6f8;padding:10px;border-radius:6px;display:inline-block">Tony Durante LLC
-10225 Ulmerton Rd, Suite 3D
-Largo, FL 33771
+11125 Park Blvd, Suite 104-153
+Seminole, FL 33772
 United States</pre>
   </li>
 </ol>
@@ -92,8 +92,8 @@ United States</pre>
   <li>Include a <strong>passport copy</strong> (we'll handle the CAA certification).</li>
   <li>Mail everything to:<br/>
     <pre style="background:#f4f6f8;padding:10px;border-radius:6px;display:inline-block">Tony Durante LLC
-10225 Ulmerton Rd, Suite 3D
-Largo, FL 33771
+11125 Park Blvd, Suite 104-153
+Seminole, FL 33772
 United States</pre>
   </li>
 </ol>
@@ -107,9 +107,9 @@ United States</pre>
 
 function buildPortalMessage(meta: ItinReviewV1Meta): string {
   if (meta.client_language === "it") {
-    return `Ciao ${meta.client_first_name}, ti abbiamo appena inviato via email i tre moduli ITIN pronti per la firma (W-7, 1040-NR, Schedule OI). Stampa, firma a inchiostro, allega una copia del passaporto, e spedisci a Tony Durante LLC, 10225 Ulmerton Rd, Suite 3D, Largo, FL 33771. Usa un corriere tracciabile e condividi con noi il numero di tracking. Grazie!`
+    return `Ciao ${meta.client_first_name}, ti abbiamo appena inviato via email i tre moduli ITIN pronti per la firma (W-7, 1040-NR, Schedule OI). Stampa, firma a inchiostro, allega una copia del passaporto, e spedisci a Tony Durante LLC, 11125 Park Blvd, Suite 104-153, Seminole, FL 33772. Usa un corriere tracciabile e condividi con noi il numero di tracking. Grazie!`
   }
-  return `Hi ${meta.client_first_name}, we just emailed you the three ITIN forms ready for signature (W-7, 1040-NR, Schedule OI). Print them, sign in wet ink, include a passport copy, and mail to Tony Durante LLC, 10225 Ulmerton Rd, Suite 3D, Largo, FL 33771. Please use a trackable shipping method and share the tracking number with us. Thanks!`
+  return `Hi ${meta.client_first_name}, we just emailed you the three ITIN forms ready for signature (W-7, 1040-NR, Schedule OI). Print them, sign in wet ink, include a passport copy, and mail to Tony Durante LLC, 11125 Park Blvd, Suite 104-153, Seminole, FL 33772. Please use a trackable shipping method and share the tracking number with us. Thanks!`
 }
 
 export const itinApproveAndSend: WorkflowHandler = async (

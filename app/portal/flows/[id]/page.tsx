@@ -7,15 +7,64 @@ import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
+import { FlowStageJourney, type ShippingCard } from '@/components/portal/flow-stage-journey'
 import { DocumentList } from '@/components/portal/document-list'
-import { buildFlowSteps, type FlowStageRow } from '@/lib/flows/flow-progress'
-import { deriveFlowYear, buildFlowTopic, FLOW_TYPES } from '@/lib/flows/resolve-flows'
+import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flows/flow-progress'
+import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, CONTACT_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
 
 export const dynamic = 'force-dynamic'
 
 const CATEGORY_LABELS: Record<number, string> = {
   1: 'Company', 2: 'Contacts', 3: 'Tax', 4: 'Banking', 5: 'Correspondence',
+}
+
+/**
+ * Print/sign/mail card shown on the ITIN "Client Signing" stage. The mailing
+ * destination is TD's document-receiving office (Seminole) — NOT the CMRA
+ * business address. Keep in sync with the itin_prepare_documents email
+ * (lib/mcp/tools/itin-form.ts) and itin-approve-and-send.ts.
+ */
+function buildItinShippingCard(
+  locale: 'en' | 'it',
+  documents: { id: string; file_name: string }[],
+  shippingForm: ShippingCard['shippingForm'],
+): ShippingCard {
+  const addressLines = ['Tony Durante LLC', '11125 Park Blvd, Suite 104-153', 'Seminole, FL 33772', 'United States']
+  if (locale === 'it') {
+    return {
+      stageName: 'Client Signing',
+      title: 'Stampa, firma e spedisci i documenti',
+      intro: 'Stampa i documenti, firmali a inchiostro e spediscili a:',
+      addressLines,
+      checklist: [
+        '2 copie firmate del Form W-7',
+        '2 copie firmate del Form 1040-NR (con Schedule OI)',
+        '2 copie a colori del passaporto (pagina dati + pagina firma)',
+      ],
+      tracking: 'Usa un corriere tracciabile (FedEx, DHL, UPS) e condividi con noi il numero di tracking.',
+      documentsHeading: 'I tuoi documenti da stampare:',
+      downloadLabel: 'Scarica',
+      documents,
+      shippingForm,
+    }
+  }
+  return {
+    stageName: 'Client Signing',
+    title: 'Print, sign & mail your documents',
+    intro: 'Print these documents, sign them with wet ink, and mail to:',
+    addressLines,
+    checklist: [
+      '2× signed Form W-7',
+      '2× signed Form 1040-NR (with Schedule OI)',
+      '2× color copies of your passport (data page + signature page)',
+    ],
+    tracking: 'Use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.',
+    documentsHeading: 'Your documents to print:',
+    downloadLabel: 'Download',
+    documents,
+    shippingForm,
+  }
 }
 
 /**
@@ -43,7 +92,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .eq('id', params.id)
     .maybeSingle()
 
-  if (!sd || !sd.service_type || !(FLOW_TYPES as readonly string[]).includes(sd.service_type)) {
+  if (!sd || !sd.service_type || !(ALL_FLOW_TYPES as readonly string[]).includes(sd.service_type)) {
     notFound()
   }
 
@@ -65,20 +114,26 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   if (!allowed) notFound()
 
   // ── Flow progress ──
-  const { data: stageRows } = await supabaseAdmin
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: stageRows } = await (supabaseAdmin as any)
     .from('pipeline_stages')
-    .select('stage_name, stage_order, client_label, client_label_it, icon')
+    .select('stage_name, stage_order, client_label, client_label_it, client_description, icon')
     .eq('service_type', sd.service_type)
 
-  const stages: FlowStageRow[] = (stageRows ?? []).map(r => ({
+  const stages: FlowStageRow[] = ((stageRows ?? []) as Array<Record<string, unknown>>).map(r => ({
     stage_name: r.stage_name as string,
     stage_order: (r.stage_order as number | null) ?? 0,
     client_label: (r.client_label as string | null) ?? null,
     client_label_it: (r.client_label_it as string | null) ?? null,
+    client_description: (r.client_description as string | null) ?? null,
     icon: (r.icon as string | null) ?? null,
   }))
 
-  const steps = buildFlowSteps(stages, sd.stage ?? null, locale)
+  // Contact-scoped flows (ITIN) get the rich, clickable per-stage journey driven
+  // by client_description; account flows keep the compact horizontal stepper.
+  const isContactFlow = (CONTACT_FLOW_TYPES as readonly string[]).includes(sd.service_type)
+  const steps = isContactFlow ? null : buildFlowSteps(stages, sd.stage ?? null, locale)
+  const journey = isContactFlow ? buildJourneySteps(stages, sd.stage ?? null, locale) : null
   const year = deriveFlowYear(sd)
   const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
 
@@ -95,6 +150,31 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     drive_file_id: string | null; processed_at: string | null; created_at: string
     flow_stage: string | null; portal_visible: boolean | null
   }>).filter(d => isClientSafeFlowDoc(sd.service_type, d.flow_stage, d.portal_visible))
+
+  // ITIN "Client Signing" card embeds the actual prepared documents (W-7 /
+  // 1040-NR / Schedule OI) as download links — the SD-linked client-safe docs
+  // above are exactly those generated forms. When the SD is AT the Client
+  // Signing stage, it also gets the client shipping-tracking form (current
+  // courier/tracking come from the untyped shipping_* columns on the SD).
+  let shippingForm: ShippingCard['shippingForm'] = null
+  if (sd.service_type === 'ITIN' && sd.stage === 'Client Signing') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: shipRow } = await (supabaseAdmin as any)
+      .from('service_deliveries')
+      .select('shipping_courier, shipping_tracking_number')
+      .eq('id', sd.id)
+      .maybeSingle()
+    shippingForm = {
+      serviceDeliveryId: sd.id,
+      initialCourier: (shipRow?.shipping_courier as string | null) ?? null,
+      initialTracking: (shipRow?.shipping_tracking_number as string | null) ?? null,
+      locale,
+    }
+  }
+  const shipping: ShippingCard | null =
+    sd.service_type === 'ITIN'
+      ? buildItinShippingCard(locale, docs.map(d => ({ id: d.id, file_name: d.file_name })), shippingForm)
+      : null
 
   // ── Flow chat messages (read-only) — same scoping as the portal chat client
   // view: never show soft-deleted rows or internal chat-event notes. ──
@@ -133,8 +213,15 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
         )}
       </div>
 
-      {/* Progress stepper — or a neutral state for flows without client stages */}
-      {steps ? (
+      {/* Progress — rich clickable journey for contact flows (ITIN), the compact
+          stepper for account flows, or a neutral state when neither applies. */}
+      {journey && journey.length > 0 ? (
+        <FlowStageJourney
+          title={locale === 'it' ? 'Avanzamento' : 'Progress'}
+          steps={journey}
+          shipping={shipping}
+        />
+      ) : steps ? (
         <FlowProgressTracker title={locale === 'it' ? 'Avanzamento' : 'Progress'} steps={steps} />
       ) : (
         <div className="bg-white rounded-xl border shadow-sm p-5">

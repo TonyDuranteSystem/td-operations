@@ -14,6 +14,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { gmailPost } from "@/lib/gmail"
+import {
+  classifyFindings,
+  shouldSendAuditEmail,
+  toSnapshot,
+  type FindingSnapshot,
+} from "@/lib/cron/audit-email-state"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -73,20 +79,60 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    // Email alert — added 2026-04-14 P0.3 step 4.
-    // Fires whenever the cron finds any findings at all. Wrapped in try/catch
-    // so a failed send does not break the cron response. Subject is RFC 2047
-    // base64-encoded per R041.
-    if (findings.length > 0) {
+    // Email alert — only when a finding is NEW or has ESCALATED since the last
+    // email, and at most once per 24h. The audit finds the same persistent
+    // issues every run, so emailing every run is pure noise. The last emailed
+    // set of findings + timestamp lives in cron_email_state.
+    const EMAIL_CRON_NAME = "audit-health-check"
+    let previousSnapshot: FindingSnapshot = {}
+    let lastEmailedAt: string | null = null
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: stateRow } = await (supabaseAdmin as any)
+        .from("cron_email_state")
+        .select("last_payload, last_emailed_at")
+        .eq("cron_name", EMAIL_CRON_NAME)
+        .maybeSingle()
+      if (stateRow) {
+        previousSnapshot = (stateRow.last_payload as FindingSnapshot) ?? {}
+        lastEmailedAt = (stateRow.last_emailed_at as string | null) ?? null
+      }
+    } catch (stateErr) {
+      // Table missing (e.g. before the migration is applied) — degrade to "no
+      // previous state" so we never SILENTLY suppress an alert. Worst case: it
+      // behaves like before (emails when there are findings).
+      console.warn("[audit-health-check] cron_email_state read failed:", stateErr)
+    }
+
+    const { classified, hasNotable, notableCount } = classifyFindings(findings, previousSnapshot)
+    const sendEmail =
+      findings.length > 0 &&
+      shouldSendAuditEmail({ hasNotable, lastEmailedAt, now: new Date() })
+
+    // Subject/HTML built per R041 (RFC 2047 base64 subject). try/catch so a
+    // failed send never breaks the cron response.
+    if (sendEmail) {
       try {
         const severityBadge = p0Count > 0 ? "🔴" : p1Count > 0 ? "🟠" : "🟡"
-        const subject = `${severityBadge} Audit Health Check: ${findings.length} finding(s) — P0:${p0Count} P1:${p1Count} P2:${p2Count}`
+        const subject = `${severityBadge} Audit Health Check: ${notableCount} new/changed of ${findings.length} finding(s) — P0:${p0Count} P1:${p1Count} P2:${p2Count}`
 
-        const findingRows = findings
+        // NEW / escalated findings first; badge each row so recurring noise is
+        // visually distinct from what actually changed since the last email.
+        const statusBadge = (s: string) =>
+          s === "new"
+            ? `<span style="color:#dc2626;font-weight:700;">NEW</span>`
+            : s === "escalated"
+              ? `<span style="color:#f59e0b;font-weight:700;">▲ ESC</span>`
+              : `<span style="color:#a1a1aa;">recurring</span>`
+        const notableFirst = [...classified].sort(
+          (a, b) => (a.status === "recurring" ? 1 : 0) - (b.status === "recurring" ? 1 : 0),
+        )
+        const findingRows = notableFirst
           .slice(0, 30)
-          .map((f) => {
+          .map(({ finding: f, status }) => {
             const color = f.severity === "P0" ? "#dc2626" : f.severity === "P1" ? "#f59e0b" : "#71717a"
             return `<tr style="border-bottom: 1px solid #e4e4e7;">
+              <td style="padding: 8px; font-size: 12px;">${statusBadge(status)}</td>
               <td style="padding: 8px; font-size: 12px; color: ${color}; font-weight: 600;">${f.severity}</td>
               <td style="padding: 8px; font-size: 12px; font-family: ui-monospace, monospace;">${f.check_name}</td>
               <td style="padding: 8px; font-size: 12px;">${f.table_name}</td>
@@ -98,7 +144,7 @@ export async function GET(req: NextRequest) {
 
         const html = `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px;">
-            <h2 style="font-size: 18px; color: #18181b;">Daily Audit Health Check — ${findings.length} Finding(s)</h2>
+            <h2 style="font-size: 18px; color: #18181b;">Daily Audit Health Check — ${notableCount} new/changed of ${findings.length} finding(s)</h2>
             <p style="color: #52525b; font-size: 13px;">
               <strong style="color: #dc2626;">${p0Count} P0</strong> (data integrity) ·
               <strong style="color: #f59e0b;">${p1Count} P1</strong> (business logic) ·
@@ -108,6 +154,7 @@ export async function GET(req: NextRequest) {
             <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
               <thead>
                 <tr style="background: #f4f4f5;">
+                  <th style="padding: 8px; text-align: left; font-size: 11px; color: #71717a;">Status</th>
                   <th style="padding: 8px; text-align: left; font-size: 11px; color: #71717a;">Severity</th>
                   <th style="padding: 8px; text-align: left; font-size: 11px; color: #71717a;">Check</th>
                   <th style="padding: 8px; text-align: left; font-size: 11px; color: #71717a;">Table</th>
@@ -136,6 +183,24 @@ export async function GET(req: NextRequest) {
 
         const raw = Buffer.from(mimeMessage).toString("base64url")
         await gmailPost("/messages/send", { raw })
+
+        // Record what we just communicated so the next run only emails on a
+        // genuine change. Snapshot + timestamp update ONLY on a real send, so a
+        // finding that appears during the 24h throttle window still counts as
+        // NEW the next time we actually email.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabaseAdmin as any).from("cron_email_state").upsert(
+            {
+              cron_name: EMAIL_CRON_NAME,
+              last_payload: toSnapshot(findings),
+              last_emailed_at: new Date().toISOString(),
+            },
+            { onConflict: "cron_name" },
+          )
+        } catch (stateWriteErr) {
+          console.warn("[audit-health-check] cron_email_state write failed:", stateWriteErr)
+        }
       } catch (emailErr) {
         console.error("[audit-health-check] email alert failed:", emailErr)
         // Do not fail the cron response just because email alert failed.
@@ -145,6 +210,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       summary: { p0: p0Count, p1: p1Count, p2: p2Count, total_findings: findings.length },
+      email: { sent: sendEmail, notable: notableCount },
       findings,
       elapsed_ms: Date.now() - startTime,
     })

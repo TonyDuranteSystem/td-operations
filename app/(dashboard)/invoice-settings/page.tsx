@@ -20,6 +20,7 @@ import {
 import { cn } from '@/lib/utils'
 
 interface BankAccount {
+  id?: string
   name: string
   currency: string
   bank_name: string
@@ -182,6 +183,7 @@ export default function InvoiceSettingsPage() {
   const addBankAccount = () => {
     if (!settings) return
     const newBank: BankAccount = {
+      id: crypto.randomUUID(),
       name: '',
       currency: 'USD',
       bank_name: '',

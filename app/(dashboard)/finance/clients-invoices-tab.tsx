@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   Search, FileText, Plus, Send, Bell, Download, CheckCircle,
   ChevronRight, Clock, CreditCard, Receipt, History,
-  DollarSign, AlertTriangle, SplitSquareHorizontal, Users, RefreshCw,
+  DollarSign, AlertTriangle, SplitSquareHorizontal, Users, RefreshCw, ScrollText,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
@@ -64,7 +64,7 @@ function csym(currency?: string) {
 export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, creditNotes, auditLog, paymentHistory }: Props) {
   const router = useRouter()
   const [search, setSearch] = useState('')
-  const [showSection, setShowSection] = useState<'invoices' | 'credits' | 'payments' | 'audit'>('invoices')
+  const [showSection, setShowSection] = useState<'invoices' | 'statement' | 'credits' | 'payments' | 'audit'>('invoices')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
 
   const filteredClients = useMemo(() => {
@@ -74,6 +74,61 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
   }, [clientList, search])
 
   const selectedClient = clientList.find(c => c.id === selectedClientId)
+
+  // Statement of account — a chronological ledger interleaving invoices (charges)
+  // and payments received (money in) by transaction date, with a running balance.
+  // Pure composition of the invoices + paymentHistory already passed as props.
+  const statement = useMemo(() => {
+    type Ev = {
+      date: string | null
+      sortKey: number
+      desc: string
+      ref: string | null
+      refId: string | null
+      charge: number
+      moneyIn: number
+    }
+    const evs: Ev[] = []
+    for (const inv of invoices) {
+      const d = (inv.issue_date as string) ?? null
+      evs.push({
+        date: d,
+        sortKey: d ? Date.parse(d) : Number.POSITIVE_INFINITY, // undated entries sort last
+        desc: 'Invoice issued',
+        ref: (inv.invoice_number as string) ?? null,
+        refId: (inv.id as string) ?? null,
+        charge: Number(inv.total ?? 0),
+        moneyIn: 0,
+      })
+    }
+    for (const p of paymentHistory) {
+      const amt = Number(p.amount_paid ?? p.amount ?? 0)
+      if (amt <= 0) continue
+      const d = (p.paid_date as string) ?? null
+      const method = (p.payment_method as string) ?? ''
+      evs.push({
+        date: d,
+        sortKey: d ? Date.parse(d) : Number.POSITIVE_INFINITY,
+        desc: method ? `Payment received (${method})` : 'Payment received',
+        ref: (p.invoice_number as string) ?? null,
+        refId: (p.id as string) ?? null,
+        charge: 0,
+        moneyIn: amt,
+      })
+    }
+    // Stable sort by date asc → on a tie, invoices (pushed first) precede payments,
+    // so a same-day charge appears before the payment that settles it.
+    evs.sort((a, b) => a.sortKey - b.sortKey)
+    let bal = 0
+    const rows = evs.map(e => {
+      bal += e.charge - e.moneyIn
+      return { ...e, balance: bal }
+    })
+    const totalCharged = rows.reduce((s, r) => s + r.charge, 0)
+    const totalIn = rows.reduce((s, r) => s + r.moneyIn, 0)
+    const sym = csym(invoices.find(i => i.currency)?.currency as string | undefined)
+    return { rows, totalCharged, totalIn, balanceDue: totalCharged - totalIn, sym }
+  }, [invoices, paymentHistory])
 
   function selectClient(id: string) {
     router.push(`/finance?tab=clients&client=${id}`)
@@ -225,6 +280,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             <div className="flex gap-1 mb-4 border-b">
               {([
                 { id: 'invoices', label: 'Invoices', icon: FileText, count: invoices.length },
+                { id: 'statement', label: 'Statement', icon: ScrollText, count: statement.rows.length },
                 { id: 'credits', label: 'Credit Notes', icon: Receipt, count: creditNotes.length },
                 { id: 'payments', label: 'Payment History', icon: CreditCard, count: paymentHistory.length },
                 { id: 'audit', label: 'Activity', icon: History, count: auditLog.length },
@@ -329,6 +385,64 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                       )
                     })}
                   </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Statement of account — chronological charges + money in, running balance */}
+            {showSection === 'statement' && (
+              <div className="rounded-lg border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="text-left px-4 py-2.5 font-medium">Date</th>
+                      <th className="text-left px-4 py-2.5 font-medium">Description</th>
+                      <th className="text-right px-4 py-2.5 font-medium">Charge</th>
+                      <th className="text-right px-4 py-2.5 font-medium">Money In</th>
+                      <th className="text-right px-4 py-2.5 font-medium">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statement.rows.length === 0 && (
+                      <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No transactions yet</td></tr>
+                    )}
+                    {statement.rows.map((e, i) => (
+                      <tr key={i} className="border-b hover:bg-muted/30">
+                        <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{e.date ?? '—'}</td>
+                        <td className="px-4 py-2.5">
+                          <span>{e.desc}</span>{' '}
+                          {e.ref && e.refId ? (
+                            <a
+                              href={`/api/invoices/${e.refId}/pdf`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline font-mono"
+                              title="Open invoice PDF"
+                            >
+                              {e.ref}
+                            </a>
+                          ) : e.ref ? (
+                            <span className="font-mono">{e.ref}</span>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">{e.charge > 0 ? `${statement.sym}${e.charge.toFixed(2)}` : '—'}</td>
+                        <td className="px-4 py-2.5 text-right text-green-600">{e.moneyIn > 0 ? `${statement.sym}${e.moneyIn.toFixed(2)}` : '—'}</td>
+                        <td className="px-4 py-2.5 text-right font-medium">{statement.sym}{e.balance.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {statement.rows.length > 0 && (
+                    <tfoot>
+                      <tr className="border-t-2 bg-muted/40 font-semibold">
+                        <td className="px-4 py-2.5" colSpan={2}>Totals</td>
+                        <td className="px-4 py-2.5 text-right">{statement.sym}{statement.totalCharged.toFixed(2)}</td>
+                        <td className="px-4 py-2.5 text-right text-green-600">{statement.sym}{statement.totalIn.toFixed(2)}</td>
+                        <td className="px-4 py-2.5 text-right">
+                          <span className={statement.balanceDue > 0 ? 'text-red-600' : ''}>{statement.sym}{statement.balanceDue.toFixed(2)}</span>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}

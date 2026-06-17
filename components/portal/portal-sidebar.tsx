@@ -24,6 +24,7 @@ import {
   FilePen,
   PlusCircle,
   Mail,
+  MapPin,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -132,6 +133,7 @@ const tierTopItems: NavItem[] = [
 const companyItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
+  { key: 'nav.addresses', href: '/portal/addresses', icon: MapPin },
   { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
