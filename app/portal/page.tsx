@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations, getFormationFlowSteps, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
@@ -126,13 +126,13 @@ export default async function PortalDashboardPage() {
     if (selectedFormation) {
       const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
       const ctx = await getFormationContext(contactId)
+      const formationFlow = await getFormationFlowSteps({ sdId: selectedFormation.sdId }, locale)
       return (
         <FormationDashboard
           firstName={firstName}
           locale={locale}
           account={null}
-          wizardData={ctx.wizard}
-          ss4Data={ctx.ss4}
+          flowSteps={formationFlow.steps}
           oaData={ctx.oa}
           leaseData={ctx.lease}
           formationLeadId={selectedFormation.leadId}
@@ -249,11 +249,13 @@ export default async function PortalDashboardPage() {
             .limit(1)
             .maybeSingle(),
         ])
+        const formationFlow = await getFormationFlowSteps({ accountId: formationAccount.id }, locale)
         return (
           <FormationDashboard
             firstName={firstName}
             locale={locale}
             account={formationAccount}
+            flowSteps={formationFlow.steps}
             wizardData={wizardRes.data}
             ss4Data={ss4Res.data}
             oaData={oaRes.data}
@@ -265,11 +267,13 @@ export default async function PortalDashboardPage() {
 
       // Post-PR1 path: no account, contact-scoped reads.
       const ctx = await getFormationContext(contactId)
+      const formationFlow = await getFormationFlowSteps({ contactId }, locale)
       return (
         <FormationDashboard
           firstName={firstName}
           locale={locale}
           account={null}
+          flowSteps={formationFlow.steps}
           wizardData={ctx.wizard}
           ss4Data={ctx.ss4}
           oaData={ctx.oa}
@@ -389,6 +393,7 @@ export default async function PortalDashboardPage() {
         .limit(1)
         .maybeSingle(),
     ])
+    const formationFlow = await getFormationFlowSteps({ accountId: selectedAccountId }, locale)
     return (
       <FormationDashboard
         firstName={firstName}
@@ -403,6 +408,7 @@ export default async function PortalDashboardPage() {
           status: accountRes.status,
           ein_number: accountRes.ein_number,
         } : null}
+        flowSteps={formationFlow.steps}
         wizardData={wizardRes.data}
         ss4Data={ss4Res.data}
         oaData={oaRes.data}

@@ -1,7 +1,8 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
 import type { PortalAccount, PortalService } from '@/lib/types'
-import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
+import { buildFlowSteps, type FlowStageRow, type FlowStep } from '@/lib/flows/flow-progress'
+import { FORMATION_SERVICE_TYPE } from '@/lib/formation-stages'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -128,6 +129,67 @@ export async function getFormationContext(contactId: string) {
     oa: oaRes.data,
     lease: leaseRes.data,
   }
+}
+
+/**
+ * Build the client-facing formation progress steps from the Company Formation
+ * SD's CURRENT pipeline stage (the new 8-stage pipeline). This replaces the old
+ * signal-cascade (wizard/ss4/account flags) in the portal formation dashboard:
+ * the SD stage is the single source of truth, mirroring the ITIN/Tax flow
+ * progress pattern.
+ *
+ * Resolves the SD by id (in-progress switcher), else newest by account, else the
+ * active contact-scoped formation SD. Returns null steps when no formation SD or
+ * no client-labelled stages exist (caller hides the tracker rather than show an
+ * empty one). `currentStageName` lets the dashboard light up the client-action
+ * step (e.g. "Payment Confirmed" → fill wizard, "SS-4 Prepared" → sign SS-4).
+ */
+export async function getFormationFlowSteps(
+  opts: { sdId?: string | null; accountId?: string | null; contactId?: string | null },
+  locale: 'en' | 'it',
+): Promise<{ steps: FlowStep[] | null; currentStageName: string | null; sdId: string | null }> {
+  let sd: { id: string; stage: string | null } | null = null
+  if (opts.sdId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, stage')
+      .eq('id', opts.sdId)
+      .maybeSingle()
+    sd = data ?? null
+  } else if (opts.accountId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, stage')
+      .eq('account_id', opts.accountId)
+      .eq('service_type', FORMATION_SERVICE_TYPE)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    sd = data ?? null
+  } else if (opts.contactId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, stage')
+      .eq('contact_id', opts.contactId)
+      .eq('service_type', FORMATION_SERVICE_TYPE)
+      .is('account_id', null)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    sd = data ?? null
+  }
+
+  if (!sd) return { steps: null, currentStageName: null, sdId: null }
+
+  const { data: stageRows } = await supabaseAdmin
+    .from('pipeline_stages')
+    .select('stage_name, stage_order, client_label, client_label_it, icon')
+    .eq('service_type', FORMATION_SERVICE_TYPE)
+    .order('stage_order', { ascending: true })
+
+  const stages = (stageRows ?? []) as FlowStageRow[]
+  return { steps: buildFlowSteps(stages, sd.stage, locale), currentStageName: sd.stage ?? null, sdId: sd.id }
 }
 
 export interface InProgressFormation {

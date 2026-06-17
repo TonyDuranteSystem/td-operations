@@ -14,7 +14,7 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare, ExternalLink } from 'lucide-react'
+import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare, ExternalLink, ArrowRight } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
@@ -249,12 +249,23 @@ export function ThreadWhatsNewPanel({
                   })()}
                 </div>
 
-                {/* Workflow note → render the workflow task's own stage actions + SLA inline. */}
-                {wfTask && (
+                {/* Workflow note → render the workflow task's own stage actions + SLA
+                    inline. EXCEPTION: formation notes link to the flow Workspace
+                    (the stage_layout-driven /flows/[sd] page) instead of the inline
+                    advance buttons, so staff drive the formation from the workspace. */}
+                {wfTask && note.event_key === 'formation_progress' && wfTask.delivery_id ? (
+                  <a
+                    href={`/flows/${wfTask.delivery_id}`}
+                    className="mt-2 flex items-center justify-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100"
+                    title="Open the formation workspace"
+                  >
+                    Open formation workspace <ArrowRight className="h-3 w-3" />
+                  </a>
+                ) : wfTask ? (
                   <div className="mt-2 rounded-md bg-zinc-50 border p-1.5">
                     <WorkflowTaskCard task={wfTask} today={today} role="admin" />
                   </div>
-                )}
+                ) : null}
                 <div className="mt-1.5 flex items-center justify-between">
                   <button
                     disabled={busy}

@@ -26,6 +26,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
+import { stageHasAction } from "@/lib/services/stage-actions"
+import { INIT_COMPLIANCE_DATES_ACTION, ENQUEUE_WELCOME_PACKAGE_ACTION } from "@/lib/formation-stages"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -453,10 +455,13 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 12. Company Formation — set initial renewal dates on closing stages
+  // 12. Company Formation — set initial renewal dates when the LLC is formed.
+  // Data-driven: fires on the stage carrying the `init_compliance_dates`
+  // auto_actions marker ("Articles Received" today; editable in SQL), so the
+  // trigger stage isn't hardcoded here. See lib/formation-stages.ts.
   if (
     delivery.service_type === "Company Formation" &&
-    (targetStage.stage_name === "Post-Formation + Banking" || targetStage.stage_name === "Closing") &&
+    stageHasAction(targetStage.auto_actions, INIT_COMPLIANCE_DATES_ACTION) &&
     delivery.account_id
   ) {
     try {
@@ -503,10 +508,11 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 13. Welcome Package on "Post-Formation + Banking"
+  // 13. Welcome Package — fires on the stage carrying the
+  // `enqueue_welcome_package` auto_actions marker ("Articles Received" today).
   if (
     delivery.service_type === "Company Formation" &&
-    targetStage.stage_name === "Post-Formation + Banking" &&
+    stageHasAction(targetStage.auto_actions, ENQUEUE_WELCOME_PACKAGE_ACTION) &&
     delivery.account_id
   ) {
     try {

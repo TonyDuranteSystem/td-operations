@@ -2,6 +2,9 @@
 
 import { CheckCircle, Clock, AlertCircle, ArrowRight, Building2, MapPin, Calendar, Shield, MessageCircle, FileText } from 'lucide-react'
 import Link from 'next/link'
+import { Fragment } from 'react'
+import type { FlowStep } from '@/lib/flows/flow-progress'
+import { FORMATION_STAGES } from '@/lib/formation-stages'
 
 interface FormationAccount {
   id: string
@@ -18,8 +21,16 @@ interface FormationDashboardProps {
   firstName: string
   locale: 'en' | 'it'
   account: FormationAccount | null
-  wizardData: { id: string; status: string } | null
-  ss4Data: { id: string; status: string } | null
+  /** Client-facing formation progress steps, built from the Company Formation
+   * SD's CURRENT pipeline stage (lib/portal/queries.ts::getFormationFlowSteps).
+   * The SD stage is now the single source of truth for the tracker — the old
+   * wizard/ss4/account signal cascade is gone. */
+  flowSteps?: FlowStep[] | null
+  /** @deprecated The tracker now reads the SD stage. Kept so existing callers
+   * can keep passing these without a type error — not used here. */
+  wizardData?: { id: string; status: string } | null
+  /** @deprecated see wizardData. */
+  ss4Data?: { id: string; status: string } | null
   oaData: { id: string; status: string } | null
   leaseData: { id: string; status: string } | null
   /** Active Company Closure SD on the contact, if any. Renders a Closure CTA
@@ -27,11 +38,10 @@ interface FormationDashboardProps {
    * NEW LLC being formed AND an external LLC being wound down). Patrick
    * Covelli is the canonical case. */
   closureData?: { id: string } | null
-  /** Lead the in-progress formation is anchored on. When set, the step-2
-   * "Fill In Your LLC Details" action links to /portal/wizard?lead=<leadId>.
-   * Required for returning clients who already own an account — without it the
-   * wizard page falls through to that account's context and opens the wrong
-   * wizard (tax/onboarding) instead of this new company's formation. */
+  /** Lead the in-progress formation is anchored on. When set, the client-action
+   * "Fill in your details" step links to /portal/wizard?lead=<leadId>. Required
+   * for returning clients who already own an account — without it the wizard
+   * page falls through to that account's context and opens the wrong wizard. */
   formationLeadId?: string | null
 }
 
@@ -42,8 +52,7 @@ export function FormationDashboard({
   firstName,
   locale,
   account,
-  wizardData,
-  ss4Data,
+  flowSteps,
   oaData,
   leaseData,
   closureData,
@@ -58,48 +67,38 @@ export function FormationDashboard({
     ? `/portal/wizard?lead=${formationLeadId}`
     : '/portal/wizard'
 
-  // ── Raw signals (unchanged) ──
-  const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed'
-  const stateConfirmed = !!account?.filing_id || !!account?.formation_date
-  const ss4AwaitingSignature = ss4Data?.status === 'awaiting_signature'
-  const ss4Signed = ss4Data?.status === 'signed' || ss4Data?.status === 'submitted' || ss4Data?.status === 'confirmed'
-  const ss4Faxed = ss4Data?.status === 'submitted' || ss4Data?.status === 'confirmed'
+  // ── Post-EIN CTAs (account-based signals; independent of the SD tracker) ──
   const einReceived = !!account?.ein_number
   const oaSigned = oaData?.status === 'signed'
   const leaseSigned = leaseData?.status === 'signed'
-
-  // ── Milestone completion (monotonic cascade) ──
-  // A later milestone being reached implies every earlier one is done, so a
-  // backstop (||einReceived etc.) prevents an upstream step from rendering gray
-  // when a downstream one is already complete (e.g. EIN entered manually).
-  const m2Done = wizardSubmitted || stateConfirmed || einReceived
-  const m345Done = stateConfirmed || einReceived
-  const m6Done = ss4Signed || einReceived
-  const m7Done = ss4Faxed || einReceived
-  const m8Done = einReceived
-
-  // ── Per-step visual state ──
-  const m2State: MilestoneState = m2Done ? 'completed' : 'action'
-  const m3State: MilestoneState = m345Done ? 'completed' : m2Done ? 'waiting' : 'upcoming'
-  const m4State: MilestoneState = m345Done ? 'completed' : 'upcoming'
-  const m5State: MilestoneState = m345Done ? 'completed' : 'upcoming'
-  // Once the LLC is approved, the SS-4 is being prepared by our team until it's
-  // ready for the client's signature — show that as a blue "waiting" dot (mirrors
-  // steps 7 & 8) rather than a gray "upcoming" one.
-  const m6State: MilestoneState = m6Done ? 'completed' : ss4AwaitingSignature ? 'action' : m345Done ? 'waiting' : 'upcoming'
-  const m7State: MilestoneState = m7Done ? 'completed' : m6Done ? 'waiting' : 'upcoming'
-  const m8State: MilestoneState = m8Done ? 'completed' : m7Done ? 'waiting' : 'upcoming'
-
-  // ── Post-EIN CTAs (kept; independent of the tracker) ──
   const needsOA = einReceived && !oaSigned && oaData && oaData.status !== 'signed'
   const needsLease = einReceived && !leaseSigned && leaseData && leaseData.status !== 'signed'
-  // Closure is INDEPENDENT of the formation milestone chain — it surfaces
-  // whenever an active Closure SD exists on the contact, regardless of stage.
+  // Closure is INDEPENDENT of the formation chain — surfaces whenever an active
+  // Closure SD exists on the contact, regardless of formation stage.
   const needsClosure = !!closureData
 
-  // Informational waiting banners (timelines the tracker dots can't convey)
-  const waitingForState = m2Done && !m345Done
-  const waitingForEIN = m7Done && !einReceived
+  // ── Tracker (driven entirely by the SD's current pipeline stage) ──
+  const steps = flowSteps ?? []
+  const currentStageName = steps.find((s) => s.state === 'current')?.stageName ?? null
+
+  // Map a flow step to the milestone visual. The two client-action stages glow
+  // amber and link out when they're the current stage; everything else is a
+  // completed check / blue in-progress dot / gray upcoming dot.
+  function stepVisual(step: FlowStep): { state: MilestoneState; href?: string } {
+    if (step.state === 'completed') return { state: 'completed' }
+    if (step.state === 'current') {
+      if (step.stageName === FORMATION_STAGES.PAYMENT_CONFIRMED) return { state: 'action', href: wizardHref }
+      if (step.stageName === FORMATION_STAGES.SS4_PREPARED) return { state: 'action', href: '/portal/sign/ss4' }
+      return { state: 'waiting' }
+    }
+    return { state: 'upcoming' }
+  }
+
+  // Informational banners keyed off the current stage (timelines the dots can't
+  // convey): "being filed" while at Filing with State, "waiting for EIN" while
+  // at SS-4 Signed (faxed, awaiting the IRS).
+  const waitingForState = currentStageName === FORMATION_STAGES.FILING_WITH_STATE
+  const waitingForEIN = currentStageName === FORMATION_STAGES.SS4_SIGNED
 
   function formatDate(d: string | null): string {
     if (!d) return '—'
@@ -204,27 +203,23 @@ export function FormationDashboard({
         </div>
       )}
 
-      {/* Progress tracker */}
-      <div className="bg-white rounded-xl border shadow-sm p-6">
-        <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-5">{tr.progressTitle}</h2>
-        <div className="space-y-1">
-          <Milestone label={tr.m1Label} desc={tr.m1Desc} state="completed" actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={true} />
-          <Milestone label={tr.m2Label} desc={tr.m2Desc} state={m2State} href={wizardHref} actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={m2Done} />
-          <Milestone label={tr.m3Label} desc={tr.m3Desc} state={m3State} actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={m345Done} />
-          <Milestone label={tr.m4Label} desc={tr.m4Desc} state={m4State} actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={m345Done} />
-          <Milestone label={tr.m5Label} desc={tr.m5Desc} state={m5State} actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={m6Done} />
-          <Milestone label={tr.m6Label} desc={tr.m6Desc} state={m6State} href="/portal/sign/ss4" actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={m6Done} />
-          <Milestone label={tr.m7Label} desc={tr.m7Desc} state={m7State} actionLabel={tr.actionRequired} />
-          <MilestoneConnector completed={m7Done} />
-          <Milestone label={tr.m8Label} desc={tr.m8Desc} state={m8State} actionLabel={tr.actionRequired} />
+      {/* Progress tracker — driven entirely by the SD's current pipeline stage */}
+      {steps.length > 0 && (
+        <div className="bg-white rounded-xl border shadow-sm p-6">
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-5">{tr.progressTitle}</h2>
+          <div className="space-y-1">
+            {steps.map((step, i) => {
+              const v = stepVisual(step)
+              return (
+                <Fragment key={step.stageName}>
+                  {i > 0 && <MilestoneConnector completed={steps[i - 1].state === 'completed'} />}
+                  <Milestone label={step.label} state={v.state} href={v.href} actionLabel={tr.actionRequired} />
+                </Fragment>
+              )
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Company info */}
       {account && (
@@ -299,7 +294,7 @@ function Milestone({
   actionLabel,
 }: {
   label: string
-  desc: string
+  desc?: string
   state: MilestoneState
   href?: string
   actionLabel: string
@@ -344,7 +339,7 @@ function Milestone({
             </span>
           )}
         </div>
-        <p className="text-xs text-zinc-500">{desc}</p>
+        {desc && <p className="text-xs text-zinc-500">{desc}</p>}
       </div>
       {isAction && <ArrowRight className="h-4 w-4 text-amber-500 shrink-0" />}
     </>

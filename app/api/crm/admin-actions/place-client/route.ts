@@ -21,6 +21,7 @@ import { logAction } from "@/lib/mcp/action-log"
 // createFolder removed — now uses ensureCompanyFolder from drive-folder-utils
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
+import { FORMATION_STAGES } from "@/lib/formation-stages"
 
 // ─── Types ───
 
@@ -53,32 +54,32 @@ interface StepResult {
 const STAGE_PRESETS: Record<string, { service_type: string; stage_name: string; stage_order: number; portal_tier: string }> = {
   just_paid: {
     service_type: "Company Formation",
-    stage_name: "Data Collection",
+    stage_name: FORMATION_STAGES.PAYMENT_CONFIRMED,
     stage_order: 1,
     portal_tier: "formation",
   },
   data_collected: {
     service_type: "Company Formation",
-    stage_name: "State Filing",
-    stage_order: 2,
+    stage_name: FORMATION_STAGES.FILING_WITH_STATE,
+    stage_order: 4,
     portal_tier: "formation",
   },
   llc_formed: {
     service_type: "Company Formation",
-    stage_name: "EIN Application",
-    stage_order: 3,
+    stage_name: FORMATION_STAGES.ARTICLES_RECEIVED,
+    stage_order: 5,
     portal_tier: "formation",
   },
   ein_received: {
     service_type: "Company Formation",
-    stage_name: "Post-Formation + Banking",
-    stage_order: 4,
+    stage_name: FORMATION_STAGES.EIN_RECEIVED,
+    stage_order: 8,
     portal_tier: "active",
   },
   everything_done: {
     service_type: "Company Formation",
-    stage_name: "Closing",
-    stage_order: 5,
+    stage_name: FORMATION_STAGES.EIN_RECEIVED,
+    stage_order: 8,
     portal_tier: "active",
   },
   onboarding_data_collection: {

@@ -21,12 +21,17 @@
 import { updateAccount } from "@/lib/operations/account"
 import { advanceStage } from "@/lib/operations/service-delivery"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { FORMATION_STAGES } from "@/lib/formation-stages"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 
 /** Re-export the central client-safe schema for the workflow editor. */
 export { formationConfirmEinReceivedParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
 
-const TARGET_STAGE = "Post-Formation + Banking"
+// Records the EIN and advances the formation SD into its terminal stage. In the
+// 8-stage pipeline the EIN is entered at "EIN Received" (the prior stage is
+// "SS-4 Signed"); staff then click "Mark Formation Complete" to close the SD and
+// spawn the recurring RA/Annual-Report SDs.
+const TARGET_STAGE = FORMATION_STAGES.EIN_RECEIVED
 
 function normalizeEin(raw: string): string {
   // Strip everything except digits, then re-format as XX-XXXXXXX.
@@ -78,9 +83,9 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
       success: true,
       side_effects: [
         { kind: "account.field_preview", detail: `accounts.ein_number → ${ein}` },
-        { kind: "sd.advance.preview", detail: `EIN Submitted → ${TARGET_STAGE}` },
+        { kind: "sd.advance.preview", detail: `${FORMATION_STAGES.SS4_SIGNED} → ${TARGET_STAGE}` },
       ],
-      preview: { sd_stage_change: `EIN Submitted → ${TARGET_STAGE}` },
+      preview: { sd_stage_change: `${FORMATION_STAGES.SS4_SIGNED} → ${TARGET_STAGE}` },
     }
   }
 
@@ -135,7 +140,7 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
     delivery_id: ctx.task.delivery_id,
     target_stage: TARGET_STAGE,
     actor: `workflow:formation.confirm_ein_received:${ctx.actor.id}`,
-    notes: `EIN ${ein} recorded; advancing to Post-Formation + Banking`,
+    notes: `EIN ${ein} recorded; advancing to ${TARGET_STAGE}`,
   })
   if (!advance.success) {
     sideEffects.push({
