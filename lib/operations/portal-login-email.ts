@@ -104,7 +104,7 @@ export async function sendLoginEmailChangedNotice(params: {
   fullName: string | null
   language: string | null
 }): Promise<void> {
-  const { toEmail, fullName, language } = params
+  const { toEmail, previousEmail, fullName, language } = params
   const isIt = language === "it" || language === "Italian"
   const { gmailPost } = await import("@/lib/gmail")
   const { PORTAL_BASE_URL } = await import("@/lib/config")
