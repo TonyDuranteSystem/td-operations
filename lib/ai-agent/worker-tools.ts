@@ -377,6 +377,221 @@ export const SEND_EMAIL_TOOL: ToolDef = {
   },
 }
 
+// ── Circleback call reading (Slack-only, READ-ONLY) ──────────────────────────
+// The Slack worker can read CALL data from Circleback (stored in call_summaries):
+// metadata + notes + action items + the FULL word-for-word transcript. Gated behind
+// CallWorkerOptions.enableCallReads so it NEVER reaches the Hermes/Telegram research
+// worker (R108) — call transcripts are sensitive client content. Unlike the MCP
+// cb_get_call tool (which caps the transcript at 50 turns for brevity), get_call here
+// returns the COMPLETE transcript (capped only by a generous char limit to protect the
+// worker's token budget) because Antonio wants every detail of every call.
+
+/** Char cap on a single rendered call so a very long transcript can't blow the worker's context. */
+const CALL_RESULT_CAP = 120_000
+
+export const LIST_CALLS_TOOL: ToolDef = {
+  name: "list_calls",
+  description: [
+    "List Circleback CALL recordings (sales/intake/client calls) — meeting name, date, duration, attendee count, and any linked lead/account. Filter by lead_id, account_id, or date range.",
+    "Use this to find which calls exist for a client/lead, then call get_call with the id to read the full transcript. Resolve a client name to an account_id/lead_id first with the CRM search tools.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      lead_id: { type: "string", description: "Filter by linked lead UUID." },
+      account_id: { type: "string", description: "Filter by linked CRM account UUID." },
+      min_date: { type: "string", description: "Only calls on/after this date (YYYY-MM-DD)." },
+      max_date: { type: "string", description: "Only calls on/before this date (YYYY-MM-DD)." },
+      limit: { type: "number", description: "Max results (default 25, max 100)." },
+    },
+    required: [],
+  },
+}
+
+export const GET_CALL_TOOL: ToolDef = {
+  name: "get_call",
+  description: [
+    "Read ONE Circleback call IN FULL: meeting name, date, attendees, notes, action items, and the COMPLETE word-for-word transcript (every speaking turn — not a 50-turn preview).",
+    "Use this when you need exactly what was said on a call. Get the id from list_calls or search_calls first.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { id: { type: "string", description: "Call UUID (from list_calls / search_calls)." } },
+    required: ["id"],
+  },
+}
+
+export const SEARCH_CALLS_TOOL: ToolDef = {
+  name: "search_calls",
+  description: [
+    "Search Circleback calls by text in the meeting name or notes (case-insensitive). Returns matching calls with a short snippet and id.",
+    "Use get_call with an id to read the full transcript.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Text to find in meeting name or notes." },
+      limit: { type: "number", description: "Max results (default 15, max 50)." },
+    },
+    required: ["query"],
+  },
+}
+
+function formatCallDate(iso: string, long = false): string {
+  return new Date(iso).toLocaleDateString(
+    "en-US",
+    long
+      ? { weekday: "long", month: "long", day: "numeric", year: "numeric" }
+      : { weekday: "short", month: "short", day: "numeric", year: "numeric" },
+  )
+}
+
+/** Render one call_summaries row IN FULL (notes + action items + complete transcript). Exported for tests. */
+export function renderCallDetail(data: Record<string, unknown>): string {
+  const mins = data.duration_seconds ? Math.round((data.duration_seconds as number) / 60) : 0
+  const lines: string[] = [
+    (data.meeting_name as string) || "Untitled Call",
+    "",
+    `Date: ${formatCallDate(data.created_at as string, true)}`,
+    `Duration: ${mins} min`,
+  ]
+  if (data.recording_url) lines.push(`Recording: ${data.recording_url}`)
+  if (data.lead_id) lines.push(`Linked Lead: ${data.lead_id}`)
+  if (data.account_id) lines.push(`Linked Account: ${data.account_id}`)
+  const tags = Array.isArray(data.tags) ? (data.tags as string[]) : null
+  if (tags && tags.length) lines.push(`Tags: ${tags.join(", ")}`)
+
+  const attendees = Array.isArray(data.attendees) ? (data.attendees as Array<Record<string, unknown>>) : null
+  if (attendees && attendees.length) {
+    lines.push("", "── Attendees ──")
+    for (const a of attendees) {
+      const name = (a.name as string) || (a.email as string) || "Unknown"
+      lines.push(`  ${name}${a.email ? ` <${a.email}>` : ""}`)
+    }
+  }
+
+  if (data.notes) {
+    lines.push("", "── Notes ──", typeof data.notes === "string" ? data.notes : JSON.stringify(data.notes, null, 2))
+  }
+
+  const actionItems = Array.isArray(data.action_items) ? (data.action_items as Array<Record<string, unknown>>) : null
+  if (actionItems && actionItems.length) {
+    lines.push("", "── Action Items ──")
+    for (const item of actionItems) {
+      const text =
+        typeof item === "string" ? item : (item.text as string) || (item.description as string) || JSON.stringify(item)
+      // assignee may be a string or an object { name, email } — show the name, not [object Object].
+      const a = typeof item === "string" ? null : (item.assignee as unknown)
+      const assigneeName =
+        typeof a === "string" ? a : a && typeof a === "object" ? ((a as Record<string, unknown>).name as string) || ((a as Record<string, unknown>).email as string) : ""
+      lines.push(`  - ${text}${assigneeName ? ` (@${assigneeName})` : ""}`)
+    }
+  }
+
+  const transcript = Array.isArray(data.transcript) ? (data.transcript as Array<Record<string, unknown>>) : null
+  if (transcript && transcript.length) {
+    lines.push("", `── Transcript (${transcript.length} turns) ──`)
+    for (const e of transcript) {
+      const speaker = (e.speaker as string) || (e.name as string) || "?"
+      const text = (e.text as string) || (e.content as string) || ""
+      lines.push(`[${speaker}]: ${text}`)
+    }
+  } else {
+    lines.push("", "(No transcript stored for this call.)")
+  }
+
+  const out = lines.join("\n")
+  if (out.length > CALL_RESULT_CAP) {
+    const tail = data.recording_url
+      ? `\n…(truncated at ${CALL_RESULT_CAP} chars — full recording: ${data.recording_url})`
+      : `\n…(truncated at ${CALL_RESULT_CAP} chars)`
+    return out.slice(0, CALL_RESULT_CAP) + tail
+  }
+  return out
+}
+
+/** list_calls handler — metadata only (no transcript). */
+async function listCallsForWorker(params: Record<string, unknown>): Promise<string> {
+  const leadId = typeof params.lead_id === "string" ? params.lead_id : undefined
+  const accountId = typeof params.account_id === "string" ? params.account_id : undefined
+  const minDate = typeof params.min_date === "string" ? params.min_date : undefined
+  const maxDate = typeof params.max_date === "string" ? params.max_date : undefined
+  const limit = Math.min(typeof params.limit === "number" ? params.limit : 25, 100)
+  let query = supabaseAdmin
+    .from("call_summaries")
+    .select("id, meeting_name, duration_seconds, attendees, lead_id, account_id, tags, created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit)
+  if (leadId) query = query.eq("lead_id", leadId)
+  if (accountId) query = query.eq("account_id", accountId)
+  if (minDate) query = query.gte("created_at", `${minDate}T00:00:00`)
+  if (maxDate) query = query.lte("created_at", `${maxDate}T23:59:59`)
+  const { data, error } = await query
+  if (error) return `Error listing calls: ${error.message}`
+  if (!data || data.length === 0) return "No calls found."
+  const lines: string[] = [`Calls (${data.length}):`, ""]
+  for (const c of data) {
+    const mins = c.duration_seconds ? Math.round(c.duration_seconds / 60) : 0
+    const attendees = Array.isArray(c.attendees) ? c.attendees.length : 0
+    const tags = Array.isArray(c.tags) && c.tags.length ? ` [${(c.tags as string[]).join(", ")}]` : ""
+    lines.push(`• ${c.meeting_name || "Untitled Call"}${tags}`)
+    lines.push(`  ${formatCallDate(c.created_at)} | ${mins} min | ${attendees} attendee(s)`)
+    if (c.lead_id) lines.push(`  Lead: ${c.lead_id}`)
+    if (c.account_id) lines.push(`  Account: ${c.account_id}`)
+    lines.push(`  id: ${c.id}`)
+  }
+  return lines.join("\n")
+}
+
+/** get_call handler — FULL detail incl. the complete transcript. */
+async function getCallForWorker(params: Record<string, unknown>): Promise<string> {
+  const id = typeof params.id === "string" ? params.id : ""
+  if (!id) return "id is required."
+  const { data, error } = await supabaseAdmin.from("call_summaries").select("*").eq("id", id).single()
+  if (error || !data) return `Call not found: ${id}`
+  return renderCallDetail(data as unknown as Record<string, unknown>)
+}
+
+/** search_calls handler — text match in name/notes with snippet. */
+async function searchCallsForWorker(params: Record<string, unknown>): Promise<string> {
+  const q = typeof params.query === "string" ? params.query : ""
+  if (!q.trim()) return "query is required."
+  const limit = Math.min(typeof params.limit === "number" ? params.limit : 15, 50)
+  const sel = "id, meeting_name, notes, duration_seconds, created_at, lead_id, account_id"
+  const [nameRes, noteRes] = await Promise.all([
+    supabaseAdmin.from("call_summaries").select(sel).ilike("meeting_name", `%${q}%`).order("created_at", { ascending: false }).limit(limit),
+    supabaseAdmin.from("call_summaries").select(sel).ilike("notes", `%${q}%`).order("created_at", { ascending: false }).limit(limit),
+  ])
+  if (nameRes.error) return `Search error: ${nameRes.error.message}`
+  if (noteRes.error) return `Search error: ${noteRes.error.message}`
+  const seen = new Set<string>()
+  const results: Array<Record<string, unknown>> = []
+  for (const item of [...(nameRes.data || []), ...(noteRes.data || [])]) {
+    const rid = (item as Record<string, unknown>).id as string
+    if (!seen.has(rid)) {
+      seen.add(rid)
+      results.push(item as Record<string, unknown>)
+    }
+  }
+  if (!results.length) return `No calls matching "${q}".`
+  const lines: string[] = [`Search "${q}" — ${results.length} result(s):`, ""]
+  for (const c of results.slice(0, limit)) {
+    const mins = c.duration_seconds ? Math.round((c.duration_seconds as number) / 60) : 0
+    lines.push(`• ${(c.meeting_name as string) || "Untitled"} — ${formatCallDate(c.created_at as string)} (${mins} min)`)
+    const notes = c.notes
+    if (typeof notes === "string") {
+      const idx = notes.toLowerCase().indexOf(q.toLowerCase())
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 50)
+        const end = Math.min(notes.length, idx + q.length + 50)
+        lines.push(`  "${start > 0 ? "…" : ""}${notes.slice(start, end)}${end < notes.length ? "…" : ""}"`)
+      }
+    }
+    lines.push(`  id: ${c.id}`)
+  }
+  return lines.join("\n")
+}
+
 /**
  * Antonio's admin auth user id — stamped as sender_id on portal_messages so the
  * client sees the message as coming from the Tony Durante team (sender_type
@@ -841,6 +1056,17 @@ export async function executeWorkerTool(
   if (name === "run_sql_query") {
     return runReadOnlySqlForWorker(params)
   }
+  // Circleback call reading — Slack-only (gated via enableCallReads at the tool-list
+  // level). Executor-gate too (defense-in-depth, like send_email): never let the Hermes
+  // research worker read call transcripts even if a name leaks (R108). Read-only.
+  if (name === "list_calls" || name === "get_call" || name === "search_calls") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (call reading not enabled).`
+    }
+    if (name === "list_calls") return listCallsForWorker(params)
+    if (name === "get_call") return getCallForWorker(params)
+    return searchCallsForWorker(params)
+  }
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
@@ -975,6 +1201,13 @@ export interface CallWorkerOptions {
    * (R108). Sending still requires Antonio's explicit "send it" — enforced by the prompt.
    */
   enableEmailSend?: boolean
+  /**
+   * Expose the Slack-only Circleback call-reading tools (list_calls / get_call /
+   * search_calls) for this call. Set by the Slack worker (processSlackEvent). When
+   * true, the three read-only tools are appended to the resolved tool list. Kept
+   * Slack-only so the Hermes/Telegram research worker never gets call transcripts (R108).
+   */
+  enableCallReads?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -1195,6 +1428,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // still requires Antonio's explicit "send it" — enforced by the prompt.
   if (opts.enableEmailSend && !tools.some((t) => t.name === SEND_EMAIL_TOOL.name)) {
     tools = [...tools, SEND_EMAIL_TOOL]
+  }
+
+  // Slack-only: append the Circleback call-reading tools (list_calls / get_call /
+  // search_calls). Gated on enableCallReads so they NEVER reach the Hermes research
+  // worker (R108) and never double-add. Read-only; the executor also re-checks
+  // availableNames (defense-in-depth).
+  if (opts.enableCallReads) {
+    for (const t of [LIST_CALLS_TOOL, GET_CALL_TOOL, SEARCH_CALLS_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send

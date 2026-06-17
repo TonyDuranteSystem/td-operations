@@ -138,9 +138,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // dig-in investigation discipline: verify-before-asserting, trace-the-code,
     // confirmed/unconfirmed hand-off format, run_sql_query + sensitive-data guidance)
     // → 6200 (2026-06-15, EMAIL block: send_email from support@/antonio@ with
-    // same-thread replies + show-draft-then-explicit-"send it" guardrail).
+    // same-thread replies + show-draft-then-explicit-"send it" guardrail)
+    // → 7200 (2026-06-17, CALLS block: read Circleback calls in full via
+    // list_calls/get_call/search_calls).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(6200)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(7200)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
@@ -337,6 +339,7 @@ describe("processSlackEvent", () => {
       enableSlackSend: true,
       enableDbRead: true,
       enableEmailSend: true,
+      enableCallReads: true,
       maxIterations: 12,
     })
 
