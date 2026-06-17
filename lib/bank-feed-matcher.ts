@@ -779,16 +779,59 @@ export function partitionInvoicesForMultiMatch<T extends { id: string; invoice_s
   return { applicable, skippedIds }
 }
 
+type WaterfallAllocation = { payment_id: string; applied: number; balance: number; status: "Paid" | "Partial" }
+
+/**
+ * Plan how a single incoming wire is spread across selected invoices, IN THE
+ * GIVEN ORDER (the staff's selection order). Each invoice receives
+ * `min(remaining wire, its balance)`: fully Paid if the wire covers its balance,
+ * Partial if the wire runs out mid-invoice. Once the wire is exhausted the rest
+ * receive nothing (they stay open as debt and are simply absent from the result).
+ * Total applied across allocations always equals `min(feedAmount, sum of balances)`
+ * — no invoice is ever over-credited. Pure — exported for tests.
+ *
+ * `leftover` = wire remaining after every funded invoice is covered (0 in the
+ * typical underpayment/debt case; positive only when the wire exceeds total owed).
+ */
+export function planWaterfallAllocation<T extends { id: string; total: number | null; amount_paid: number | null }>(
+  feedAmount: number,
+  invoicesInOrder: T[],
+): { allocations: WaterfallAllocation[]; leftover: number } {
+  const EPS = 0.005 // sub-cent floor so float dust doesn't fund a phantom allocation
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  let remaining = Number(feedAmount) || 0
+  const allocations: WaterfallAllocation[] = []
+  for (const row of invoicesInOrder) {
+    if (remaining <= EPS) break // wire exhausted — remaining invoices stay open as debt
+    const balance = Math.max(Number(row.total ?? 0) - Number(row.amount_paid ?? 0), 0)
+    if (balance <= EPS) continue // nothing owed — skip, don't burn wire
+    const toApply = Math.min(remaining, balance)
+    allocations.push({
+      payment_id: row.id,
+      applied: round2(toApply),
+      balance: round2(balance),
+      status: toApply >= balance - EPS ? "Paid" : "Partial",
+    })
+    remaining -= toApply
+  }
+  return { allocations, leftover: round2(Math.max(remaining, 0)) }
+}
+
 /**
  * Multi-invoice manual match — one incoming transaction that settles SEVERAL
  * invoices (e.g. a single wire paying invoices for two different companies the
  * same person owns: "Partner Alliance" paying for itself + "Morgan & Taylor").
  *
- * Each selected invoice is settled for its OWN remaining balance (marked Paid),
- * NOT an arithmetic split of the feed amount — the caller (UI) shows a running
- * total so staff only confirm when the selection adds up. The feed links to the
- * first applied invoice via `matched_payment_id` (keeps every existing single-FK
- * read valid) and records the full set in `review_metadata.matched_payment_ids`.
+ * WATERFALL allocation: the wire amount is applied across the selected invoices
+ * IN SELECTION ORDER. Each invoice receives `min(remaining wire, its balance)` —
+ * fully Paid if the wire covers its balance, Partial if the wire runs out
+ * mid-invoice (the unpaid remainder stays as `amount_due`, i.e. debt). Once the
+ * wire is exhausted the remaining selected invoices receive nothing and stay
+ * fully open (debt). Total applied = the wire amount exactly; no invoice is ever
+ * over-credited. This is the "client owes $3,000 but pays $2,000 → record the
+ * difference as debt" rule. The feed links to the first FUNDED invoice via
+ * `matched_payment_id` (keeps every existing single-FK read valid) and records
+ * the full funded set + per-invoice allocation in `review_metadata`.
  *
  * Guards: no-op if the feed is already matched; silently skips invoices already
  * in a terminal status (Paid/Voided/Cancelled/Credit) so a double-click or a
@@ -810,12 +853,13 @@ export async function manualMatchMulti(
     // Guard: never re-apply an already-matched feed (would double amount_paid).
     const { data: feed } = await supabaseAdmin
       .from("td_bank_feeds")
-      .select("status, review_metadata")
+      .select("status, review_metadata, amount")
       .eq("id", feedId)
       .single()
     if (feed?.status === "matched") {
       return { matched: false, error: "This transaction is already matched." }
     }
+    const feedAmount = Number(feed?.amount ?? 0)
 
     // Fetch all selected invoices at once, then partition into applicable vs
     // terminal (already paid/closed) so a stale/duplicate selection can't double-pay.
@@ -829,23 +873,23 @@ export async function manualMatchMulti(
     const { applicable, skippedIds } = partitionInvoicesForMultiMatch(rows)
     const skipped = [...missing, ...skippedIds]
 
-    const applied: string[] = []
-    let firstInvoiceNumber: string | undefined
-    // Settle in the caller's selection order so `matched_payment_id` (the primary
-    // FK) is deterministically the first selected, applicable invoice.
+    // Order the applicable invoices by the caller's selection order, then plan the
+    // waterfall: the wire is spread top-to-bottom, each invoice gets min(remaining
+    // wire, its balance). Pure + unit-tested so the money math is verifiable.
     const applicableById = new Map(applicable.map((r) => [r.id, r]))
-    for (const id of ids) {
-      const row = applicableById.get(id)
-      if (!row) continue
-      // Apply this invoice's OWN remaining balance → it goes fully Paid.
-      const balance = Math.max(Number(row.total ?? 0) - Number(row.amount_paid ?? 0), 0)
-      const invNum = await settleInvoiceFromFeed(feedId, id, balance, now, today)
-      if (!firstInvoiceNumber) firstInvoiceNumber = invNum
-      applied.push(id)
+    const orderedApplicable = ids.map((id) => applicableById.get(id)).filter((r): r is typeof applicable[number] => Boolean(r))
+    const { allocations, leftover } = planWaterfallAllocation(feedAmount, orderedApplicable)
+
+    if (allocations.length === 0) {
+      return { matched: false, error: "Nothing to apply — selected invoices are already paid/closed or the transaction amount is zero." }
     }
 
-    if (applied.length === 0) {
-      return { matched: false, error: "All selected invoices are already paid or closed — nothing to match." }
+    const applied: string[] = []
+    let firstInvoiceNumber: string | undefined
+    for (const alloc of allocations) {
+      const invNum = await settleInvoiceFromFeed(feedId, alloc.payment_id, alloc.applied, now, today)
+      if (!firstInvoiceNumber) firstInvoiceNumber = invNum
+      applied.push(alloc.payment_id)
     }
 
     // Link the feed: primary FK = first applied invoice (keeps existing single-read
@@ -866,6 +910,10 @@ export async function manualMatchMulti(
           ...existingMeta,
           multi_match: true,
           matched_payment_ids: applied,
+          multi_match_allocations: allocations,
+          // Positive = wire left over after covering every funded invoice;
+          // 0 when the wire was fully consumed (typical underpayment/debt case).
+          multi_match_leftover: leftover,
           ...(skipped.length ? { multi_match_skipped: skipped } : {}),
         },
         updated_at: now,

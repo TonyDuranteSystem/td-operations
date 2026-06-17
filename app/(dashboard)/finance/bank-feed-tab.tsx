@@ -526,7 +526,20 @@ function UnmatchedRow({
   const removeSelect = (id: string) => setSelected(prev => { const next = new Map(prev); next.delete(id); return next })
   const selectedArr = Array.from(selected.values())
   const selectedTotal = selectedArr.reduce((sum, x) => sum + x.appliedAmount, 0)
-  const totalMismatch = selectedArr.length > 0 && Math.abs(selectedTotal - amount) > 0.01
+  // Waterfall preview (matches the backend): the wire is applied in selection
+  // order, each invoice gets min(remaining wire, its balance). Map preserves
+  // insertion = selection order, so this mirrors what manualMatchMulti will do.
+  const EPS = 0.005
+  let _remaining = amount
+  const selectedPreview = selectedArr.map(s => {
+    const willApply = Math.max(Math.min(_remaining, s.appliedAmount), 0)
+    _remaining -= willApply
+    const willStatus: 'Paid' | 'Partial' | 'Unpaid' =
+      willApply >= s.appliedAmount - EPS ? 'Paid' : willApply > EPS ? 'Partial' : 'Unpaid'
+    return { ...s, willApply, willStatus }
+  })
+  const shortfall = Math.max(selectedTotal - amount, 0) // wire < owed → stays as debt
+  const leftover = Math.max(amount - selectedTotal, 0) // wire > owed → unallocated surplus
   const handleMatchSelected = () => {
     const ids = selectedArr.map(s => s.id)
     if (ids.length === 0) return
@@ -914,13 +927,24 @@ function UnmatchedRow({
           {selected.size > 0 && (
             <div className="sticky bottom-0 -mx-4 border-t bg-white px-4 pt-2">
               <div className="rounded-md border border-blue-300 bg-blue-50 p-2 space-y-1.5">
-                <p className="text-xs font-semibold text-blue-900">Selected to match ({selected.size}):</p>
+                <p className="text-xs font-semibold text-blue-900">Selected to match ({selected.size}) — applied in this order:</p>
                 <div className="space-y-1 max-h-32 overflow-y-auto">
-                  {selectedArr.map(s => (
+                  {selectedPreview.map(s => (
                     <div key={s.id} className="flex items-center gap-2 text-xs">
                       <span className="font-mono text-blue-600">{s.invoice_number ?? '—'}</span>
                       <span className="truncate flex-1">{s.party}</span>
-                      <span className="font-medium tabular-nums">{formatCurrency(s.appliedAmount, s.currency)}</span>
+                      <span className={cn(
+                        "rounded px-1 text-[10px] font-medium",
+                        s.willStatus === 'Paid' ? "bg-green-100 text-green-700"
+                          : s.willStatus === 'Partial' ? "bg-amber-100 text-amber-700"
+                          : "bg-zinc-100 text-zinc-500",
+                      )}>{s.willStatus}</span>
+                      <span className="font-medium tabular-nums">
+                        {formatCurrency(s.willApply, s.currency)}
+                        {s.willApply < s.appliedAmount - EPS && (
+                          <span className="text-zinc-400"> / {formatCurrency(s.appliedAmount, s.currency)}</span>
+                        )}
+                      </span>
                       <button type="button" onClick={() => removeSelect(s.id)} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" title="Remove">
                         <X className="h-3 w-3" />
                       </button>
@@ -928,14 +952,19 @@ function UnmatchedRow({
                   ))}
                 </div>
                 <div className="flex items-center justify-between border-t border-blue-200 pt-1 text-xs">
-                  <span className="text-blue-900">Selected total</span>
-                  <span className={cn("font-semibold tabular-nums", totalMismatch ? "text-amber-600" : "text-blue-900")}>
-                    {formatCurrency(selectedTotal, feed.currency)} / feed {formatCurrency(amount, feed.currency)}
+                  <span className="text-blue-900">Owed selected / wire</span>
+                  <span className="font-semibold tabular-nums text-blue-900">
+                    {formatCurrency(selectedTotal, feed.currency)} / {formatCurrency(amount, feed.currency)}
                   </span>
                 </div>
-                {totalMismatch && (
+                {shortfall > EPS && (
                   <p className="text-[11px] text-amber-700">
-                    ⚠ Selected total doesn&apos;t equal the transaction amount. Each selected invoice will still be marked paid for its own balance — confirm this is intended.
+                    ⚠ The wire covers {formatCurrency(amount, feed.currency)} of {formatCurrency(selectedTotal, feed.currency)} owed. It&apos;s applied top-to-bottom; {formatCurrency(shortfall, feed.currency)} stays as an outstanding balance (debt) on the invoice(s) the wire didn&apos;t reach.
+                  </p>
+                )}
+                {leftover > EPS && (
+                  <p className="text-[11px] text-amber-700">
+                    ⚠ The wire is {formatCurrency(leftover, feed.currency)} more than the selected invoices owe. Every selected invoice will be fully paid; the extra {formatCurrency(leftover, feed.currency)} is left unallocated.
                   </p>
                 )}
                 <button
