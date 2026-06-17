@@ -26,9 +26,13 @@ export const FLOW_TYPES = [
 ] as const
 
 /** CONTACT-scoped flow types — their SDs carry a contact_id and frequently have
- *  account_id = NULL (e.g. ITIN, which can exist before/without an LLC). They are
- *  resolved by contact, never by account. */
-export const CONTACT_FLOW_TYPES = ['ITIN'] as const
+ *  account_id = NULL, so they're resolved by contact, never by account:
+ *   - ITIN: can exist before/without an LLC.
+ *   - Company Formation: while a NEW company is being formed it has no account yet
+ *     (account_id is set only at materialization, per getInProgressFormations), so
+ *     in-progress formations are contact-scoped and must surface on the contact page.
+ */
+export const CONTACT_FLOW_TYPES = ['ITIN', 'Company Formation'] as const
 
 /** Every flow type that has a Workspace (account-scoped + contact-scoped). */
 export const ALL_FLOW_TYPES = [...FLOW_TYPES, ...CONTACT_FLOW_TYPES] as const
