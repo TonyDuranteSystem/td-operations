@@ -134,7 +134,11 @@ export function registerCirclebackTools(server: McpServer) {
           lines.push("── Action Items ──")
           for (const item of actionItems) {
             const text = typeof item === "string" ? item : (item.text as string) || (item.description as string) || JSON.stringify(item)
-            const assignee = item.assignee ? ` (@${item.assignee})` : ""
+            // assignee may be a string or an object { name, email } — show the name, not [object Object].
+            const a = typeof item === "string" ? null : (item.assignee as unknown)
+            const assigneeName =
+              typeof a === "string" ? a : a && typeof a === "object" ? ((a as Record<string, unknown>).name as string) || ((a as Record<string, unknown>).email as string) : ""
+            const assignee = assigneeName ? ` (@${assigneeName})` : ""
             lines.push(`  - ${text}${assignee}`)
           }
         }

@@ -480,8 +480,11 @@ export function renderCallDetail(data: Record<string, unknown>): string {
     for (const item of actionItems) {
       const text =
         typeof item === "string" ? item : (item.text as string) || (item.description as string) || JSON.stringify(item)
-      const assignee = item && (item as Record<string, unknown>).assignee
-      lines.push(`  - ${text}${assignee ? ` (@${assignee})` : ""}`)
+      // assignee may be a string or an object { name, email } — show the name, not [object Object].
+      const a = typeof item === "string" ? null : (item.assignee as unknown)
+      const assigneeName =
+        typeof a === "string" ? a : a && typeof a === "object" ? ((a as Record<string, unknown>).name as string) || ((a as Record<string, unknown>).email as string) : ""
+      lines.push(`  - ${text}${assigneeName ? ` (@${assigneeName})` : ""}`)
     }
   }
 

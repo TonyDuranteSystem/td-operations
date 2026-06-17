@@ -20,7 +20,11 @@ function makeCall(transcriptTurns: number) {
     tags: ['intake'],
     attendees: [{ name: 'Antonio', email: 'antonio@tonydurante.us' }, { name: 'Client' }],
     notes: 'Discussed LLC formation and EIN timeline.',
-    action_items: [{ text: 'Send formation form', assignee: 'Luca' }, 'Follow up next week'],
+    action_items: [
+      { text: 'Send formation form', assignee: 'Luca' },
+      { text: 'Book bank appointment', assignee: { name: 'Antonio Durante', email: 'antonio@tonydurante.us' } },
+      'Follow up next week',
+    ],
     transcript: Array.from({ length: transcriptTurns }, (_, i) => ({
       speaker: i % 2 === 0 ? 'Antonio' : 'Client',
       text: `Turn number ${i} of the conversation.`,
@@ -36,6 +40,9 @@ describe('renderCallDetail', () => {
     expect(out).toContain('EIN timeline')
     expect(out).toContain('── Action Items ──')
     expect(out).toContain('Send formation form (@Luca)')
+    // Object-shaped assignee { name, email } renders the name, not "[object Object]".
+    expect(out).toContain('Book bank appointment (@Antonio Durante)')
+    expect(out).not.toContain('[object Object]')
     // Full transcript: header reports all turns and the LAST turn is present (would be
     // hidden by the old 50-entry MCP cap).
     expect(out).toContain('── Transcript (120 turns) ──')
