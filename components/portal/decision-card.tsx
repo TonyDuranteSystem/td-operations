@@ -50,6 +50,10 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
   const t = T[locale]
   const opts = (request.options ?? {}) as Record<string, unknown>
   const message = locale === 'it' && request.message_it ? request.message_it : request.message
+  // Per-request button labels (with optional IT variants), falling back to the
+  // localized defaults.
+  const approveLabel = ((locale === 'it' ? (opts.approve_label_it ?? opts.approve_label) : opts.approve_label) as string | undefined) || t.yes
+  const rejectLabel = ((locale === 'it' ? (opts.reject_label_it ?? opts.reject_label) : opts.reject_label) as string | undefined) || t.no
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -123,9 +127,9 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
       <div className="flex items-start gap-2">
         <HelpCircle className={`mt-0.5 h-4 w-4 shrink-0 ${isPendingActionable ? 'text-amber-500' : 'text-zinc-400'}`} />
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold text-zinc-900">{request.title}</h3>
-          {isPendingActionable && <div className="text-[11px] font-medium text-amber-700">{t.actionRequired}</div>}
-          <p className="mt-1 text-sm text-zinc-700 whitespace-pre-wrap break-words">{message}</p>
+          {isPendingActionable && <div className="text-[11px] font-medium uppercase tracking-wide text-amber-700">{t.actionRequired}</div>}
+          <h3 className="text-lg font-bold text-zinc-900 break-words">{request.title}</h3>
+          <p className="mt-1.5 text-sm text-zinc-700 whitespace-pre-wrap break-words">{message}</p>
         </div>
       </div>
 
@@ -159,7 +163,7 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
                   className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                  {(opts.approve_label as string) || t.yes}
+                  {approveLabel}
                 </button>
                 <button
                   disabled={submitting}
@@ -167,7 +171,7 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
                   className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
                 >
                   <XCircle className="h-4 w-4" />
-                  {(opts.reject_label as string) || t.no}
+                  {rejectLabel}
                 </button>
               </div>
             </>

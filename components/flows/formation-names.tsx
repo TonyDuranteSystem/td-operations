@@ -176,6 +176,9 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${BADGE_CLS[c.status]}`}>
                     {meta.emoji} {meta.label}
                   </span>
+                  {c.status === 'sent_to_client' && c.updated_at && (
+                    <span className="text-[10px] text-zinc-400">Sent {new Date(c.updated_at).toLocaleDateString()}</span>
+                  )}
                   {busyIndex === i && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">{rowActions(c, i)}</div>

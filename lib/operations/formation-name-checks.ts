@@ -135,15 +135,19 @@ export async function handleNameAction(params: {
     entry.updated_at = now
   } else if (params.action === 'send_to_client') {
     const state = await resolveState(row)
+    // Hero title = the LLC name (append "LLC" if not already in the name).
+    const displayName = /llc\b/i.test(entry.name) ? entry.name : `${entry.name} LLC`
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'approval',
-      title: 'LLC Name Approval',
-      message: `${entry.name} is available in ${state}. Do you accept this name for your LLC?`,
-      message_it: `${entry.name} è disponibile in ${state}. Accetti questo nome per la tua LLC?`,
+      title: displayName,
+      message: `We checked your first choice and this name is currently available in ${state}.\n\nWe'd like to proceed with filing this name with the Secretary of State.\n\nPlease note: the final approval is up to the Secretary of State. If they reject this name, we'll try your other choices or you can propose new ones.\n\nDo you approve filing with this name?`,
+      message_it: `Abbiamo verificato la tua prima scelta e questo nome è attualmente disponibile in ${state}.\n\nVorremmo procedere con la registrazione di questo nome presso il Secretary of State.\n\nNota bene: l'approvazione finale spetta al Secretary of State. Se il nome venisse rifiutato, proveremo con le altre opzioni oppure potrai proporne di nuove.\n\nApprovi la registrazione con questo nome?`,
       options: {
-        approve_label: 'Yes, I accept',
-        reject_label: 'No, try another',
+        approve_label: 'Yes, proceed',
+        reject_label: 'No, use a different name',
+        approve_label_it: 'Sì, procedi',
+        reject_label_it: 'No, usa un altro nome',
         name_check: { kind: 'approval', name_index: params.nameIndex, name: entry.name },
       },
       created_by: params.actor,
