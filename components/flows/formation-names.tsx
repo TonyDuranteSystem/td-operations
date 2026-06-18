@@ -125,11 +125,9 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
       case 'pending':
         return (
           <>
-            {sos.url && (
-              <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
-                <ExternalLink className="h-3 w-3" /> Check on SOS
-              </a>
-            )}
+            <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+              <ExternalLink className="h-3 w-3" /> Check on SOS ({sos.stateCode})
+            </a>
             <Btn onClick={() => act(i, 'mark_available', 'available')} variant="primary">Mark Available</Btn>
             <Btn onClick={() => act(i, 'mark_not_available', 'not_available')}>Mark Not Available</Btn>
           </>
@@ -141,11 +139,9 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
       case 'accepted':
         return (
           <>
-            {sos.url && (
-              <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
-                <ExternalLink className="h-3 w-3" /> File on SOS →
-              </a>
-            )}
+            <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
+              <ExternalLink className="h-3 w-3" /> File on SOS ({sos.stateCode}) →
+            </a>
             <Btn onClick={() => act(i, 'mark_filed', 'filed')} variant="primary">Mark as Filed</Btn>
           </>
         )
