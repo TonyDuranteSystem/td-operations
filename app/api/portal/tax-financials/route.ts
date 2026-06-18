@@ -42,19 +42,30 @@ export async function GET(request: NextRequest) {
     // Paginated — the 1000-row cap would hide questions / undercount files for
     // any account with >1000 transactions in the year (same bug class as the
     // financials reads). `id` order keeps range pages from skipping rows.
-    const uncatRows = await fetchAllPaged(async (from, to) => {
-      const { data, error } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any // ai_lean/ai_bucket + financials_meta not yet in database.types.ts
+    const uncatRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
+      const { data, error } = await db
         .from('bank_transactions')
-        .select('id, description, counterparty, amount, transaction_date, bank_name')
+        .select('id, description, counterparty, amount, transaction_date, bank_name, ai_lean, ai_bucket')
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
         .eq('category', 'uncategorized')
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
-      return data ?? []
+      return (data ?? []) as Record<string, unknown>[]
     })
-    const questions = groupUncategorized(uncatRows.map(r => ({ ...r, amount: Number(r.amount) })))
+    const questions = groupUncategorized(uncatRows.map(r => ({
+      id: String(r.id),
+      description: String(r.description ?? ''),
+      counterparty: (r.counterparty as string | null) ?? null,
+      amount: Number(r.amount),
+      transaction_date: String(r.transaction_date ?? ''),
+      bank_name: String(r.bank_name ?? ''),
+      ai_lean: (r.ai_lean as string | null) ?? null,
+      ai_bucket: (r.ai_bucket as string | null) ?? null,
+    })))
 
     // Per-file sources for the delete/replace cards (§6) + coverage below.
     const sources = await fetchAllPaged(async (from, to) => {
@@ -81,9 +92,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Current attestation state — reset by any data mutation (QA finding) —
-    // and the coverage answers (financials_meta, Slice 9).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
+    // and the coverage answers (financials_meta, Slice 9). (`db` hoisted above.)
     const { data: sub } = await db
       .from('tax_return_submissions')
       .select('confirmation_accepted, financials_meta')
@@ -105,10 +114,16 @@ export async function GET(request: NextRequest) {
       incomplete: incompleteCoverage(covQs, answers).length,
     }
 
+    // Flexible expense buckets (#2) — the live catalog list the review groups by
+    // and the "add a bucket" field offers.
+    const { getExpenseBuckets } = await import('@/lib/tax/expense-buckets')
+    const buckets = await getExpenseBuckets(db)
+
     return NextResponse.json({
       ...view,
       questions,
       coverage,
+      buckets,
       attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
     })

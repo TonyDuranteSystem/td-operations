@@ -11,7 +11,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; direction: 'in' | 'out' | 'mixed'; transaction_ids: string[]; sample: string }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; direction: 'in' | 'out' | 'mixed'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string }
+interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
@@ -32,6 +33,7 @@ interface View {
   canConfirm: boolean
   transactionCount: number
   questions: QuestionGroup[]
+  buckets: Bucket[]
   attested: boolean
   files: FileCard[]
 }
@@ -55,6 +57,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
   const [busy, setBusy] = useState<string | null>(null)
   const [attestChecked, setAttestChecked] = useState(false)
   const [attested, setAttested] = useState(false)
+  const [newBucket, setNewBucket] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -88,6 +91,49 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const addBucket = async () => {
+    const name = newBucket.trim()
+    if (name.length < 2) return
+    setBusy('add-bucket')
+    try {
+      const res = await fetch('/api/portal/tax-financials/add-bucket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, name }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile aggiungere la categoria — riprova.' : 'Could not add the category — please try again.'))
+      }
+      setNewBucket('')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const setBucket = async (g: QuestionGroup, bucket: string) => {
+    setBusy(g.group_key)
+    try {
+      const res = await fetch('/api/portal/tax-financials/set-bucket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, bucket }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile spostare la categoria — riprova.' : 'Could not move the category — please try again.'))
       }
       await load()
     } catch (e) {
@@ -254,10 +300,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             </section>
           )}
 
-          {/* Spending review — "default + flag exceptions": everything is already
-              set as a business expense (out) / income (in) and reflected in the
-              P&L above; the owner only FLAGS the exceptions. Flagging persists a
-              real category, so the group drops off this list on the next load. */}
+          {/* Spending review (#2) — grouped into accountant buckets, each merchant
+              pre-tagged with the AI's business/personal guess. Everything is set
+              to business expense by default (reflected in the P&L above); the
+              owner confirms/flips the exceptions (which persist + feed learning)
+              and can re-bucket or add a new (shared) category. */}
           {view.questions.length > 0 && (
             <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
               <h2 className="text-sm font-semibold text-zinc-900">
@@ -265,44 +312,94 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
               </h2>
               <p className="text-xs text-zinc-500 mt-1 mb-4">
                 {it
-                  ? 'Abbiamo considerato tutte le spese della carta come spese aziendali (già incluse nel risultato qui sopra). Se qualcuna era personale (tua, non della società), segnalala qui sotto. Il resto lascialo così.'
-                  : 'We’ve treated all your card spending as business expenses (already reflected in the net income above). If any of these were personal (yours, not the company’s), flag them below. Leave the rest as they are.'}
+                  ? 'Le abbiamo raggruppate per categoria e segnalato quelle che sembrano personali. Conferma o correggi: tocca “Personale” su ciò che era tuo (non della società). Il resto lascialo così.'
+                  : 'We’ve grouped them by category and flagged the ones that look personal. Confirm or correct: tap “Personal” on anything that was yours (not the company’s). Leave the rest as they are.'}
               </p>
-              <div className="space-y-3">
-                {view.questions.map(g => {
-                  const isOut = g.direction === 'out'
+              {(() => {
+                const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
+                const order = [...view.buckets.map(b => b.slug), '__unsorted__']
+                const byBucket = new Map<string, QuestionGroup[]>()
+                for (const g of view.questions) {
+                  const key = g.ai_bucket && bucketLabel.has(g.ai_bucket) ? g.ai_bucket : '__unsorted__'
+                  if (!byBucket.has(key)) byBucket.set(key, [])
+                  byBucket.get(key)!.push(g)
+                }
+                return order.filter(k => byBucket.has(k)).map(slug => {
+                  const groups = byBucket.get(slug)!
+                  const label = slug === '__unsorted__' ? (it ? 'Da sistemare' : 'Not yet sorted') : (bucketLabel.get(slug) ?? slug)
                   return (
-                    <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4">
-                      <div className="flex flex-wrap items-baseline justify-between gap-2">
-                        <div className="text-sm font-medium text-zinc-800">{g.label}</div>
-                        <div className="text-xs text-zinc-500">{g.count}× · {it ? 'totale' : 'total'} {fmt(g.total)}</div>
-                      </div>
-                      <div className="mt-1 text-xs font-medium text-emerald-700">
-                        {isOut
-                          ? (it ? 'Predefinito: spesa aziendale' : 'Default: business expense')
-                          : (it ? 'Predefinito: incasso aziendale' : 'Default: business income')}
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-zinc-400">{it ? 'In realtà era:' : 'Actually it was:'}</span>
-                        {visibleAnswers(g).map(a => {
-                          const primary = (isOut && a.value === 'personal_spending') || (!isOut && a.value === 'owner_money_in')
+                    <div key={slug} className="mb-5">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">{label} · {groups.length}</div>
+                      <div className="space-y-2">
+                        {groups.map(g => {
+                          const isOut = g.direction === 'out'
+                          const lean = g.ai_lean === 'personal'
+                            ? { txt: it ? 'Sembra personale' : 'Looks personal', cls: 'text-amber-700 bg-amber-50' }
+                            : g.ai_lean === 'business'
+                              ? { txt: it ? 'Sembra aziendale' : 'Looks business', cls: 'text-emerald-700 bg-emerald-50' }
+                              : { txt: it ? 'Da controllare' : 'Please check', cls: 'text-zinc-500 bg-zinc-100' }
                           return (
-                            <button
-                              key={a.value}
-                              disabled={busy !== null}
-                              onClick={() => void answer(g, a.value)}
-                              className={primary
-                                ? 'rounded-full border border-amber-400 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 hover:border-amber-600 disabled:opacity-50'
-                                : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
-                            >
-                              {it ? a.it : a.en}
-                            </button>
+                            <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3">
+                              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                <div className="text-sm font-medium text-zinc-800">{g.label}</div>
+                                <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}</div>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
+                                <select
+                                  value={g.ai_bucket ?? ''}
+                                  disabled={busy !== null}
+                                  onChange={e => void setBucket(g, e.target.value)}
+                                  className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
+                                >
+                                  <option value="">{it ? '— categoria —' : '— category —'}</option>
+                                  {view.buckets.map(b => <option key={b.slug} value={b.slug}>{b.label}</option>)}
+                                </select>
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-zinc-400">{it ? 'In realtà era:' : 'Actually it was:'}</span>
+                                {visibleAnswers(g).map(a => {
+                                  const primary = (isOut && a.value === 'personal_spending') || (!isOut && a.value === 'owner_money_in')
+                                  return (
+                                    <button
+                                      key={a.value}
+                                      disabled={busy !== null}
+                                      onClick={() => void answer(g, a.value)}
+                                      className={primary
+                                        ? 'rounded-full border border-amber-400 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 hover:border-amber-600 disabled:opacity-50'
+                                        : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
+                                    >
+                                      {it ? a.it : a.en}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
                           )
                         })}
                       </div>
                     </div>
                   )
-                })}
+                })
+              })()}
+              {/* Add a new bucket — flexible, shared vocabulary (#2). A bucket added
+                  here is saved globally and offered to everyone next time. */}
+              <div className="mt-1 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
+                <span className="text-xs text-zinc-500">{it ? 'Manca una categoria?' : 'Missing a category?'}</span>
+                <input
+                  value={newBucket}
+                  onChange={e => setNewBucket(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') void addBucket() }}
+                  placeholder={it ? 'Aggiungi categoria…' : 'Add a category…'}
+                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs"
+                />
+                <button
+                  disabled={busy !== null || newBucket.trim().length < 2}
+                  onClick={() => void addBucket()}
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
+                >
+                  {it ? 'Aggiungi' : 'Add'}
+                </button>
               </div>
             </section>
           )}

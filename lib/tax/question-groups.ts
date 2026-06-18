@@ -18,6 +18,9 @@ export interface UncategorizedRow {
   amount: number
   transaction_date: string
   bank_name: string
+  /** Advisory AI hints (#2) — present once the AI labeling pass has run. */
+  ai_lean?: string | null
+  ai_bucket?: string | null
 }
 
 export interface QuestionGroup {
@@ -31,6 +34,23 @@ export interface QuestionGroup {
   direction: "in" | "out" | "mixed"
   transaction_ids: string[]
   sample: string
+  /** Advisory AI hints for this merchant (#2): the dominant lean + bucket across
+   *  the group's rows. Used to pre-tag + group the review; the client confirms. */
+  ai_lean?: "business" | "personal" | "unsure"
+  ai_bucket?: string
+}
+
+/** Most-frequent non-empty value in a list (ties → first seen). */
+function mode(values: Array<string | null | undefined>): string | undefined {
+  const counts = new Map<string, number>()
+  for (const v of values) {
+    if (!v) continue
+    counts.set(v, (counts.get(v) ?? 0) + 1)
+  }
+  let best: string | undefined
+  let bestN = 0
+  for (const [v, n] of Array.from(counts.entries())) if (n > bestN) { best = v; bestN = n }
+  return best
 }
 
 /** Merchant root: strip card suffixes (••1234), embedded dates, amounts, and
@@ -58,6 +78,10 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
     .map(([group_key, g]) => {
       const ins = g.rows.filter(r => r.amount > 0).length
       const outs = g.rows.filter(r => r.amount < 0).length
+      const leanRaw = mode(g.rows.map(r => r.ai_lean))
+      const lean: QuestionGroup["ai_lean"] | undefined =
+        leanRaw === "business" || leanRaw === "personal" || leanRaw === "unsure" ? leanRaw : undefined
+      const bucket = mode(g.rows.map(r => r.ai_bucket))
       return {
         group_key,
         label: g.label,
@@ -66,6 +90,8 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         direction: (ins > 0 && outs > 0 ? "mixed" : ins > 0 ? "in" : "out") as QuestionGroup["direction"],
         transaction_ids: g.rows.map(r => r.id),
         sample: g.rows[0].description,
+        ...(lean ? { ai_lean: lean } : {}),
+        ...(bucket ? { ai_bucket: bucket } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)
