@@ -143,8 +143,10 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // list_calls/get_call/search_calls).
     // → 8000 (2026-06-18, ENGINEERING DISCIPLINE block: never assume/invent,
     // check before claiming a tool doesn't exist, challenge first answer).
+    // → 8800 (2026-06-18, don't-double-down-when-corrected + recount-against-the-
+    // list-you-pulled rules, after the offers-vs-leads miscount).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(8000)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(8800)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
