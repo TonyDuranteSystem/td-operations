@@ -131,7 +131,13 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
     await syncOwnershipBack(accountId, ownership)
   }
 
-  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn })
+  // Portal tax review uses the "default + flag exceptions" policy: a real
+  // client's bank export has hundreds of scattered merchants, so asking the
+  // owner to categorize each one does not scale (Dynamiq: 287 distinct
+  // merchants). Instead every still-uncategorized row is defaulted by sign
+  // (outflow → business expense, inflow → income) and the owner only flags the
+  // exceptions (personal spend). This makes the P&L complete and unblocks gate 6.
+  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true })
   const gates = evaluateGates({ draft, ownership, priorReturn })
 
   return { draft, gates, canConfirm: canConfirm(gates), ownership, priorReturn, transactionCount: transactions.length }

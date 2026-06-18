@@ -14,6 +14,40 @@ import { categorizeTransaction, type ParsedTransaction } from '@/lib/bank-statem
 
 const tx = (category: string, amount: number) => ({ category, amount })
 
+describe('computePnlTotals — default-by-sign policy (portal tax review)', () => {
+  it('OFF (default): uncategorized rows stay pending and out of net income', () => {
+    const t = computePnlTotals([tx('income', 1000), tx('uncategorized', -300), tx('uncategorized', 50)])
+    expect(t.totalIncome).toBe(1000)
+    expect(t.totalExpenses).toBe(0)
+    expect(t.netIncome).toBe(1000)
+    expect(t.uncategorizedCount).toBe(2)
+  })
+
+  it('ON: an uncategorized OUTflow defaults to a business expense', () => {
+    const t = computePnlTotals([tx('income', 1000), tx('uncategorized', -300)], { defaultUncategorizedBySign: true })
+    expect(t.totalExpenses).toBe(300)
+    expect(t.netIncome).toBe(700)
+    expect(t.uncategorizedCount).toBe(0) // nothing pending → gate 6 passes
+  })
+
+  it('ON: an uncategorized INflow defaults to income', () => {
+    const t = computePnlTotals([tx('uncategorized', 500), tx('expense', -100)], { defaultUncategorizedBySign: true })
+    expect(t.totalIncome).toBe(500)
+    expect(t.totalExpenses).toBe(100)
+    expect(t.netIncome).toBe(400)
+    expect(t.uncategorizedCount).toBe(0)
+  })
+
+  it('ON: a flagged exception (distribution) is NOT counted as an expense', () => {
+    // The owner flagged a personal charge → it persists as `distribution`, so it
+    // leaves the uncategorized bucket and does not reduce net income.
+    const t = computePnlTotals([tx('income', 1000), tx('distribution', -200), tx('uncategorized', -100)], { defaultUncategorizedBySign: true })
+    expect(t.totalExpenses).toBe(100) // only the still-uncategorized 100 defaults to expense
+    expect(t.totalDistributions).toBe(200)
+    expect(t.netIncome).toBe(900)
+  })
+})
+
 describe('computePnlTotals', () => {
   it('F1: a refund RECEIVED reduces expenses instead of inflating them', () => {
     const t = computePnlTotals([

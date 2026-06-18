@@ -84,7 +84,10 @@ async function getAccountContext(accountId: string): Promise<AccountContext> {
 }
 
 /** Compute P&L totals from a set of transactions (reusable for current + prior year) */
-export function computePnlTotals(txs: Array<{ category: string; amount: number | string }>) {
+export function computePnlTotals(
+  txs: Array<{ category: string; amount: number | string }>,
+  opts: { defaultUncategorizedBySign?: boolean } = {},
+) {
   const income = txs.filter(t => t.category === "income")
   const cogs = txs.filter(t => t.category === "cogs")
   const expenses = txs.filter(t => ["expense", "fee"].includes(t.category))
@@ -93,7 +96,18 @@ export function computePnlTotals(txs: Array<{ category: string; amount: number |
   const contributions = txs.filter(t => t.category === "contribution")
   const uncategorized = txs.filter(t => t.category === "uncategorized")
 
+  // "Default + flag exceptions" policy (portal tax review, 2026-06-17). When ON,
+  // any still-uncategorized transaction is treated by SIGN — an outflow
+  // (amount < 0) as a business EXPENSE, an inflow (amount > 0) as INCOME — so the
+  // P&L is complete and gate 6 (uncategorized == 0) is not blocked. The owner
+  // only FLAGS the exceptions (e.g. personal spend → distribution); a flag
+  // persists as a real category and therefore leaves the `uncategorized` bucket.
+  // OFF by default so the staff P&L tools / external P&L are byte-identical.
+  const uncatIncome = opts.defaultUncategorizedBySign ? uncategorized.filter(t => Number(t.amount) > 0) : []
+  const uncatExpense = opts.defaultUncategorizedBySign ? uncategorized.filter(t => Number(t.amount) < 0) : []
+
   const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
+    + uncatIncome.reduce((s, t) => s + Number(t.amount), 0)
   // F4 fix (2026-06-15): expenses and COGS are SIGNED, not Math.abs. Outflows
   // are negative, so the magnitude is the NEGATED signed sum. A positive amount
   // inside an expense/COGS category is money RETURNED (a vendor refund or a
@@ -108,15 +122,18 @@ export function computePnlTotals(txs: Array<{ category: string; amount: number |
   // (inflow, amount > 0) REDUCES expenses; a refund paid out (outflow) increases.
   const totalExpenses =
     -expenses.reduce((s, t) => s + Number(t.amount), 0) +
-    refunds.reduce((s, t) => s - Number(t.amount), 0)
+    refunds.reduce((s, t) => s - Number(t.amount), 0) +
+    -uncatExpense.reduce((s, t) => s + Number(t.amount), 0)
   const netIncome = grossProfit - totalExpenses
   const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
   // F3 fix: contributions (owner money in) are equity, never revenue.
   // Tracked separately for the capital-account roll-forward.
   const totalContributions = contributions.reduce((s, t) => s + Number(t.amount), 0)
-  // F2 visibility: the document must SHOW what its totals exclude.
-  const uncategorizedCount = uncategorized.length
-  const uncategorizedTotal = uncategorized.reduce((s, t) => s + Number(t.amount), 0)
+  // F2 visibility: the document must SHOW what its totals exclude. Under the
+  // default-by-sign policy nothing is left pending (every uncategorized row is
+  // folded into income/expenses above), so the pending count is 0.
+  const uncategorizedCount = opts.defaultUncategorizedBySign ? 0 : uncategorized.length
+  const uncategorizedTotal = opts.defaultUncategorizedBySign ? 0 : uncategorized.reduce((s, t) => s + Number(t.amount), 0)
 
   return {
     totalIncome, totalCogs, grossProfit, totalExpenses, netIncome,

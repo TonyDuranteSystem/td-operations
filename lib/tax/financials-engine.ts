@@ -82,6 +82,11 @@ export interface BuildDraftInput {
   /** From resolveOwnership — only members with a pct take part in allocation. */
   members: ResolvedMember[]
   priorReturn: PriorReturnCaseRecord | null
+  /** "Default + flag exceptions" policy: treat remaining uncategorized rows by
+   *  sign (outflow → business expense, inflow → income) so the P&L is complete
+   *  and gate 6 is not blocked; the owner flags only the exceptions. Portal tax
+   *  review turns this ON; staff/Excel paths leave it OFF. */
+  defaultUncategorizedBySign?: boolean
 }
 
 /** Match a counterparty/description to a member by name. Exported for tests. */
@@ -117,7 +122,7 @@ function priorBeginningCapital(prior: PriorReturnCaseRecord | null, memberName: 
 export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   const { taxYear, transactions, members, priorReturn } = input
   const notes: string[] = []
-  const pnl = computePnlTotals(transactions)
+  const pnl = computePnlTotals(transactions, { defaultUncategorizedBySign: input.defaultUncategorizedBySign })
 
   // ── Per-bank cash positions (gate 1 inputs) ──
   const bankKeys = Array.from(new Set(transactions.map(t => `${t.bank_name} ${t.account_type ?? "Checking"}`)))

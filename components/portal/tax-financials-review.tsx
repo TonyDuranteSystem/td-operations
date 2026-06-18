@@ -254,36 +254,55 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             </section>
           )}
 
-          {/* Questions */}
+          {/* Spending review — "default + flag exceptions": everything is already
+              set as a business expense (out) / income (in) and reflected in the
+              P&L above; the owner only FLAGS the exceptions. Flagging persists a
+              real category, so the group drops off this list on the next load. */}
           {view.questions.length > 0 && (
-            <section className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 sm:p-5">
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
               <h2 className="text-sm font-semibold text-zinc-900">
-                {it ? `${view.draft.pnl.uncategorizedCount} movimenti hanno bisogno di una tua risposta` : `${view.draft.pnl.uncategorizedCount} transactions need your answer`}
+                {it ? 'Le tue spese — già impostate come spese aziendali' : 'Your spending — already set as business expenses'}
               </h2>
               <p className="text-xs text-zinc-500 mt-1 mb-4">
-                {it ? 'Una risposta copre tutti i movimenti dello stesso tipo.' : 'One answer covers every transaction of the same kind.'}
+                {it
+                  ? 'Abbiamo considerato tutte le spese della carta come spese aziendali (già incluse nel risultato qui sopra). Se qualcuna era personale (tua, non della società), segnalala qui sotto. Il resto lascialo così.'
+                  : 'We’ve treated all your card spending as business expenses (already reflected in the net income above). If any of these were personal (yours, not the company’s), flag them below. Leave the rest as they are.'}
               </p>
-              <div className="space-y-4">
-                {view.questions.map(g => (
-                  <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4">
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <div className="text-sm font-medium text-zinc-800">{g.label}</div>
-                      <div className="text-xs text-zinc-500">{g.count}× · {it ? 'totale' : 'total'} {fmt(g.total)}</div>
+              <div className="space-y-3">
+                {view.questions.map(g => {
+                  const isOut = g.direction === 'out'
+                  return (
+                    <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <div className="text-sm font-medium text-zinc-800">{g.label}</div>
+                        <div className="text-xs text-zinc-500">{g.count}× · {it ? 'totale' : 'total'} {fmt(g.total)}</div>
+                      </div>
+                      <div className="mt-1 text-xs font-medium text-emerald-700">
+                        {isOut
+                          ? (it ? 'Predefinito: spesa aziendale' : 'Default: business expense')
+                          : (it ? 'Predefinito: incasso aziendale' : 'Default: business income')}
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-zinc-400">{it ? 'In realtà era:' : 'Actually it was:'}</span>
+                        {visibleAnswers(g).map(a => {
+                          const primary = (isOut && a.value === 'personal_spending') || (!isOut && a.value === 'owner_money_in')
+                          return (
+                            <button
+                              key={a.value}
+                              disabled={busy !== null}
+                              onClick={() => void answer(g, a.value)}
+                              className={primary
+                                ? 'rounded-full border border-amber-400 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 hover:border-amber-600 disabled:opacity-50'
+                                : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
+                            >
+                              {it ? a.it : a.en}
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {visibleAnswers(g).map(a => (
-                        <button
-                          key={a.value}
-                          disabled={busy !== null}
-                          onClick={() => void answer(g, a.value)}
-                          className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                        >
-                          {it ? a.it : a.en}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </section>
           )}
