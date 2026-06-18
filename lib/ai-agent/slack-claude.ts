@@ -145,14 +145,15 @@ SHIPPING: When Antonio says "ship it"/"deploy it"/"push it" AFTER a code task po
 - The runner never auto-deploys; promotion happens only here, on Antonio's word. No branch yet = nothing to ship.
 - "Ship" = promote to production. "Do it" = implement.
 
-CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and sometimes Hermes
-(the Telegram AI assistant). Antonio is the decision-maker. You answer, discuss, and
-propose — he approves and directs. Hermes handles its own work independently.
+CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and the team — e.g. Luca
+(support@tonydurante.us). Antonio is the decision-maker; you answer, discuss, and propose —
+he approves and directs.
 
-SHARED THREADS: When Antonio tags both you and Hermes, you'll see Hermes's messages in
-the thread context. Read them. Don't repeat what Hermes already answered. If Hermes found
-something and Antonio asks you to act on it, you have the context. If Antonio says "send it"
-after Hermes drafted something, acknowledge that Hermes already sent it — don't ask "to who?"`.trim()
+ATTRIBUTION: The thread context labels each message with who sent it (Antonio, Luca, …).
+Attribute statements and actions ONLY to the person actually shown as the sender. If a line
+is labeled "Someone", treat the author as unknown — never guess a name, and never attribute
+it to a specific person, teammate, or assistant. Never invent a participant who is not shown
+in the thread.`.trim()
 
 // Conversation window: how long a scope stays "open" for follow-ups
 const SCOPE_WINDOW_MS = 30 * 60 * 1000 // 30 minutes
@@ -394,26 +395,30 @@ export async function fetchThreadImages(
 }
 
 // Known Slack user IDs, used to label thread-history lines so the worker can
-// tell who said what. Claude (U0B9S675WTT) and Hermes (U0B9D3MAD9B) are verified
-// against app/api/webhooks/slack-claude/route.ts (lines 46 + 201). Antonio's id
-// is supplied by Antonio (his own Slack id) — an unknown sender just falls back
-// to "Someone", so a wrong id degrades the label only, never the flow.
+// tell who said what. Claude (U0B9S675WTT) is verified against
+// app/api/webhooks/slack-claude/route.ts (line 46). Antonio + Luca are real team
+// members; labeling Luca explicitly fixes the bug where his messages fell back to
+// "Someone" and the worker then guessed they were Hermes (2026-06-18 incident).
+// An unknown sender still falls back to "Someone", degrading the label only.
+// Hermes is dismissed — intentionally NOT labeled here so the worker never
+// attributes thread activity to it.
 const SLACK_USER_CLAUDE = "U0B9S675WTT"
-const SLACK_USER_HERMES = "U0B9D3MAD9B"
 const SLACK_USER_ANTONIO = "U0BAALR4Y4Q"
+const SLACK_USER_LUCA = "U0B9ZUE2Q75"
 
 /**
  * Fetch recent messages from a Slack thread for shared context.
- * Returns a formatted string of who said what, so Claude can see
- * Hermes's messages and Antonio's replies to both bots.
+ * Returns a formatted string of who said what, so Claude can see what the rest
+ * of the team (Antonio, Luca, …) said in the thread.
  *
- * Why this exists: in a thread where Antonio tags both @Claude and @Hermes, the
- * worker otherwise only has `row.body` (the current message) + Claude's own
- * agent_messages memory — it never sees what Hermes said. This injects the real
- * Slack transcript so Claude has the full picture. Claude's own messages are
- * skipped (they're already in its agent_messages context). Best-effort: a
- * missing token, non-ok response (e.g. missing channels:history scope), or
- * network error returns "" (logged) so the worker still answers.
+ * Why this exists: in a multi-person thread the worker otherwise only has
+ * `row.body` (the current message) + Claude's own agent_messages memory — it
+ * never sees what teammates said. This injects the real Slack transcript so
+ * Claude has the full picture and can attribute each message to the person who
+ * actually sent it. Claude's own messages are skipped (already in its
+ * agent_messages context). Best-effort: a missing token, non-ok response (e.g.
+ * missing channels:history scope), or network error returns "" (logged) so the
+ * worker still answers.
  */
 export async function fetchThreadHistory(
   channelId: string,
@@ -452,13 +457,13 @@ export async function fetchThreadHistory(
       // Determine who sent it
       let sender = "Someone"
       if (msg.user === SLACK_USER_ANTONIO) sender = "Antonio"
-      else if (msg.user === SLACK_USER_HERMES) sender = "Hermes"
+      else if (msg.user === SLACK_USER_LUCA) sender = "Luca"
       else if (msg.bot_id) sender = "Bot"
 
       // Clean up Slack mention formatting so the worker reads plain @names.
       const cleanText = text
         .replace(/<@U0B9S675WTT(\|[^>]*)?>/g, "@Claude")
-        .replace(/<@U0B9D3MAD9B(\|[^>]*)?>/g, "@Hermes")
+        .replace(/<@U0B9ZUE2Q75(\|[^>]*)?>/g, "@Luca")
         .replace(/<@U0BAALR4Y4Q(\|[^>]*)?>/g, "@Antonio")
 
       lines.push(`${sender}: ${cleanText}${fileNote}`)

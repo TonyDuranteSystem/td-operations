@@ -152,9 +152,12 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(9600)
   })
 
-  it("instructs awareness of Hermes's messages in shared threads", () => {
-    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SHARED THREADS/)
-    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/Hermes/)
+  it("does not present Hermes as a teammate (dismissed) and instructs careful attribution", () => {
+    // Hermes is dismissed — the prompt must not frame it as an active participant,
+    // which is what led the worker to attribute Luca's invoice to "Hermes".
+    expect(SLACK_WORKER_SYSTEM_PROMPT).not.toMatch(/Hermes/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/ATTRIBUTION/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/Luca/)
   })
 })
 
@@ -893,20 +896,20 @@ describe("fetchThreadHistory", () => {
     process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
   })
 
-  it("formats who-said-what, labels Antonio/Hermes, and skips Claude's own messages", async () => {
+  it("formats who-said-what, labels Antonio/Luca, and skips Claude's own messages", async () => {
     mockFetch.mockResolvedValue({
       json: () =>
         Promise.resolve({
           ok: true,
           messages: [
             { user: "U0BAALR4Y4Q", text: "look at this invoice" }, // Antonio
-            { user: "U0B9D3MAD9B", text: "I found the duplicate" }, // Hermes
+            { user: "U0B9ZUE2Q75", text: "I made the invoice" }, // Luca
             { user: "U0B9S675WTT", text: "On it 👍" }, // Claude — must be skipped
           ],
         }),
     })
     const out = await fetchThreadHistory("C123", "100.000")
-    expect(out).toBe("Antonio: look at this invoice\nHermes: I found the duplicate")
+    expect(out).toBe("Antonio: look at this invoice\nLuca: I made the invoice")
     // queries conversations.replies with channel + thread root ts + limit
     const url = String(mockFetch.mock.calls[0][0])
     expect(url).toContain("conversations.replies")
@@ -920,12 +923,27 @@ describe("fetchThreadHistory", () => {
         Promise.resolve({
           ok: true,
           messages: [
-            { user: "U0BAALR4Y4Q", text: "<@U0B9S675WTT> and <@U0B9D3MAD9B> please check" },
+            { user: "U0BAALR4Y4Q", text: "<@U0B9S675WTT> and <@U0B9ZUE2Q75> please check" },
           ],
         }),
     })
     const out = await fetchThreadHistory("C123", "100.000")
-    expect(out).toBe("Antonio: @Claude and @Hermes please check")
+    expect(out).toBe("Antonio: @Claude and @Luca please check")
+  })
+
+  it("no longer treats the dismissed Hermes id specially — it falls back to 'Someone' (2026-06-18 fix)", async () => {
+    // Regression guard for the bug where Luca's messages were labeled "Someone"
+    // and the worker then guessed they were Hermes. Hermes is dismissed; its id
+    // must NOT get a special label, and its mention token must NOT rewrite to @Hermes.
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [{ user: "U0B9D3MAD9B", text: "ghost <@U0B9D3MAD9B> note" }],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Someone: ghost <@U0B9D3MAD9B> note")
   })
 
   it("includes a file note for messages that carry files but no text", async () => {
@@ -1006,7 +1024,7 @@ describe("processSlackEvent shared-thread context", () => {
               ok: true,
               messages: [
                 { user: "U0BAALR4Y4Q", text: "check this" },
-                { user: "U0B9D3MAD9B", text: "Hermes found the answer" },
+                { user: "U0B9ZUE2Q75", text: "Luca found the answer" },
               ],
             }),
         })
@@ -1020,7 +1038,7 @@ describe("processSlackEvent shared-thread context", () => {
 
     const row = {
       id: "row-shared-1",
-      body: "do what Hermes said",
+      body: "do what Luca said",
       thread_id: "thread-x",
       context_json: {
         slack_channel_id: "C0BAB08DSDN",
@@ -1034,9 +1052,9 @@ describe("processSlackEvent shared-thread context", () => {
 
     const sentBody = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(sentBody).toContain("[SLACK THREAD CONTEXT")
-    expect(sentBody).toContain("Hermes: Hermes found the answer")
+    expect(sentBody).toContain("Luca: Luca found the answer")
     expect(sentBody).toContain("[YOUR CURRENT MESSAGE]")
-    expect(sentBody).toContain("do what Hermes said")
+    expect(sentBody).toContain("do what Luca said")
   })
 
   it("uses the raw body (no context block) when the message is not in a thread", async () => {
