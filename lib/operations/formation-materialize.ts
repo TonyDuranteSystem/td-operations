@@ -69,6 +69,14 @@ export interface MaterializeFormationParams {
    * resolution (contract → form → wizard) cannot determine the type.
    */
   entity_type?: "SMLLC" | "MMLLC"
+  /**
+   * Explicit chosen company name. Highest-priority name source — overrides the
+   * `wizard_progress.data.chosen_name_final` lookup. Used by the flow-advance
+   * auto-materialize (advance to "Articles Received"), where the confirmed name
+   * lives in `service_deliveries.name_checks` (status 'filed'), not in
+   * chosen_name_final. Existing callers omit this and keep the wizard lookup.
+   */
+  chosen_name?: string
   actor?: string
 }
 
@@ -188,7 +196,7 @@ export async function materializeFormationCompany(
       })
     }
 
-    const chosenName = String(wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
+    const chosenName = String(params.chosen_name || wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
     if (!chosenName) {
       return {
         success: false,

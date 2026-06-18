@@ -26,6 +26,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
+import { filedName, type NameCheck } from "@/lib/flows/name-checks"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -450,6 +451,74 @@ export async function advanceServiceDelivery(
       }
     } catch (arErr) {
       autoTriggers.push(`Annual report auto-update failed: ${arErr instanceof Error ? arErr.message : String(arErr)}`)
+    }
+  }
+
+  // 11b. Company Formation — MATERIALIZE the CRM account when advancing into
+  // "Articles Received" for an in-flight (contact-scoped, account_id NULL)
+  // formation. All the heavy lifting — account insert, owner/member links, Drive
+  // folder, SD account_id link, portal-tier sync — lives in
+  // materializeFormationCompany (the single account-creation path, shared with
+  // the Upload Articles admin action + articles-detector cron). We DON'T
+  // duplicate it; we just call it with the right params, bridging two v2 gaps:
+  //   • the confirmed name lives in service_deliveries.name_checks (status
+  //     'filed'), not wizard_progress.chosen_name_final → pass it as chosen_name;
+  //   • materialize needs a state CODE → resolve from wizard data, default NM.
+  // Resilient: a failure is logged to auto_triggers but never fails the advance
+  // (the stage move already committed above). On success we reflect the new
+  // account on the in-memory record so sections 12 & 13 below fire this run.
+  if (
+    delivery.service_type === "Company Formation" &&
+    targetStage.stage_name === "Articles Received" &&
+    !delivery.account_id &&
+    delivery.contact_id
+  ) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
+      const { data: ncRow } = await (supabaseAdmin as any)
+        .from("service_deliveries")
+        .select("name_checks")
+        .eq("id", delivery_id)
+        .maybeSingle()
+      const confirmedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
+
+      if (!confirmedName) {
+        autoTriggers.push("Account not materialized: no filed company name in name_checks yet")
+      } else {
+        // Resolve the formation state CODE (wizard data → default NM). The
+        // formation wizard rarely captures the formation state, so NM (the
+        // primary filing state) is the documented default.
+        const { data: wp } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("data")
+          .eq("contact_id", delivery.contact_id)
+          .eq("wizard_type", "formation")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        const wd = (wp?.data ?? {}) as Record<string, unknown>
+        const rawState = String(wd.formation_state || wd.state_of_formation || wd.state_of_incorporation || "").toUpperCase().trim()
+        const stateCode: "NM" | "WY" | "FL" | "DE" =
+          rawState === "WY" || rawState.includes("WYOMING") ? "WY" :
+          rawState === "FL" || rawState.includes("FLORIDA") ? "FL" :
+          rawState === "DE" || rawState.includes("DELAWARE") ? "DE" : "NM"
+
+        const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
+        const mat = await materializeFormationCompany({
+          contact_id: delivery.contact_id,
+          chosen_name: confirmedName,
+          formation_state: stateCode,
+          actor: `flow-advance:${actor}`,
+        })
+        if (mat.success && mat.account_id) {
+          delivery.account_id = mat.account_id
+          autoTriggers.push(`Account materialized: ${confirmedName} (${stateCode}) → ${mat.account_id} [${mat.outcome}]`)
+        } else {
+          autoTriggers.push(`Account materialization failed (${mat.outcome}): ${mat.error ?? "unknown"}`)
+        }
+      }
+    } catch (matErr) {
+      autoTriggers.push(`Account materialization error: ${matErr instanceof Error ? matErr.message : String(matErr)}`)
     }
   }
 
