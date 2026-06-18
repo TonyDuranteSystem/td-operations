@@ -28,6 +28,11 @@ import { AGENT_TOOLS, executeTool, type ToolDef } from "./tools"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import {
+  listCalendlyBookings,
+  getCalendlyEvent,
+  getCalendlyAvailability,
+} from "@/lib/mcp/tools/calendly"
+import {
   APPROVABLE_TOOL_NAMES,
   isApprovableTool,
   validateToolParams,
@@ -435,6 +440,88 @@ export const SEARCH_CALLS_TOOL: ToolDef = {
     },
     required: ["query"],
   },
+}
+
+// ─── Calendly read rail (Slack-only, R108) ──────────────────────────────────
+// Three READ-ONLY Calendly tools for the Slack worker — gated by
+// CallWorkerOptions.enableCalendly (set only in processSlackEvent), kept OUT of
+// WORKER_TOOLS, plus an executor availableNames gate, so the Hermes/Telegram
+// research worker never receives them. They reuse the shared fetch+format
+// functions in lib/mcp/tools/calendly.ts (single source of truth) — read-only:
+// list bookings, event details, and the active booking pages. No create/cancel.
+
+export const CAL_LIST_BOOKINGS_TOOL: ToolDef = {
+  name: "cal_list_bookings",
+  description: [
+    "List scheduled Calendly bookings (meetings). Default: upcoming events from now, soonest first. Shows event name, date/time, duration, meeting link, invitee count, and the event UUID.",
+    "Use cal_get_event_details with a UUID to see WHO booked and their form answers.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      status: { type: "string", description: "'active' (default) or 'canceled'." },
+      count: { type: "number", description: "Max results (default 20, max 100)." },
+      min_start_time: { type: "string", description: "ISO 8601 — events starting after this (default: now)." },
+      max_start_time: { type: "string", description: "ISO 8601 — events starting before this." },
+      sort: { type: "string", description: "'start_time:asc' (default) or 'start_time:desc'." },
+    },
+    required: [],
+  },
+}
+
+export const CAL_GET_EVENT_TOOL: ToolDef = {
+  name: "cal_get_event_details",
+  description: [
+    "Get full details of one Calendly booking by UUID (from cal_list_bookings): date, time, location/join URL, cancellation info, and every invitee with their booking-form answers (name, email, reason, etc.).",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { event_uuid: { type: "string", description: "Event UUID (from cal_list_bookings)." } },
+    required: ["event_uuid"],
+  },
+}
+
+export const CAL_GET_AVAILABILITY_TOOL: ToolDef = {
+  name: "cal_get_availability",
+  description: [
+    "List Antonio's active Calendly event types (booking pages) — scheduling URLs, durations, descriptions. Use this to find the right booking link to share with a client or to see which event types are active.",
+  ].join("\n"),
+  parameters: { type: "object", properties: {}, required: [] },
+}
+
+/** cal_list_bookings handler — wraps the shared read fn, formats failures. */
+async function calListBookingsForWorker(params: Record<string, unknown>): Promise<string> {
+  try {
+    return await listCalendlyBookings({
+      status: typeof params.status === "string" ? params.status : undefined,
+      count: typeof params.count === "number" ? params.count : undefined,
+      min_start_time: typeof params.min_start_time === "string" ? params.min_start_time : undefined,
+      max_start_time: typeof params.max_start_time === "string" ? params.max_start_time : undefined,
+      sort: typeof params.sort === "string" ? params.sort : undefined,
+    })
+  } catch (err) {
+    return `❌ List bookings failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+/** cal_get_event_details handler. */
+async function calGetEventForWorker(params: Record<string, unknown>): Promise<string> {
+  const uuid = typeof params.event_uuid === "string" ? params.event_uuid : ""
+  if (!uuid) return "event_uuid is required."
+  try {
+    return await getCalendlyEvent(uuid)
+  } catch (err) {
+    return `❌ Get event failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+/** cal_get_availability handler. */
+async function calGetAvailabilityForWorker(): Promise<string> {
+  try {
+    return await getCalendlyAvailability()
+  } catch (err) {
+    return `❌ Get availability failed: ${err instanceof Error ? err.message : String(err)}`
+  }
 }
 
 function formatCallDate(iso: string, long = false): string {
@@ -977,6 +1064,7 @@ export async function proposeAction(
     idempotency_key?: unknown
     thread_id?: unknown
     batch_id?: unknown
+    source_message_id?: unknown
   },
   opts?: { allowBridgeTools?: boolean },
 ): Promise<string> {
@@ -998,6 +1086,14 @@ export async function proposeAction(
   // batch_id so they're queryable as a unit (Phase D, batch_propose). NULL = solo.
   const batchId = typeof input.batch_id === "string" && input.batch_id.length > 0
     ? input.batch_id
+    : null
+  // Optional linkage to the agent_messages row that triggered this proposal (FK →
+  // agent_messages.id). Set server-side (not by the model) so an approval surface
+  // can map a row back to its originating conversation — e.g. the Slack worker
+  // resolves a typed confirmation code to the proposal minted in that same thread.
+  // NULL when unknown (preserves prior behaviour for any direct caller).
+  const sourceMessageId = typeof input.source_message_id === "string" && input.source_message_id.length > 0
+    ? input.source_message_id
     : null
 
   // 1) Allow-list check. The existing 14 approvable AGENT tools are ALWAYS allowed
@@ -1078,6 +1174,7 @@ export async function proposeAction(
       idempotency_key: idempotencyKey,
       thread_id: threadId,
       batch_id: batchId,
+      source_message_id: sourceMessageId,
       // Lane tag: which approval environment will execute this (Phase D). Defaults
       // to 'production' on every real deployment unless APPROVAL_ENV carves a lane.
       env: currentApprovalEnv(),
@@ -1180,6 +1277,7 @@ export async function executeWorkerTool(
   name: string,
   params: Record<string, unknown>,
   availableNames?: Set<string>,
+  sourceMessageId?: string | null,
 ): Promise<string> {
   if (name === "start_code_task") {
     const { _currentSlackCtx } = await import("./slack-claude")
@@ -1245,7 +1343,11 @@ export async function executeWorkerTool(
     return sendPortalMessageFromWorker(params)
   }
   if (name === "propose_action") {
-    return proposeAction(params)
+    // Inject the originating agent_messages id server-side so the proposal links
+    // to the conversation that produced it (the Slack worker later resolves a
+    // typed confirmation code to the proposal minted in that same thread). The
+    // model never supplies this; a model-supplied value in params is overridden.
+    return proposeAction({ ...params, source_message_id: sourceMessageId ?? null })
   }
   // memory_save — knowledge-only write (decision_memory), not a business
   // mutation; delegated to the shared executeTool implementation. memory_recall
@@ -1282,6 +1384,17 @@ export async function executeWorkerTool(
     if (name === "list_calls") return listCallsForWorker(params)
     if (name === "get_call") return getCallForWorker(params)
     return searchCallsForWorker(params)
+  }
+  // Calendly reads — Slack-only (gated via enableCalendly at the tool-list level).
+  // Executor-gate too (defense-in-depth, R108): never let the Hermes research worker
+  // read Antonio's calendar even if a name leaks. All read-only.
+  if (name === "cal_list_bookings" || name === "cal_get_event_details" || name === "cal_get_availability") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (Calendly not enabled).`
+    }
+    if (name === "cal_list_bookings") return calListBookingsForWorker(params)
+    if (name === "cal_get_event_details") return calGetEventForWorker(params)
+    return calGetAvailabilityForWorker()
   }
   // Internal knowledge-source reading — Slack-only (gated via enableDocReads at the
   // tool-list level). Executor-gate too (defense-in-depth, R108): never let the Hermes
@@ -1490,6 +1603,13 @@ export interface CallWorkerOptions {
    */
   enableCallReads?: boolean
   /**
+   * Expose the Slack-only READ-ONLY Calendly tools (cal_list_bookings /
+   * cal_get_event_details / cal_get_availability) for this call. Set by the Slack
+   * worker (processSlackEvent). Kept Slack-only so the Hermes/Telegram research
+   * worker never gets them (R108). All read-only — no create/cancel.
+   */
+  enableCalendly?: boolean
+  /**
    * Expose the Slack-only internal knowledge-source readers (search_sysdocs /
    * read_sysdoc / search_sops / read_drive_file) for this call. Set by the Slack
    * worker (processSlackEvent). Gives the worker read parity with the sources Claude
@@ -1539,6 +1659,7 @@ async function runWorkerLoop(
   tools: ToolDef[],
   systemPrompt: string,
   maxIterations?: number,
+  sourceMessageId?: string | null,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
@@ -1623,7 +1744,7 @@ async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
-      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames)
+      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -1660,6 +1781,63 @@ async function runWorkerLoop(
  * Every thread step is best-effort — a thread-layer failure never breaks the
  * core research reply.
  */
+// Auto-recall tuning (Decision Memory). Before the model loop, callWorker
+// proactively injects the top-N past lessons whose stored situation is at least
+// this similar to the incoming request, so the worker APPLIES them without having
+// to decide to call memory_recall. The bar is well below the 0.7 explicit-recall
+// default: a raw incoming message is matched against a Haiku-distilled stored
+// situation (noisier → lower scores), and measured production neighbors show the
+// genuinely-related cluster sits at ~0.45–0.55 with the unrelated tail below 0.4.
+// 0.45 captures that related band; the top-3 cap keeps a loose match from flooding
+// the prompt. Tunable — watch the recall counter + injected-lesson relevance.
+export const AUTO_RECALL_THRESHOLD = 0.45
+export const AUTO_RECALL_COUNT = 3
+
+/**
+ * Format recalled decision-memory matches into a system-prompt bullet list.
+ * Pure + exported so the formatting is unit-tested without an embedding/DB call.
+ * Returns "" for an empty list so the caller can skip injection cleanly.
+ */
+export function formatRecalledLessons(
+  matches: Array<{ decision: string; domain: string | null; reasoning: string | null }>,
+): string {
+  if (!matches.length) return ""
+  return matches
+    .map(
+      (m) =>
+        `- ${m.domain ? `[${m.domain}] ` : ""}${m.decision}${m.reasoning ? ` (why: ${m.reasoning})` : ""}`,
+    )
+    .join("\n")
+}
+
+/**
+ * Build the "RELEVANT PAST LESSONS" system-prompt suffix for a request, by
+ * recalling the top decision-memory matches for `query` and formatting them.
+ * Returns "" when there are no matches OR on ANY failure (missing OpenAI key,
+ * embedding error, RPC error) — best-effort so it can never break a reply.
+ *
+ * Single source of truth for auto-recall, shared by the worker (callWorker,
+ * below) and the in-dashboard agent (lib/ai-agent/providers.ts) so both surfaces
+ * apply past lessons identically without depending on the model choosing to call
+ * the memory_recall tool.
+ */
+export async function buildAutoRecallSuffix(query: string): Promise<string> {
+  try {
+    if (!query?.trim()) return ""
+    const { recallDecisionMemory } = await import("./decision-memory")
+    const recalled = await recallDecisionMemory(query, {
+      matchThreshold: AUTO_RECALL_THRESHOLD,
+      matchCount: AUTO_RECALL_COUNT,
+    })
+    const lessons = formatRecalledLessons(recalled)
+    if (!lessons) return ""
+    return `\n\nRELEVANT PAST LESSONS (auto-recalled from prior corrections/decisions for a situation like this one — apply them if relevant; do not repeat a past mistake):\n${lessons}`
+  } catch (err) {
+    console.warn("[auto-recall] failed (non-fatal):", err)
+    return ""
+  }
+}
+
 export async function callWorker(userBody: string, opts: CallWorkerOptions = {}): Promise<WorkerResponse> {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured")
 
@@ -1742,6 +1920,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     }
   }
 
+  // Slack-only: append the READ-ONLY Calendly tools (cal_list_bookings /
+  // cal_get_event_details / cal_get_availability). Gated on enableCalendly so they
+  // NEVER reach the Hermes research worker (R108) and never double-add. The executor
+  // also re-checks availableNames (defense-in-depth).
+  if (opts.enableCalendly) {
+    for (const t of [CAL_LIST_BOOKINGS_TOOL, CAL_GET_EVENT_TOOL, CAL_GET_AVAILABILITY_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
   // Slack-only: append the internal knowledge-source readers (search_sysdocs /
   // read_sysdoc / search_sops / read_drive_file). Gated on enableDocReads so they
   // NEVER reach the Hermes research worker (R108) and never double-add. Read-only;
@@ -1769,7 +1957,14 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   const userContent: WorkerUserContent =
     images.length > 0 ? [{ type: "text", text: userBody }, ...images] : userBody
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations)
+  // Auto-recall (Decision Memory): surface relevant past lessons up-front so the
+  // worker applies them without having to choose to call memory_recall — the gap
+  // that left ~70 saved lessons with near-zero recalls. The memory_recall tool
+  // stays available for deeper/explicit lookups. Shared with the in-dashboard
+  // agent via buildAutoRecallSuffix (best-effort; never fails a reply).
+  systemPrompt = `${systemPrompt}${await buildAutoRecallSuffix(userBody)}`
+
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null)
 
   if (threadId) {
     try {

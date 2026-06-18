@@ -18,6 +18,7 @@ import { syncInvoiceToQB } from "@/lib/qb-sync"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { buildInvoiceEmail } from "@/lib/email/invoice-email"
 import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
+import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { TD_COMPANY } from "@/lib/config"
 
 type SettingsBank = {
@@ -227,26 +228,23 @@ export async function sendTDInvoice(
     .eq("id", payment.account_id)
     .single()
 
-  // Resolve recipient: prefer opts override (dashboard path with flexible
-  // contact resolution), fall back to cron-style role='Owner' lookup.
+  // Resolve recipient: prefer opts override (caller already resolved the
+  // contact), else go through the single shared resolver (contact_id →
+  // owner-role contact, case-insensitive → any linked contact → account
+  // communication email). NEVER hand-roll an exact-case role='Owner' lookup —
+  // lowercase "owner" links silently resolve zero rows (the ADWise incident,
+  // 2026-06-18).
   let recipientEmail = opts?.recipientEmail ?? ""
   let recipientName = opts?.clientName ?? ""
 
   if (!recipientEmail) {
-    const { data: contactLink } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contacts(first_name, last_name, email)")
-      .eq("account_id", payment.account_id)
-      .eq("role", "Owner")
-      .limit(1)
-      .maybeSingle()
-
-    const contact = (contactLink as unknown as { contacts: { first_name: string; last_name: string; email: string } })?.contacts
-    if (!contact?.email) throw new Error("No contact email found for this account")
-    recipientEmail = contact.email
-    recipientName = contact.first_name
-      ? `${contact.first_name} ${contact.last_name ?? ""}`.trim()
-      : account?.company_name ?? "Client"
+    const recipient = await resolvePaymentRecipient(
+      { contact_id: payment.contact_id, account_id: payment.account_id },
+      supabaseAdmin,
+    )
+    if (!recipient) throw new Error("No contact email found for this account")
+    recipientEmail = recipient.email
+    recipientName = recipient.name
   }
 
   const currency: "USD" | "EUR" = (payment.amount_currency === "EUR" ? "EUR" : "USD")
@@ -412,51 +410,24 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
         .single()
     : { data: null as { company_name: string | null; physical_address: string | null; mailing_address?: unknown } | null }
 
-  // Resolve recipient email + name. Prefer contact_id, then account owner,
-  // then account communication_email (same priority as sendTDInvoice).
-  let recipientEmail: string | null = null
-  let recipientName = account?.company_name ?? "Client"
+  // Resolve recipient via the single shared resolver (contact_id → owner-role
+  // contact, case-insensitive → any linked contact → account communication
+  // email). NEVER hand-roll an exact-case role='Owner' lookup — lowercase
+  // "owner" links silently resolve zero rows (the ADWise incident, 2026-06-18).
+  const recipient = await resolvePaymentRecipient(
+    { contact_id: payment.contact_id, account_id: payment.account_id },
+    supabaseAdmin,
+  )
 
-  if (payment.contact_id) {
-    const { data: contact } = await supabaseAdmin
-      .from("contacts")
-      .select("first_name, last_name, email, full_name")
-      .eq("id", payment.contact_id)
-      .single()
-    if (contact?.email) recipientEmail = contact.email
-    if (contact?.first_name) {
-      recipientName = `${contact.first_name} ${contact.last_name ?? ""}`.trim()
-    } else if (contact?.full_name) {
-      recipientName = contact.full_name
-    }
-  } else if (payment.account_id) {
-    const { data: link } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contacts(first_name, last_name, email)")
-      .eq("account_id", payment.account_id)
-      .eq("role", "Owner")
-      .limit(1)
-      .maybeSingle()
-    const c = (link as unknown as { contacts: { first_name: string; last_name: string; email: string } } | null)?.contacts
-    if (c?.email) recipientEmail = c.email
-    if (c?.first_name) recipientName = `${c.first_name} ${c.last_name ?? ""}`.trim()
-  }
-
-  if (!recipientEmail && payment.account_id) {
-    const { data: acctEmail } = await supabaseAdmin
-      .from("accounts")
-      .select("communication_email")
-      .eq("id", payment.account_id)
-      .single()
-    if (acctEmail?.communication_email) recipientEmail = acctEmail.communication_email
-  }
-
-  if (!recipientEmail) {
+  if (!recipient) {
     // Silent — callers are fire-and-forget, and a missing email is not a
     // payment-blocking condition.
     console.warn(`[sendPaidReceipt] no recipient email for payment ${paymentId} — skipping`)
     return
   }
+
+  const recipientEmail = recipient.email
+  const recipientName = recipient.name
 
   const currency: "USD" | "EUR" = payment.amount_currency === "EUR" ? "EUR" : "USD"
   const csym = currency === "EUR" ? "€" : "$"

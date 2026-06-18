@@ -17,6 +17,11 @@
 import { randomUUID, createHmac, timingSafeEqual } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
+import {
+  isSixDigitCode,
+  isAuthorizedApprover,
+  handleSlackApprovalCode,
+} from "@/lib/ai-agent/slack-approval"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
 import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
 import { callAI } from "@/lib/portal/ai-provider"
@@ -140,14 +145,15 @@ SHIPPING: When Antonio says "ship it"/"deploy it"/"push it" AFTER a code task po
 - The runner never auto-deploys; promotion happens only here, on Antonio's word. No branch yet = nothing to ship.
 - "Ship" = promote to production. "Do it" = implement.
 
-CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and sometimes Hermes
-(the Telegram AI assistant). Antonio is the decision-maker. You answer, discuss, and
-propose — he approves and directs. Hermes handles its own work independently.
+CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and the team — e.g. Luca
+(support@tonydurante.us). Antonio is the decision-maker; you answer, discuss, and propose —
+he approves and directs.
 
-SHARED THREADS: When Antonio tags both you and Hermes, you'll see Hermes's messages in
-the thread context. Read them. Don't repeat what Hermes already answered. If Hermes found
-something and Antonio asks you to act on it, you have the context. If Antonio says "send it"
-after Hermes drafted something, acknowledge that Hermes already sent it — don't ask "to who?"`.trim()
+ATTRIBUTION: The thread context labels each message with who sent it (Antonio, Luca, …).
+Attribute statements and actions ONLY to the person actually shown as the sender. If a line
+is labeled "Someone", treat the author as unknown — never guess a name, and never attribute
+it to a specific person, teammate, or assistant. Never invent a participant who is not shown
+in the thread.`.trim()
 
 // Conversation window: how long a scope stays "open" for follow-ups
 const SCOPE_WINDOW_MS = 30 * 60 * 1000 // 30 minutes
@@ -389,26 +395,30 @@ export async function fetchThreadImages(
 }
 
 // Known Slack user IDs, used to label thread-history lines so the worker can
-// tell who said what. Claude (U0B9S675WTT) and Hermes (U0B9D3MAD9B) are verified
-// against app/api/webhooks/slack-claude/route.ts (lines 46 + 201). Antonio's id
-// is supplied by Antonio (his own Slack id) — an unknown sender just falls back
-// to "Someone", so a wrong id degrades the label only, never the flow.
+// tell who said what. Claude (U0B9S675WTT) is verified against
+// app/api/webhooks/slack-claude/route.ts (line 46). Antonio + Luca are real team
+// members; labeling Luca explicitly fixes the bug where his messages fell back to
+// "Someone" and the worker then guessed they were Hermes (2026-06-18 incident).
+// An unknown sender still falls back to "Someone", degrading the label only.
+// Hermes is dismissed — intentionally NOT labeled here so the worker never
+// attributes thread activity to it.
 const SLACK_USER_CLAUDE = "U0B9S675WTT"
-const SLACK_USER_HERMES = "U0B9D3MAD9B"
 const SLACK_USER_ANTONIO = "U0BAALR4Y4Q"
+const SLACK_USER_LUCA = "U0B9ZUE2Q75"
 
 /**
  * Fetch recent messages from a Slack thread for shared context.
- * Returns a formatted string of who said what, so Claude can see
- * Hermes's messages and Antonio's replies to both bots.
+ * Returns a formatted string of who said what, so Claude can see what the rest
+ * of the team (Antonio, Luca, …) said in the thread.
  *
- * Why this exists: in a thread where Antonio tags both @Claude and @Hermes, the
- * worker otherwise only has `row.body` (the current message) + Claude's own
- * agent_messages memory — it never sees what Hermes said. This injects the real
- * Slack transcript so Claude has the full picture. Claude's own messages are
- * skipped (they're already in its agent_messages context). Best-effort: a
- * missing token, non-ok response (e.g. missing channels:history scope), or
- * network error returns "" (logged) so the worker still answers.
+ * Why this exists: in a multi-person thread the worker otherwise only has
+ * `row.body` (the current message) + Claude's own agent_messages memory — it
+ * never sees what teammates said. This injects the real Slack transcript so
+ * Claude has the full picture and can attribute each message to the person who
+ * actually sent it. Claude's own messages are skipped (already in its
+ * agent_messages context). Best-effort: a missing token, non-ok response (e.g.
+ * missing channels:history scope), or network error returns "" (logged) so the
+ * worker still answers.
  */
 export async function fetchThreadHistory(
   channelId: string,
@@ -447,13 +457,13 @@ export async function fetchThreadHistory(
       // Determine who sent it
       let sender = "Someone"
       if (msg.user === SLACK_USER_ANTONIO) sender = "Antonio"
-      else if (msg.user === SLACK_USER_HERMES) sender = "Hermes"
+      else if (msg.user === SLACK_USER_LUCA) sender = "Luca"
       else if (msg.bot_id) sender = "Bot"
 
       // Clean up Slack mention formatting so the worker reads plain @names.
       const cleanText = text
         .replace(/<@U0B9S675WTT(\|[^>]*)?>/g, "@Claude")
-        .replace(/<@U0B9D3MAD9B(\|[^>]*)?>/g, "@Hermes")
+        .replace(/<@U0B9ZUE2Q75(\|[^>]*)?>/g, "@Luca")
         .replace(/<@U0BAALR4Y4Q(\|[^>]*)?>/g, "@Antonio")
 
       lines.push(`${sender}: ${cleanText}${fileNote}`)
@@ -464,6 +474,60 @@ export async function fetchThreadHistory(
   } catch (err) {
     console.warn("[slack-claude] fetchThreadHistory failed:", err)
     return ""
+  }
+}
+
+/**
+ * From a Slack messages array, return the trimmed text of the message whose ts
+ * matches exactly, or null if none matches / it has no text. Pure + exported so
+ * the ts-matching logic is unit-tested without a Slack call. This exact-match is
+ * what prevents the 🧠-on-a-thread-reply bug: conversations.history returns the
+ * nearest TOP-LEVEL message for a reply ts, so blindly taking messages[0] saved
+ * the wrong (parent) message — we must verify the ts.
+ */
+export function pickMessageTextByTs(
+  messages: Array<{ ts?: string; text?: string }> | undefined,
+  ts: string,
+): string | null {
+  const m = (messages ?? []).find((x) => x.ts === ts)
+  const t = typeof m?.text === "string" ? m.text.trim() : ""
+  return t || null
+}
+
+/**
+ * Fetch the text of a single Slack message by ts, robust to thread replies.
+ * `conversations.history` only returns top-level channel messages, so for a
+ * thread reply `latest=<reply_ts>` returns the WRONG (parent) message. We accept
+ * the history result ONLY when its ts matches; otherwise we fall back to
+ * `conversations.replies` (which includes thread replies) and pick the exact ts.
+ * Requires channels:history / groups:history — same scope fetchThreadHistory uses.
+ * Best-effort: returns null on a missing token, non-ok response, or network error.
+ */
+export async function fetchSlackMessageText(channelId: string, ts: string): Promise<string | null> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token || !channelId || !ts) return null
+  const headers = { Authorization: `Bearer ${token}` }
+  try {
+    // Top-level path: conversations.history. Accept only on an exact ts match.
+    const hRes = await fetch(
+      `https://slack.com/api/conversations.history?channel=${channelId}&latest=${ts}&inclusive=true&limit=1`,
+      { headers },
+    )
+    const hData = (await hRes.json()) as { ok?: boolean; messages?: Array<{ ts?: string; text?: string }> }
+    const topLevel = pickMessageTextByTs(hData.messages, ts)
+    if (topLevel) return topLevel
+
+    // Thread-reply path: conversations.replies accepts a reply ts and returns the
+    // whole thread (parent + replies); find the exact reacted message in it.
+    const rRes = await fetch(
+      `https://slack.com/api/conversations.replies?channel=${channelId}&ts=${ts}&inclusive=true&limit=200`,
+      { headers },
+    )
+    const rData = (await rRes.json()) as { ok?: boolean; messages?: Array<{ ts?: string; text?: string }> }
+    return pickMessageTextByTs(rData.messages, ts)
+  } catch (err) {
+    console.warn("[slack-claude] fetchSlackMessageText failed:", err)
+    return null
   }
 }
 
@@ -690,6 +754,41 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     throw new Error(`agent_messages row ${row.id} missing slack_channel_id in context_json`)
   }
 
+  // ── In-channel approval completion (loop fix) ──────────────────────────────
+  // A message that is EXACTLY a 6-digit code from the authorized approver
+  // (Antonio) is an approval, not a chat turn. Resolve it deterministically and
+  // NEVER call the LLM — the model only ever proposes, so consuming the code here
+  // (not in the model) is what makes the propose→retype→re-propose loop impossible.
+  const slackUserId = ctx.slack_user_id as string | undefined
+  if (isSixDigitCode(row.body) && isAuthorizedApprover(slackUserId)) {
+    const outcome = await handleSlackApprovalCode({
+      code: row.body,
+      channelId,
+      // Raw slack_thread_ts (not replyThreadTs) so the scope key matches exactly
+      // what the webhook stored on agent_messages.context_json.slack_scope_key.
+      threadTs: ctx.slack_thread_ts as string | null | undefined,
+      slackUserId,
+    })
+    if (outcome.handled) {
+      if (ackTs) {
+        await updateSlackMessage(channelId, ackTs, outcome.message, [])
+      } else {
+        await postSlackMessage(channelId, outcome.message, replyThreadTs)
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabaseAdmin as any)
+        .from("agent_messages")
+        .update({
+          status: "done",
+          reply: outcome.message,
+          replied_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id)
+      return outcome.message
+    }
+  }
+
   // Download any attached screenshots → base64 image blocks (best-effort).
   let imageRefs = (Array.isArray(ctx.slack_images) ? ctx.slack_images : []) as SlackImageRef[]
 
@@ -742,6 +841,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Read internal knowledge sources Claude Code can read — sysdocs (incl.
     // session-context), SOPs by topic, Drive file text — Slack-only.
     enableDocReads: true,
+    // Read-only Calendly: list bookings, event details, active booking pages — Slack-only.
+    enableCalendly: true,
     // Flexible action surface (find_tool/use_tool) — OFF unless explicitly enabled.
     enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
     maxIterations: 20,
@@ -837,6 +938,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableEmailSend: true,
           enableCallReads: true,
           enableDocReads: true,
+          enableCalendly: true,
           enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
           maxIterations: 20,
         }

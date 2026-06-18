@@ -37,6 +37,7 @@ import {
   postSlackMessage,
   buildThinkingBlocks,
   findOrCreateConversationThread,
+  fetchSlackMessageText,
   slackScopeKey,
   SLACK_SUPPORTED_IMAGE_TYPES,
   SLACK_MAX_IMAGE_BYTES,
@@ -194,16 +195,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true, dedup: "already_saved" })
     }
 
-    // Fetch the reacted message text (single message at item.ts).
-    const msgRes = await fetch(
-      `https://slack.com/api/conversations.history?channel=${itemChannel}&latest=${itemTs}&inclusive=true&limit=1`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    )
-    const msgData = (await msgRes.json().catch(() => ({}))) as {
-      ok?: boolean
-      messages?: Array<{ text?: string }>
-    }
-    const msgText = msgData.messages?.[0]?.text?.trim()
+    // Fetch the reacted message text — robust to thread replies. Using
+    // conversations.history alone returned the parent (wrong) message when the
+    // reaction was on a thread reply; fetchSlackMessageText verifies the exact ts
+    // and falls back to conversations.replies. (Bug found 2026-06-18 during the
+    // first live 🧠 test — a reply was saved as its parent question.)
+    const msgText = await fetchSlackMessageText(itemChannel, itemTs)
     if (!msgText) {
       return NextResponse.json({ ok: true, skipped: "no_text" })
     }
