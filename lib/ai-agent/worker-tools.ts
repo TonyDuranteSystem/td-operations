@@ -1705,6 +1705,34 @@ export function formatRecalledLessons(
     .join("\n")
 }
 
+/**
+ * Build the "RELEVANT PAST LESSONS" system-prompt suffix for a request, by
+ * recalling the top decision-memory matches for `query` and formatting them.
+ * Returns "" when there are no matches OR on ANY failure (missing OpenAI key,
+ * embedding error, RPC error) — best-effort so it can never break a reply.
+ *
+ * Single source of truth for auto-recall, shared by the worker (callWorker,
+ * below) and the in-dashboard agent (lib/ai-agent/providers.ts) so both surfaces
+ * apply past lessons identically without depending on the model choosing to call
+ * the memory_recall tool.
+ */
+export async function buildAutoRecallSuffix(query: string): Promise<string> {
+  try {
+    if (!query?.trim()) return ""
+    const { recallDecisionMemory } = await import("./decision-memory")
+    const recalled = await recallDecisionMemory(query, {
+      matchThreshold: AUTO_RECALL_THRESHOLD,
+      matchCount: AUTO_RECALL_COUNT,
+    })
+    const lessons = formatRecalledLessons(recalled)
+    if (!lessons) return ""
+    return `\n\nRELEVANT PAST LESSONS (auto-recalled from prior corrections/decisions for a situation like this one — apply them if relevant; do not repeat a past mistake):\n${lessons}`
+  } catch (err) {
+    console.warn("[auto-recall] failed (non-fatal):", err)
+    return ""
+  }
+}
+
 export async function callWorker(userBody: string, opts: CallWorkerOptions = {}): Promise<WorkerResponse> {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured")
 
@@ -1817,21 +1845,9 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // Auto-recall (Decision Memory): surface relevant past lessons up-front so the
   // worker applies them without having to choose to call memory_recall — the gap
   // that left ~70 saved lessons with near-zero recalls. The memory_recall tool
-  // stays available for deeper/explicit lookups. Best-effort: a missing OpenAI
-  // key, embedding error, or RPC failure is swallowed so it never fails a reply.
-  try {
-    const { recallDecisionMemory } = await import("./decision-memory")
-    const recalled = await recallDecisionMemory(userBody, {
-      matchThreshold: AUTO_RECALL_THRESHOLD,
-      matchCount: AUTO_RECALL_COUNT,
-    })
-    const lessons = formatRecalledLessons(recalled)
-    if (lessons) {
-      systemPrompt = `${systemPrompt}\n\nRELEVANT PAST LESSONS (auto-recalled from prior corrections/decisions for a situation like this one — apply them if relevant; do not repeat a past mistake):\n${lessons}`
-    }
-  } catch (err) {
-    console.warn("[callWorker] auto-recall failed (non-fatal):", err)
-  }
+  // stays available for deeper/explicit lookups. Shared with the in-dashboard
+  // agent via buildAutoRecallSuffix (best-effort; never fails a reply).
+  systemPrompt = `${systemPrompt}${await buildAutoRecallSuffix(userBody)}`
 
   const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null)
 
