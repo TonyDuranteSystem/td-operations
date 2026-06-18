@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initNameChecksFromWizard, parseProposedNames, hasFiledName, type NameCheck } from '@/lib/flows/name-checks'
+import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, type NameCheck } from '@/lib/flows/name-checks'
 
 describe('initNameChecksFromWizard', () => {
   it('builds entries from the numbered candidates, skipping empties', () => {
@@ -48,5 +48,21 @@ describe('hasFiledName', () => {
     expect(hasFiledName([{ ...base, status: 'available' }, { ...base, status: 'filed' }])).toBe(true)
     expect(hasFiledName([])).toBe(false)
     expect(hasFiledName(null)).toBe(false)
+  })
+})
+
+describe('filedName', () => {
+  const base: NameCheck = { name: 'X', source: 'wizard', status: 'pending', updated_at: null }
+  it('returns the filed candidate name', () => {
+    expect(filedName([{ ...base, name: 'Acme LLC', status: 'available' }, { ...base, name: 'Marinela Marku LLC', status: 'filed' }])).toBe('Marinela Marku LLC')
+  })
+  it('returns null when nothing is filed', () => {
+    expect(filedName([{ ...base, status: 'accepted' }])).toBeNull()
+    expect(filedName([])).toBeNull()
+    expect(filedName(null)).toBeNull()
+    expect(filedName(undefined)).toBeNull()
+  })
+  it('returns null for a filed entry with a blank name', () => {
+    expect(filedName([{ ...base, name: '   ', status: 'filed' }])).toBeNull()
   })
 })

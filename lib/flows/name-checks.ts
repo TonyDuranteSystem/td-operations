@@ -102,3 +102,15 @@ export function parseProposedNames(text: unknown): string[] {
 export function hasFiledName(checks: NameCheck[] | null | undefined): boolean {
   return Array.isArray(checks) && checks.some((c) => c.status === 'filed')
 }
+
+/**
+ * The confirmed company name — the candidate filed with the Secretary of State
+ * (status 'filed'). This is the real LLC name once the state approves it, used
+ * for the "Company Created" milestone banner. Returns null when no name has been
+ * filed yet (or input is empty/invalid). Pure.
+ */
+export function filedName(checks: NameCheck[] | null | undefined): string | null {
+  if (!Array.isArray(checks)) return null
+  const filed = checks.find((c) => c.status === 'filed')
+  return filed ? str(filed.name) : null
+}

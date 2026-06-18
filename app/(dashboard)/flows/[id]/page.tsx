@@ -8,6 +8,7 @@ import { StageStepper, type StepperStage } from '@/components/flows/stage-steppe
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
+import { filedName, type NameCheck } from '@/lib/flows/name-checks'
 import { APP_BASE_URL } from '@/lib/config'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
 
@@ -36,6 +37,20 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     .select('shipping_courier, shipping_tracking_number, shipping_submitted_at')
     .eq('id', params.id)
     .maybeSingle()
+
+  // Company Formation "Company Created" milestone — when the SD reaches
+  // "Articles Received", surface the confirmed LLC name (the candidate filed
+  // with the SOS, status 'filed' in the SD's name_checks JSONB).
+  let companyCreatedName: string | null = null
+  if (sd.service_type === 'Company Formation' && sd.stage === 'Articles Received') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
+    const { data: ncRow } = await (supabaseAdmin as any)
+      .from('service_deliveries')
+      .select('name_checks')
+      .eq('id', params.id)
+      .maybeSingle()
+    companyCreatedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
+  }
 
   const [{ data: accountRow }, { data: stageRows }] = await Promise.all([
     sd.account_id
@@ -234,6 +249,14 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
       {/* Purchase Origin — ITIN only, above the stepper */}
       {itinOrigin && <ItinOriginCard origin={itinOrigin} contractUrl={itinContractUrl} />}
+
+      {/* Company Created milestone — Company Formation at "Articles Received" */}
+      {companyCreatedName && (
+        <div className="mb-6 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <span className="text-lg leading-none">✅</span>
+          <span className="text-sm font-semibold text-emerald-800">Company Created — {companyCreatedName}</span>
+        </div>
+      )}
 
       {/* Stage stepper */}
       <div className="mb-6 overflow-x-auto pb-1">

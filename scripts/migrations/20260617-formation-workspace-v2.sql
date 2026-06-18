@@ -63,7 +63,7 @@ VALUES
   ('Company Formation', 4, 'Articles Received',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),
    'Articles received', 'Atto costitutivo ricevuto', 'FileCheck', true, true, false,
-   '{"description": "The state approved the company — the Articles of Organization are in. The company is now real: upload the Articles, activate the Registered Agent on Harbor Compliance, then prepare the SS-4. (Compliance dates + welcome package fire automatically on this stage.)", "components": [{"type": "document_upload", "label": "Upload Articles of Organization", "autoAdvance": false}, {"type": "activate_ra"}, {"type": "document_viewer"}, {"type": "info_panel"}, {"type": "chat"}, {"type": "action_buttons", "actions": [{"key": "advance_next", "label": "Articles Uploaded — Prepare SS-4", "target": "SS-4 Prepared"}]}]}'::jsonb),
+   '{"components": [{"type": "document_viewer"}, {"type": "info_panel"}, {"type": "activate_ra"}, {"type": "chat"}, {"type": "action_buttons", "actions": [{"key": "advance_next", "label": "Prepare SS-4", "target": "SS-4 Prepared"}]}], "description": "Company created! Upload the Articles if needed, activate the Registered Agent, then prepare the SS-4."}'::jsonb),
 
   ('Company Formation', 5, 'SS-4 Prepared',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),
