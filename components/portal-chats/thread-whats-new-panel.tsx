@@ -35,6 +35,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   contact_updated: 'Contact',
   offer_signed: 'Contract',
   workflow_spawned: 'Workflow',
+  decision_responded: 'Decision',
   formation_progress: 'Formation',
   onboarding_progress: 'Onboarding',
   closure_progress: 'Closure',

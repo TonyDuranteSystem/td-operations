@@ -11,6 +11,7 @@ import { SignatureStatus } from './signature-status'
 import { WaitingNotice } from './waiting-notice'
 import { FaxIrs } from './fax-irs'
 import { ActivateRa } from './activate-ra'
+import { DecisionRequestPanel } from './decision-request'
 import { FlowChat } from './flow-chat'
 import { ShippingInfo } from './shipping-info'
 
@@ -78,6 +79,15 @@ function renderComponent(
       return <FaxIrs key={key} account={account} />
     case 'activate_ra':
       return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
+    case 'decision_requests':
+      return (
+        <DecisionRequestPanel
+          key={key}
+          serviceDeliveryId={serviceDelivery.id}
+          serviceType={serviceDelivery.service_type}
+          stage={serviceDelivery.stage}
+        />
+      )
     case 'shipping_info':
       return <ShippingInfo key={key} serviceDelivery={serviceDelivery} />
     case 'chat':

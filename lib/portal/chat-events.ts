@@ -41,6 +41,7 @@ export type ChatEventKind =
   | "members_updated"         // client submitted the member-info form (multi-member LLC)
   | "contact_updated"         // client submitted the contact-request form (add/update contact)
   | "offer_signed"            // client signed the offer/contract (awaiting payment)
+  | "decision_responded"      // client answered a client_decision_request (approval/choice/text)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -286,5 +287,29 @@ export async function emitOfferSignedEvent(params: {
     message,
     source: { table: "offers", id: params.offer_id },
     event_kind: "offer_signed",
+  })
+}
+
+/**
+ * Emit a "client responded to a decision request" event so staff see the answer
+ * in the What's New feed. `summary` is a short human description of the answer
+ * (e.g. "Approved", "Rejected — wants a different name", "Selected: Aurora").
+ * Idempotent on the request id. Non-fatal.
+ */
+export async function emitDecisionRespondedEvent(params: {
+  request_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  title: string
+  summary: string
+}): Promise<EmitResult> {
+  const message = `Client responded to "${params.title}" — ${params.summary}.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "decision",
+    message,
+    source: { table: "client_decision_requests", id: params.request_id },
+    event_kind: "decision_responded",
   })
 }
