@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { formatRecalledLessons, AUTO_RECALL_THRESHOLD, AUTO_RECALL_COUNT } from "@/lib/ai-agent/worker-tools"
+import {
+  formatRecalledLessons,
+  buildAutoRecallSuffix,
+  AUTO_RECALL_THRESHOLD,
+  AUTO_RECALL_COUNT,
+} from "@/lib/ai-agent/worker-tools"
 
 describe("formatRecalledLessons (Decision Memory auto-recall)", () => {
   it("returns empty string for no matches", () => {
@@ -39,5 +44,12 @@ describe("formatRecalledLessons (Decision Memory auto-recall)", () => {
     expect(AUTO_RECALL_THRESHOLD).toBeGreaterThan(0)
     expect(AUTO_RECALL_THRESHOLD).toBeLessThan(0.7)
     expect(AUTO_RECALL_COUNT).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe("buildAutoRecallSuffix (shared worker + dashboard recall)", () => {
+  it("returns '' for an empty or whitespace query without touching the DB", async () => {
+    expect(await buildAutoRecallSuffix("")).toBe("")
+    expect(await buildAutoRecallSuffix("   ")).toBe("")
   })
 })
