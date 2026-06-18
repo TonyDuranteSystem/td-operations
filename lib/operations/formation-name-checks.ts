@@ -30,13 +30,14 @@ interface SdRow {
   id: string
   contact_id: string | null
   account_id: string | null
-  state_of_formation: string | null
   name_checks: NameCheck[] | null
 }
 
 async function loadSd(sdId: string): Promise<SdRow | null> {
+  // NOTE: state_of_formation lives on `accounts`, NOT service_deliveries —
+  // selecting it here errors the whole query (and silently empties name_checks).
   const { data } = await sd()
-    .select('id, contact_id, account_id, state_of_formation, name_checks')
+    .select('id, contact_id, account_id, name_checks')
     .eq('id', sdId)
     .maybeSingle()
   return (data as SdRow | null) ?? null
@@ -51,7 +52,14 @@ async function writeNameChecks(sdId: string, checks: NameCheck[]): Promise<void>
  * latest formation wizard's state, else "New Mexico".
  */
 async function resolveState(row: SdRow): Promise<string> {
-  if (row.state_of_formation) return row.state_of_formation
+  if (row.account_id) {
+    const { data: acct } = await supabaseAdmin
+      .from('accounts')
+      .select('state_of_formation')
+      .eq('id', row.account_id)
+      .maybeSingle()
+    if (acct?.state_of_formation) return acct.state_of_formation as string
+  }
   if (row.contact_id) {
     const { data: wp } = await supabaseAdmin
       .from('wizard_progress')
