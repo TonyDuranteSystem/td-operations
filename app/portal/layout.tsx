@@ -14,6 +14,7 @@ import { getUnopenedDocsCount } from '@/lib/portal/document-alerts'
 import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
+import { PendingDecisions } from '@/components/portal/pending-decisions'
 import { PushToggle } from '@/components/portal/push-toggle'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PullToRefresh } from '@/components/portal/pull-to-refresh'
@@ -236,6 +237,7 @@ export default async function PortalLayout({
               <NotificationBell accountId={selectedAccountId || undefined} contactId={contactId} />
             </div>
           )}
+          {contactId && <PendingDecisions locale={locale} />}
           {isSuspended && selectedAccount ? (
             <SuspendedGuard companyName={selectedAccount.company_name}>
               {children}
