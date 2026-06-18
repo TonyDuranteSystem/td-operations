@@ -15,7 +15,6 @@ import { z } from "zod"
 const CALENDLY_API = "https://api.calendly.com"
 const USER_UUID = "e163f002-89ba-4999-a32c-40aabf1f8173"
 const USER_URI = `${CALENDLY_API}/users/${USER_UUID}`
-const ORG_URI = `${CALENDLY_API}/organizations/2d681251-a657-4ec8-b3b5-3189992b21ac`
 
 function getToken(): string {
   const token = process.env.CALENDLY_PAT
@@ -103,6 +102,126 @@ interface CalendlyEventType {
   description_plain?: string
 }
 
+// ─── Shared read functions ──────────────────────────────────
+// One implementation of each read, returning the formatted text. Consumed by the
+// MCP tool registrations below AND by the Slack worker's gated Calendly tools
+// (lib/ai-agent/worker-tools.ts) so there is a single source of truth. They throw
+// on API error; each caller wraps in try/catch to format the failure.
+
+export interface ListBookingsArgs {
+  status?: string
+  count?: number
+  min_start_time?: string
+  max_start_time?: string
+  sort?: string
+}
+
+export async function listCalendlyBookings(args: ListBookingsArgs = {}): Promise<string> {
+  const params: Record<string, string> = {
+    user: USER_URI,
+    count: String(Math.min(args.count || 20, 100)),
+    status: args.status || "active",
+    sort: args.sort || "start_time:asc",
+  }
+  if (args.min_start_time) {
+    params.min_start_time = args.min_start_time
+  } else if (!args.max_start_time) {
+    params.min_start_time = new Date().toISOString()
+  }
+  if (args.max_start_time) {
+    params.max_start_time = args.max_start_time
+  }
+
+  const result = (await calendlyGet("/scheduled_events", params)) as {
+    collection: CalendlyEvent[]
+    pagination: { count: number; next_page_token?: string }
+  }
+
+  if (!result.collection || result.collection.length === 0) {
+    return "📭 No bookings found for the specified criteria."
+  }
+
+  const lines: string[] = [
+    `📅 Bookings (${result.collection.length}${result.pagination.next_page_token ? "+" : ""})`,
+    "",
+  ]
+  for (const evt of result.collection) {
+    const start = new Date(evt.start_time)
+    const end = new Date(evt.end_time)
+    const duration = Math.round((end.getTime() - start.getTime()) / 60000)
+    const statusIcon = evt.status === "active" ? "✅" : "❌"
+    const uuid = evt.uri.split("/").pop()
+    lines.push(`${statusIcon} ${evt.name}`)
+    lines.push(`   📆 ${start.toLocaleDateString("it-IT", { weekday: "short", day: "numeric", month: "short", year: "numeric" })} ${start.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} - ${end.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} (${duration} min)`)
+    if (evt.location?.join_url) lines.push(`   🔗 ${evt.location.join_url}`)
+    lines.push(`   👥 Invitees: ${evt.invitees_counter.active}/${evt.invitees_counter.total}`)
+    if (evt.cancellation) lines.push(`   ❌ Cancelled: ${evt.cancellation.reason || "no reason"}`)
+    lines.push(`   🆔 ${uuid}`)
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
+export async function getCalendlyEvent(eventUuid: string): Promise<string> {
+  const eventResult = (await calendlyGet(`/scheduled_events/${eventUuid}`)) as { resource: CalendlyEvent }
+  const evt = eventResult.resource
+  const inviteesResult = (await calendlyGet(`/scheduled_events/${eventUuid}/invitees`)) as { collection: CalendlyInvitee[] }
+
+  const start = new Date(evt.start_time)
+  const end = new Date(evt.end_time)
+  const duration = Math.round((end.getTime() - start.getTime()) / 60000)
+
+  const lines: string[] = [
+    `📅 ${evt.name}`,
+    "",
+    `📆 Date: ${start.toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`,
+    `⏰ Time: ${start.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} - ${end.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} (${duration} min)`,
+    `📋 Status: ${evt.status}`,
+  ]
+  if (evt.location?.join_url) lines.push(`🔗 Join URL: ${evt.location.join_url}`)
+  if (evt.location?.location) lines.push(`📍 Location: ${evt.location.location}`)
+  if (evt.cancellation) {
+    lines.push(`❌ Cancelled by: ${evt.cancellation.canceled_by}`)
+    if (evt.cancellation.reason) lines.push(`   Reason: ${evt.cancellation.reason}`)
+  }
+  if (inviteesResult.collection.length > 0) {
+    lines.push("")
+    lines.push("── Invitees ──")
+    for (const inv of inviteesResult.collection) {
+      const invStatus = inv.status === "active" ? "✅" : "❌"
+      lines.push(`${invStatus} ${inv.name} <${inv.email}>`)
+      if (inv.timezone) lines.push(`   🌍 Timezone: ${inv.timezone}`)
+      if (inv.questions_and_answers && inv.questions_and_answers.length > 0) {
+        for (const qa of inv.questions_and_answers) lines.push(`   💬 ${qa.question}: ${qa.answer}`)
+      }
+      if (inv.reschedule_url) lines.push(`   🔄 Reschedule: ${inv.reschedule_url}`)
+    }
+  }
+  lines.push("")
+  lines.push(`🆔 Event UUID: ${eventUuid}`)
+  lines.push(`📅 Created: ${new Date(evt.created_at).toLocaleString("it-IT")}`)
+  return lines.join("\n")
+}
+
+export async function getCalendlyAvailability(): Promise<string> {
+  const result = (await calendlyGet("/event_types", { user: USER_URI, active: "true" })) as {
+    collection: CalendlyEventType[]
+  }
+  if (!result.collection || result.collection.length === 0) {
+    return "📭 No active event types found."
+  }
+  const lines: string[] = [`🗓️ Active Event Types (${result.collection.length})`, ""]
+  for (const et of result.collection) {
+    lines.push(`📌 ${et.name}`)
+    lines.push(`   ⏱️ Duration: ${et.duration} min`)
+    lines.push(`   🔗 Book: ${et.scheduling_url}`)
+    if (et.description_plain) lines.push(`   📝 ${et.description_plain.slice(0, 200)}`)
+    lines.push(`   🎨 Color: ${et.color} | Type: ${et.type}`)
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
 // ─── Tool Registration ──────────────────────────────────────
 
 export function registerCalendlyTools(server: McpServer) {
@@ -122,66 +241,8 @@ export function registerCalendlyTools(server: McpServer) {
     },
     async ({ status, count, min_start_time, max_start_time, sort }) => {
       try {
-        const params: Record<string, string> = {
-          user: USER_URI,
-          count: String(Math.min(count || 20, 100)),
-          status: status || "active",
-          sort: sort || "start_time:asc",
-        }
-
-        // Default: from now onwards
-        if (min_start_time) {
-          params.min_start_time = min_start_time
-        } else if (!max_start_time) {
-          params.min_start_time = new Date().toISOString()
-        }
-        if (max_start_time) {
-          params.max_start_time = max_start_time
-        }
-
-        const result = (await calendlyGet("/scheduled_events", params)) as {
-          collection: CalendlyEvent[]
-          pagination: { count: number; next_page_token?: string }
-        }
-
-        if (!result.collection || result.collection.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "📭 No bookings found for the specified criteria." }],
-          }
-        }
-
-        const lines: string[] = [
-          `📅 Bookings (${result.collection.length}${result.pagination.next_page_token ? "+" : ""})`,
-          "",
-        ]
-
-        for (const evt of result.collection) {
-          const start = new Date(evt.start_time)
-          const end = new Date(evt.end_time)
-          const duration = Math.round((end.getTime() - start.getTime()) / 60000)
-          const statusIcon = evt.status === "active" ? "✅" : "❌"
-          const uuid = evt.uri.split("/").pop()
-
-          lines.push(`${statusIcon} ${evt.name}`)
-          lines.push(`   📆 ${start.toLocaleDateString("it-IT", { weekday: "short", day: "numeric", month: "short", year: "numeric" })} ${start.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} - ${end.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} (${duration} min)`)
-
-          if (evt.location?.join_url) {
-            lines.push(`   🔗 ${evt.location.join_url}`)
-          }
-
-          lines.push(`   👥 Invitees: ${evt.invitees_counter.active}/${evt.invitees_counter.total}`)
-
-          if (evt.cancellation) {
-            lines.push(`   ❌ Cancelled: ${evt.cancellation.reason || "no reason"}`)
-          }
-
-          lines.push(`   🆔 ${uuid}`)
-          lines.push("")
-        }
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        }
+        const text = await listCalendlyBookings({ status, count, min_start_time, max_start_time, sort })
+        return { content: [{ type: "text" as const, text }] }
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ List bookings failed: ${error instanceof Error ? error.message : String(error)}` }],
@@ -201,75 +262,8 @@ export function registerCalendlyTools(server: McpServer) {
     },
     async ({ event_uuid }) => {
       try {
-        // Get event details
-        const eventResult = (await calendlyGet(`/scheduled_events/${event_uuid}`)) as {
-          resource: CalendlyEvent
-        }
-        const evt = eventResult.resource
-
-        // Get invitees
-        const inviteesResult = (await calendlyGet(`/scheduled_events/${event_uuid}/invitees`)) as {
-          collection: CalendlyInvitee[]
-        }
-
-        const start = new Date(evt.start_time)
-        const end = new Date(evt.end_time)
-        const duration = Math.round((end.getTime() - start.getTime()) / 60000)
-
-        const lines: string[] = [
-          `📅 ${evt.name}`,
-          "",
-          `📆 Date: ${start.toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`,
-          `⏰ Time: ${start.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} - ${end.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} (${duration} min)`,
-          `📋 Status: ${evt.status}`,
-        ]
-
-        if (evt.location?.join_url) {
-          lines.push(`🔗 Join URL: ${evt.location.join_url}`)
-        }
-        if (evt.location?.location) {
-          lines.push(`📍 Location: ${evt.location.location}`)
-        }
-
-        if (evt.cancellation) {
-          lines.push(`❌ Cancelled by: ${evt.cancellation.canceled_by}`)
-          if (evt.cancellation.reason) {
-            lines.push(`   Reason: ${evt.cancellation.reason}`)
-          }
-        }
-
-        // Invitees
-        if (inviteesResult.collection.length > 0) {
-          lines.push("")
-          lines.push("── Invitees ──")
-
-          for (const inv of inviteesResult.collection) {
-            const invStatus = inv.status === "active" ? "✅" : "❌"
-            lines.push(`${invStatus} ${inv.name} <${inv.email}>`)
-            if (inv.timezone) {
-              lines.push(`   🌍 Timezone: ${inv.timezone}`)
-            }
-
-            // Booking form responses
-            if (inv.questions_and_answers && inv.questions_and_answers.length > 0) {
-              for (const qa of inv.questions_and_answers) {
-                lines.push(`   💬 ${qa.question}: ${qa.answer}`)
-              }
-            }
-
-            if (inv.reschedule_url) {
-              lines.push(`   🔄 Reschedule: ${inv.reschedule_url}`)
-            }
-          }
-        }
-
-        lines.push("")
-        lines.push(`🆔 Event UUID: ${event_uuid}`)
-        lines.push(`📅 Created: ${new Date(evt.created_at).toLocaleString("it-IT")}`)
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        }
+        const text = await getCalendlyEvent(event_uuid)
+        return { content: [{ type: "text" as const, text }] }
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Get event failed: ${error instanceof Error ? error.message : String(error)}` }],
@@ -287,38 +281,8 @@ export function registerCalendlyTools(server: McpServer) {
     {},
     async () => {
       try {
-        const result = (await calendlyGet("/event_types", {
-          user: USER_URI,
-          active: "true",
-        })) as {
-          collection: CalendlyEventType[]
-        }
-
-        if (!result.collection || result.collection.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "📭 No active event types found." }],
-          }
-        }
-
-        const lines: string[] = [
-          `🗓️ Active Event Types (${result.collection.length})`,
-          "",
-        ]
-
-        for (const et of result.collection) {
-          lines.push(`📌 ${et.name}`)
-          lines.push(`   ⏱️ Duration: ${et.duration} min`)
-          lines.push(`   🔗 Book: ${et.scheduling_url}`)
-          if (et.description_plain) {
-            lines.push(`   📝 ${et.description_plain.slice(0, 200)}`)
-          }
-          lines.push(`   🎨 Color: ${et.color} | Type: ${et.type}`)
-          lines.push("")
-        }
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        }
+        const text = await getCalendlyAvailability()
+        return { content: [{ type: "text" as const, text }] }
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Get availability failed: ${error instanceof Error ? error.message : String(error)}` }],
