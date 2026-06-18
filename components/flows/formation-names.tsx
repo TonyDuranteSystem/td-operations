@@ -39,6 +39,12 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   const [advancing, setAdvancing] = useState(false)
 
   const sos = resolveFormationFilingLink(stateOfFormation)
+  // The name-selection workflow (check on SOS → mark available → send to client →
+  // file) belongs to the "Wizard Submitted" stage. Once the SD is at "Filed with
+  // State" the selection is DONE: the panel is read-mostly — it shows the filed
+  // name with its status and the only corrective action (report a SOS rejection);
+  // the other candidates are shown dimmed for reference, with no action buttons.
+  const selectionStage = stage === 'Wizard Submitted'
 
   const load = useCallback(async () => {
     setError(null)
@@ -121,6 +127,15 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   }
 
   function rowActions(c: NameCheck, i: number) {
+    // Filed-with-State (read-mostly): only a filed name keeps a corrective
+    // action — report a Secretary-of-State rejection. Everything else is
+    // reference-only here (selection happened on the previous stage).
+    if (!selectionStage) {
+      if (c.status === 'filed') {
+        return <Btn onClick={() => act(i, 'mark_sos_rejected', 'rejected_by_sos')} variant="danger">Mark SOS Rejected</Btn>
+      }
+      return null
+    }
     switch (c.status) {
       case 'pending':
         return (
@@ -146,7 +161,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
           </>
         )
       case 'filed':
-        return <Btn onClick={() => act(i, 'mark_sos_rejected', 'rejected_by_sos')} variant="danger">SOS Rejected</Btn>
+        return <Btn onClick={() => act(i, 'mark_sos_rejected', 'rejected_by_sos')} variant="danger">Mark SOS Rejected</Btn>
       default:
         return null
     }
@@ -186,7 +201,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
           {checks.map((c, i) => {
             const meta = NAME_STATUS_META[c.status]
             return (
-              <li key={`${c.name}-${i}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 px-3 py-2">
+              <li key={`${c.name}-${i}`} className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 px-3 py-2 ${!selectionStage && c.status !== 'filed' ? 'opacity-50' : ''}`}>
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm font-semibold text-zinc-900 break-words">{c.name}</span>
                   {c.source === 'client_resubmit' && <span className="text-[10px] text-zinc-400">(client-proposed)</span>}
