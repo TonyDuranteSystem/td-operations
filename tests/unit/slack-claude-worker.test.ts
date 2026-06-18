@@ -141,8 +141,15 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // same-thread replies + show-draft-then-explicit-"send it" guardrail)
     // → 7200 (2026-06-17, CALLS block: read Circleback calls in full via
     // list_calls/get_call/search_calls).
+    // → 8000 (2026-06-18, ENGINEERING DISCIPLINE block: never assume/invent,
+    // check before claiming a tool doesn't exist, challenge first answer).
+    // → 8800 (2026-06-18, don't-double-down-when-corrected + recount-against-the-
+    // list-you-pulled rules, after the offers-vs-leads miscount).
+    // → 9600 (2026-06-18, SOURCES block: search_sysdocs/read_sysdoc/search_sops/
+    // read_drive_file — read every source the dev system can, after the worker hit
+    // "the KB has nothing" while the installment rule lived in a sysdoc).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(7200)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(9600)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
@@ -340,7 +347,9 @@ describe("processSlackEvent", () => {
       enableDbRead: true,
       enableEmailSend: true,
       enableCallReads: true,
-      maxIterations: 12,
+      enableDocReads: true,
+      enableFullToolReach: false,
+      maxIterations: 20,
     })
 
     // Should have called Slack chat.postMessage

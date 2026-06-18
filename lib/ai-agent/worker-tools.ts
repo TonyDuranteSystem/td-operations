@@ -592,6 +592,161 @@ async function searchCallsForWorker(params: Record<string, unknown>): Promise<st
   return lines.join("\n")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal knowledge-source reading — Slack-only (gated via enableDocReads). These
+// close the gap where the worker hit "the KB has nothing" while the answer lived in
+// a Supabase sysdoc / SOP / Drive file it couldn't see. They give the Slack worker
+// read parity with the sources Claude Code can read. ALL read-only; kept Slack-only
+// so the Hermes/Telegram research worker never receives them (R108). The big one is
+// search_sysdocs: the existing sysdoc tools only list titles + read by exact slug,
+// so there was no way to FIND the right doc by topic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Char cap on a single returned doc/file so a long document can't blow the worker's context. */
+const DOC_RESULT_CAP = 40_000
+
+/** Return a ~`radius`-char window of `text` centred on the first match of `q` (case-insensitive), else the head. Exported for tests. */
+export function snippetAround(text: string, q: string, radius = 220): string {
+  if (typeof text !== "string" || !text) return ""
+  const idx = text.toLowerCase().indexOf(q.toLowerCase())
+  if (idx < 0) return text.slice(0, radius * 2).trim() + (text.length > radius * 2 ? "…" : "")
+  const start = Math.max(0, idx - radius)
+  const end = Math.min(text.length, idx + q.length + radius)
+  return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`
+}
+
+export const SEARCH_SYSDOCS_TOOL: ToolDef = {
+  name: "search_sysdocs",
+  description: [
+    "Search the firm's SYSTEM DOCS (Supabase system_docs) by keyword across title AND full body — operational rules, plans, decisions, billing/installment rules, session-context, project state, architecture. This is the place to look when the KB has no answer: many authoritative rules live here, NOT in the KB.",
+    "Returns matching docs with their slug + a snippet. Then call read_sysdoc with the slug to read the full document.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: 'Keyword(s) to find in sysdoc title or body (e.g. "installment billing", "formation flow", "referral").' },
+      limit: { type: "number", description: "Max results (default 8, max 20)." },
+    },
+    required: ["query"],
+  },
+}
+
+export const READ_SYSDOC_TOOL: ToolDef = {
+  name: "read_sysdoc",
+  description: [
+    "Read ONE system doc IN FULL by its slug. Get the slug from search_sysdocs first. Key slugs: 'session-context' (current system state — read this to know what was just done), 'project-state', 'tech-stack'.",
+    "Returns the full Markdown content (capped at a generous char limit).",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { slug: { type: "string", description: "Sysdoc slug (from search_sysdocs, e.g. 'session-context')." } },
+    required: ["slug"],
+  },
+}
+
+export const SEARCH_SOPS_TOOL: ToolDef = {
+  name: "search_sops",
+  description: [
+    "Search the firm's SOP runbooks by keyword across title, service type, AND full body. Use this to FIND the right SOP by topic when you don't already know the service-type name (get_sop needs the exact service type).",
+    "Returns matching SOPs; the top match includes full content.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: 'Keyword(s) to find in an SOP (e.g. "passport", "second installment", "bank rejection").' },
+      limit: { type: "number", description: "Max results (default 5, max 15)." },
+    },
+    required: ["query"],
+  },
+}
+
+export const READ_DRIVE_FILE_TOOL: ToolDef = {
+  name: "read_drive_file",
+  description: [
+    "Read the TEXT content of a Google Drive file by id (plain text, CSV, Google Docs/Sheets exported as text). Get the id from drive_search / drive_list_folder first.",
+    "NOTE: PDFs and images can NOT be read here (they need OCR, which is currently disabled) — for those, report that the file is a PDF/image and can't be read as text.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { file_id: { type: "string", description: "Google Drive file id (from drive_search / drive_list_folder)." } },
+    required: ["file_id"],
+  },
+}
+
+/** search_sysdocs handler — ILIKE over title + body of system_docs, returns slug + snippet. */
+export async function searchSysdocsForWorker(params: Record<string, unknown>): Promise<string> {
+  const q = typeof params.query === "string" ? params.query.trim() : ""
+  if (!q) return "query is required."
+  const limit = Math.min(typeof params.limit === "number" ? params.limit : 8, 20)
+  const pattern = `%${q}%`
+  const { data, error } = await supabaseAdmin
+    .from("system_docs")
+    .select("slug, title, doc_type, content, updated_at")
+    .or(`title.ilike.${pattern},content.ilike.${pattern}`)
+    .limit(limit)
+  if (error) return `Error searching sysdocs: ${error.message}`
+  if (!data || data.length === 0) {
+    return `No sysdocs match "${q}". Try different keywords. (Sysdocs hold operational rules, plans, and session-context — distinct from the KB.)`
+  }
+  const lines: string[] = [`Sysdocs matching "${q}" (${data.length}) — use read_sysdoc(slug) for full content:`, ""]
+  for (const d of data) {
+    lines.push(`• ${d.title}  [slug: ${d.slug}]`)
+    lines.push(`  ${snippetAround(typeof d.content === "string" ? d.content : "", q)}`)
+  }
+  return lines.join("\n")
+}
+
+/** read_sysdoc handler — full content by exact slug, capped. */
+export async function readSysdocForWorker(params: Record<string, unknown>): Promise<string> {
+  const slug = typeof params.slug === "string" ? params.slug.trim() : ""
+  if (!slug) return "slug is required (find it with search_sysdocs)."
+  const { data, error } = await supabaseAdmin
+    .from("system_docs")
+    .select("title, content, updated_at")
+    .eq("slug", slug)
+    .single()
+  if (error || !data) return `Sysdoc not found: "${slug}". Find the right slug with search_sysdocs.`
+  const out = `# ${data.title}\n_Last updated: ${data.updated_at}_\n\n${data.content ?? ""}`
+  return out.length > DOC_RESULT_CAP ? `${out.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : out
+}
+
+/** search_sops handler — ILIKE over title + service_type + body of sop_runbooks; top match full. */
+export async function searchSopsForWorker(params: Record<string, unknown>): Promise<string> {
+  const q = typeof params.query === "string" ? params.query.trim() : ""
+  if (!q) return "query is required."
+  const limit = Math.min(typeof params.limit === "number" ? params.limit : 5, 15)
+  const pattern = `%${q}%`
+  const { data, error } = await supabaseAdmin
+    .from("sop_runbooks")
+    .select("title, service_type, content")
+    .or(`title.ilike.${pattern},service_type.ilike.${pattern},content.ilike.${pattern}`)
+    .limit(limit)
+  if (error) return `Error searching SOPs: ${error.message}`
+  if (!data || data.length === 0) return `No SOPs match "${q}". Try different keywords.`
+  const lines: string[] = [`SOPs matching "${q}" (${data.length}):`, ""]
+  data.forEach((s, i) => {
+    lines.push(`• ${s.title} (${s.service_type})`)
+    const content = typeof s.content === "string" ? s.content : ""
+    lines.push(`  ${i === 0 ? content.slice(0, DOC_RESULT_CAP) : snippetAround(content, q)}`)
+  })
+  return lines.join("\n")
+}
+
+/** read_drive_file handler — text content of a Drive file, capped; PDFs/images unsupported (OCR off). */
+export async function readDriveFileForWorker(params: Record<string, unknown>): Promise<string> {
+  const fileId = typeof params.file_id === "string" ? params.file_id.trim() : ""
+  if (!fileId) return "file_id is required (find it with drive_search / drive_list_folder)."
+  try {
+    const { downloadFileContent } = await import("@/lib/google-drive")
+    const content = await downloadFileContent(fileId)
+    if (!content || !content.trim()) return `File ${fileId} has no readable text (it may be a PDF/image — OCR is currently disabled — or an empty file).`
+    return content.length > DOC_RESULT_CAP ? `${content.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : content
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Couldn't read file ${fileId}: ${msg}. (PDFs/images need OCR, which is currently disabled — report the file type instead.)`
+  }
+}
+
 /**
  * Antonio's admin auth user id — stamped as sender_id on portal_messages so the
  * client sees the message as coming from the Tony Durante team (sender_type
@@ -746,6 +901,44 @@ export const WORKER_TOOLS: ToolDef[] = [
   MEMORY_SAVE_TOOL,
 ]
 
+/**
+ * find_tool / use_tool — the flexible action surface (Slack-only, gated by
+ * enableFullToolReach / env ASSISTANT_FULL_REACH_ENABLED, default OFF; kept OUT of
+ * WORKER_TOOLS so the Hermes/Telegram research worker never receives them, R108).
+ *
+ * find_tool searches the full ~215-tool catalog (read-only). use_tool runs a tool by
+ * name THROUGH THE RISK POLICY (lib/ai-agent/tool-risk.ts): READ tools run immediately
+ * via the bridge; tools that change data or are external are NOT auto-run — they return
+ * a notice that the approval rail for the full tool set is the next build step (the
+ * existing 14-tool propose_action rail is unchanged); blocked tools are refused.
+ */
+export const FIND_TOOL_TOOL: ToolDef = {
+  name: "find_tool",
+  description: "Search the full Tony Durante Operations tool catalog (~215 tools) by keyword to find the exact tool name and what it does. Use this before use_tool when you're not sure of the exact tool name.",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "Keyword(s) to match against tool names and descriptions." } },
+    required: ["query"],
+  },
+}
+
+export const USE_TOOL_TOOL: ToolDef = {
+  name: "use_tool",
+  description: [
+    "Run any Tony Durante Operations tool by name. Read-only tools (lookups) run immediately and return the result.",
+    "Tools that change data or send anything external are NOT run directly — they are queued for Antonio's approval (he approves with a 6-digit code, then the action runs). A few tools (raw SQL, etc.) are blocked entirely.",
+    "Find the exact tool name with find_tool first. Pass the tool's parameters as `params`. Show Antonio what you're about to do before proposing a change.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Exact tool name (from find_tool)." },
+      params: { type: "object", description: "The tool's parameters as a JSON object." },
+    },
+    required: ["name"],
+  },
+}
+
 // NOTE: START_CODE_TASK_TOOL and SEND_PORTAL_MESSAGE_TOOL are intentionally NOT
 // in WORKER_TOOLS. WORKER_TOOLS feeds both the default tool list AND
 // getToolsForThreadType() (thread-routing), which the Hermes/Telegram research
@@ -776,14 +969,17 @@ export function generateConfirmationCode(): string {
  * Idempotency: if idempotency_key matches an existing row whose status is
  * pending or approved, returns that row instead of inserting a duplicate.
  */
-export async function proposeAction(input: {
-  tool_name?: unknown
-  params?: unknown
-  rationale?: unknown
-  idempotency_key?: unknown
-  thread_id?: unknown
-  batch_id?: unknown
-}): Promise<string> {
+export async function proposeAction(
+  input: {
+    tool_name?: unknown
+    params?: unknown
+    rationale?: unknown
+    idempotency_key?: unknown
+    thread_id?: unknown
+    batch_id?: unknown
+  },
+  opts?: { allowBridgeTools?: boolean },
+): Promise<string> {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
   // hashing, so a proposal with 'medium'/'todo' is accepted (→ 'Normal'/'To Do')
@@ -804,15 +1000,35 @@ export async function proposeAction(input: {
     ? input.batch_id
     : null
 
-  // 1) Allow-list check — a tool not in the set can never be proposed.
+  // 1) Allow-list check. The existing 14 approvable AGENT tools are ALWAYS allowed
+  // (unchanged behavior for the propose_action tool / Hermes). A bridge tool is
+  // allowed ONLY when the caller explicitly opted in (use_tool, behind the
+  // full-reach flag) AND the risk policy classifies it as approval-tier — so the
+  // shared rail is never silently widened for the existing propose_action path.
+  let isBridgeTool = false
   if (!isApprovableTool(toolName)) {
-    return `❌ "${toolName}" is not an approvable action. Allowed: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`
+    if (!opts?.allowBridgeTools) {
+      return `❌ "${toolName}" is not an approvable action. Allowed: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`
+    }
+    const { decideAction } = await import("./tool-risk")
+    const d = decideAction(toolName, params as Record<string, unknown>)
+    if (d.decision === "blocked") return `❌ "${toolName}" is blocked from the assistant.`
+    if (d.decision === "auto") return `❌ "${toolName}" is a read-only tool — run it directly, not via approval.`
+    isBridgeTool = true
   }
 
-  // 2) Schema check — reject a malformed proposal at propose time.
-  const validation = validateToolParams(toolName, params)
-  if (!validation.ok) {
-    return `❌ Invalid params for "${toolName}": ${validation.errors.join(" ")}`
+  // 2) Schema check — reject a malformed proposal at propose time. AGENT tools
+  // validate against their AGENT_TOOLS schema; bridge tools against the captured
+  // MCP zod schema.
+  if (isBridgeTool) {
+    const { validateBridgeToolParams } = await import("./mcp-bridge")
+    const v = validateBridgeToolParams(toolName, params as Record<string, unknown>)
+    if (!v.ok) return `❌ Invalid params for "${toolName}": ${v.error}`
+  } else {
+    const validation = validateToolParams(toolName, params)
+    if (!validation.ok) {
+      return `❌ Invalid params for "${toolName}": ${validation.errors.join(" ")}`
+    }
   }
 
   // 3) Idempotency — return an existing pending/approved row rather than dup.
@@ -1067,6 +1283,52 @@ export async function executeWorkerTool(
     if (name === "get_call") return getCallForWorker(params)
     return searchCallsForWorker(params)
   }
+  // Internal knowledge-source reading — Slack-only (gated via enableDocReads at the
+  // tool-list level). Executor-gate too (defense-in-depth, R108): never let the Hermes
+  // research worker read sysdocs/SOPs/Drive even if a name leaks. All read-only.
+  if (name === "search_sysdocs" || name === "read_sysdoc" || name === "search_sops" || name === "read_drive_file") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (doc reading not enabled).`
+    }
+    if (name === "search_sysdocs") return searchSysdocsForWorker(params)
+    if (name === "read_sysdoc") return readSysdocForWorker(params)
+    if (name === "search_sops") return searchSopsForWorker(params)
+    return readDriveFileForWorker(params)
+  }
+  // find_tool / use_tool — the flexible action surface (Slack-only, gated via
+  // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
+  if (name === "find_tool") {
+    if (!availableNames?.has("find_tool")) return `❌ Tool "find_tool" is not permitted in this worker call (full tool reach not enabled).`
+    const q = (typeof params.query === "string" ? params.query : "").toLowerCase().trim()
+    if (!q) return "find_tool needs a query."
+    const { listBridgeTools } = await import("./mcp-bridge")
+    const hits = listBridgeTools()
+      .filter((t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+      .slice(0, 15)
+    if (!hits.length) return `No tools match "${q}".`
+    return hits.map((t) => `• ${t.name} — ${t.description.split(/\. |\n/)[0]}`).join("\n")
+  }
+  if (name === "use_tool") {
+    if (!availableNames?.has("use_tool")) return `❌ Tool "use_tool" is not permitted in this worker call (full tool reach not enabled).`
+    const toolName = typeof params.name === "string" ? params.name : ""
+    if (!toolName) return "use_tool needs a tool `name` (find it with find_tool)."
+    const toolParams = params.params && typeof params.params === "object" ? (params.params as Record<string, unknown>) : {}
+    const { decideAction } = await import("./tool-risk")
+    const { decision, tier, reasons } = decideAction(toolName, toolParams)
+    if (decision === "blocked") return `❌ "${toolName}" is blocked from the assistant (${reasons.join("; ")}).`
+    if (decision === "auto") {
+      const { runToolByName } = await import("./mcp-bridge")
+      return runToolByName(toolName, toolParams)
+    }
+    // approval needed — queue it on the approval rail (opt-in to bridge tools). It
+    // does NOT execute; Antonio approves with a 6-digit code, then the executor runs
+    // it via runToolByName. Show the draft + wait for his OK before this fires.
+    const queued = await proposeAction(
+      { tool_name: toolName, params: toolParams, rationale: `Proposed via use_tool (${tier})` },
+      { allowBridgeTools: true },
+    )
+    return `🔒 "${toolName}" is a ${tier === "EXTERNAL" ? "client-facing/external" : "data-changing"} action — queued for your approval.\n${queued}`
+  }
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
@@ -1143,6 +1405,25 @@ type WorkerUserContent = string | Array<{ type: "text"; text: string } | WorkerI
 const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
 const ANTHROPIC_TIMEOUT_MS = 240_000 // per-call ceiling; raised from 55s so max_tokens=16384 is usable for long pure-text responses. Stays under cron route's maxDuration=300 with 60s buffer.
 
+// Wall-clock budget for the WHOLE tool-use loop. Kept under the cron route's
+// maxDuration=300s with a 50s margin so the serverless function never gets
+// hard-killed mid-loop. The loop stops GRACEFULLY when this (or the iteration cap)
+// is hit — better than a fixed iteration cap alone: a fast investigation gets more
+// steps; a slow one stops cleanly before the deadline instead of being cut off.
+const WORKER_WALL_CLOCK_BUDGET_MS = 250_000
+const MIN_CALL_TIMEOUT_MS = 15_000
+const CALL_DEADLINE_MARGIN_MS = 5_000
+
+/**
+ * Per-API-call abort timeout given how much loop budget is left, so a late call can
+ * never overrun WORKER_WALL_CLOCK_BUDGET_MS (which would risk a hard function kill).
+ * Clamped to [MIN_CALL_TIMEOUT_MS, maxCallMs]. Pure — exported for tests.
+ */
+export function callTimeoutForBudget(elapsedMs: number, budgetMs: number, maxCallMs: number): number {
+  const remaining = budgetMs - elapsedMs - CALL_DEADLINE_MARGIN_MS
+  return Math.max(MIN_CALL_TIMEOUT_MS, Math.min(maxCallMs, remaining))
+}
+
 export interface CallWorkerOptions {
   /**
    * Thread this message belongs to. When set, the worker is given the thread's
@@ -1208,6 +1489,23 @@ export interface CallWorkerOptions {
    * Slack-only so the Hermes/Telegram research worker never gets call transcripts (R108).
    */
   enableCallReads?: boolean
+  /**
+   * Expose the Slack-only internal knowledge-source readers (search_sysdocs /
+   * read_sysdoc / search_sops / read_drive_file) for this call. Set by the Slack
+   * worker (processSlackEvent). Gives the worker read parity with the sources Claude
+   * Code can read (sysdocs incl. session-context, SOPs by topic, Drive file text).
+   * All read-only; kept Slack-only so the Hermes/Telegram research worker never gets
+   * them (R108).
+   */
+  enableDocReads?: boolean
+  /**
+   * Expose the Slack-only flexible action surface (find_tool / use_tool) for this
+   * call. Set by the Slack worker (processSlackEvent) ONLY when env
+   * ASSISTANT_FULL_REACH_ENABLED === 'true' (default off). Read tools run via the
+   * bridge; data-changing/external tools require approval (rail expansion pending).
+   * Kept out of WORKER_TOOLS so the Hermes/Telegram research worker never gets it (R108).
+   */
+  enableFullToolReach?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -1261,9 +1559,13 @@ async function runWorkerLoop(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let currentMessages: any[] = [{ role: "user", content: userContent }]
 
-  for (let i = 0; i < maxLoops; i++) {
+  const loopStart = Date.now()
+  for (let i = 0; i < maxLoops && Date.now() - loopStart < WORKER_WALL_CLOCK_BUDGET_MS; i++) {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS)
+    // Per-call timeout shrinks as the loop budget depletes so a late call can't
+    // push the function past its hard maxDuration.
+    const callTimeout = callTimeoutForBudget(Date.now() - loopStart, WORKER_WALL_CLOCK_BUDGET_MS, ANTHROPIC_TIMEOUT_MS)
+    const timeout = setTimeout(() => controller.abort(), callTimeout)
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1337,7 +1639,7 @@ async function runWorkerLoop(
   }
 
   return {
-    reply: `Reached the worker's maximum tool-use iterations (${maxLoops}). Findings may be incomplete — consider narrowing the question.`,
+    reply: `I reached my working limit on this one (up to ${maxLoops} steps within the time budget), so my findings may be incomplete. Try narrowing it down or asking for one thing at a time.`,
     toolsUsed,
     reachedMaxLoops: true,
   }
@@ -1436,6 +1738,26 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // availableNames (defense-in-depth).
   if (opts.enableCallReads) {
     for (const t of [LIST_CALLS_TOOL, GET_CALL_TOOL, SEARCH_CALLS_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
+  // Slack-only: append the internal knowledge-source readers (search_sysdocs /
+  // read_sysdoc / search_sops / read_drive_file). Gated on enableDocReads so they
+  // NEVER reach the Hermes research worker (R108) and never double-add. Read-only;
+  // the executor also re-checks availableNames (defense-in-depth).
+  if (opts.enableDocReads) {
+    for (const t of [SEARCH_SYSDOCS_TOOL, READ_SYSDOC_TOOL, SEARCH_SOPS_TOOL, READ_DRIVE_FILE_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
+  // Slack-only: append the flexible action surface (find_tool / use_tool). Gated on
+  // enableFullToolReach (default off) so it NEVER reaches the Hermes research worker
+  // (R108) and never double-adds. Read tools auto-run via the bridge; writes/externals
+  // require approval (rail expansion pending). Executor re-checks availableNames.
+  if (opts.enableFullToolReach) {
+    for (const t of [FIND_TOOL_TOOL, USE_TOOL_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }

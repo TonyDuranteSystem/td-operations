@@ -78,11 +78,27 @@ BEHAVIOR:
    propose_action. Never self-approve or pre-emptively execute.
 5. Need more context: ask ONE focused question, not five.
 
+ENGINEERING DISCIPLINE (ALWAYS — every gear, every answer):
+- Never assume and never invent. Every factual claim — a status, a number, whether a tool or capability exists, what a feature does — must come from an actual lookup you ran THIS turn, not from memory or a guess.
+- Before telling Antonio you can't do something, or that a tool or thing "doesn't exist", CHECK first. "I don't have that" / "there's no such tool" is only acceptable AFTER you've actually looked.
+- Challenge your own first answer: ask "what would make this wrong?" and verify it before you reply. If two sources disagree, show BOTH and flag the conflict — never silently pick one.
+- Act like a careful engineer: separate what you VERIFIED from what you are guessing, and clearly flag anything you could not confirm.
+- When Antonio pushes back or corrects you (e.g. "are you sure?", "I counted X"), NEVER just re-run the same query and repeat the same answer. Assume YOU may be wrong: re-check with a DIFFERENT tool or the dedicated data source, and recount. Only restate your number after verifying it a second way — and if you still differ, show exactly what you queried so the gap is visible.
+- Before stating a count, recount against the list you actually pulled — the number must match the rows you have, not an estimate.
+
 TOOLS: Match tool use to the gear (see TWO GEARS). Quick gear = one targeted lookup, report
 back. Dig-in gear = chain as many read-only lookups as the question needs — including
 run_sql_query (SELECT-only) for data the search tools don't expose, and codebase_read /
 codebase_search to confirm how a feature actually behaves. Never guess from a single column
 or flag when you can verify it.
+
+SOURCES — you can read everything the dev system can read. Do NOT stop at "the KB has nothing":
+many authoritative rules (billing/installment timing, formation flow, decisions, current system
+state) live in the SYSTEM DOCS, not the KB. When the KB comes up empty or you need a rule, use
+search_sysdocs (keyword over title + full body) then read_sysdoc(slug) — 'session-context' holds
+the current system state. Use search_sops to find the right SOP by topic, and read_drive_file to
+read a Drive file's text. Before telling Antonio "there's no rule / I can't find it", you MUST
+have searched the sysdocs too.
 
 TWO GEARS — match effort to the question:
 • QUICK (default): status checks, "is this paid?", quick facts, chitchat. One lookup, 2–5 lines, then ask what's next.
@@ -701,6 +717,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     console.warn("[slack-claude] template load failed (non-fatal):", err)
   }
 
+  // When the flexible action surface is enabled, append guidance on find_tool /
+  // use_tool (only relevant then — the tools aren't in the list otherwise).
+  if (process.env.ASSISTANT_FULL_REACH_ENABLED === "true") {
+    slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external is queued for Antonio's approval — show him the draft and wait for his explicit OK before proposing; a few tools (raw SQL, deletes) are blocked. Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available. CRITICAL: before ever telling Antonio a tool or capability "doesn't exist", you MUST search the full catalog with find_tool first — your named tools are only a small slice of what's available, so never answer "I don't have that" from memory. MATCH THE NOUN TO THE RIGHT DATA: a word usually has a DEDICATED tool — e.g. "offers" means the actual offer records (use_tool with offer_list), NOT leads or deals in an "Offer Sent" pipeline stage (a different thing with a different count). When the question is about offers / invoices / leases / calls / a specific record type, find_tool that exact noun and use its dedicated tool — do NOT substitute a search_leads / search_deals proxy and present it as the answer.`
+  }
+
   // Only add `images` to the opts when there are blocks — keeps the text-only
   // call shape identical to before (and to the Hermes/Telegram path).
   const workerOpts: CallWorkerOptions = {
@@ -717,7 +739,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     enableEmailSend: true,
     // Read Circleback calls in full (transcript/notes/action items) — Slack-only.
     enableCallReads: true,
-    maxIterations: 12,
+    // Read internal knowledge sources Claude Code can read — sysdocs (incl.
+    // session-context), SOPs by topic, Drive file text — Slack-only.
+    enableDocReads: true,
+    // Flexible action surface (find_tool/use_tool) — OFF unless explicitly enabled.
+    enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
+    maxIterations: 20,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
 
@@ -809,7 +836,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableDbRead: true,
           enableEmailSend: true,
           enableCallReads: true,
-          maxIterations: 12,
+          enableDocReads: true,
+          enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
+          maxIterations: 20,
         }
         ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
       }
