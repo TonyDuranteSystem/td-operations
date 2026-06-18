@@ -210,12 +210,23 @@ export async function recategorizeAccountYear(
   let aiCategorized = 0
   let aiErrors: string[] = []
   if (opts?.aiAssist) {
-    const residual = rows.filter(r => {
+    // Option B (#2): label the FULL reviewable set for advisory hints — outflows
+    // booked as a business cost (expense/fee/cogs) or still undecided, and
+    // inflows booked as income or undecided — so the client review is pre-sorted
+    // even for rows a rule already expensed. Skip rows that already have both
+    // hints (idempotent + cost). Category is still APPLIED only to uncategorized
+    // rows below (a rule/AI never auto-decides personal — that's the owner's call).
+    const catById = new Map(rows.map(r => [r.id as string, r.category as string]))
+    const toLabel = rows.filter(r => {
       if ((r.notes ?? "").startsWith("manual:")) return false
-      const u = updates.get(r.id as string)
-      return (u?.category ?? r.category) === "uncategorized"
+      if ((r.ai_lean ?? null) !== null && (r.ai_bucket ?? null) !== null) return false
+      const cat = updates.get(r.id as string)?.category ?? (r.category as string)
+      const amt = Number(r.amount)
+      return amt < 0
+        ? ["uncategorized", "expense", "fee", "cogs"].includes(cat)
+        : ["uncategorized", "income"].includes(cat)
     })
-    if (residual.length > 0) {
+    if (toLabel.length > 0) {
       const { data: acct } = await supabaseAdmin
         .from("accounts")
         .select("company_name")
@@ -236,7 +247,7 @@ export async function recategorizeAccountYear(
       const businessDescription =
         (sub?.submitted_data as Record<string, unknown> | null)?.["us_business_activities"] as string | undefined
       const bankNames = Array.from(new Set(rows.map(r => (r.bank_name as string) ?? "").filter(Boolean)))
-      const txs: AiCategorizableTx[] = residual.map(r => ({
+      const txs: AiCategorizableTx[] = toLabel.map(r => ({
         id: r.id as string,
         transaction_date: r.transaction_date as string,
         description: (r.description as string) ?? "",
@@ -259,11 +270,15 @@ export async function recategorizeAccountYear(
         const hint: { ai_lean?: string; ai_bucket?: string } = {}
         if (s.lean) hint.ai_lean = s.lean
         if (s.bucket) hint.ai_bucket = s.bucket
-        if (s.confidence === "high") {
+        // Category is APPLIED only when the row is still uncategorized — a rule or
+        // the AI must never re-categorize a row the deterministic pass already
+        // booked (and never auto-decide personal: that's the owner's call). For
+        // already-booked rows we record the advisory hints only.
+        const effCat = updates.get(s.id)?.category ?? catById.get(s.id)
+        if (s.confidence === "high" && effCat === "uncategorized") {
           updates.set(s.id, { ...updates.get(s.id), category: s.category, subcategory: s.subcategory, notes: "ai:high", ...hint })
           aiCategorized++
         } else if (hint.ai_lean || hint.ai_bucket) {
-          // Category stays uncategorized; only the advisory hints are recorded.
           updates.set(s.id, { ...updates.get(s.id), ...hint })
         }
       }

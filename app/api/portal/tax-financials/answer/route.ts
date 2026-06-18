@@ -58,12 +58,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before changing answers.' }, { status: 409 })
     }
 
+    // Option B (2026-06-18): the owner can re-decide ANY business-booked charge
+    // (expense/fee/cogs/income/uncategorized) — and undo a prior client decision
+    // (distribution/contribution). We never clobber an auto-detected internal
+    // transfer ('conversion') via a merchant flip.
     const { data: updated, error } = await supabaseAdmin
       .from('bank_transactions')
       .update({ category: mapped.category, subcategory: mapped.subcategory, notes: `manual: client answer (${answer})` })
       .eq('account_id', accountId)
       .eq('tax_year', taxYear)
-      .eq('category', 'uncategorized')
+      .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
       .in('id', transactionIds)
       .select('id, description, counterparty, amount')
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })

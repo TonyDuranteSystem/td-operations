@@ -45,12 +45,18 @@ export async function GET(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // ai_lean/ai_bucket + financials_meta not yet in database.types.ts
     const uncatRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
+      // Option B (2026-06-18, Antonio): the review shows ALL spend booked as a
+      // business cost (or defaulting to one) — not just the undecided rows — so
+      // the owner can flag ANY of it as personal, even what a rule expensed. A
+      // rule can categorize, but only the owner knows if a charge was personal.
+      // Already-personal (distribution), owner-money-in (contribution) and
+      // internal transfers (conversion) are decided and drop off.
       const { data, error } = await db
         .from('bank_transactions')
         .select('id, description, counterparty, amount, transaction_date, bank_name, ai_lean, ai_bucket')
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
-        .eq('category', 'uncategorized')
+        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income'])
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
