@@ -26,6 +26,7 @@ const db = supabaseAdmin as any
 import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, type TransferCandidate } from "./transfer-matcher"
 import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions } from "./ai-categorizer"
+import { getExpenseBuckets } from "./expense-buckets"
 
 export interface CategorizationRule {
   id: string
@@ -129,6 +130,8 @@ interface CategorizableRow {
   subcategory: string | null
   is_related_party: boolean | null
   notes: string | null
+  ai_lean: string | null
+  ai_bucket: string | null
 }
 
 /**
@@ -152,7 +155,7 @@ export async function recategorizeAccountYear(
   const rows = await fetchAllBankTransactionsByYear<CategorizableRow>(
     accountId,
     taxYear,
-    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes",
+    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket",
   )
   if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
 
@@ -168,8 +171,9 @@ export async function recategorizeAccountYear(
     .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
     .filter(n => n.length > 0)
 
-  // Pass 1: rules
-  const updates = new Map<string, { category: string; subcategory: string; notes?: string }>()
+  // Pass 1: rules. (ai_lean/ai_bucket are ADVISORY review hints — #2 — written
+  // for residual rows even when their category stays uncategorized.)
+  const updates = new Map<string, { category?: string; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string }>()
   for (const row of rows) {
     if ((row.notes ?? "").startsWith("manual:")) continue // human corrections win, always
     const isAiTagged = (row.notes ?? "").startsWith("ai:")
@@ -241,16 +245,27 @@ export async function recategorizeAccountYear(
         currency: (r.currency as string) ?? "USD",
         bank_name: (r.bank_name as string) ?? "",
       }))
+      const buckets = await getExpenseBuckets(db)
       const ai = await aiSuggestCategories(
         txs,
-        { companyName: acct?.company_name ?? "the company", memberNames, bankNames, businessDescription },
+        { companyName: acct?.company_name ?? "the company", memberNames, bankNames, businessDescription, buckets },
         opts.aiOptions,
       )
       aiErrors = ai.errors
       for (const s of ai.suggestions) {
-        if (s.confidence !== "high") continue
-        updates.set(s.id, { category: s.category, subcategory: s.subcategory, notes: "ai:high" })
-        aiCategorized++
+        // ADVISORY review hints (#2): recorded for EVERY suggestion (any
+        // confidence) so the client review can pre-sort by bucket + pre-tag the
+        // business/personal lean. They NEVER change the bookkeeping category.
+        const hint: { ai_lean?: string; ai_bucket?: string } = {}
+        if (s.lean) hint.ai_lean = s.lean
+        if (s.bucket) hint.ai_bucket = s.bucket
+        if (s.confidence === "high") {
+          updates.set(s.id, { ...updates.get(s.id), category: s.category, subcategory: s.subcategory, notes: "ai:high", ...hint })
+          aiCategorized++
+        } else if (hint.ai_lean || hint.ai_bucket) {
+          // Category stays uncategorized; only the advisory hints are recorded.
+          updates.set(s.id, { ...updates.get(s.id), ...hint })
+        }
       }
     }
   }
@@ -260,10 +275,20 @@ export async function recategorizeAccountYear(
   for (const [id, u] of Array.from(updates.entries())) {
     const orig = rows.find(r => r.id === id)
     if (!orig) continue
-    if (orig.category === u.category && (orig.subcategory ?? "") === u.subcategory && !u.notes) continue
+    // A hint-only update (non-high AI) leaves category/subcategory as-is.
+    const nextCategory = u.category ?? (orig.category as string)
+    const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
+    const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
+    const leanChanged = u.ai_lean !== undefined && u.ai_lean !== ((orig.ai_lean as string | null) ?? undefined)
+    const bucketChanged = u.ai_bucket !== undefined && u.ai_bucket !== ((orig.ai_bucket as string | null) ?? undefined)
+    if (!catChanged && !u.notes && !leanChanged && !bucketChanged) continue
+    const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
+    if (u.notes) payload.notes = u.notes
+    if (u.ai_lean !== undefined) payload.ai_lean = u.ai_lean
+    if (u.ai_bucket !== undefined) payload.ai_bucket = u.ai_bucket
     const { error: upErr } = await supabaseAdmin
       .from("bank_transactions")
-      .update({ category: u.category, subcategory: u.subcategory, ...(u.notes ? { notes: u.notes } : {}) })
+      .update(payload)
       .eq("id", id)
     if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
     recategorized++
