@@ -145,8 +145,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // check before claiming a tool doesn't exist, challenge first answer).
     // → 8800 (2026-06-18, don't-double-down-when-corrected + recount-against-the-
     // list-you-pulled rules, after the offers-vs-leads miscount).
+    // → 9600 (2026-06-18, SOURCES block: search_sysdocs/read_sysdoc/search_sops/
+    // read_drive_file — read every source the dev system can, after the worker hit
+    // "the KB has nothing" while the installment rule lived in a sysdoc).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(8800)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(9600)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {
@@ -344,6 +347,7 @@ describe("processSlackEvent", () => {
       enableDbRead: true,
       enableEmailSend: true,
       enableCallReads: true,
+      enableDocReads: true,
       enableFullToolReach: false,
       maxIterations: 20,
     })

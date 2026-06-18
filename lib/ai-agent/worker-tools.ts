@@ -592,6 +592,161 @@ async function searchCallsForWorker(params: Record<string, unknown>): Promise<st
   return lines.join("\n")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal knowledge-source reading — Slack-only (gated via enableDocReads). These
+// close the gap where the worker hit "the KB has nothing" while the answer lived in
+// a Supabase sysdoc / SOP / Drive file it couldn't see. They give the Slack worker
+// read parity with the sources Claude Code can read. ALL read-only; kept Slack-only
+// so the Hermes/Telegram research worker never receives them (R108). The big one is
+// search_sysdocs: the existing sysdoc tools only list titles + read by exact slug,
+// so there was no way to FIND the right doc by topic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Char cap on a single returned doc/file so a long document can't blow the worker's context. */
+const DOC_RESULT_CAP = 40_000
+
+/** Return a ~`radius`-char window of `text` centred on the first match of `q` (case-insensitive), else the head. Exported for tests. */
+export function snippetAround(text: string, q: string, radius = 220): string {
+  if (typeof text !== "string" || !text) return ""
+  const idx = text.toLowerCase().indexOf(q.toLowerCase())
+  if (idx < 0) return text.slice(0, radius * 2).trim() + (text.length > radius * 2 ? "…" : "")
+  const start = Math.max(0, idx - radius)
+  const end = Math.min(text.length, idx + q.length + radius)
+  return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`
+}
+
+export const SEARCH_SYSDOCS_TOOL: ToolDef = {
+  name: "search_sysdocs",
+  description: [
+    "Search the firm's SYSTEM DOCS (Supabase system_docs) by keyword across title AND full body — operational rules, plans, decisions, billing/installment rules, session-context, project state, architecture. This is the place to look when the KB has no answer: many authoritative rules live here, NOT in the KB.",
+    "Returns matching docs with their slug + a snippet. Then call read_sysdoc with the slug to read the full document.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: 'Keyword(s) to find in sysdoc title or body (e.g. "installment billing", "formation flow", "referral").' },
+      limit: { type: "number", description: "Max results (default 8, max 20)." },
+    },
+    required: ["query"],
+  },
+}
+
+export const READ_SYSDOC_TOOL: ToolDef = {
+  name: "read_sysdoc",
+  description: [
+    "Read ONE system doc IN FULL by its slug. Get the slug from search_sysdocs first. Key slugs: 'session-context' (current system state — read this to know what was just done), 'project-state', 'tech-stack'.",
+    "Returns the full Markdown content (capped at a generous char limit).",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { slug: { type: "string", description: "Sysdoc slug (from search_sysdocs, e.g. 'session-context')." } },
+    required: ["slug"],
+  },
+}
+
+export const SEARCH_SOPS_TOOL: ToolDef = {
+  name: "search_sops",
+  description: [
+    "Search the firm's SOP runbooks by keyword across title, service type, AND full body. Use this to FIND the right SOP by topic when you don't already know the service-type name (get_sop needs the exact service type).",
+    "Returns matching SOPs; the top match includes full content.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: 'Keyword(s) to find in an SOP (e.g. "passport", "second installment", "bank rejection").' },
+      limit: { type: "number", description: "Max results (default 5, max 15)." },
+    },
+    required: ["query"],
+  },
+}
+
+export const READ_DRIVE_FILE_TOOL: ToolDef = {
+  name: "read_drive_file",
+  description: [
+    "Read the TEXT content of a Google Drive file by id (plain text, CSV, Google Docs/Sheets exported as text). Get the id from drive_search / drive_list_folder first.",
+    "NOTE: PDFs and images can NOT be read here (they need OCR, which is currently disabled) — for those, report that the file is a PDF/image and can't be read as text.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { file_id: { type: "string", description: "Google Drive file id (from drive_search / drive_list_folder)." } },
+    required: ["file_id"],
+  },
+}
+
+/** search_sysdocs handler — ILIKE over title + body of system_docs, returns slug + snippet. */
+export async function searchSysdocsForWorker(params: Record<string, unknown>): Promise<string> {
+  const q = typeof params.query === "string" ? params.query.trim() : ""
+  if (!q) return "query is required."
+  const limit = Math.min(typeof params.limit === "number" ? params.limit : 8, 20)
+  const pattern = `%${q}%`
+  const { data, error } = await supabaseAdmin
+    .from("system_docs")
+    .select("slug, title, doc_type, content, updated_at")
+    .or(`title.ilike.${pattern},content.ilike.${pattern}`)
+    .limit(limit)
+  if (error) return `Error searching sysdocs: ${error.message}`
+  if (!data || data.length === 0) {
+    return `No sysdocs match "${q}". Try different keywords. (Sysdocs hold operational rules, plans, and session-context — distinct from the KB.)`
+  }
+  const lines: string[] = [`Sysdocs matching "${q}" (${data.length}) — use read_sysdoc(slug) for full content:`, ""]
+  for (const d of data) {
+    lines.push(`• ${d.title}  [slug: ${d.slug}]`)
+    lines.push(`  ${snippetAround(typeof d.content === "string" ? d.content : "", q)}`)
+  }
+  return lines.join("\n")
+}
+
+/** read_sysdoc handler — full content by exact slug, capped. */
+export async function readSysdocForWorker(params: Record<string, unknown>): Promise<string> {
+  const slug = typeof params.slug === "string" ? params.slug.trim() : ""
+  if (!slug) return "slug is required (find it with search_sysdocs)."
+  const { data, error } = await supabaseAdmin
+    .from("system_docs")
+    .select("title, content, updated_at")
+    .eq("slug", slug)
+    .single()
+  if (error || !data) return `Sysdoc not found: "${slug}". Find the right slug with search_sysdocs.`
+  const out = `# ${data.title}\n_Last updated: ${data.updated_at}_\n\n${data.content ?? ""}`
+  return out.length > DOC_RESULT_CAP ? `${out.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : out
+}
+
+/** search_sops handler — ILIKE over title + service_type + body of sop_runbooks; top match full. */
+export async function searchSopsForWorker(params: Record<string, unknown>): Promise<string> {
+  const q = typeof params.query === "string" ? params.query.trim() : ""
+  if (!q) return "query is required."
+  const limit = Math.min(typeof params.limit === "number" ? params.limit : 5, 15)
+  const pattern = `%${q}%`
+  const { data, error } = await supabaseAdmin
+    .from("sop_runbooks")
+    .select("title, service_type, content")
+    .or(`title.ilike.${pattern},service_type.ilike.${pattern},content.ilike.${pattern}`)
+    .limit(limit)
+  if (error) return `Error searching SOPs: ${error.message}`
+  if (!data || data.length === 0) return `No SOPs match "${q}". Try different keywords.`
+  const lines: string[] = [`SOPs matching "${q}" (${data.length}):`, ""]
+  data.forEach((s, i) => {
+    lines.push(`• ${s.title} (${s.service_type})`)
+    const content = typeof s.content === "string" ? s.content : ""
+    lines.push(`  ${i === 0 ? content.slice(0, DOC_RESULT_CAP) : snippetAround(content, q)}`)
+  })
+  return lines.join("\n")
+}
+
+/** read_drive_file handler — text content of a Drive file, capped; PDFs/images unsupported (OCR off). */
+export async function readDriveFileForWorker(params: Record<string, unknown>): Promise<string> {
+  const fileId = typeof params.file_id === "string" ? params.file_id.trim() : ""
+  if (!fileId) return "file_id is required (find it with drive_search / drive_list_folder)."
+  try {
+    const { downloadFileContent } = await import("@/lib/google-drive")
+    const content = await downloadFileContent(fileId)
+    if (!content || !content.trim()) return `File ${fileId} has no readable text (it may be a PDF/image — OCR is currently disabled — or an empty file).`
+    return content.length > DOC_RESULT_CAP ? `${content.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : content
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Couldn't read file ${fileId}: ${msg}. (PDFs/images need OCR, which is currently disabled — report the file type instead.)`
+  }
+}
+
 /**
  * Antonio's admin auth user id — stamped as sender_id on portal_messages so the
  * client sees the message as coming from the Tony Durante team (sender_type
@@ -1128,6 +1283,18 @@ export async function executeWorkerTool(
     if (name === "get_call") return getCallForWorker(params)
     return searchCallsForWorker(params)
   }
+  // Internal knowledge-source reading — Slack-only (gated via enableDocReads at the
+  // tool-list level). Executor-gate too (defense-in-depth, R108): never let the Hermes
+  // research worker read sysdocs/SOPs/Drive even if a name leaks. All read-only.
+  if (name === "search_sysdocs" || name === "read_sysdoc" || name === "search_sops" || name === "read_drive_file") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (doc reading not enabled).`
+    }
+    if (name === "search_sysdocs") return searchSysdocsForWorker(params)
+    if (name === "read_sysdoc") return readSysdocForWorker(params)
+    if (name === "search_sops") return searchSopsForWorker(params)
+    return readDriveFileForWorker(params)
+  }
   // find_tool / use_tool — the flexible action surface (Slack-only, gated via
   // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
   if (name === "find_tool") {
@@ -1322,6 +1489,15 @@ export interface CallWorkerOptions {
    * Slack-only so the Hermes/Telegram research worker never gets call transcripts (R108).
    */
   enableCallReads?: boolean
+  /**
+   * Expose the Slack-only internal knowledge-source readers (search_sysdocs /
+   * read_sysdoc / search_sops / read_drive_file) for this call. Set by the Slack
+   * worker (processSlackEvent). Gives the worker read parity with the sources Claude
+   * Code can read (sysdocs incl. session-context, SOPs by topic, Drive file text).
+   * All read-only; kept Slack-only so the Hermes/Telegram research worker never gets
+   * them (R108).
+   */
+  enableDocReads?: boolean
   /**
    * Expose the Slack-only flexible action surface (find_tool / use_tool) for this
    * call. Set by the Slack worker (processSlackEvent) ONLY when env
@@ -1562,6 +1738,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // availableNames (defense-in-depth).
   if (opts.enableCallReads) {
     for (const t of [LIST_CALLS_TOOL, GET_CALL_TOOL, SEARCH_CALLS_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
+  // Slack-only: append the internal knowledge-source readers (search_sysdocs /
+  // read_sysdoc / search_sops / read_drive_file). Gated on enableDocReads so they
+  // NEVER reach the Hermes research worker (R108) and never double-add. Read-only;
+  // the executor also re-checks availableNames (defense-in-depth).
+  if (opts.enableDocReads) {
+    for (const t of [SEARCH_SYSDOCS_TOOL, READ_SYSDOC_TOOL, SEARCH_SOPS_TOOL, READ_DRIVE_FILE_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }

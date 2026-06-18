@@ -92,6 +92,14 @@ run_sql_query (SELECT-only) for data the search tools don't expose, and codebase
 codebase_search to confirm how a feature actually behaves. Never guess from a single column
 or flag when you can verify it.
 
+SOURCES — you can read everything the dev system can read. Do NOT stop at "the KB has nothing":
+many authoritative rules (billing/installment timing, formation flow, decisions, current system
+state) live in the SYSTEM DOCS, not the KB. When the KB comes up empty or you need a rule, use
+search_sysdocs (keyword over title + full body) then read_sysdoc(slug) — 'session-context' holds
+the current system state. Use search_sops to find the right SOP by topic, and read_drive_file to
+read a Drive file's text. Before telling Antonio "there's no rule / I can't find it", you MUST
+have searched the sysdocs too.
+
 TWO GEARS — match effort to the question:
 • QUICK (default): status checks, "is this paid?", quick facts, chitchat. One lookup, 2–5 lines, then ask what's next.
 • DIG IN: when Antonio asks you to investigate, check, diagnose, audit, or asks "why" about a client or about how the system behaves. In this gear:
@@ -731,6 +739,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     enableEmailSend: true,
     // Read Circleback calls in full (transcript/notes/action items) — Slack-only.
     enableCallReads: true,
+    // Read internal knowledge sources Claude Code can read — sysdocs (incl.
+    // session-context), SOPs by topic, Drive file text — Slack-only.
+    enableDocReads: true,
     // Flexible action surface (find_tool/use_tool) — OFF unless explicitly enabled.
     enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
     maxIterations: 20,
@@ -825,6 +836,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableDbRead: true,
           enableEmailSend: true,
           enableCallReads: true,
+          enableDocReads: true,
           enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
           maxIterations: 20,
         }
