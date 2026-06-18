@@ -20,6 +20,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { sendTDInvoice } from '@/lib/invoice-auto-send'
+import { resolvePaymentRecipient } from '@/lib/portal/resolve-payment-recipient'
 
 export async function POST(
   _request: NextRequest,
@@ -54,41 +55,19 @@ export async function POST(
     )
   }
 
-  // Resolve recipient for the opts override. sendTDInvoice already does
-  // account_contacts role='Owner' lookup as its fallback, but the admin
-  // route may have a contact_id attached (One-Time / standalone contact
-  // flows) that the fallback wouldn't find.
-  let recipientEmail = ''
-  let clientName = ''
+  // Resolve recipient via the single shared resolver (contact_id → owner-role
+  // contact, case-insensitive → any linked contact → account communication
+  // email). NEVER hand-roll an exact-case role='Owner' lookup here — it
+  // silently resolves zero rows for lowercase "owner" links and breaks resend
+  // (the ADWise incident, 2026-06-18).
+  const recipient = await resolvePaymentRecipient(payment, supabaseAdmin)
 
-  if (payment.contact_id) {
-    const { data: contact } = await supabaseAdmin
-      .from('contacts')
-      .select('first_name, last_name, email, full_name')
-      .eq('id', payment.contact_id)
-      .single()
-    if (contact?.email) recipientEmail = contact.email
-    if (contact?.first_name) {
-      clientName = `${contact.first_name} ${contact.last_name ?? ''}`.trim()
-    } else if (contact?.full_name) {
-      clientName = contact.full_name
-    }
-  } else if (payment.account_id) {
-    const { data: link } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contacts(first_name, last_name, email)')
-      .eq('account_id', payment.account_id)
-      .eq('role', 'Owner')
-      .limit(1)
-      .maybeSingle()
-    const c = (link as unknown as { contacts: { first_name: string; last_name: string; email: string } } | null)?.contacts
-    if (c?.email) recipientEmail = c.email
-    if (c?.first_name) clientName = `${c.first_name} ${c.last_name ?? ''}`.trim()
-  }
-
-  if (!recipientEmail) {
+  if (!recipient) {
     return NextResponse.json({ error: 'No contact email found for this invoice' }, { status: 400 })
   }
+
+  const recipientEmail = recipient.email
+  const clientName = recipient.name
 
   try {
     // For Sent/Overdue/Partial resends, temporarily reset to Draft so
