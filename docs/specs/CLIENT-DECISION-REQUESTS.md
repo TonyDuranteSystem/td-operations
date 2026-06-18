@@ -169,15 +169,34 @@ Every response is immutable (new request created for new questions, old response
 
 ## First Implementation (Formation Names)
 
-The formation workspace "Wizard Submitted" stage gets:
-- A "Propose Name to Client" button that creates an `approval` request (the proposed name in the message)
-- A panel showing pending/historical decision requests for this SD
-- The "Filed with State" stage also shows any name decisions for context
+The formation "Wizard Submitted" stage (the name command center — see
+docs/specs/FORMATION-WORKSPACE.md) drives decision requests **automatically** off
+the per-name status (`service_deliveries.name_checks`). Decision requests are the
+client-communication half of that loop:
 
-The portal flow page gets:
-- A decision request card when one is pending
-- The card shows: "We checked and [Name] LLC is available in [State]. Do you approve?" with Yes/No buttons
-- After responding, shows the recorded decision
+- **Staff marks a name `Available`** → the system auto-creates an **`approval`**
+  request: *"[Name] LLC is available in [State]. Approve filing with this name?"*
+  The created request's id is stored on that name's `name_checks` entry
+  (`decision_request_id`). When the client approves, the name flips to
+  `Approved by Client` and staff can file it on the SOS.
+- **No submitted name is available** → the system auto-creates a **`text_input`**
+  request: *"None of your names are available. Please propose 3 new names."* The
+  client's response text is parsed and the new names append to `name_checks`
+  (`source: "client_proposed"`, status `checking`).
+- **SOS rejects a filed name** (at Wizard Submitted or Filed with State) → the
+  name flips to `Rejected by SOS` and the system auto-creates the same
+  **`text_input`** new-names request; the loop continues.
+- The **decision-request history is shown on the Wizard Submitted stage** (the
+  `decision_requests` panel), alongside the name-status badges, so staff see the
+  full ask/answer trail in one place. "Filed with State" shows it too for context.
+
+The portal flow page (`/portal/flows/[id]`) renders the newest pending request as
+an actionable card (Yes/No for `approval`, a text field for `text_input`); after
+the client responds it shows the recorded answer read-only.
+
+These remain the **three generic types** — the name flow is just a configured
+caller. `name_checks` (the per-name status array) lives on the service delivery,
+NOT in this system; decision requests don't know about LLC names.
 
 ## Future Consumers
 
