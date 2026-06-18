@@ -34,16 +34,26 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   const [checks, setChecks] = useState<NameCheck[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [authError, setAuthError] = useState(false)
   const [busyIndex, setBusyIndex] = useState<number | null>(null)
   const [advancing, setAdvancing] = useState(false)
 
   const sos = resolveFormationFilingLink(stateOfFormation)
 
   const load = useCallback(async () => {
+    setError(null)
+    setAuthError(false)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.success) throw new Error(data.error || 'Could not load the LLC names.')
+      // Session lapse: middleware 307-redirects unauthenticated /api/flows
+      // requests to the login page (HTML). Detect that (or a 401/403) and show
+      // a clear "session" message — the names are NOT lost, they're in the DB.
+      if (res.redirected || res.url.includes('/login') || res.status === 401 || res.status === 403) {
+        setAuthError(true)
+        return
+      }
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data || !data.success) throw new Error(data?.error || 'Could not load the LLC names.')
       setChecks((data.name_checks as NameCheck[]) ?? [])
       setLoaded(true)
     } catch (err) {
@@ -156,12 +166,23 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
         {sos.defaulted && <span className="text-[11px] text-zinc-400">· defaulted to New Mexico</span>}
       </div>
 
-      {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
-      {!error && !loaded && (
-        <p className="flex items-center gap-1.5 text-sm text-zinc-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
-      )}
-      {!error && loaded && checks.length === 0 && (
-        <p className="text-sm text-zinc-500">No names submitted by the client yet.</p>
+      {authError ? (
+        <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Your session expired (or you&apos;re not signed in as staff). The names are safe — reload the page.
+          <button onClick={load} className="ml-2 rounded-md border border-amber-300 px-2 py-0.5 text-xs font-medium hover:bg-amber-100">
+            Retry
+          </button>
+        </div>
+      ) : (
+        <>
+          {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+          {!error && !loaded && (
+            <p className="flex items-center gap-1.5 text-sm text-zinc-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
+          )}
+          {!error && loaded && checks.length === 0 && (
+            <p className="text-sm text-zinc-500">No names submitted by the client yet.</p>
+          )}
+        </>
       )}
 
       {checks.length > 0 && (
