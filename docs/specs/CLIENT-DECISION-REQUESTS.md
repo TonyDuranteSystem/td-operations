@@ -25,7 +25,7 @@ A flexible, reusable system where staff (or automation) creates a structured req
 | service_delivery_id | uuid FK → service_deliveries | Which flow this belongs to |
 | contact_id | uuid FK → contacts | Who needs to respond |
 | account_id | uuid FK → accounts (nullable) | If account-scoped |
-| request_type | text | 'approval', 'choice', 'text_input', 'name_proposal', 'document_approval' |
+| request_type | text | 'approval', 'choice', 'text_input' |
 | title | text | What the client sees as the heading |
 | message | text | Explanation / instructions for the client |
 | message_it | text (nullable) | Italian translation |
@@ -74,27 +74,7 @@ A flexible, reusable system where staff (or automation) creates a structured req
 { "text": "NewName1 LLC, NewName2 LLC, NewName3 LLC" }
 ```
 
-**4. name_proposal (formation-specific convenience type)**
-A specialized version of 'choice' pre-built for the LLC name flow:
-```json
-// options
-{ "proposed_name": "Automatiko LLC", 
-  "state": "New Mexico",
-  "checked_on_sos": true,
-  "approve_label": "Yes, file with this name",
-  "reject_label": "No, check another name" }
-// response
-{ "decision": "approved" | "rejected", "note": "..." }
-```
-
-**5. document_approval (for future use)**
-```json
-// options
-{ "document_id": "uuid", "document_name": "Tax Return 2025.pdf", 
-  "approve_label": "Approve", "reject_label": "Request changes" }
-// response
-{ "decision": "approved" | "changes_requested", "note": "change X on page 3" }
-```
+These three types cover every scenario. Anything more specific (an LLC name proposal, a document sign-off) is just a *configured instance* of one of them — the business context lives in `title`, `message`, and `options`, never in a new type.
 
 ## Portal Experience (Client Side)
 
@@ -136,10 +116,10 @@ Staff fills in:
 On the "Wizard Submitted" stage:
 1. Staff sees 3 name choices from wizard
 2. Staff checks names on SOS (link provided)
-3. Staff clicks "Propose Name to Client" → picks which name
-4. System creates a `name_proposal` request → client sees it in portal
-5. Client approves → staff can advance to "Filed with State"
-6. Client rejects → staff proposes another name or sends a `text_input` request for new names
+3. Staff proposes one name → an `approval` request with the name in the message ("We checked and [Name] LLC is available in [State]. Do you approve?")
+4. Or, if several names are available, staff offers them → a `choice` request with the names as options
+5. Client approves (or selects one) → staff can advance to "Filed with State"
+6. Client rejects → staff proposes another name (`approval`/`choice`) or sends a `text_input` request asking for new names
 7. If client sends new names → they appear as new data, staff repeats the check
 
 On the "Filed with State" stage:
@@ -173,7 +153,7 @@ Client's pending decision requests across all flows. Used by the portal dashboar
 
 ## Auto-advance
 
-If `auto_advance_on` is set (e.g., "Filed with State") and the client approves, the system automatically advances the SD to that stage. This is optional — not all requests should auto-advance. For names, it probably shouldn't auto-advance (staff still needs to file manually). For document approval, it could.
+If `auto_advance_on` is set (e.g., "Filed with State") and the client approves, the system automatically advances the SD to that stage. This is optional — not all requests should auto-advance. For names, it probably shouldn't auto-advance (staff still needs to file manually). For a simple approval gate, it could.
 
 ## Audit Trail
 
@@ -190,7 +170,7 @@ Every response is immutable (new request created for new questions, old response
 ## First Implementation (Formation Names)
 
 The formation workspace "Wizard Submitted" stage gets:
-- A "Propose Name to Client" button that creates a `name_proposal` request
+- A "Propose Name to Client" button that creates an `approval` request (the proposed name in the message)
 - A panel showing pending/historical decision requests for this SD
 - The "Filed with State" stage also shows any name decisions for context
 
@@ -201,6 +181,4 @@ The portal flow page gets:
 
 ## Future Consumers
 
-- Tax Return: "Do you approve this tax return?" (document_approval type)
-- Operating Agreement: "Please review and approve" (approval type)
-- Any workflow where staff needs a structured yes/no/choice from the client
+Any workflow can use the three generic types — `approval`, `choice`, `text_input` — with no new schema or types; the business context lives in the request's `title`, `message`, and `options`. For example: a tax-return sign-off or an Operating Agreement review (`approval`, referencing the document in the message), a bank-provider selection (`choice`), or a request for missing information (`text_input`).
