@@ -19,6 +19,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
+import { buildSubmissionRecord } from '@/lib/portal/submission-record'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
@@ -199,56 +200,22 @@ export async function POST(req: NextRequest) {
         taxYear = tr?.tax_year ?? null
       }
 
-      const submissionRecord: Record<string, unknown> = {
+      // The submission tables do NOT share one column set (formation has no
+      // account_id, tax_return has no lead_id, itin/closure have no entity_type,
+      // only tax_return has tax_year). buildSubmissionRecord centralizes those
+      // per-table rules; tests/unit/submission-record.test.ts cross-checks the
+      // columns it can emit against the generated DB types, so a future drift
+      // fails CI loudly instead of as a 500 / false "submission failed" toast.
+      const submissionRecord = buildSubmissionRecord(submissionTable, {
         token: submissionToken,
         contact_id: contact_id || null,
-        language: 'en',
-        prefilled_data: {},
+        account_id: account_id || null,
+        lead_id: lead_id || null,
+        entity_type: entity_type || null,
         submitted_data: data,
-        changed_fields: {},
         upload_paths: uploadPaths,
-        status: 'completed',
-      }
-
-      // entity_type only exists on formation/onboarding/tax_return/company_info
-      // submission tables. itin_submissions and closure_submissions don't have
-      // that column — including it caused the upsert to fail silently and the
-      // ITIN auto-chain to never run for Valerio Di Santo, Antony Fioravanti,
-      // and Luca Gallacci (2026-04-22 → 2026-05-13). Verified against
-      // information_schema 2026-05-13.
-      const TABLES_WITH_ENTITY_TYPE = new Set([
-        'formation_submissions',
-        'onboarding_submissions',
-        'tax_return_submissions',
-        'company_info_submissions',
-      ])
-      if (TABLES_WITH_ENTITY_TYPE.has(submissionTable)) {
-        submissionRecord.entity_type = entity_type || 'SMLLC'
-      }
-
-      // Only include lead_id for tables that have it (tax_return_submissions does not).
-      // Formation-for-a-new-company submissions carry the lead so materialization
-      // can build the right company even when the contact already owns others.
-      if (submissionTable !== 'tax_return_submissions') {
-        submissionRecord.lead_id = lead_id || null
-      }
-
-      // formation_submissions is the ONLY submission table WITHOUT an account_id
-      // column — a formation is bought by the contact before any company/account
-      // exists (see CONTACT_SCOPED_WIZARD_TYPES in wizard-map.ts), so the row
-      // carries lead_id, not account_id. Including account_id made the upsert fail
-      // with PGRST204 ("column account_id not found") → 500 → the client saw a false
-      // "submission failed" toast even though wizard_progress was already saved, AND
-      // the failure happened before the formation_setup auto-chain enqueue below, so
-      // it never ran (clients needed manual '-heal' repair). Verified against
-      // information_schema 2026-06-18: onboarding/tax_return/company_info/itin/closure
-      // submission tables all HAVE account_id. Same bug class as the entity_type guard.
-      if (submissionTable !== 'formation_submissions') {
-        submissionRecord.account_id = account_id || null
-      }
-
-      // Only include tax_year if we resolved it (avoids NOT NULL constraint violation)
-      if (taxYear !== null) submissionRecord.tax_year = taxYear
+        tax_year: taxYear,
+      })
 
       const { data: sub, error: subErr } = await supabaseAdmin
         .from(submissionTable as never)
