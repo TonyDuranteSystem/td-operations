@@ -472,6 +472,60 @@ export async function fetchThreadHistory(
   }
 }
 
+/**
+ * From a Slack messages array, return the trimmed text of the message whose ts
+ * matches exactly, or null if none matches / it has no text. Pure + exported so
+ * the ts-matching logic is unit-tested without a Slack call. This exact-match is
+ * what prevents the 🧠-on-a-thread-reply bug: conversations.history returns the
+ * nearest TOP-LEVEL message for a reply ts, so blindly taking messages[0] saved
+ * the wrong (parent) message — we must verify the ts.
+ */
+export function pickMessageTextByTs(
+  messages: Array<{ ts?: string; text?: string }> | undefined,
+  ts: string,
+): string | null {
+  const m = (messages ?? []).find((x) => x.ts === ts)
+  const t = typeof m?.text === "string" ? m.text.trim() : ""
+  return t || null
+}
+
+/**
+ * Fetch the text of a single Slack message by ts, robust to thread replies.
+ * `conversations.history` only returns top-level channel messages, so for a
+ * thread reply `latest=<reply_ts>` returns the WRONG (parent) message. We accept
+ * the history result ONLY when its ts matches; otherwise we fall back to
+ * `conversations.replies` (which includes thread replies) and pick the exact ts.
+ * Requires channels:history / groups:history — same scope fetchThreadHistory uses.
+ * Best-effort: returns null on a missing token, non-ok response, or network error.
+ */
+export async function fetchSlackMessageText(channelId: string, ts: string): Promise<string | null> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token || !channelId || !ts) return null
+  const headers = { Authorization: `Bearer ${token}` }
+  try {
+    // Top-level path: conversations.history. Accept only on an exact ts match.
+    const hRes = await fetch(
+      `https://slack.com/api/conversations.history?channel=${channelId}&latest=${ts}&inclusive=true&limit=1`,
+      { headers },
+    )
+    const hData = (await hRes.json()) as { ok?: boolean; messages?: Array<{ ts?: string; text?: string }> }
+    const topLevel = pickMessageTextByTs(hData.messages, ts)
+    if (topLevel) return topLevel
+
+    // Thread-reply path: conversations.replies accepts a reply ts and returns the
+    // whole thread (parent + replies); find the exact reacted message in it.
+    const rRes = await fetch(
+      `https://slack.com/api/conversations.replies?channel=${channelId}&ts=${ts}&inclusive=true&limit=200`,
+      { headers },
+    )
+    const rData = (await rRes.json()) as { ok?: boolean; messages?: Array<{ ts?: string; text?: string }> }
+    return pickMessageTextByTs(rData.messages, ts)
+  } catch (err) {
+    console.warn("[slack-claude] fetchSlackMessageText failed:", err)
+    return null
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Auto-detection of corrections (Decision Memory — Phase 5)
 // ---------------------------------------------------------------------------
