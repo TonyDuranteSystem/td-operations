@@ -367,10 +367,10 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
  * Send a newly created invoice to the client via email.
  *
  * Thin wrapper around sendTDInvoice() (lib/invoice-auto-send.ts) — the single
- * source of truth for sending TD invoices with PDF + HTML. Owns the
- * dashboard-specific contact resolution (flexible: contact_id first, then
- * any account_contacts row — no role filter, unlike the cron path), plus the
- * client_expenses mirror sync and the revalidatePath() calls.
+ * source of truth for sending TD invoices with PDF + HTML. Recipient
+ * resolution goes through the shared resolvePaymentRecipient() (contact_id →
+ * owner-role contact case-insensitive → any linked contact → communication
+ * email), plus the client_expenses mirror sync and the revalidatePath() calls.
  *
  * The actual PDF generation, HTML rendering, multipart/mixed MIME, bank
  * details resolution (from payments.bank_preference), and payments row
@@ -387,35 +387,20 @@ export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
       .single()
     if (!payment) throw new Error('Payment not found')
 
-    // Dashboard-specific flexible contact resolution:
-    //  1. Try payment.contact_id directly (if set)
-    //  2. Fall back to ANY account_contacts row (no role filter)
-    // This differs from sendTDInvoice's default lookup which uses role='Owner'.
-    // Dashboard sends often target a specific contact, so we pre-resolve and
-    // pass recipientEmail as an override.
-    let clientEmail = ''
-    let clientName = ''
-    if (payment.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from('contacts')
-        .select('full_name, email')
-        .eq('id', payment.contact_id)
-        .single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || '' }
-    }
-    if (!clientEmail && payment.account_id) {
-      const { data: link } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contacts(full_name, email)')
-        .eq('account_id', payment.account_id)
-        .limit(1)
-        .maybeSingle()
-      if (link) {
-        const c = link.contacts as unknown as { full_name: string; email: string }
-        clientName = c.full_name; clientEmail = c.email || ''
-      }
-    }
-    if (!clientEmail) throw new Error('No client email found — check contact record')
+    // Recipient resolution via the single shared resolver: contact_id →
+    // owner-role contact (case-insensitive) → any linked contact with an
+    // email → account communication_email. Same path as every other
+    // invoice-send surface — never hand-roll a role lookup (ADWise incident,
+    // 2026-06-18). We pre-resolve and pass recipientEmail as an override so
+    // sendTDInvoice uses exactly this recipient.
+    const { resolvePaymentRecipient } = await import('@/lib/portal/resolve-payment-recipient')
+    const recipient = await resolvePaymentRecipient(
+      { contact_id: payment.contact_id, account_id: payment.account_id },
+      supabaseAdmin,
+    )
+    if (!recipient) throw new Error('No client email found — check contact record')
+    const clientEmail = recipient.email
+    const clientName = recipient.name
 
     // Delegate to the shared helper. It generates the PDF, builds the HTML
     // body, sends via Gmail with multipart/mixed, and updates payments.
@@ -460,30 +445,17 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
       .single()
     if (!payment) throw new Error('Payment not found')
 
-    // Resolve client email from contact (primary) or account
-    let clientEmail = ''
-    let clientName = ''
-    if (payment.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from('contacts')
-        .select('full_name, email')
-        .eq('id', payment.contact_id)
-        .single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || '' }
-    }
-    if (!clientEmail && payment.account_id) {
-      const { data: link } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contacts(full_name, email)')
-        .eq('account_id', payment.account_id)
-        .limit(1)
-        .maybeSingle()
-      if (link) {
-        const c = link.contacts as unknown as { full_name: string; email: string }
-        clientName = c.full_name; clientEmail = c.email || ''
-      }
-    }
-    if (!clientEmail) throw new Error('No client email found')
+    // Resolve recipient via the single shared resolver (same path as every
+    // other invoice-send surface — contact_id → owner-role contact
+    // case-insensitive → any linked contact → account communication_email).
+    const { resolvePaymentRecipient } = await import('@/lib/portal/resolve-payment-recipient')
+    const recipient = await resolvePaymentRecipient(
+      { contact_id: payment.contact_id, account_id: payment.account_id },
+      supabaseAdmin,
+    )
+    if (!recipient) throw new Error('No client email found')
+    const clientEmail = recipient.email
+    const clientName = recipient.name
 
     const currency = payment.amount_currency ?? 'USD'
     const csym = currency === 'EUR' ? '€' : '$'
