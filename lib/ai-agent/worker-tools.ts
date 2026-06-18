@@ -28,6 +28,11 @@ import { AGENT_TOOLS, executeTool, type ToolDef } from "./tools"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import {
+  listCalendlyBookings,
+  getCalendlyEvent,
+  getCalendlyAvailability,
+} from "@/lib/mcp/tools/calendly"
+import {
   APPROVABLE_TOOL_NAMES,
   isApprovableTool,
   validateToolParams,
@@ -435,6 +440,88 @@ export const SEARCH_CALLS_TOOL: ToolDef = {
     },
     required: ["query"],
   },
+}
+
+// ─── Calendly read rail (Slack-only, R108) ──────────────────────────────────
+// Three READ-ONLY Calendly tools for the Slack worker — gated by
+// CallWorkerOptions.enableCalendly (set only in processSlackEvent), kept OUT of
+// WORKER_TOOLS, plus an executor availableNames gate, so the Hermes/Telegram
+// research worker never receives them. They reuse the shared fetch+format
+// functions in lib/mcp/tools/calendly.ts (single source of truth) — read-only:
+// list bookings, event details, and the active booking pages. No create/cancel.
+
+export const CAL_LIST_BOOKINGS_TOOL: ToolDef = {
+  name: "cal_list_bookings",
+  description: [
+    "List scheduled Calendly bookings (meetings). Default: upcoming events from now, soonest first. Shows event name, date/time, duration, meeting link, invitee count, and the event UUID.",
+    "Use cal_get_event_details with a UUID to see WHO booked and their form answers.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      status: { type: "string", description: "'active' (default) or 'canceled'." },
+      count: { type: "number", description: "Max results (default 20, max 100)." },
+      min_start_time: { type: "string", description: "ISO 8601 — events starting after this (default: now)." },
+      max_start_time: { type: "string", description: "ISO 8601 — events starting before this." },
+      sort: { type: "string", description: "'start_time:asc' (default) or 'start_time:desc'." },
+    },
+    required: [],
+  },
+}
+
+export const CAL_GET_EVENT_TOOL: ToolDef = {
+  name: "cal_get_event_details",
+  description: [
+    "Get full details of one Calendly booking by UUID (from cal_list_bookings): date, time, location/join URL, cancellation info, and every invitee with their booking-form answers (name, email, reason, etc.).",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: { event_uuid: { type: "string", description: "Event UUID (from cal_list_bookings)." } },
+    required: ["event_uuid"],
+  },
+}
+
+export const CAL_GET_AVAILABILITY_TOOL: ToolDef = {
+  name: "cal_get_availability",
+  description: [
+    "List Antonio's active Calendly event types (booking pages) — scheduling URLs, durations, descriptions. Use this to find the right booking link to share with a client or to see which event types are active.",
+  ].join("\n"),
+  parameters: { type: "object", properties: {}, required: [] },
+}
+
+/** cal_list_bookings handler — wraps the shared read fn, formats failures. */
+async function calListBookingsForWorker(params: Record<string, unknown>): Promise<string> {
+  try {
+    return await listCalendlyBookings({
+      status: typeof params.status === "string" ? params.status : undefined,
+      count: typeof params.count === "number" ? params.count : undefined,
+      min_start_time: typeof params.min_start_time === "string" ? params.min_start_time : undefined,
+      max_start_time: typeof params.max_start_time === "string" ? params.max_start_time : undefined,
+      sort: typeof params.sort === "string" ? params.sort : undefined,
+    })
+  } catch (err) {
+    return `❌ List bookings failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+/** cal_get_event_details handler. */
+async function calGetEventForWorker(params: Record<string, unknown>): Promise<string> {
+  const uuid = typeof params.event_uuid === "string" ? params.event_uuid : ""
+  if (!uuid) return "event_uuid is required."
+  try {
+    return await getCalendlyEvent(uuid)
+  } catch (err) {
+    return `❌ Get event failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+/** cal_get_availability handler. */
+async function calGetAvailabilityForWorker(): Promise<string> {
+  try {
+    return await getCalendlyAvailability()
+  } catch (err) {
+    return `❌ Get availability failed: ${err instanceof Error ? err.message : String(err)}`
+  }
 }
 
 function formatCallDate(iso: string, long = false): string {
@@ -1298,6 +1385,17 @@ export async function executeWorkerTool(
     if (name === "get_call") return getCallForWorker(params)
     return searchCallsForWorker(params)
   }
+  // Calendly reads — Slack-only (gated via enableCalendly at the tool-list level).
+  // Executor-gate too (defense-in-depth, R108): never let the Hermes research worker
+  // read Antonio's calendar even if a name leaks. All read-only.
+  if (name === "cal_list_bookings" || name === "cal_get_event_details" || name === "cal_get_availability") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (Calendly not enabled).`
+    }
+    if (name === "cal_list_bookings") return calListBookingsForWorker(params)
+    if (name === "cal_get_event_details") return calGetEventForWorker(params)
+    return calGetAvailabilityForWorker()
+  }
   // Internal knowledge-source reading — Slack-only (gated via enableDocReads at the
   // tool-list level). Executor-gate too (defense-in-depth, R108): never let the Hermes
   // research worker read sysdocs/SOPs/Drive even if a name leaks. All read-only.
@@ -1504,6 +1602,13 @@ export interface CallWorkerOptions {
    * Slack-only so the Hermes/Telegram research worker never gets call transcripts (R108).
    */
   enableCallReads?: boolean
+  /**
+   * Expose the Slack-only READ-ONLY Calendly tools (cal_list_bookings /
+   * cal_get_event_details / cal_get_availability) for this call. Set by the Slack
+   * worker (processSlackEvent). Kept Slack-only so the Hermes/Telegram research
+   * worker never gets them (R108). All read-only — no create/cancel.
+   */
+  enableCalendly?: boolean
   /**
    * Expose the Slack-only internal knowledge-source readers (search_sysdocs /
    * read_sysdoc / search_sops / read_drive_file) for this call. Set by the Slack
@@ -1811,6 +1916,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // availableNames (defense-in-depth).
   if (opts.enableCallReads) {
     for (const t of [LIST_CALLS_TOOL, GET_CALL_TOOL, SEARCH_CALLS_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
+  // Slack-only: append the READ-ONLY Calendly tools (cal_list_bookings /
+  // cal_get_event_details / cal_get_availability). Gated on enableCalendly so they
+  // NEVER reach the Hermes research worker (R108) and never double-add. The executor
+  // also re-checks availableNames (defense-in-depth).
+  if (opts.enableCalendly) {
+    for (const t of [CAL_LIST_BOOKINGS_TOOL, CAL_GET_EVENT_TOOL, CAL_GET_AVAILABILITY_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }

@@ -348,6 +348,7 @@ describe("processSlackEvent", () => {
       enableEmailSend: true,
       enableCallReads: true,
       enableDocReads: true,
+      enableCalendly: true,
       enableFullToolReach: false,
       maxIterations: 20,
     })

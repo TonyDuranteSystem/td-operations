@@ -782,6 +782,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Read internal knowledge sources Claude Code can read — sysdocs (incl.
     // session-context), SOPs by topic, Drive file text — Slack-only.
     enableDocReads: true,
+    // Read-only Calendly: list bookings, event details, active booking pages — Slack-only.
+    enableCalendly: true,
     // Flexible action surface (find_tool/use_tool) — OFF unless explicitly enabled.
     enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
     maxIterations: 20,
@@ -877,6 +879,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableEmailSend: true,
           enableCallReads: true,
           enableDocReads: true,
+          enableCalendly: true,
           enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
           maxIterations: 20,
         }
