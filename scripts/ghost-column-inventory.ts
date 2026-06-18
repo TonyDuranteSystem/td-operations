@@ -25,75 +25,10 @@
 
 import fs from "node:fs"
 import path from "node:path"
-
-// ─── Parse lib/database.types.ts → Map<table, Set<column>> ───────────
-// The generated types file puts each table under a block like:
-//   table_name: {
-//     Row: { col_a: string; col_b: number | null; ... }
-//     Insert: { ... }
-//     Update: { ... }
-//     Relationships: [...]
-//   }
-// We read the Row block for each table — it's the complete column set.
-// This parser is intentionally regex-based rather than a full TS parse
-// because the type file shape is stable and a one-time audit doesn't
-// need AST-level precision.
-
-function parseDatabaseTypes(filePath: string): Map<string, Set<string>> {
-  const source = fs.readFileSync(filePath, "utf8")
-  const tables = new Map<string, Set<string>>()
-
-  // Find the `public: { Tables: { ... } }` block — columns live here.
-  const publicTablesIdx = source.indexOf("public: {")
-  if (publicTablesIdx < 0) return tables
-  const tablesBlockStart = source.indexOf("Tables: {", publicTablesIdx)
-  if (tablesBlockStart < 0) return tables
-
-  // Walk forward, matching `  TABLE_NAME: {` entries at the Tables-level
-  // indent. Then within each, find the Row block and extract keys.
-  // Because TS has uniform 8-char indent for table entries, we pin on it.
-  const tableHeaderPattern = /^ {6}(\w+): \{$/gm
-  const sourceAfter = source.substring(tablesBlockStart)
-
-  let match: RegExpExecArray | null
-  while ((match = tableHeaderPattern.exec(sourceAfter)) !== null) {
-    const tableName = match[1]
-    if (tableName === "Relationships") continue
-
-    // Find the Row block inside this table definition.
-    const rowBlockStart = sourceAfter.indexOf("Row: {", match.index)
-    if (rowBlockStart < 0 || rowBlockStart > match.index + 2000) continue // sanity
-
-    // Collect lines until the matching closing brace at Row's indent.
-    const rowBody = extractBracedBlock(sourceAfter, rowBlockStart + "Row: ".length)
-    if (!rowBody) continue
-
-    const cols = new Set<string>()
-    for (const line of rowBody.split("\n")) {
-      // Match `  col_name: type` — ignore comments, empty lines, nested blocks.
-      const colMatch = line.match(/^\s+(\w+)(\??):/)
-      if (colMatch && colMatch[1] !== "Row" && colMatch[1] !== "Insert" && colMatch[1] !== "Update") {
-        cols.add(colMatch[1])
-      }
-    }
-    if (cols.size > 0) tables.set(tableName, cols)
-  }
-  return tables
-}
-
-function extractBracedBlock(source: string, start: number): string | null {
-  // start must point at "{"
-  if (source[start] !== "{") return null
-  let depth = 0
-  for (let i = start; i < source.length; i++) {
-    if (source[i] === "{") depth++
-    else if (source[i] === "}") {
-      depth--
-      if (depth === 0) return source.substring(start + 1, i)
-    }
-  }
-  return null
-}
+// Schema parser lives in lib/db-columns.ts so this audit and the build-time
+// column guards (tests/unit/submission-record.test.ts) read the generated
+// types the same way and can never drift apart.
+import { parseDatabaseTypes } from "../lib/db-columns"
 
 // ─── Walk repo and extract .from(...) blocks ─────────────────────────
 
