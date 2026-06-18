@@ -35,6 +35,13 @@ export interface AiSuggestion {
   category: CategorizedTransaction["category"]
   subcategory: string
   confidence: "high" | "medium" | "low"
+  /** ADVISORY review hint (#2, 2026-06-18) — not applied as a category. Whether
+   *  this looks like a business cost or the owner's personal spending. The
+   *  client confirms; only the owner truly knows. "unsure" when the AI can't tell. */
+  lean?: "business" | "personal" | "unsure"
+  /** ADVISORY accountant bucket slug from the live `expense_categories` catalog
+   *  (or "other"). Used only to GROUP the review screen; never a tax category. */
+  bucket?: string
 }
 
 export interface AiCategorizeContext {
@@ -49,6 +56,10 @@ export interface AiCategorizeContext {
    *  tools (e-commerce platform, marketing software, …) high-confidence
    *  instead of hedging. */
   businessDescription?: string
+  /** Live accountant buckets from the `expense_categories` catalog (#2). The AI
+   *  picks one slug per transaction to GROUP the review; passing the list keeps
+   *  it constrained to the shared vocabulary rather than inventing labels. */
+  buckets?: { slug: string; label: string }[]
 }
 
 const VALID_CATEGORIES = new Set([
@@ -77,6 +88,14 @@ const SUGGEST_TOOL = {
               type: "string", enum: ["high", "medium", "low"],
               description: "high = the description makes the category unambiguous; medium = plausible but the business context could change it; low = guessing. BE CONSERVATIVE — a wrong 'high' corrupts a TAX RETURN, an honest 'medium' just asks the client.",
             },
+            lean: {
+              type: "string", enum: ["business", "personal", "unsure"],
+              description: "ADVISORY only (the client confirms): does this OUTFLOW look like a business cost ('business') or the owner's personal spending on the company card ('personal', e.g. groceries/fuel/restaurants/personal travel)? Use 'unsure' when you genuinely cannot tell. Inflows/transfers: 'business'. Be honest — this is a suggestion, not a decision.",
+            },
+            bucket: {
+              type: "string",
+              description: "ADVISORY accountant bucket — the slug of the single best-fit category from the provided list, or 'other' if none fit. Used only to GROUP the review screen.",
+            },
           },
           required: ["id", "category", "confidence"],
         },
@@ -98,27 +117,35 @@ function systemPrompt(ctx: AiCategorizeContext): string {
     "- 'high' when the description makes the category unambiguous, OR when the merchant/counterparty clearly serves the stated business activity (e.g. e-commerce platform, marketing/ads tools, hosting, freelancer marketplaces for an online business). Recurring INFLOWS from payment processors or repeated third-party customer payments (PayPal, Stripe, ACH from non-member companies) are sales revenue for this kind of business — 'high' unless something contradicts it.",
     "- 'medium' when the category is plausible but the business context could change it.",
     "- 'low' for personal-looking spending on company cards (food delivery, restaurants, streaming, gyms, supermarkets): it may be a deductible business cost OR the owner's personal spending (a distribution) — only the client knows. NEVER 'high' for these; a wrong deduction corrupts a TAX RETURN, an honest 'low' just asks the client.",
+    ctx.buckets?.length ? `Accountant buckets — put the single best-fit SLUG in the 'bucket' field (or 'other'): ${ctx.buckets.map(b => `${b.slug} (${b.label})`).join("; ")}.` : "",
+    "For EVERY transaction also set 'lean' (business/personal/unsure) and 'bucket'. These are ADVISORY hints used only to pre-sort the client's review — the client confirms, and they NEVER change the bookkeeping category. 'lean=personal' for personal-looking owner spending; 'business' for inflows, transfers, and clear business costs; 'unsure' when you truly cannot tell.",
     "Always respond by calling the suggest_categories tool with one entry per transaction.",
   ].filter(Boolean).join(" ")
 }
 
 /** Parse + validate the raw tool output into safe suggestions. Exported for tests. */
-export function parseSuggestions(raw: unknown, validIds: Set<string>): AiSuggestion[] {
+export function parseSuggestions(raw: unknown, validIds: Set<string>, validBuckets?: Set<string>): AiSuggestion[] {
   if (!raw || typeof raw !== "object") return []
   const list = (raw as { suggestions?: unknown }).suggestions
   if (!Array.isArray(list)) return []
   const out: AiSuggestion[] = []
   for (const s of list) {
     if (!s || typeof s !== "object") continue
-    const { id, category, subcategory, confidence } = s as Record<string, unknown>
+    const { id, category, subcategory, confidence, lean, bucket } = s as Record<string, unknown>
     if (typeof id !== "string" || !validIds.has(id)) continue
     if (typeof category !== "string" || !VALID_CATEGORIES.has(category) || category === "uncategorized") continue
     if (confidence !== "high" && confidence !== "medium" && confidence !== "low") continue
+    // Advisory fields (#2): tolerate missing/garbage — they only hint the review.
+    const leanOk = lean === "business" || lean === "personal" || lean === "unsure"
+    const bucketStr = typeof bucket === "string" ? bucket.trim() : ""
+    const bucketOk = bucketStr.length > 0 && (!validBuckets || validBuckets.has(bucketStr) || bucketStr === "other")
     out.push({
       id,
       category: category as AiSuggestion["category"],
       subcategory: typeof subcategory === "string" ? subcategory.slice(0, 60) : "",
       confidence,
+      ...(leanOk ? { lean: lean as AiSuggestion["lean"] } : {}),
+      ...(bucketOk ? { bucket: bucketStr } : {}),
     })
   }
   return out
@@ -148,6 +175,7 @@ export async function aiSuggestCategories(
 
   const suggestions: AiSuggestion[] = []
   const errors: string[] = []
+  const validBuckets = ctx.buckets ? new Set(ctx.buckets.map(b => b.slug)) : undefined
 
   const batches: AiCategorizableTx[][] = []
   for (let i = 0; i < txs.length; i += BATCH_SIZE) batches.push(txs.slice(i, i + BATCH_SIZE))
@@ -188,7 +216,7 @@ export async function aiSuggestCategories(
       }
       const data = await res.json() as { content?: Array<{ type: string; name?: string; input?: unknown }> }
       const toolBlock = data.content?.find(b => b.type === "tool_use" && b.name === "suggest_categories")
-      suggestions.push(...parseSuggestions(toolBlock?.input, validIds))
+      suggestions.push(...parseSuggestions(toolBlock?.input, validIds, validBuckets))
     } catch (e) {
       errors.push(`Batch failed: ${e instanceof Error ? e.message : String(e)}`)
     }

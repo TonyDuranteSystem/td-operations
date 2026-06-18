@@ -27,6 +27,28 @@ describe("parseSuggestions", () => {
     expect(out[1].confidence).toBe("medium")
   })
 
+  it("captures advisory lean + bucket, validating bucket against the catalog (#2)", () => {
+    const buckets = new Set(["fuel_auto", "software_saas"])
+    const out = parseSuggestions({ suggestions: [
+      { id: "a", category: "distribution", confidence: "low", lean: "personal", bucket: "fuel_auto" },
+      { id: "b", category: "expense", confidence: "high", lean: "business", bucket: "software_saas" },
+    ] }, ids, buckets)
+    expect(out[0]).toMatchObject({ id: "a", lean: "personal", bucket: "fuel_auto" })
+    expect(out[1]).toMatchObject({ id: "b", lean: "business", bucket: "software_saas" })
+  })
+
+  it("keeps 'other' but drops a bucket that is not in the catalog; tolerates a bad lean", () => {
+    const buckets = new Set(["fuel_auto"])
+    const out = parseSuggestions({ suggestions: [
+      { id: "a", category: "expense", confidence: "low", lean: "maybe", bucket: "made_up_bucket" },
+      { id: "b", category: "expense", confidence: "low", lean: "unsure", bucket: "other" },
+    ] }, ids, buckets)
+    // a: bad lean dropped, unknown bucket dropped — still a valid suggestion, just no hints
+    expect(out[0]).toEqual({ id: "a", category: "expense", subcategory: "", confidence: "low" })
+    // b: 'other' is always allowed
+    expect(out[1]).toMatchObject({ id: "b", lean: "unsure", bucket: "other" })
+  })
+
   it("drops hallucinated ids, invalid categories, 'uncategorized', and bad confidence", () => {
     const out = parseSuggestions({ suggestions: [
       { id: "ghost", category: "expense", confidence: "high" },          // id not in batch
