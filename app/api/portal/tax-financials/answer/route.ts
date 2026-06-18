@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       .eq('tax_year', taxYear)
       .eq('category', 'uncategorized')
       .in('id', transactionIds)
-      .select('id')
+      .select('id, description, counterparty, amount')
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     const changed = (updated ?? []).length
@@ -73,6 +73,24 @@ export async function POST(request: NextRequest) {
       // The data changed — a prior attestation no longer covers it (QA finding).
       const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
       await resetFinancialsAttestation(accountId, taxYear, `answer applied to ${changed} transactions`)
+
+      // LEARN a per-client rule from this answer so the same merchant
+      // auto-categorizes next year / on re-runs (the engine applies per-client
+      // rules before global ones). Fire-and-forget: a learning failure must
+      // NEVER break the client's answer.
+      try {
+        const { upsertLearnedMerchantRules, makeSupabaseRuleStore } = await import('@/lib/tax/learned-rules')
+        await upsertLearnedMerchantRules(
+          makeSupabaseRuleStore(supabaseAdmin),
+          accountId,
+          (updated ?? []) as Array<{ description: string | null; counterparty: string | null; amount: number | string }>,
+          mapped.category,
+          mapped.subcategory,
+          user.email ?? 'client',
+        )
+      } catch (learnErr) {
+        console.error('[tax-financials] learn-rule failed (non-fatal):', learnErr)
+      }
     }
 
     return NextResponse.json({ updated: changed })
