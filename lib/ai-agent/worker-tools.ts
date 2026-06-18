@@ -746,6 +746,44 @@ export const WORKER_TOOLS: ToolDef[] = [
   MEMORY_SAVE_TOOL,
 ]
 
+/**
+ * find_tool / use_tool — the flexible action surface (Slack-only, gated by
+ * enableFullToolReach / env ASSISTANT_FULL_REACH_ENABLED, default OFF; kept OUT of
+ * WORKER_TOOLS so the Hermes/Telegram research worker never receives them, R108).
+ *
+ * find_tool searches the full ~215-tool catalog (read-only). use_tool runs a tool by
+ * name THROUGH THE RISK POLICY (lib/ai-agent/tool-risk.ts): READ tools run immediately
+ * via the bridge; tools that change data or are external are NOT auto-run — they return
+ * a notice that the approval rail for the full tool set is the next build step (the
+ * existing 14-tool propose_action rail is unchanged); blocked tools are refused.
+ */
+export const FIND_TOOL_TOOL: ToolDef = {
+  name: "find_tool",
+  description: "Search the full Tony Durante Operations tool catalog (~215 tools) by keyword to find the exact tool name and what it does. Use this before use_tool when you're not sure of the exact tool name.",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "Keyword(s) to match against tool names and descriptions." } },
+    required: ["query"],
+  },
+}
+
+export const USE_TOOL_TOOL: ToolDef = {
+  name: "use_tool",
+  description: [
+    "Run any Tony Durante Operations tool by name. Read-only tools (lookups) run immediately and return the result.",
+    "Tools that change data or send anything external are NOT run directly — they are queued for Antonio's approval (he approves with a 6-digit code, then the action runs). A few tools (raw SQL, etc.) are blocked entirely.",
+    "Find the exact tool name with find_tool first. Pass the tool's parameters as `params`. Show Antonio what you're about to do before proposing a change.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Exact tool name (from find_tool)." },
+      params: { type: "object", description: "The tool's parameters as a JSON object." },
+    },
+    required: ["name"],
+  },
+}
+
 // NOTE: START_CODE_TASK_TOOL and SEND_PORTAL_MESSAGE_TOOL are intentionally NOT
 // in WORKER_TOOLS. WORKER_TOOLS feeds both the default tool list AND
 // getToolsForThreadType() (thread-routing), which the Hermes/Telegram research
@@ -776,14 +814,17 @@ export function generateConfirmationCode(): string {
  * Idempotency: if idempotency_key matches an existing row whose status is
  * pending or approved, returns that row instead of inserting a duplicate.
  */
-export async function proposeAction(input: {
-  tool_name?: unknown
-  params?: unknown
-  rationale?: unknown
-  idempotency_key?: unknown
-  thread_id?: unknown
-  batch_id?: unknown
-}): Promise<string> {
+export async function proposeAction(
+  input: {
+    tool_name?: unknown
+    params?: unknown
+    rationale?: unknown
+    idempotency_key?: unknown
+    thread_id?: unknown
+    batch_id?: unknown
+  },
+  opts?: { allowBridgeTools?: boolean },
+): Promise<string> {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
   // hashing, so a proposal with 'medium'/'todo' is accepted (→ 'Normal'/'To Do')
@@ -804,15 +845,35 @@ export async function proposeAction(input: {
     ? input.batch_id
     : null
 
-  // 1) Allow-list check — a tool not in the set can never be proposed.
+  // 1) Allow-list check. The existing 14 approvable AGENT tools are ALWAYS allowed
+  // (unchanged behavior for the propose_action tool / Hermes). A bridge tool is
+  // allowed ONLY when the caller explicitly opted in (use_tool, behind the
+  // full-reach flag) AND the risk policy classifies it as approval-tier — so the
+  // shared rail is never silently widened for the existing propose_action path.
+  let isBridgeTool = false
   if (!isApprovableTool(toolName)) {
-    return `❌ "${toolName}" is not an approvable action. Allowed: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`
+    if (!opts?.allowBridgeTools) {
+      return `❌ "${toolName}" is not an approvable action. Allowed: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`
+    }
+    const { decideAction } = await import("./tool-risk")
+    const d = decideAction(toolName, params as Record<string, unknown>)
+    if (d.decision === "blocked") return `❌ "${toolName}" is blocked from the assistant.`
+    if (d.decision === "auto") return `❌ "${toolName}" is a read-only tool — run it directly, not via approval.`
+    isBridgeTool = true
   }
 
-  // 2) Schema check — reject a malformed proposal at propose time.
-  const validation = validateToolParams(toolName, params)
-  if (!validation.ok) {
-    return `❌ Invalid params for "${toolName}": ${validation.errors.join(" ")}`
+  // 2) Schema check — reject a malformed proposal at propose time. AGENT tools
+  // validate against their AGENT_TOOLS schema; bridge tools against the captured
+  // MCP zod schema.
+  if (isBridgeTool) {
+    const { validateBridgeToolParams } = await import("./mcp-bridge")
+    const v = validateBridgeToolParams(toolName, params as Record<string, unknown>)
+    if (!v.ok) return `❌ Invalid params for "${toolName}": ${v.error}`
+  } else {
+    const validation = validateToolParams(toolName, params)
+    if (!validation.ok) {
+      return `❌ Invalid params for "${toolName}": ${validation.errors.join(" ")}`
+    }
   }
 
   // 3) Idempotency — return an existing pending/approved row rather than dup.
@@ -1067,6 +1128,40 @@ export async function executeWorkerTool(
     if (name === "get_call") return getCallForWorker(params)
     return searchCallsForWorker(params)
   }
+  // find_tool / use_tool — the flexible action surface (Slack-only, gated via
+  // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
+  if (name === "find_tool") {
+    if (!availableNames?.has("find_tool")) return `❌ Tool "find_tool" is not permitted in this worker call (full tool reach not enabled).`
+    const q = (typeof params.query === "string" ? params.query : "").toLowerCase().trim()
+    if (!q) return "find_tool needs a query."
+    const { listBridgeTools } = await import("./mcp-bridge")
+    const hits = listBridgeTools()
+      .filter((t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+      .slice(0, 15)
+    if (!hits.length) return `No tools match "${q}".`
+    return hits.map((t) => `• ${t.name} — ${t.description.split(/\. |\n/)[0]}`).join("\n")
+  }
+  if (name === "use_tool") {
+    if (!availableNames?.has("use_tool")) return `❌ Tool "use_tool" is not permitted in this worker call (full tool reach not enabled).`
+    const toolName = typeof params.name === "string" ? params.name : ""
+    if (!toolName) return "use_tool needs a tool `name` (find it with find_tool)."
+    const toolParams = params.params && typeof params.params === "object" ? (params.params as Record<string, unknown>) : {}
+    const { decideAction } = await import("./tool-risk")
+    const { decision, tier, reasons } = decideAction(toolName, toolParams)
+    if (decision === "blocked") return `❌ "${toolName}" is blocked from the assistant (${reasons.join("; ")}).`
+    if (decision === "auto") {
+      const { runToolByName } = await import("./mcp-bridge")
+      return runToolByName(toolName, toolParams)
+    }
+    // approval needed — queue it on the approval rail (opt-in to bridge tools). It
+    // does NOT execute; Antonio approves with a 6-digit code, then the executor runs
+    // it via runToolByName. Show the draft + wait for his OK before this fires.
+    const queued = await proposeAction(
+      { tool_name: toolName, params: toolParams, rationale: `Proposed via use_tool (${tier})` },
+      { allowBridgeTools: true },
+    )
+    return `🔒 "${toolName}" is a ${tier === "EXTERNAL" ? "client-facing/external" : "data-changing"} action — queued for your approval.\n${queued}`
+  }
   if (!WORKER_READ_ONLY_TOOL_NAMES.has(name)) {
     return `❌ Tool "${name}" is not permitted in the Hermes-bridge worker (read-only by design).`
   }
@@ -1143,6 +1238,25 @@ type WorkerUserContent = string | Array<{ type: "text"; text: string } | WorkerI
 const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
 const ANTHROPIC_TIMEOUT_MS = 240_000 // per-call ceiling; raised from 55s so max_tokens=16384 is usable for long pure-text responses. Stays under cron route's maxDuration=300 with 60s buffer.
 
+// Wall-clock budget for the WHOLE tool-use loop. Kept under the cron route's
+// maxDuration=300s with a 50s margin so the serverless function never gets
+// hard-killed mid-loop. The loop stops GRACEFULLY when this (or the iteration cap)
+// is hit — better than a fixed iteration cap alone: a fast investigation gets more
+// steps; a slow one stops cleanly before the deadline instead of being cut off.
+const WORKER_WALL_CLOCK_BUDGET_MS = 250_000
+const MIN_CALL_TIMEOUT_MS = 15_000
+const CALL_DEADLINE_MARGIN_MS = 5_000
+
+/**
+ * Per-API-call abort timeout given how much loop budget is left, so a late call can
+ * never overrun WORKER_WALL_CLOCK_BUDGET_MS (which would risk a hard function kill).
+ * Clamped to [MIN_CALL_TIMEOUT_MS, maxCallMs]. Pure — exported for tests.
+ */
+export function callTimeoutForBudget(elapsedMs: number, budgetMs: number, maxCallMs: number): number {
+  const remaining = budgetMs - elapsedMs - CALL_DEADLINE_MARGIN_MS
+  return Math.max(MIN_CALL_TIMEOUT_MS, Math.min(maxCallMs, remaining))
+}
+
 export interface CallWorkerOptions {
   /**
    * Thread this message belongs to. When set, the worker is given the thread's
@@ -1208,6 +1322,14 @@ export interface CallWorkerOptions {
    * Slack-only so the Hermes/Telegram research worker never gets call transcripts (R108).
    */
   enableCallReads?: boolean
+  /**
+   * Expose the Slack-only flexible action surface (find_tool / use_tool) for this
+   * call. Set by the Slack worker (processSlackEvent) ONLY when env
+   * ASSISTANT_FULL_REACH_ENABLED === 'true' (default off). Read tools run via the
+   * bridge; data-changing/external tools require approval (rail expansion pending).
+   * Kept out of WORKER_TOOLS so the Hermes/Telegram research worker never gets it (R108).
+   */
+  enableFullToolReach?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -1261,9 +1383,13 @@ async function runWorkerLoop(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let currentMessages: any[] = [{ role: "user", content: userContent }]
 
-  for (let i = 0; i < maxLoops; i++) {
+  const loopStart = Date.now()
+  for (let i = 0; i < maxLoops && Date.now() - loopStart < WORKER_WALL_CLOCK_BUDGET_MS; i++) {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS)
+    // Per-call timeout shrinks as the loop budget depletes so a late call can't
+    // push the function past its hard maxDuration.
+    const callTimeout = callTimeoutForBudget(Date.now() - loopStart, WORKER_WALL_CLOCK_BUDGET_MS, ANTHROPIC_TIMEOUT_MS)
+    const timeout = setTimeout(() => controller.abort(), callTimeout)
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1337,7 +1463,7 @@ async function runWorkerLoop(
   }
 
   return {
-    reply: `Reached the worker's maximum tool-use iterations (${maxLoops}). Findings may be incomplete — consider narrowing the question.`,
+    reply: `I reached my working limit on this one (up to ${maxLoops} steps within the time budget), so my findings may be incomplete. Try narrowing it down or asking for one thing at a time.`,
     toolsUsed,
     reachedMaxLoops: true,
   }
@@ -1436,6 +1562,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // availableNames (defense-in-depth).
   if (opts.enableCallReads) {
     for (const t of [LIST_CALLS_TOOL, GET_CALL_TOOL, SEARCH_CALLS_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
+  // Slack-only: append the flexible action surface (find_tool / use_tool). Gated on
+  // enableFullToolReach (default off) so it NEVER reaches the Hermes research worker
+  // (R108) and never double-adds. Read tools auto-run via the bridge; writes/externals
+  // require approval (rail expansion pending). Executor re-checks availableNames.
+  if (opts.enableFullToolReach) {
+    for (const t of [FIND_TOOL_TOOL, USE_TOOL_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }

@@ -701,6 +701,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     console.warn("[slack-claude] template load failed (non-fatal):", err)
   }
 
+  // When the flexible action surface is enabled, append guidance on find_tool /
+  // use_tool (only relevant then — the tools aren't in the list otherwise).
+  if (process.env.ASSISTANT_FULL_REACH_ENABLED === "true") {
+    slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external is queued for Antonio's approval — show him the draft and wait for his explicit OK before proposing; a few tools (raw SQL, deletes) are blocked. Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available.`
+  }
+
   // Only add `images` to the opts when there are blocks — keeps the text-only
   // call shape identical to before (and to the Hermes/Telegram path).
   const workerOpts: CallWorkerOptions = {
@@ -717,7 +723,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     enableEmailSend: true,
     // Read Circleback calls in full (transcript/notes/action items) — Slack-only.
     enableCallReads: true,
-    maxIterations: 12,
+    // Flexible action surface (find_tool/use_tool) — OFF unless explicitly enabled.
+    enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
+    maxIterations: 20,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
 
@@ -809,7 +817,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableDbRead: true,
           enableEmailSend: true,
           enableCallReads: true,
-          maxIterations: 12,
+          enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
+          maxIterations: 20,
         }
         ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))
       }

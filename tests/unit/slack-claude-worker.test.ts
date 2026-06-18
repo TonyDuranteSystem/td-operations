@@ -340,7 +340,8 @@ describe("processSlackEvent", () => {
       enableDbRead: true,
       enableEmailSend: true,
       enableCallReads: true,
-      maxIterations: 12,
+      enableFullToolReach: false,
+      maxIterations: 20,
     })
 
     // Should have called Slack chat.postMessage

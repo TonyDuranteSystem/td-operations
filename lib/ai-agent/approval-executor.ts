@@ -32,7 +32,11 @@
  * (writeOutcomeCallback) so Hermes can report what happened.
  */
 
-import { executeTool } from "./tools"
+// NOTE: runToolByName (the tool dispatcher) is imported DYNAMICALLY at the two call
+// sites below, not here — a static import would create a cycle
+// (approval-executor → mcp-bridge → agent-approvals → approval-executor). It routes
+// the existing 14 approvable AGENT tools through executeTool (unchanged) and
+// bridge-proposed tools through the MCP bridge.
 import { computeParamsHash } from "./approvable-tools"
 import { emitApprovalOutcome, runNotificationSweep } from "./approval-notifications"
 import { currentApprovalEnv } from "./approval-env"
@@ -243,7 +247,8 @@ export async function executeApprovalRow(row: ApprovalRow): Promise<ExecResult> 
   // 2) Execute the real action.
   let raw: string
   try {
-    raw = await executeTool(row.tool_name, row.params)
+    const { runToolByName } = await import("./mcp-bridge")
+    raw = await runToolByName(row.tool_name, row.params)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     await finalize(row.id, "failed", { error_text: msg })
@@ -368,7 +373,8 @@ export async function executeClaimedRow(id: string): Promise<ExecResult> {
   // 3) Execute the real action (same path as the server executor).
   let raw: string
   try {
-    raw = await executeTool(row.tool_name, row.params ?? {})
+    const { runToolByName } = await import("./mcp-bridge")
+    raw = await runToolByName(row.tool_name, row.params ?? {})
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const won = await finalizeClaimed(id, "failed", claimedBy, { error_text: msg })
