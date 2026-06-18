@@ -69,7 +69,11 @@ export function resolveSecretaryOfStateLink(state: string | null | undefined): R
  * with State" stages.
  */
 const FORMATION_SOS_URL: Record<string, string> = {
-  NM: 'https://portal.sos.state.nm.us/BFS/online/',
+  // NM moved off portal.sos.state.nm.us (now dead — connection refused) to the
+  // "SOS Enterprise" portal. Verified live 2026-06-18. This is the home where
+  // staff search name availability AND file. The old /BFS/online/ URL is why the
+  // "File on SOS" link appeared broken.
+  NM: 'https://enterprise.sos.nm.gov/',
   WY: 'https://wyobiz.wyo.gov/Business/FilingSearch.aspx',
   FL: 'https://dos.fl.gov/sunbiz/start-business/efile/fl-llc/',
   DE: 'https://icis.corp.delaware.gov/ecorp/logintax.aspx',

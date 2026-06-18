@@ -81,7 +81,7 @@ Available as MCP tools: `hc_sync_company` (push account to HC, activate RA), `hc
 
 | State | URL |
 |-------|-----|
-| New Mexico | https://portal.sos.state.nm.us/BFS/online/ |
+| New Mexico | https://enterprise.sos.nm.gov/ (the old portal.sos.state.nm.us/BFS/online/ is dead) |
 | Wyoming | https://wyobiz.wyo.gov/Business/FilingSearch.aspx |
 | Florida | https://dos.fl.gov/sunbiz/start-business/efile/fl-llc/ |
 | Delaware | https://icis.corp.delaware.gov/ecorp/logintax.aspx |
