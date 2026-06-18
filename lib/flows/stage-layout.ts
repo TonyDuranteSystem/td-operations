@@ -22,7 +22,7 @@ export const STAGE_COMPONENT_TYPES = [
   'fax_irs',
   'activate_ra',
   'shipping_info',
-  'decision_requests',
+  'formation_names',
   'notes',
 ] as const
 

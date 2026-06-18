@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ClipboardList, Loader2, Building2 } from 'lucide-react'
+import { ClipboardList, Loader2 } from 'lucide-react'
 import { groupSubmittedData, type DataGroup } from '@/lib/flows/submitted-data'
-import { formationNameChoices, FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
+import { FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
 import { formatUploadDate } from '@/lib/flows/workspace-format'
 
 interface Submission {
@@ -61,11 +61,9 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
   }, [serviceDeliveryId])
 
   const isFormation = source === 'formation'
-  const nameChoices = isFormation ? formationNameChoices(submission?.submitted_data ?? null) : []
-  const hasNameChoices = nameChoices.length > 0
   // For formation, drop the name keys (incl. any chosen_name*) from the grouped
-  // view — the candidates are shown prominently in their own card above, and
-  // nothing is "chosen" yet at this stage.
+  // view — the candidate LLC names are owned by the formation_names command
+  // center (components/flows/formation-names.tsx), not shown here.
   const dataForGroups = isFormation && submission?.submitted_data
     ? Object.fromEntries(
         Object.entries(submission.submitted_data).filter(
@@ -94,27 +92,6 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {!error && loaded && submission && hasNameChoices && (
-        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
-          <div className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
-            <Building2 className="h-3.5 w-3.5" />
-            Proposed LLC Names — check availability & confirm one with the client
-          </div>
-          <div className="space-y-2">
-            {nameChoices.map((choice) => (
-              <div key={choice.label} className="rounded-lg border border-blue-200 bg-white px-3 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-blue-600">{choice.label}</div>
-                {choice.value ? (
-                  <div className="text-base font-semibold text-zinc-900 break-words">{choice.value}</div>
-                ) : (
-                  <div className="text-sm italic text-zinc-400">Not provided</div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {!error && !loaded && (
         <p className="flex items-center gap-1.5 text-sm text-zinc-400">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -126,7 +103,7 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
         <p className="text-sm text-zinc-500">No submitted data found for this client yet.</p>
       )}
 
-      {!error && loaded && submission && groups.length === 0 && !hasNameChoices && (
+      {!error && loaded && submission && groups.length === 0 && (
         <p className="text-sm text-zinc-500">The submission has no data to display.</p>
       )}
 

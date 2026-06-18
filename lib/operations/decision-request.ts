@@ -238,6 +238,18 @@ export async function respondToDecisionRequest(params: RespondDecisionParams): P
     }
   }
 
+  // Formation name flow: when the request carries a name_check marker, reflect
+  // the response onto service_deliveries.name_checks. Gated by the marker so the
+  // decisions system itself stays type-agnostic (non-fatal).
+  if ((req.options as { name_check?: unknown } | null)?.name_check) {
+    try {
+      const { applyNameDecisionResponse } = await import('@/lib/operations/formation-name-checks')
+      await applyNameDecisionResponse(req, v.status, v.response)
+    } catch {
+      // non-critical — staff can correct the name status from the workspace
+    }
+  }
+
   // Optional auto-advance on approval.
   let auto_advanced = false
   if (req.auto_advance_on && v.status === 'approved' && req.service_delivery_id) {
