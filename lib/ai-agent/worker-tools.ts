@@ -1660,6 +1660,35 @@ async function runWorkerLoop(
  * Every thread step is best-effort — a thread-layer failure never breaks the
  * core research reply.
  */
+// Auto-recall tuning (Decision Memory). Before the model loop, callWorker
+// proactively injects the top-N past lessons whose stored situation is at least
+// this similar to the incoming request, so the worker APPLIES them without having
+// to decide to call memory_recall. The bar is well below the 0.7 explicit-recall
+// default: a raw incoming message is matched against a Haiku-distilled stored
+// situation (noisier → lower scores), and measured production neighbors show the
+// genuinely-related cluster sits at ~0.45–0.55 with the unrelated tail below 0.4.
+// 0.45 captures that related band; the top-3 cap keeps a loose match from flooding
+// the prompt. Tunable — watch the recall counter + injected-lesson relevance.
+export const AUTO_RECALL_THRESHOLD = 0.45
+export const AUTO_RECALL_COUNT = 3
+
+/**
+ * Format recalled decision-memory matches into a system-prompt bullet list.
+ * Pure + exported so the formatting is unit-tested without an embedding/DB call.
+ * Returns "" for an empty list so the caller can skip injection cleanly.
+ */
+export function formatRecalledLessons(
+  matches: Array<{ decision: string; domain: string | null; reasoning: string | null }>,
+): string {
+  if (!matches.length) return ""
+  return matches
+    .map(
+      (m) =>
+        `- ${m.domain ? `[${m.domain}] ` : ""}${m.decision}${m.reasoning ? ` (why: ${m.reasoning})` : ""}`,
+    )
+    .join("\n")
+}
+
 export async function callWorker(userBody: string, opts: CallWorkerOptions = {}): Promise<WorkerResponse> {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured")
 
@@ -1768,6 +1797,25 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   const images = Array.isArray(opts.images) ? opts.images : []
   const userContent: WorkerUserContent =
     images.length > 0 ? [{ type: "text", text: userBody }, ...images] : userBody
+
+  // Auto-recall (Decision Memory): surface relevant past lessons up-front so the
+  // worker applies them without having to choose to call memory_recall — the gap
+  // that left ~70 saved lessons with near-zero recalls. The memory_recall tool
+  // stays available for deeper/explicit lookups. Best-effort: a missing OpenAI
+  // key, embedding error, or RPC failure is swallowed so it never fails a reply.
+  try {
+    const { recallDecisionMemory } = await import("./decision-memory")
+    const recalled = await recallDecisionMemory(userBody, {
+      matchThreshold: AUTO_RECALL_THRESHOLD,
+      matchCount: AUTO_RECALL_COUNT,
+    })
+    const lessons = formatRecalledLessons(recalled)
+    if (lessons) {
+      systemPrompt = `${systemPrompt}\n\nRELEVANT PAST LESSONS (auto-recalled from prior corrections/decisions for a situation like this one — apply them if relevant; do not repeat a past mistake):\n${lessons}`
+    }
+  } catch (err) {
+    console.warn("[callWorker] auto-recall failed (non-fatal):", err)
+  }
 
   const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations)
 
