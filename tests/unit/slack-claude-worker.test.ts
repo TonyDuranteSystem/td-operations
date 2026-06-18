@@ -141,8 +141,10 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // same-thread replies + show-draft-then-explicit-"send it" guardrail)
     // → 7200 (2026-06-17, CALLS block: read Circleback calls in full via
     // list_calls/get_call/search_calls).
+    // → 8000 (2026-06-18, ENGINEERING DISCIPLINE block: never assume/invent,
+    // check before claiming a tool doesn't exist, challenge first answer).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(7200)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(8000)
   })
 
   it("instructs awareness of Hermes's messages in shared threads", () => {

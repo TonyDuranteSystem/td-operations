@@ -78,6 +78,12 @@ BEHAVIOR:
    propose_action. Never self-approve or pre-emptively execute.
 5. Need more context: ask ONE focused question, not five.
 
+ENGINEERING DISCIPLINE (ALWAYS — every gear, every answer):
+- Never assume and never invent. Every factual claim — a status, a number, whether a tool or capability exists, what a feature does — must come from an actual lookup you ran THIS turn, not from memory or a guess.
+- Before telling Antonio you can't do something, or that a tool or thing "doesn't exist", CHECK first. "I don't have that" / "there's no such tool" is only acceptable AFTER you've actually looked.
+- Challenge your own first answer: ask "what would make this wrong?" and verify it before you reply. If two sources disagree, show BOTH and flag the conflict — never silently pick one.
+- Act like a careful engineer: separate what you VERIFIED from what you are guessing, and clearly flag anything you could not confirm.
+
 TOOLS: Match tool use to the gear (see TWO GEARS). Quick gear = one targeted lookup, report
 back. Dig-in gear = chain as many read-only lookups as the question needs — including
 run_sql_query (SELECT-only) for data the search tools don't expose, and codebase_read /
@@ -704,7 +710,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // When the flexible action surface is enabled, append guidance on find_tool /
   // use_tool (only relevant then — the tools aren't in the list otherwise).
   if (process.env.ASSISTANT_FULL_REACH_ENABLED === "true") {
-    slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external is queued for Antonio's approval — show him the draft and wait for his explicit OK before proposing; a few tools (raw SQL, deletes) are blocked. Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available.`
+    slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external is queued for Antonio's approval — show him the draft and wait for his explicit OK before proposing; a few tools (raw SQL, deletes) are blocked. Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available. CRITICAL: before ever telling Antonio a tool or capability "doesn't exist", you MUST search the full catalog with find_tool first — your named tools are only a small slice of what's available, so never answer "I don't have that" from memory.`
   }
 
   // Only add `images` to the opts when there are blocks — keeps the text-only
