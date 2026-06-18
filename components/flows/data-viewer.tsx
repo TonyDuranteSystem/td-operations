@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ClipboardList, Loader2, Building2, CheckCircle2 } from 'lucide-react'
+import { ClipboardList, Loader2, Building2 } from 'lucide-react'
 import { groupSubmittedData, type DataGroup } from '@/lib/flows/submitted-data'
-import { extractFormationNames, FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
+import { formationNameChoices, FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
 import { formatUploadDate } from '@/lib/flows/workspace-format'
 
 interface Submission {
@@ -61,9 +61,11 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
   }, [serviceDeliveryId])
 
   const isFormation = source === 'formation'
-  const names = isFormation ? extractFormationNames(submission?.submitted_data ?? null) : null
-  // For formation, drop the name keys from the grouped view — they're shown
-  // prominently in their own card above.
+  const nameChoices = isFormation ? formationNameChoices(submission?.submitted_data ?? null) : []
+  const hasNameChoices = nameChoices.length > 0
+  // For formation, drop the name keys (incl. any chosen_name*) from the grouped
+  // view — the candidates are shown prominently in their own card above, and
+  // nothing is "chosen" yet at this stage.
   const dataForGroups = isFormation && submission?.submitted_data
     ? Object.fromEntries(
         Object.entries(submission.submitted_data).filter(
@@ -92,34 +94,24 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {!error && loaded && submission && names && names.choices.length > 0 && (
-        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50/60 p-3">
-          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+      {!error && loaded && submission && hasNameChoices && (
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+          <div className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
             <Building2 className="h-3.5 w-3.5" />
-            LLC Name Choices
+            Proposed LLC Names — check availability & confirm one with the client
           </div>
-          <ol className="space-y-1">
-            {names.choices.map((name, i) => {
-              const isChosen = names.chosen != null && name.toLowerCase() === names.chosen.toLowerCase()
-              return (
-                <li key={`${name}-${i}`} className="flex items-center gap-2 text-sm">
-                  <span className="text-zinc-400">{i + 1}.</span>
-                  <span className={isChosen ? 'font-semibold text-blue-900' : 'text-zinc-800'}>{name}</span>
-                  {isChosen && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-medium text-white">
-                      <CheckCircle2 className="h-3 w-3" />
-                      Chosen
-                    </span>
-                  )}
-                </li>
-              )
-            })}
-          </ol>
-          {names.chosen && !names.choices.some((n) => n.toLowerCase() === names.chosen!.toLowerCase()) && (
-            <div className="mt-2 text-sm text-blue-900">
-              Chosen name: <span className="font-semibold">{names.chosen}</span>
-            </div>
-          )}
+          <div className="space-y-2">
+            {nameChoices.map((choice) => (
+              <div key={choice.label} className="rounded-lg border border-blue-200 bg-white px-3 py-2">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-blue-600">{choice.label}</div>
+                {choice.value ? (
+                  <div className="text-base font-semibold text-zinc-900 break-words">{choice.value}</div>
+                ) : (
+                  <div className="text-sm italic text-zinc-400">Not provided</div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -134,29 +126,50 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
         <p className="text-sm text-zinc-500">No submitted data found for this client yet.</p>
       )}
 
-      {!error && loaded && submission && groups.length === 0 && !(names && names.choices.length > 0) && (
+      {!error && loaded && submission && groups.length === 0 && !hasNameChoices && (
         <p className="text-sm text-zinc-500">The submission has no data to display.</p>
       )}
 
       {!error && groups.length > 0 && (
-        <div className="space-y-4">
-          {groups.map((group) => (
-            <div key={group.title}>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
-                {group.title}
-              </div>
-              <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                {group.fields.map((f) => (
-                  <div key={f.label} className="flex flex-col">
-                    <dt className="text-[11px] text-zinc-400">{f.label}</dt>
-                    <dd className="text-sm text-zinc-800 break-words">{f.value}</dd>
-                  </div>
-                ))}
-              </dl>
+        isFormation ? (
+          // Secondary client details — collapsed by default; the name choices
+          // above are the primary content at this stage.
+          <details className="group rounded-lg border border-zinc-200 bg-zinc-50/60">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-zinc-600 hover:text-zinc-900">
+              Client details (owner, address, business purpose…)
+            </summary>
+            <div className="space-y-4 px-3 pb-3 pt-1">
+              {groups.map((group) => (
+                <DataGroupBlock key={group.title} group={group} />
+              ))}
             </div>
-          ))}
-        </div>
+          </details>
+        ) : (
+          <div className="space-y-4">
+            {groups.map((group) => (
+              <DataGroupBlock key={group.title} group={group} />
+            ))}
+          </div>
+        )
       )}
+    </div>
+  )
+}
+
+function DataGroupBlock({ group }: { group: DataGroup }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+        {group.title}
+      </div>
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
+        {group.fields.map((f) => (
+          <div key={f.label} className="flex flex-col">
+            <dt className="text-[11px] text-zinc-400">{f.label}</dt>
+            <dd className="text-sm text-zinc-800 break-words">{f.value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   )
 }

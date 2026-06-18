@@ -53,7 +53,7 @@ VALUES
   ('Company Formation', 2, 'Wizard Submitted',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),
    'We''re reviewing your details', 'Stiamo verificando i tuoi dati', 'ClipboardCheck', true, true, false,
-   '{"description": "Client submitted the formation wizard. Review the LLC name choices and owner details, check name availability on the Secretary of State site, and confirm the chosen name with the client.", "components": [{"type": "data_viewer", "label": "Formation Wizard Submission"}, {"type": "external_link", "label": "Check Name Availability on Secretary of State"}, {"type": "info_panel"}, {"type": "chat"}, {"type": "action_buttons", "actions": [{"key": "advance_next", "label": "Name Chosen — File with State", "target": "Filed with State"}]}]}'::jsonb),
+   '{"description": "Client submitted the formation wizard. Review the LLC name choices and owner details, check name availability on the Secretary of State site, and confirm the chosen name with the client.", "components": [{"type": "data_viewer", "label": "Formation Wizard Submission"}, {"type": "external_link", "label": "Check Name Availability on Secretary of State"}, {"type": "info_panel"}, {"type": "chat"}, {"type": "action_buttons", "actions": [{"key": "advance_next", "label": "Name Confirmed by Client — File with State", "target": "Filed with State"}]}]}'::jsonb),
 
   ('Company Formation', 3, 'Filed with State',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),

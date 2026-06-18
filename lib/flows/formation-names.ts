@@ -1,25 +1,28 @@
 /**
  * Pure helpers for the Company Formation flow Workspace data_viewer.
  *
- * The formation wizard stores its data as a flat JSONB blob (wizard_progress.data)
- * whose name fields vary by submission vintage:
- *   - newer: `llc_name_1` / `llc_name_2` / `llc_name_3` (the 3 candidate names)
- *     plus `chosen_name`,
- *   - older: a single `llc_name` / `company_name` / `business_name`.
- * The data_viewer surfaces the candidate names PROMINENTLY (the staff's first job
- * at "Wizard Submitted" is to check name availability and confirm one), then
- * renders the rest of the submission via the schema-agnostic grouping helper.
+ * At the "Wizard Submitted" stage the client has proposed up to THREE candidate
+ * LLC names — there is NO chosen name yet (the choosing happens in this stage,
+ * via the SoS availability check + chat with the client). So the viewer shows
+ * the three candidates, labeled "Name Choice 1/2/3", and never a "chosen" name.
+ *
+ * Data shapes vary by submission vintage:
+ *   - current: `llc_name_1` / `llc_name_2` / `llc_name_3` (the 3 candidates),
+ *   - legacy:  a single `llc_name` / `company_name` / `business_name`.
+ * `chosen_name` / `chosen_name_final` may also be present from later steps — they
+ * are intentionally NOT surfaced at this stage.
  */
 
-export interface FormationNames {
-  /** Ordered candidate LLC names (1–3), de-duplicated, empties dropped. */
-  choices: string[]
-  /** The name the client marked as chosen, if any. */
-  chosen: string | null
+export interface FormationNameChoice {
+  /** Display label, e.g. "Name Choice 1" or "Proposed Name". */
+  label: string
+  /** The candidate name, or null when that slot wasn't filled. */
+  value: string | null
 }
 
-/** Keys consumed by extractFormationNames — excluded from the grouped view so
- *  the names are not rendered twice (prominent card + grouped fields). */
+/** Name-related keys consumed here — excluded from the grouped "rest of data"
+ *  view so names aren't rendered twice and no "chosen" name leaks in at this
+ *  stage. */
 export const FORMATION_NAME_KEYS = [
   'llc_name_1',
   'llc_name_2',
@@ -28,6 +31,7 @@ export const FORMATION_NAME_KEYS = [
   'company_name',
   'business_name',
   'chosen_name',
+  'chosen_name_final',
 ] as const
 
 function str(v: unknown): string | null {
@@ -36,25 +40,27 @@ function str(v: unknown): string | null {
   return t === '' ? null : t
 }
 
-/** Extract the candidate LLC names + the chosen name from a formation wizard blob. */
-export function extractFormationNames(data: Record<string, unknown> | null | undefined): FormationNames {
-  if (!data || typeof data !== 'object') return { choices: [], chosen: null }
+/**
+ * Build the candidate-name rows for the "Wizard Submitted" stage.
+ *   - When any of `llc_name_1/2/3` is present → exactly 3 rows labeled
+ *     "Name Choice 1/2/3" (empty slots carry value=null so the UI can show a
+ *     "not provided" placeholder — the 3-choice structure stays explicit).
+ *   - Else, a legacy single-name shape → one "Proposed Name" row.
+ *   - Else → [].
+ * No "chosen" concept — nothing is chosen yet at this stage.
+ */
+export function formationNameChoices(data: Record<string, unknown> | null | undefined): FormationNameChoice[] {
+  if (!data || typeof data !== 'object') return []
 
-  const choices: string[] = []
-  for (const key of ['llc_name_1', 'llc_name_2', 'llc_name_3']) {
+  const numbered = [1, 2, 3].map((n) => str(data[`llc_name_${n}`]))
+  if (numbered.some((v) => v !== null)) {
+    return numbered.map((value, i) => ({ label: `Name Choice ${i + 1}`, value }))
+  }
+
+  for (const key of ['llc_name', 'company_name', 'business_name']) {
     const v = str(data[key])
-    if (v && !choices.includes(v)) choices.push(v)
-  }
-  // Fall back to a single-name shape only when no numbered candidates exist.
-  if (choices.length === 0) {
-    for (const key of ['llc_name', 'company_name', 'business_name']) {
-      const v = str(data[key])
-      if (v) {
-        choices.push(v)
-        break
-      }
-    }
+    if (v) return [{ label: 'Proposed Name', value: v }]
   }
 
-  return { choices, chosen: str(data['chosen_name']) }
+  return []
 }
