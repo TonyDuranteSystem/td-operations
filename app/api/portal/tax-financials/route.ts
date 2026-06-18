@@ -45,18 +45,19 @@ export async function GET(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // ai_lean/ai_bucket + financials_meta not yet in database.types.ts
     const uncatRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
-      // Option B (2026-06-18, Antonio): the review shows ALL spend booked as a
-      // business cost (or defaulting to one) — not just the undecided rows — so
-      // the owner can flag ANY of it as personal, even what a rule expensed. A
-      // rule can categorize, but only the owner knows if a charge was personal.
-      // Already-personal (distribution), owner-money-in (contribution) and
-      // internal transfers (conversion) are decided and drop off.
+      // Option B + no-vanish (2026-06-18, Antonio/Luca): the review shows ALL
+      // reviewable spend AND the owner's already-made decisions
+      // (distribution=personal, contribution=owner-money-in) — so flagging a
+      // charge NEVER makes it disappear; it just changes its shown state and can
+      // be flipped back (Luca: "when you select it, it disappears right away —
+      // you have to be really careful"). Only auto-detected internal transfers
+      // ('conversion') are excluded (not an owner spend decision).
       const { data, error } = await db
         .from('bank_transactions')
-        .select('id, description, counterparty, amount, transaction_date, bank_name, ai_lean, ai_bucket')
+        .select('id, description, counterparty, amount, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
-        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income'])
+        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
@@ -71,6 +72,7 @@ export async function GET(request: NextRequest) {
       bank_name: String(r.bank_name ?? ''),
       ai_lean: (r.ai_lean as string | null) ?? null,
       ai_bucket: (r.ai_bucket as string | null) ?? null,
+      category: String(r.category ?? 'uncategorized'),
     })))
 
     // Per-file sources for the delete/replace cards (§6) + coverage below.

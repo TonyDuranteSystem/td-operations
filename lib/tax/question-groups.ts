@@ -21,6 +21,9 @@ export interface UncategorizedRow {
   /** Advisory AI hints (#2) — present once the AI labeling pass has run. */
   ai_lean?: string | null
   ai_bucket?: string | null
+  /** The row's current bookkeeping category (no-vanish: lets the review show
+   *  the owner's current choice instead of dropping decided rows). */
+  category?: string | null
 }
 
 export interface QuestionGroup {
@@ -38,6 +41,9 @@ export interface QuestionGroup {
    *  the group's rows. Used to pre-tag + group the review; the client confirms. */
   ai_lean?: "business" | "personal" | "unsure"
   ai_bucket?: string
+  /** The group's current bookkeeping category (mode across its rows) — drives
+   *  which answer chip shows as selected so a flagged row never just vanishes. */
+  current_category?: string
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -82,6 +88,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
       const lean: QuestionGroup["ai_lean"] | undefined =
         leanRaw === "business" || leanRaw === "personal" || leanRaw === "unsure" ? leanRaw : undefined
       const bucket = mode(g.rows.map(r => r.ai_bucket))
+      const current_category = mode(g.rows.map(r => r.category))
       return {
         group_key,
         label: g.label,
@@ -92,6 +99,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         sample: g.rows[0].description,
         ...(lean ? { ai_lean: lean } : {}),
         ...(bucket ? { ai_bucket: bucket } : {}),
+        ...(current_category ? { current_category } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)

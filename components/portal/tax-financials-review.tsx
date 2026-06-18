@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; direction: 'in' | 'out' | 'mixed'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; direction: 'in' | 'out' | 'mixed'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 
@@ -46,6 +46,15 @@ const ANSWERS = [
   { value: 'own_transfer', directions: ['in', 'out', 'mixed'], en: 'Transfer between my own accounts', it: 'Trasferimento tra i miei conti' },
   { value: 'bank_fee', directions: ['out', 'mixed'], en: 'Bank / platform fee', it: 'Commissione bancaria' },
 ]
+
+// Which answer chip is "active" given the row's current bookkeeping category.
+// (uncategorized defaults to business expense in the P&L, so it shows as such.)
+const CATEGORY_TO_ANSWER: Record<string, string> = {
+  expense: 'business_expense', cogs: 'business_expense', uncategorized: 'business_expense',
+  fee: 'bank_fee', distribution: 'personal_spending', income: 'business_income',
+  contribution: 'owner_money_in', conversion: 'own_transfer',
+}
+const activeAnswerOf = (g: QuestionGroup) => CATEGORY_TO_ANSWER[g.current_category ?? 'uncategorized'] ?? 'business_expense'
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -115,6 +124,28 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
         throw new Error(d.error || (it ? 'Impossibile aggiungere la categoria — riprova.' : 'Could not add the category — please try again.'))
       }
       setNewBucket('')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const bulkAnswer = async (groups: QuestionGroup[], value: string) => {
+    setBusy('bulk')
+    try {
+      for (const g of groups) {
+        const res = await fetch('/api/portal/tax-financials/answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, answer: value }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || (it ? 'Aggiornamento non riuscito — riprova.' : 'Could not update — please try again.'))
+        }
+      }
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -327,9 +358,27 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                 return order.filter(k => byBucket.has(k)).map(slug => {
                   const groups = byBucket.get(slug)!
                   const label = slug === '__unsorted__' ? (it ? 'Da sistemare' : 'Not yet sorted') : (bucketLabel.get(slug) ?? slug)
+                  const outGroups = groups.filter(x => x.direction === 'out')
                   return (
                     <div key={slug} className="mb-5">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">{label} · {groups.length}</div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{label} · {groups.length}</div>
+                        {outGroups.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-zinc-400">{it ? 'Tutti come:' : 'All as:'}</span>
+                            <button
+                              disabled={busy !== null}
+                              onClick={() => void bulkAnswer(outGroups, 'business_expense')}
+                              className="rounded-full border border-zinc-300 bg-white px-2.5 py-0.5 text-[11px] font-medium text-zinc-600 hover:border-zinc-900 disabled:opacity-50"
+                            >{it ? 'Aziendale' : 'Business'}</button>
+                            <button
+                              disabled={busy !== null}
+                              onClick={() => void bulkAnswer(outGroups, 'personal_spending')}
+                              className="rounded-full border border-amber-300 bg-white px-2.5 py-0.5 text-[11px] font-medium text-amber-700 hover:border-amber-600 disabled:opacity-50"
+                            >{it ? 'Personale' : 'Personal'}</button>
+                          </div>
+                        )}
+                      </div>
                       <div className="space-y-2">
                         {groups.map(g => {
                           const isOut = g.direction === 'out'
@@ -357,19 +406,20 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                                 </select>
                               </div>
                               <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="text-xs text-zinc-400">{it ? 'In realtà era:' : 'Actually it was:'}</span>
+                                <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
                                 {visibleAnswers(g).map(a => {
-                                  const primary = (isOut && a.value === 'personal_spending') || (!isOut && a.value === 'owner_money_in')
+                                  const selected = a.value === activeAnswerOf(g)
                                   return (
                                     <button
                                       key={a.value}
-                                      disabled={busy !== null}
+                                      disabled={busy !== null || selected}
                                       onClick={() => void answer(g, a.value)}
-                                      className={primary
-                                        ? 'rounded-full border border-amber-400 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 hover:border-amber-600 disabled:opacity-50'
+                                      aria-pressed={selected}
+                                      className={selected
+                                        ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
                                         : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
                                     >
-                                      {it ? a.it : a.en}
+                                      {selected ? '✓ ' : ''}{it ? a.it : a.en}
                                     </button>
                                   )
                                 })}
