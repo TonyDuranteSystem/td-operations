@@ -977,6 +977,7 @@ export async function proposeAction(
     idempotency_key?: unknown
     thread_id?: unknown
     batch_id?: unknown
+    source_message_id?: unknown
   },
   opts?: { allowBridgeTools?: boolean },
 ): Promise<string> {
@@ -998,6 +999,14 @@ export async function proposeAction(
   // batch_id so they're queryable as a unit (Phase D, batch_propose). NULL = solo.
   const batchId = typeof input.batch_id === "string" && input.batch_id.length > 0
     ? input.batch_id
+    : null
+  // Optional linkage to the agent_messages row that triggered this proposal (FK →
+  // agent_messages.id). Set server-side (not by the model) so an approval surface
+  // can map a row back to its originating conversation — e.g. the Slack worker
+  // resolves a typed confirmation code to the proposal minted in that same thread.
+  // NULL when unknown (preserves prior behaviour for any direct caller).
+  const sourceMessageId = typeof input.source_message_id === "string" && input.source_message_id.length > 0
+    ? input.source_message_id
     : null
 
   // 1) Allow-list check. The existing 14 approvable AGENT tools are ALWAYS allowed
@@ -1078,6 +1087,7 @@ export async function proposeAction(
       idempotency_key: idempotencyKey,
       thread_id: threadId,
       batch_id: batchId,
+      source_message_id: sourceMessageId,
       // Lane tag: which approval environment will execute this (Phase D). Defaults
       // to 'production' on every real deployment unless APPROVAL_ENV carves a lane.
       env: currentApprovalEnv(),
@@ -1180,6 +1190,7 @@ export async function executeWorkerTool(
   name: string,
   params: Record<string, unknown>,
   availableNames?: Set<string>,
+  sourceMessageId?: string | null,
 ): Promise<string> {
   if (name === "start_code_task") {
     const { _currentSlackCtx } = await import("./slack-claude")
@@ -1245,7 +1256,11 @@ export async function executeWorkerTool(
     return sendPortalMessageFromWorker(params)
   }
   if (name === "propose_action") {
-    return proposeAction(params)
+    // Inject the originating agent_messages id server-side so the proposal links
+    // to the conversation that produced it (the Slack worker later resolves a
+    // typed confirmation code to the proposal minted in that same thread). The
+    // model never supplies this; a model-supplied value in params is overridden.
+    return proposeAction({ ...params, source_message_id: sourceMessageId ?? null })
   }
   // memory_save — knowledge-only write (decision_memory), not a business
   // mutation; delegated to the shared executeTool implementation. memory_recall
@@ -1539,6 +1554,7 @@ async function runWorkerLoop(
   tools: ToolDef[],
   systemPrompt: string,
   maxIterations?: number,
+  sourceMessageId?: string | null,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
@@ -1623,7 +1639,7 @@ async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
-      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames)
+      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -1817,7 +1833,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     console.warn("[callWorker] auto-recall failed (non-fatal):", err)
   }
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations)
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null)
 
   if (threadId) {
     try {
