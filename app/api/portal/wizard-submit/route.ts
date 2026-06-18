@@ -202,7 +202,6 @@ export async function POST(req: NextRequest) {
       const submissionRecord: Record<string, unknown> = {
         token: submissionToken,
         contact_id: contact_id || null,
-        account_id: account_id || null,
         language: 'en',
         prefilled_data: {},
         submitted_data: data,
@@ -232,6 +231,20 @@ export async function POST(req: NextRequest) {
       // can build the right company even when the contact already owns others.
       if (submissionTable !== 'tax_return_submissions') {
         submissionRecord.lead_id = lead_id || null
+      }
+
+      // formation_submissions is the ONLY submission table WITHOUT an account_id
+      // column — a formation is bought by the contact before any company/account
+      // exists (see CONTACT_SCOPED_WIZARD_TYPES in wizard-map.ts), so the row
+      // carries lead_id, not account_id. Including account_id made the upsert fail
+      // with PGRST204 ("column account_id not found") → 500 → the client saw a false
+      // "submission failed" toast even though wizard_progress was already saved, AND
+      // the failure happened before the formation_setup auto-chain enqueue below, so
+      // it never ran (clients needed manual '-heal' repair). Verified against
+      // information_schema 2026-06-18: onboarding/tax_return/company_info/itin/closure
+      // submission tables all HAVE account_id. Same bug class as the entity_type guard.
+      if (submissionTable !== 'formation_submissions') {
+        submissionRecord.account_id = account_id || null
       }
 
       // Only include tax_year if we resolved it (avoids NOT NULL constraint violation)
