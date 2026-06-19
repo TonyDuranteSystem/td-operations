@@ -450,6 +450,74 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
   })
 }
 
+export interface BulkReminderOutcome {
+  id: string
+  invoice_number: string
+  status: 'sent' | 'skipped' | 'failed'
+  reason?: string
+  recipient?: string
+}
+
+/**
+ * Send payment reminders to many invoices in one shot (the Overdue-list bulk
+ * button). Cap/pause-aware: skips paused accounts and invoices already at the
+ * 2-reminder limit unless `overrideCap` is set. Runs sequentially (Gmail
+ * pacing) and reports a per-invoice outcome — never collapses to one toast.
+ */
+export async function sendBulkReminders(
+  paymentIds: string[],
+  opts: { overrideCap?: boolean } = {},
+): Promise<ActionResult<{ outcomes: BulkReminderOutcome[]; sent: number; skipped: number; failed: number }>> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { sendInvoiceReminder: sendReminderEmail } = await import('@/lib/billing/invoice-reminder')
+
+    // Dedupe + hard cap the batch size as a safety rail.
+    const ids = Array.from(new Set(paymentIds)).slice(0, 200)
+    const outcomes: BulkReminderOutcome[] = []
+
+    for (const id of ids) {
+      const { data: p } = await supabaseAdmin
+        .from('payments')
+        .select('id, invoice_number, invoice_status, reminder_count, account_id')
+        .eq('id', id)
+        .single()
+      const invNo = p?.invoice_number ?? id
+      if (!p) { outcomes.push({ id, invoice_number: invNo, status: 'failed', reason: 'Invoice not found' }); continue }
+
+      // Per-account dunning pause gate.
+      if (p.account_id) {
+        const { data: acc } = await supabaseAdmin.from('accounts').select('dunning_pause').eq('id', p.account_id).single()
+        if ((acc as { dunning_pause?: boolean } | null)?.dunning_pause) {
+          outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Account reminders paused' })
+          continue
+        }
+      }
+
+      // 2-reminder cap gate (override = explicit staff force-send).
+      if (!opts.overrideCap && Number(p.reminder_count ?? 0) >= 2) {
+        outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Already at 2-reminder limit' })
+        continue
+      }
+
+      const r = await sendReminderEmail(id, { source: 'manual' })
+      if (r.ok && r.sent) outcomes.push({ id, invoice_number: invNo, status: 'sent', recipient: r.recipient })
+      else if (r.alreadySent) outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Already sent recently' })
+      else outcomes.push({ id, invoice_number: invNo, status: 'failed', reason: r.error ?? 'Send failed' })
+    }
+
+    revalidatePath('/finance')
+    const sent = outcomes.filter(o => o.status === 'sent').length
+    const skipped = outcomes.filter(o => o.status === 'skipped').length
+    const failed = outcomes.filter(o => o.status === 'failed').length
+    return { outcomes, sent, skipped, failed }
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    summary: `Bulk invoice reminders — ${paymentIds.length} selected`,
+  })
+}
+
 export async function updateInvoice(
   paymentId: string,
   updates: { description?: string; due_date?: string; notes?: string; message?: string; total?: number }

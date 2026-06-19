@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment } from './actions'
+import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment, sendBulkReminders } from './actions'
 import { regenerateInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -80,6 +80,9 @@ function reminderTooltip(inv: InvoiceRecord): string {
   return parts.length ? `Reminders — ${parts.join(' · ')}` : 'Reminders sent'
 }
 
+/** Statuses for which a reminder can be sent (and thus bulk-selected). */
+const REMINDABLE_STATUSES = new Set(['Sent', 'Overdue', 'Partial'])
+
 export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
   const [search, setSearch] = useState('')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
@@ -88,6 +91,43 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
   const [statusFilter, setStatusFilter] = useState<string>('All')
   const [sortField, setSortField] = useState<SortField>('issue_date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  // ── Bulk reminder selection (Phase 3) ──
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [overrideCap, setOverrideCap] = useState(false)
+  const [bulkSending, setBulkSending] = useState(false)
+
+  function toggleSelected(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function handleBulkRemind() {
+    const ids = Array.from(selected)
+    if (ids.length === 0) return
+    if (!window.confirm(
+      `Send a payment reminder to ${ids.length} invoice${ids.length > 1 ? 's' : ''}?` +
+      (overrideCap ? '\n\nIncluding invoices already at the 2-reminder limit.' : '')
+    )) return
+    setBulkSending(true)
+    try {
+      const res = await sendBulkReminders(ids, { overrideCap })
+      if (!res.success || !res.data) { toast.error(res.error ?? 'Bulk reminder failed'); return }
+      const { sent, skipped, failed, outcomes } = res.data
+      toast.success(`Reminders — ${sent} sent · ${skipped} skipped · ${failed} failed`)
+      // Surface each non-sent outcome individually (R099: never hide the cause).
+      outcomes.filter(o => o.status !== 'sent').slice(0, 10).forEach(o =>
+        toast(`${o.invoice_number}: ${o.status} — ${o.reason ?? ''}`, { duration: 7000 }))
+      setSelected(new Set())
+      newInvRouter.refresh()
+    } finally {
+      setBulkSending(false)
+    }
+  }
 
   // Counts per status
   const statusCounts = useMemo(() => {
@@ -242,11 +282,52 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
         </div>
       </div>
 
+      {/* Bulk reminder toolbar — appears when invoices are selected */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm">
+          <span className="font-medium text-amber-800">{selected.size} selected</span>
+          <label className="flex items-center gap-1.5 text-amber-800 cursor-pointer">
+            <input type="checkbox" checked={overrideCap} onChange={e => setOverrideCap(e.target.checked)} />
+            Send even if already at the 2-reminder limit
+          </label>
+          <button
+            onClick={handleBulkRemind}
+            disabled={bulkSending}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
+          >
+            {bulkSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            Send Reminders ({selected.size})
+          </button>
+          <button onClick={() => setSelected(new Set())} className="text-amber-700 hover:text-amber-900 text-xs">Clear</button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="border rounded-lg overflow-auto max-h-[calc(100vh-320px)]">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 sticky top-0">
             <tr>
+              <th className="w-8 px-3 py-3">
+                {(() => {
+                  const selectable = filtered.filter(i => REMINDABLE_STATUSES.has(i.status))
+                  const allSel = selectable.length > 0 && selectable.every(i => selected.has(i.id))
+                  return (
+                    <input
+                      type="checkbox"
+                      aria-label="Select all remindable invoices"
+                      checked={allSel}
+                      onChange={e => {
+                        setSelected(prev => {
+                          const next = new Set(prev)
+                          if (e.target.checked) selectable.forEach(i => next.add(i.id))
+                          else selectable.forEach(i => next.delete(i.id))
+                          return next
+                        })
+                      }}
+                    />
+                  )
+                })()}
+              </th>
               <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('invoice_number')}>
                 Invoice # <SortIcon field="invoice_number" />
               </th>
@@ -272,7 +353,7 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
           <tbody className="divide-y">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center py-12 text-muted-foreground">
+                <td colSpan={9} className="text-center py-12 text-muted-foreground">
                   <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
                   No invoices found
                 </td>
@@ -288,6 +369,16 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                   key={inv.id}
                   className={`hover:bg-muted/30 transition-colors ${isOverdue ? 'bg-red-50/50' : ''}`}
                 >
+                  <td className="w-8 px-3 py-3">
+                    {REMINDABLE_STATUSES.has(inv.status) && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select invoice ${inv.invoice_number}`}
+                        checked={selected.has(inv.id)}
+                        onChange={() => toggleSelected(inv.id)}
+                      />
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <a
                       href={`/api/invoices/${inv.id}/pdf`}
