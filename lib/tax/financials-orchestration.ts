@@ -17,6 +17,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 import { buildFinancialDraft, type DraftTransaction, type FinancialDraft } from "./financials-engine"
+import type { FxRates } from "./fx"
 import { evaluateGates, canConfirm, type GateResult } from "./verification-gates"
 import { resolveOwnership, type OwnershipResolution, type OwnershipSource } from "./ownership-resolution"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
@@ -94,6 +95,25 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   )
   const transactions = txRows.map(r => ({ ...r, amount: Number(r.amount) })) as DraftTransaction[]
 
+  // Phase 2 — IRS yearly-average rates for any non-USD currency present, so the
+  // engine can express foreign-currency amounts in USD (lib/tax/fx.ts). USD needs
+  // no rate; an all-USD dataset skips this entirely (fxRates stays undefined).
+  const foreignCurrencies = Array.from(new Set(
+    transactions.map(t => (t.currency ?? "").trim().toUpperCase()).filter(c => c && c !== "USD"),
+  ))
+  let fxRates: FxRates | undefined
+  if (foreignCurrencies.length > 0) {
+    const { data: rateRows } = await supabaseAdmin
+      .from("irs_exchange_rates")
+      .select("currency, rate_to_usd")
+      .eq("tax_year", taxYear)
+      .in("currency", foreignCurrencies)
+    fxRates = {}
+    for (const r of (rateRows ?? []) as Array<{ currency: string; rate_to_usd: number }>) {
+      fxRates[r.currency.toUpperCase()] = Number(r.rate_to_usd)
+    }
+  }
+
   const { data: links } = await supabaseAdmin
     .from("account_contacts")
     .select("contact_id, ownership_pct, contacts(first_name, last_name)")
@@ -137,7 +157,7 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   // merchants). Instead every still-uncategorized row is defaulted by sign
   // (outflow → business expense, inflow → income) and the owner only flags the
   // exceptions (personal spend). This makes the P&L complete and unblocks gate 6.
-  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true })
+  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates })
   const gates = evaluateGates({ draft, ownership, priorReturn })
 
   return { draft, gates, canConfirm: canConfirm(gates), ownership, priorReturn, transactionCount: transactions.length }

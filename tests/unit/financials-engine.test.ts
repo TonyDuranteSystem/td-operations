@@ -222,3 +222,29 @@ describe("beginning cash — statement-opening fallback (no prior return)", () =
     expect(draft.beginning_cash_source).toBeNull()
   })
 })
+
+describe("buildFinancialDraft — foreign-currency conversion to USD (Phase 2)", () => {
+  it("converts a EUR expense to USD by the IRS rate (÷ rate) and leaves USD rows alone", () => {
+    const txs = [
+      tx({ amount: 1000, category: "income", currency: "USD", bank_name: "Relay", account_type: "USD" }),
+      tx({ amount: -88.6, category: "expense", currency: "EUR", bank_name: "Wise", account_type: "EUR" }), // €88.6 / 0.886 = $100
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, fxRates: { EUR: 0.886 } })
+    expect(draft.pnl.totalIncome).toBeCloseTo(1000, 2)
+    expect(draft.pnl.totalExpenses).toBeCloseTo(100, 2) // converted from EUR, not 88.6
+  })
+
+  it("flags a non-USD row with no rate on file (left unconverted, noted)", () => {
+    const txs = [tx({ amount: -100, category: "expense", currency: "AED", bank_name: "Wise", account_type: "AED" })]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, fxRates: { EUR: 0.886 } })
+    expect(draft.notes.some(n => n.includes("AED"))).toBe(true)
+    expect(draft.pnl.totalExpenses).toBeCloseTo(100, 2) // unconverted fallback, not dropped
+  })
+
+  it("is a no-op when no fxRates are provided (all-USD path unchanged)", () => {
+    const txs = [tx({ amount: -200, category: "expense", currency: "USD", bank_name: "Relay", account_type: "USD" })]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null })
+    expect(draft.pnl.totalExpenses).toBeCloseTo(200, 2)
+    expect(draft.notes.some(n => n.toLowerCase().includes("exchange rate"))).toBe(false)
+  })
+})

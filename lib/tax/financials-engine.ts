@@ -24,6 +24,7 @@
 import { computePnlTotals } from "@/lib/pnl-generator"
 import { sameName, type ResolvedMember } from "./ownership-resolution"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
+import { toUsd, type FxRates } from "./fx"
 
 export interface DraftTransaction {
   id: string
@@ -92,6 +93,9 @@ export interface BuildDraftInput {
    *  and gate 6 is not blocked; the owner flags only the exceptions. Portal tax
    *  review turns this ON; staff/Excel paths leave it OFF. */
   defaultUncategorizedBySign?: boolean
+  /** IRS yearly-average rates (foreign units per USD) for converting
+   *  foreign-currency amounts to USD (Phase 2). Omit for all-USD datasets. */
+  fxRates?: FxRates
 }
 
 /** Match a counterparty/description to a member by name. Exported for tests. */
@@ -125,8 +129,28 @@ function priorBeginningCapital(prior: PriorReturnCaseRecord | null, memberName: 
 }
 
 export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
-  const { taxYear, transactions, members, priorReturn } = input
+  const { taxYear, transactions: rawTransactions, members, priorReturn, fxRates } = input
   const notes: string[] = []
+
+  // ── Phase 2: normalize every amount + running balance to USD ──
+  // A foreign-currency row is converted by ITS OWN currency's IRS yearly-average
+  // rate (USD = amount / rate). USD / empty currency pass through unchanged. A
+  // non-USD row with no rate on file is left as-is and FLAGGED, so it never
+  // silently counts 1:1. Everything downstream (P&L, banks, balance sheet) then
+  // works in USD. Single-currency USD accounts are unaffected.
+  const missingRateCurrencies = new Set<string>()
+  const transactions: DraftTransaction[] = !fxRates ? rawTransactions : rawTransactions.map(t => {
+    const conv = toUsd(Number(t.amount), t.currency, fxRates)
+    if (conv.missingRate) missingRateCurrencies.add((t.currency ?? "").trim().toUpperCase())
+    const balance_after = t.balance_after === null || t.balance_after === undefined
+      ? t.balance_after
+      : toUsd(Number(t.balance_after), t.currency, fxRates).usd
+    return { ...t, amount: conv.usd, balance_after }
+  })
+  if (missingRateCurrencies.size > 0) {
+    notes.push(`No IRS yearly-average exchange rate on file for ${Array.from(missingRateCurrencies).sort().join(", ")} (${taxYear}) — those amounts are shown unconverted; add the rate so the P&L is fully in USD.`)
+  }
+
   const pnl = computePnlTotals(transactions, { defaultUncategorizedBySign: input.defaultUncategorizedBySign })
 
   // ── Per-bank cash positions (gate 1 inputs) ──
