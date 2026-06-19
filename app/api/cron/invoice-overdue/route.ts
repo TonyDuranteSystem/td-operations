@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { syncInvoiceStatus } from '@/lib/portal/unified-invoice'
+import { sendInvoiceReminder } from '@/lib/billing/invoice-reminder'
 import { logCron } from '@/lib/cron-log'
 
 export async function GET(req: NextRequest) {
@@ -112,29 +113,16 @@ export async function GET(req: NextRequest) {
         else if (daysOverdue >= reminder1Days && reminderCount < 1) shouldRemind = true
 
         if (shouldRemind) {
-          try {
-            // Call the remind API internally
-            const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
-              ? `https://${process.env.VERCEL_URL}`
-              : 'http://localhost:3000'
-
-            const remindRes = await fetch(`${baseUrl}/api/invoices/${inv.id}/remind`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-cron-secret': cronSecret || '',
-              },
-            })
-
-            if (remindRes.ok) {
-              results.reminders_sent++
-              console.warn(`[invoice-overdue] Sent reminder for ${inv.invoice_number} (${daysOverdue}d overdue, reminder #${reminderCount + 1}, config: r1=${reminder1Days}d r2=${reminder2Days}d)`)
-            } else {
-              const errBody = await remindRes.text()
-              results.errors.push(`Remind ${inv.invoice_number}: ${errBody}`)
-            }
-          } catch (err) {
-            results.errors.push(`Remind ${inv.invoice_number}: ${err instanceof Error ? err.message : String(err)}`)
+          // Call the shared reminder function DIRECTLY (in-process). The old
+          // code did an internal HTTP fetch to `https://${VERCEL_URL}/...`,
+          // which hit the Vercel "Authentication Required" wall and sent ZERO
+          // reminders (every overdue invoice errored). No self-HTTP now.
+          const r = await sendInvoiceReminder(inv.id)
+          if (r.ok && r.sent) {
+            results.reminders_sent++
+            console.warn(`[invoice-overdue] Sent reminder for ${inv.invoice_number} (${daysOverdue}d overdue, reminder #${r.reminderNumber}, config: r1=${reminder1Days}d r2=${reminder2Days}d)`)
+          } else if (!r.ok) {
+            results.errors.push(`Remind ${inv.invoice_number}: ${r.error ?? 'unknown error'}`)
           }
         }
       }

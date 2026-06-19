@@ -4,6 +4,9 @@ import type { Database } from "@/lib/database.types"
 export interface PaymentRecipient {
   email: string
   name: string
+  /** Resolved contact's language ("en"/"it"); null when resolved via
+   *  account.communication_email (no contact). Callers default to "en". */
+  language: string | null
 }
 
 /**
@@ -33,10 +36,10 @@ export async function resolvePaymentRecipient(
   if (payment.contact_id) {
     const { data } = await supabase
       .from("contacts")
-      .select("email, full_name")
+      .select("email, full_name, language")
       .eq("id", payment.contact_id)
       .single()
-    if (data?.email) return { email: data.email, name: data.full_name ?? "Client" }
+    if (data?.email) return { email: data.email, name: data.full_name ?? "Client", language: data.language ?? null }
   }
 
   if (!payment.account_id) return null
@@ -50,7 +53,7 @@ export async function resolvePaymentRecipient(
       .single(),
     supabase
       .from("account_contacts")
-      .select("role, contacts(email, full_name)")
+      .select("role, contacts(email, full_name, language)")
       .eq("account_id", payment.account_id)
       .limit(10),
   ])
@@ -63,22 +66,22 @@ export async function resolvePaymentRecipient(
   const links = (contactsRes.data ?? [])
     .map((row) => ({
       role: (row as { role: string | null }).role ?? null,
-      contact: row.contacts as { email: string | null; full_name: string | null } | null,
+      contact: row.contacts as { email: string | null; full_name: string | null; language: string | null } | null,
     }))
     .filter(
-      (l): l is { role: string | null; contact: { email: string; full_name: string | null } } =>
+      (l): l is { role: string | null; contact: { email: string; full_name: string | null; language: string | null } } =>
         !!l.contact?.email,
     )
 
   if (links.length > 0) {
     const owner = links.find((l) => l.role?.toLowerCase().includes("owner"))
     const chosen = owner ?? links[0]
-    return { email: chosen.contact.email, name: chosen.contact.full_name ?? accountName }
+    return { email: chosen.contact.email, name: chosen.contact.full_name ?? accountName, language: chosen.contact.language ?? null }
   }
 
-  // Path 3 — account-level communication email
+  // Path 3 — account-level communication email (no contact → no language)
   if (accountRes.data?.communication_email) {
-    return { email: accountRes.data.communication_email, name: accountName }
+    return { email: accountRes.data.communication_email, name: accountName, language: null }
   }
 
   return null

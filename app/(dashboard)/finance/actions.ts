@@ -435,58 +435,12 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
   if (preCheck?.invoice_status === 'Draft') return sendNewInvoice(paymentId)
 
   return safeAction(async () => {
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
-
-    // Get payment + resolve client email from contact/account
-    const { data: payment } = await supabaseAdmin
-      .from('payments')
-      .select('id, invoice_number, total, amount_due, amount_currency, invoice_status, due_date, account_id, contact_id, reminder_count')
-      .eq('id', paymentId)
-      .single()
-    if (!payment) throw new Error('Payment not found')
-
-    // Resolve recipient via the single shared resolver (same path as every
-    // other invoice-send surface — contact_id → owner-role contact
-    // case-insensitive → any linked contact → account communication_email).
-    const { resolvePaymentRecipient } = await import('@/lib/portal/resolve-payment-recipient')
-    const recipient = await resolvePaymentRecipient(
-      { contact_id: payment.contact_id, account_id: payment.account_id },
-      supabaseAdmin,
-    )
-    if (!recipient) throw new Error('No client email found')
-    const clientEmail = recipient.email
-    const clientName = recipient.name
-
-    const currency = payment.amount_currency ?? 'USD'
-    const csym = currency === 'EUR' ? '€' : '$'
-    const amount = Number(payment.amount_due ?? payment.total)
-    const status = payment.invoice_status ?? 'Sent'
-
-    // Send reminder email via Gmail API
-    const { gmailPost } = await import('@/lib/gmail')
-    const subject = `Payment Reminder: Invoice ${payment.invoice_number} — ${csym}${amount.toLocaleString()}`
-    const body = `Dear ${clientName},\n\nThis is a friendly reminder that invoice ${payment.invoice_number} for ${csym}${amount.toLocaleString()} is ${status === 'Overdue' ? 'overdue' : 'due'}${payment.due_date ? ` (due date: ${payment.due_date})` : ''}.\n\nPlease arrange payment at your earliest convenience.\n\nBest regards,\nTony Durante LLC`
-
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-    const raw = Buffer.from(
-      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${encodedSubject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
-    ).toString('base64url')
-
-    await gmailPost('/messages/send', { raw })
-
-    // Update reminder count
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: reminderErr } = await supabaseAdmin.from('payments').update({
-      reminder_count: (payment.reminder_count ?? 0) + 1,
-      last_reminder_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', paymentId)
-    if (reminderErr) throw new Error(`Failed to update reminder count: ${reminderErr.message}`)
-
-    // Note: Draft invoices are handled by the pre-check at the top of this
-    // function (delegated to sendNewInvoice for the real PDF+HTML path).
-    // By the time we reach here, invoice_status is Sent/Overdue/Partial.
-
+    // Delegate to the SINGLE shared reminder function (bilingual EN/IT email,
+    // shared recipient resolution, reminder_count bump) — same path the dunning
+    // cron and the /remind route use. No duplicate plain-text template here.
+    const { sendInvoiceReminder: sendReminderEmail } = await import('@/lib/billing/invoice-reminder')
+    const result = await sendReminderEmail(paymentId)
+    if (!result.ok) throw new Error(result.error ?? 'Failed to send reminder')
     revalidatePath('/finance')
   }, {
     action_type: 'update',
