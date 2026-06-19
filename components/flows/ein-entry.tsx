@@ -9,7 +9,9 @@ interface EinEntryProps {
   accountId?: string | null
 }
 
-const EIN_RE = /^\d{2}-\d{7}$/
+// Accept both the auto-formatted "XX-XXXXXXX" and bare 9 digits "XXXXXXXXX"
+// (the server's normalizeEin strips non-digits, so both are valid).
+const EIN_RE = /^\d{2}-?\d{7}$/
 
 /**
  * EIN entry for the Company Formation "EIN Received" stage. Reads the account's
@@ -44,7 +46,7 @@ export function EinEntry({ serviceDeliveryId, accountId }: EinEntryProps) {
   async function save() {
     const value = ein.trim()
     if (!EIN_RE.test(value)) {
-      setError('Enter the EIN as XX-XXXXXXX (2 digits, dash, 7 digits).')
+      setError('Enter a valid EIN — 9 digits (XX-XXXXXXX).')
       return
     }
     setBusy(true)
@@ -96,7 +98,12 @@ export function EinEntry({ serviceDeliveryId, accountId }: EinEntryProps) {
             <input
               type="text"
               value={ein}
-              onChange={(e) => setEin(e.target.value)}
+              onChange={(e) => {
+                let v = e.target.value.replace(/[^0-9]/g, '') // strip non-digits
+                if (v.length > 2) v = v.slice(0, 2) + '-' + v.slice(2) // auto-insert dash after 2 digits
+                if (v.length > 10) v = v.slice(0, 10) // cap at XX-XXXXXXX (10 chars)
+                setEin(v)
+              }}
               placeholder="XX-XXXXXXX"
               inputMode="numeric"
               maxLength={10}
