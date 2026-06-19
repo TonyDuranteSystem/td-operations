@@ -124,7 +124,7 @@ export async function GET(request: NextRequest) {
 
     // Flexible expense buckets (#2) — the live catalog list the review groups by
     // and the "add a bucket" field offers.
-    const { getExpenseBuckets } = await import('@/lib/tax/expense-buckets')
+    const { getExpenseBuckets, isOperatingExpenseRow, bucketSlugForRow, OTHER_BUCKET_LABEL } = await import('@/lib/tax/expense-buckets')
     const buckets = await getExpenseBuckets(db)
 
     // Operating-expense breakdown by accountant bucket (Luca: "more detail in the
@@ -132,17 +132,18 @@ export async function GET(request: NextRequest) {
     // expense/fee PLUS uncategorized outflows (which default to business expense).
     // COGS + distributions are shown on their own lines, so excluded here.
     const bucketLabelMap = new Map(buckets.map(b => [b.slug, b.label]))
+    const validSlugs = new Set(buckets.map(b => b.slug))
     const breakdownMap = new Map<string, number>()
     for (const r of uncatRows) {
-      const cat = String(r.category ?? 'uncategorized')
       const amt = Number(r.amount)
-      const isOpExpense = cat === 'expense' || cat === 'fee' || (cat === 'uncategorized' && amt < 0)
-      if (!isOpExpense) continue
-      const slug = (typeof r.ai_bucket === 'string' && bucketLabelMap.has(r.ai_bucket)) ? (r.ai_bucket as string) : 'other'
+      if (!isOperatingExpenseRow(r.category as string | null, amt)) continue
+      const slug = bucketSlugForRow(r.ai_bucket, validSlugs)
       breakdownMap.set(slug, (breakdownMap.get(slug) ?? 0) + Math.abs(amt))
     }
+    // slug travels with each line so the client can lazy-load that category's
+    // transactions on click (Luca's drill-down, dev_task 1bee0ffe).
     const expense_breakdown = Array.from(breakdownMap.entries())
-      .map(([slug, total]) => ({ label: bucketLabelMap.get(slug) ?? 'Other', total }))
+      .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
       .sort((a, b) => b.total - a.total)
 
     return NextResponse.json({

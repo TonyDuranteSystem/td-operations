@@ -25,6 +25,30 @@ export function slugifyBucket(name: string): string {
     .slice(0, 40)
 }
 
+/** The synthetic bucket every operating-expense row falls into when it has no
+ *  recognized catalog bucket. Not a catalog row — computed on the fly. */
+export const OTHER_BUCKET_SLUG = "other"
+export const OTHER_BUCKET_LABEL = "Other"
+
+/**
+ * Is this row part of "Operating expenses" on the P&L? Mirrors computePnlTotals
+ * exactly: booked expense + fee, PLUS uncategorized OUTFLOWS (which default to
+ * business expense). COGS and distributions are shown on their own P&L lines, so
+ * they are NOT operating expenses. Keep this in lockstep with computePnlTotals so
+ * the category breakdown + drill-down can never drift from the headline total.
+ */
+export function isOperatingExpenseRow(category: string | null | undefined, amount: number): boolean {
+  const cat = category ?? "uncategorized"
+  return cat === "expense" || cat === "fee" || (cat === "uncategorized" && amount < 0)
+}
+
+/** The breakdown bucket slug for a row: its ai_bucket when that is a known active
+ *  catalog bucket, otherwise the synthetic "other". `validSlugs` is the live
+ *  catalog slug set (from getExpenseBuckets). */
+export function bucketSlugForRow(aiBucket: unknown, validSlugs: Set<string>): string {
+  return typeof aiBucket === "string" && validSlugs.has(aiBucket) ? aiBucket : OTHER_BUCKET_SLUG
+}
+
 /** Live active buckets, ordered by the catalog's sort_order then label.
  *  `db` is loosely typed to avoid the supabase-js "excessively deep" TS error. */
 export async function getExpenseBuckets(db: { from: (t: string) => any }): Promise<ExpenseBucket[]> { // eslint-disable-line @typescript-eslint/no-explicit-any

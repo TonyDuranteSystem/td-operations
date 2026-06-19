@@ -34,10 +34,16 @@ interface View {
   transactionCount: number
   questions: QuestionGroup[]
   buckets: Bucket[]
-  expense_breakdown?: { label: string; total: number }[]
+  expense_breakdown?: { slug: string; label: string; total: number }[]
   attested: boolean
   files: FileCard[]
 }
+
+// Drill-down (Luca's request): the transactions behind one P&L expense category,
+// grouped by merchant, loaded on demand.
+interface CategoryTx { id: string; date: string; description: string; amount: number }
+interface CategoryMerchant { merchant: string; count: number; total: number; transactions: CategoryTx[] }
+interface CategoryDrill { bucket: string; label: string; merchants: CategoryMerchant[]; total: number; total_count: number; truncated: boolean }
 
 const ANSWERS = [
   { value: 'business_expense', directions: ['out', 'mixed'], en: 'Business expense', it: 'Spesa aziendale' },
@@ -68,6 +74,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
   const [attestChecked, setAttestChecked] = useState(false)
   const [attested, setAttested] = useState(false)
   const [newBucket, setNewBucket] = useState('')
+  // P&L expense-category drill-down (Luca's request, dev_task 1bee0ffe).
+  const [openCat, setOpenCat] = useState<string | null>(null)
+  const [catData, setCatData] = useState<Record<string, CategoryDrill>>({})
+  const [catLoading, setCatLoading] = useState<string | null>(null)
+  const [catError, setCatError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -107,6 +118,28 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)
+    }
+  }
+
+  // Toggle a category open and lazy-load its transactions (cached after first open).
+  const toggleCategory = async (slug: string) => {
+    if (openCat === slug) { setOpenCat(null); return }
+    setOpenCat(slug)
+    setCatError(null)
+    if (catData[slug]) return
+    setCatLoading(slug)
+    try {
+      const res = await fetch(`/api/portal/tax-financials/category-transactions?account_id=${accountId}&tax_year=${taxYear}&bucket=${encodeURIComponent(slug)}`)
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile caricare la categoria — riprova.' : 'Could not load this category — please try again.'))
+      }
+      const d: CategoryDrill = await res.json()
+      setCatData(prev => ({ ...prev, [slug]: d }))
+    } catch (e) {
+      setCatError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCatLoading(null)
     }
   }
 
@@ -295,9 +328,66 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Spese operative' : 'Operating expenses'}</dt><dd className="font-medium">−{fmt(view.draft.pnl.totalExpenses)}</dd></div>
                 {(view.expense_breakdown?.length ?? 0) > 0 && (
                   <div className="pl-3 border-l border-zinc-100 ml-1 space-y-0.5">
-                    {view.expense_breakdown!.map(b => (
-                      <div key={b.label} className="flex justify-between text-xs text-zinc-400"><dt>{b.label}</dt><dd>−{fmt(b.total)}</dd></div>
-                    ))}
+                    {view.expense_breakdown!.map(b => {
+                      const open = openCat === b.slug
+                      const drill = catData[b.slug]
+                      return (
+                        <div key={b.slug}>
+                          <button
+                            type="button"
+                            onClick={() => toggleCategory(b.slug)}
+                            className="flex w-full items-center justify-between gap-2 text-xs text-zinc-500 hover:text-zinc-800 py-0.5"
+                            aria-expanded={open}
+                          >
+                            <span className="flex items-center gap-1 text-left">
+                              <span className={`inline-block transition-transform text-[9px] text-zinc-400 ${open ? 'rotate-90' : ''}`}>▶</span>
+                              {b.label}
+                            </span>
+                            <span>−{fmt(b.total)}</span>
+                          </button>
+                          {open && (
+                            <div className="ml-3 mt-1 mb-2 border-l border-zinc-100 pl-3">
+                              {catLoading === b.slug && (
+                                <p className="text-xs text-zinc-400 py-1">{it ? 'Caricamento…' : 'Loading…'}</p>
+                              )}
+                              {catError && catLoading !== b.slug && !drill && (
+                                <p className="text-xs text-red-600 py-1">{catError}</p>
+                              )}
+                              {drill && (
+                                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                  {drill.merchants.length === 0 && (
+                                    <p className="text-xs text-zinc-400">{it ? 'Nessuna transazione.' : 'No transactions.'}</p>
+                                  )}
+                                  {drill.merchants.map((m, mi) => (
+                                    <div key={`${m.merchant}-${mi}`}>
+                                      <div className="flex justify-between gap-2 text-xs font-medium text-zinc-600">
+                                        <span className="truncate">{m.merchant}</span>
+                                        <span className="shrink-0 text-zinc-500">{m.count}× · −{fmt(m.total)}</span>
+                                      </div>
+                                      <div className="mt-0.5 space-y-0.5">
+                                        {m.transactions.map(t => (
+                                          <div key={t.id} className="flex justify-between gap-2 text-[11px] text-zinc-400">
+                                            <span className="truncate">{t.date} · {t.description}</span>
+                                            <span className="shrink-0">−{fmt(t.amount)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {drill.truncated && (
+                                    <p className="text-[11px] text-zinc-400 italic">
+                                      {it
+                                        ? `Mostrate le prime transazioni di ${drill.total_count} totali.`
+                                        : `Showing the first transactions of ${drill.total_count} total.`}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Utile netto' : 'Net income'}</dt><dd className="font-semibold">{fmt(view.draft.pnl.netIncome)}</dd></div>
