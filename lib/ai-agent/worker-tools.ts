@@ -846,6 +846,27 @@ const ADMIN_PORTAL_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 const PORTAL_SEND_DEDUP_WINDOW_MS = 2 * 60 * 1000
 
 /**
+/**
+ * Strip Markdown / asterisk decoration from a CLIENT-FACING draft (email body or
+ * portal message) so no literal asterisks or markdown ever reach the client,
+ * even if the model ignores the prompt rule. Unwraps bold/italic asterisk pairs,
+ * turns line-start bullets into "- " (asterisk-free), and removes any stray ones.
+ * Pure + exported (unit-tested). Scoped to the Slack worker's send paths — does
+ * NOT touch the worker's Slack chat formatting (where *bold* is still wanted).
+ */
+export function stripDraftMarkdown(text: string): string {
+  if (!text) return text
+  return text
+    // Unwrap bold first (so the italic pass below doesn't split the pair), then italic.
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    // Line-start markdown bullets "* item" → "- item" (keep the list, drop the asterisk).
+    .replace(/^(\s*)\*\s+/gm, "$1- ")
+    // Any remaining stray asterisks.
+    .replace(/\*/g, "")
+}
+
+/**
  * Send a portal chat message on behalf of the Slack worker. Mirrors the MCP
  * portal_chat_send tool (insert into portal_messages as admin + fire the client
  * notification/email), with one extra guard: because this is an un-gated,
@@ -863,7 +884,9 @@ export async function sendPortalMessageFromWorker(input: {
     typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
   const contactId =
     typeof input.contact_id === "string" && input.contact_id.length > 0 ? input.contact_id : null
-  const message = typeof input.message === "string" ? input.message.trim() : ""
+  // Hard sanitizer (belt-and-suspenders with the DRAFTS prompt rule): strip any
+  // markdown/asterisks so a client never sees "an AI wrote this" formatting.
+  const message = typeof input.message === "string" ? stripDraftMarkdown(input.message.trim()).trim() : ""
 
   if (!accountId && !contactId) {
     return "❌ send_portal_message needs an account_id (LLC) or a contact_id (person) — which client to message."
@@ -1334,7 +1357,12 @@ export async function executeWorkerTool(
       return `❌ Tool "send_email" is not permitted in this worker call (email send not enabled).`
     }
     // Delegates to the shared send_email tool (sender selection support@/antonio@ + threading).
-    return executeTool("send_email", params)
+    // Hard sanitizer (with the DRAFTS prompt rule): strip markdown/asterisks from the
+    // client-facing body + subject so no "AI-looking" formatting reaches the recipient.
+    const cleaned: Record<string, unknown> = { ...params }
+    if (typeof cleaned.body === "string") cleaned.body = stripDraftMarkdown(cleaned.body)
+    if (typeof cleaned.subject === "string") cleaned.subject = stripDraftMarkdown(cleaned.subject)
+    return executeTool("send_email", cleaned)
   }
   if (name === "send_portal_message") {
     // Slack-only direct send (gated at the tool-list level via enableSlackSend).

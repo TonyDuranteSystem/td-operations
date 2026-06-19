@@ -158,6 +158,13 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(9600)
   })
 
+  it("instructs human-tone, asterisk-free client DRAFTS (emails + portal messages)", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/DRAFTS/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/asterisk/i)
+    // Must scope it to the client draft, NOT the worker's own Slack formatting.
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/client-facing draft/i)
+  })
+
   it("does not present Hermes as a teammate (dismissed) and instructs careful attribution", () => {
     // Hermes is dismissed — the prompt must not frame it as an active participant,
     // which is what led the worker to attribute Luca's invoice to "Hermes".
