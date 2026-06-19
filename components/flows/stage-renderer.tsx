@@ -12,6 +12,7 @@ import { WaitingNotice } from './waiting-notice'
 import { FaxIrs } from './fax-irs'
 import { ActivateRa } from './activate-ra'
 import { Ss4Panel } from './ss4-panel'
+import { EinEntry } from './ein-entry'
 import { FormationNames } from './formation-names'
 import { FlowChat } from './flow-chat'
 import { ShippingInfo } from './shipping-info'
@@ -82,6 +83,8 @@ function renderComponent(
       return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'ss4_panel':
       return <Ss4Panel key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
+    case 'ein_entry':
+      return <EinEntry key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'formation_names':
       return (
         <FormationNames

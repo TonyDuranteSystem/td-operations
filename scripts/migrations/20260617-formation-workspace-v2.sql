@@ -78,7 +78,7 @@ VALUES
   ('Company Formation', 7, 'EIN Received',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),
    'EIN received — all set!', 'EIN ricevuto — tutto fatto!', 'CheckCircle2', true, true, false,
-   '{"description": "EIN received from the IRS. Enter the EIN and upload the CP 575 letter. Formation is complete — use the task card to mark complete (spawns RA Renewal + Annual Report).", "components": [{"type": "document_upload", "label": "Upload EIN Letter (CP 575)", "autoAdvance": false}, {"type": "document_viewer"}, {"type": "info_panel"}, {"type": "chat"}]}'::jsonb);
+   '{"description": "EIN received from the IRS. Enter the EIN and upload the CP 575 letter. Formation is complete — use the task card to mark complete (spawns RA Renewal + Annual Report).", "components": [{"type": "ein_entry"}, {"type": "document_upload", "label": "Upload EIN Letter (CP 575)", "autoAdvance": false}, {"type": "document_viewer"}, {"type": "info_panel"}, {"type": "chat"}]}'::jsonb);
 
 -- ── 2. Remap in-flight service_deliveries onto the new stage names ──────────
 -- Handles BOTH the production old-6 names AND the abandoned-8 names. Each

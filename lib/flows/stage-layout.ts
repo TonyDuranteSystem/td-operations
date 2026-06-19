@@ -22,6 +22,7 @@ export const STAGE_COMPONENT_TYPES = [
   'fax_irs',
   'activate_ra',
   'ss4_panel',
+  'ein_entry',
   'shipping_info',
   'formation_names',
   'notes',
