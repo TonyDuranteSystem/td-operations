@@ -16,7 +16,8 @@
  *
  * This module does NOT decide cadence or the 2-reminder cap — that policy
  * lives in the cron (auto) and the bulk action (manual). It just sends one
- * reminder and bumps `reminder_count` / `last_reminder_at`.
+ * reminder, bumps `reminder_count` / `last_reminder_at`, and writes an
+ * `invoice_reminder_log` row (source = auto | manual) for the history UI.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -154,7 +155,11 @@ function buildRawEmail(to: string, subject: string, html: string): string {
  * `reminder_count` / `last_reminder_at`. Never throws — always returns a
  * structured result so callers (cron / bulk) can report per-invoice outcomes.
  */
-export async function sendInvoiceReminder(paymentId: string): Promise<ReminderResult> {
+export async function sendInvoiceReminder(
+  paymentId: string,
+  opts: { source?: "auto" | "manual" } = {},
+): Promise<ReminderResult> {
+  const source = opts.source ?? "manual"
   const { data: payment } = await supabaseAdmin
     .from("payments")
     .select("id, invoice_number, invoice_status, total, amount, amount_currency, due_date, account_id, contact_id, reminder_count")
@@ -202,6 +207,23 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ReminderRe
                 updated_at: new Date().toISOString(),
               })
               .eq("id", paymentId)
+          },
+        },
+        {
+          name: "write_reminder_log",
+          fn: async () => {
+            // invoice_reminder_log is newer than the generated DB types (the
+            // repo doesn't regen types per migration), so cast `as never` —
+            // same pattern as lib/portal/auto-save-document.ts.
+            // eslint-disable-next-line no-restricted-syntax -- history audit insert; no dedicated helper
+            await supabaseAdmin.from("invoice_reminder_log" as never).insert({
+              payment_id: paymentId,
+              account_id: payment.account_id,
+              source,
+              reminder_number: reminderCount + 1,
+              recipient_email: recipient.email,
+              language: recipient.language,
+            } as never)
           },
         },
       ],

@@ -117,7 +117,7 @@ export async function GET(req: NextRequest) {
           // code did an internal HTTP fetch to `https://${VERCEL_URL}/...`,
           // which hit the Vercel "Authentication Required" wall and sent ZERO
           // reminders (every overdue invoice errored). No self-HTTP now.
-          const r = await sendInvoiceReminder(inv.id)
+          const r = await sendInvoiceReminder(inv.id, { source: 'auto' })
           if (r.ok && r.sent) {
             results.reminders_sent++
             console.warn(`[invoice-overdue] Sent reminder for ${inv.invoice_number} (${daysOverdue}d overdue, reminder #${r.reminderNumber}, config: r1=${reminder1Days}d r2=${reminder2Days}d)`)

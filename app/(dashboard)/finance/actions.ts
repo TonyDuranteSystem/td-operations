@@ -439,7 +439,7 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
     // shared recipient resolution, reminder_count bump) — same path the dunning
     // cron and the /remind route use. No duplicate plain-text template here.
     const { sendInvoiceReminder: sendReminderEmail } = await import('@/lib/billing/invoice-reminder')
-    const result = await sendReminderEmail(paymentId)
+    const result = await sendReminderEmail(paymentId, { source: 'manual' })
     if (!result.ok) throw new Error(result.error ?? 'Failed to send reminder')
     revalidatePath('/finance')
   }, {

@@ -24,7 +24,7 @@ export async function POST(
   }
 
   const { id } = await params
-  const result = await sendInvoiceReminder(id)
+  const result = await sendInvoiceReminder(id, { source: 'manual' })
 
   if (!result.ok) {
     // "Invoice not found" → 404; everything else (bad status, no email) → 400.
