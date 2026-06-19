@@ -23,6 +23,7 @@ interface View {
     pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number }
     members: Member[]
     beginning_cash: number | null
+    beginning_cash_source: 'prior_return' | 'statements' | null
     ending_cash: number
     total_assets: number
     total_liabilities: number
@@ -398,7 +399,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
               <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Stato Patrimoniale' : 'Balance Sheet'}</h2>
               <dl className="space-y-1.5 text-sm">
-                <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Cassa iniziale' : 'Beginning cash'}</dt><dd className="font-medium">{view.draft.beginning_cash === null ? '—' : fmt(view.draft.beginning_cash)}</dd></div>
+                <div className="flex justify-between">
+                  <dt className="text-zinc-500">
+                    {it ? 'Cassa iniziale' : 'Beginning cash'}
+                    {view.draft.beginning_cash_source === 'statements' && (
+                      <span className="ml-1 text-[11px] text-zinc-400">{it ? '(dai tuoi estratti conto)' : '(from your statements)'}</span>
+                    )}
+                  </dt>
+                  <dd className="font-medium">{view.draft.beginning_cash === null ? '—' : fmt(view.draft.beginning_cash)}</dd>
+                </div>
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Cassa finale' : 'Ending cash'}</dt><dd className="font-medium">{fmt(view.draft.ending_cash)}</dd></div>
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Totale attivo' : 'Total assets'}</dt><dd className="font-medium">{fmt(view.draft.total_assets)}</dd></div>
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Capitale soci' : 'Members’ capital'}</dt><dd className="font-semibold">{fmt(view.draft.ending_capital_total)}</dd></div>

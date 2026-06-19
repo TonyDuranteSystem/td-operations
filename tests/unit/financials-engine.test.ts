@@ -177,3 +177,48 @@ describe("priorEndingCash", () => {
     expect(priorEndingCash({ case: "first_year", status: "first_year", formation_date: null, note: "", recorded_at: "" })).toBeNull()
   })
 })
+
+describe("beginning cash — statement-opening fallback (no prior return)", () => {
+  // Two banks, each earliest row carries a running balance → derived openings.
+  // Mercury: first row amount -100, balance_after 900 → opening 1000.
+  // Relay:   first row amount +500, balance_after 1500 → opening 1000.
+  const baseTxs = [
+    tx({ transaction_date: "2025-01-05", amount: -100, category: "expense", bank_name: "Mercury", account_type: "Checking", balance_after: 900 }),
+    tx({ transaction_date: "2025-01-10", amount: 500, category: "income", bank_name: "Relay", account_type: "USD", balance_after: 1500 }),
+  ]
+
+  it("uses summed statement openings as beginning cash and tags the source", () => {
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: baseTxs, members: MEMBERS.members, priorReturn: null })
+    expect(draft.beginning_cash).toBe(2000)
+    expect(draft.beginning_cash_source).toBe("statements")
+  })
+
+  it("keeps the balance sheet tied (assets = capital) with seeded opening equity", () => {
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: baseTxs, members: MEMBERS.members, priorReturn: null })
+    expect(draft.beginning_capital_total).toBe(2000) // opening equity seeded from opening cash
+    expect(Math.abs(draft.total_assets - (draft.total_liabilities + draft.ending_capital_total))).toBeLessThan(0.01)
+  })
+
+  it("falls back to blank when an account carries no running balance (partial data)", () => {
+    const partial = [
+      baseTxs[0],
+      tx({ transaction_date: "2025-01-10", amount: 500, category: "income", bank_name: "Relay", account_type: "USD", balance_after: null }),
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: partial, members: MEMBERS.members, priorReturn: null })
+    expect(draft.beginning_cash).toBeNull()
+    expect(draft.beginning_cash_source).toBeNull()
+  })
+
+  it("prefers the prior return over the statements when one is validated", () => {
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: baseTxs, members: MEMBERS.members, priorReturn: PRIOR })
+    expect(draft.beginning_cash).toBe(10_000) // prior Schedule L ending cash, not the statements
+    expect(draft.beginning_cash_source).toBe("prior_return")
+  })
+
+  it("does not invent beginning cash when there are no members to hold the equity", () => {
+    const noMembers = resolveOwnership({ priorK1s: [], wizardMembers: [], accountContacts: [] })
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: baseTxs, members: noMembers.members, priorReturn: null })
+    expect(draft.beginning_cash).toBeNull()
+    expect(draft.beginning_cash_source).toBeNull()
+  })
+})

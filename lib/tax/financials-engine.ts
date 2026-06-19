@@ -63,8 +63,13 @@ export interface FinancialDraft {
   pnl: ReturnType<typeof computePnlTotals>
   members: MemberCapital[]
   banks: BankCashPosition[]
-  /** Prior Schedule L ending cash — the current year's beginning cash. Null = no validated prior (first year / never filed / quarantined). */
+  /** The current year's beginning cash. Prefers the prior return's Schedule L
+   *  ending cash; when there is no validated prior, falls back to the bank
+   *  statements' opening balances (only when EVERY account carries a running
+   *  balance and there are members to hold the opening equity). Null otherwise. */
   beginning_cash: number | null
+  /** Where beginning_cash came from — drives the UI note + gate wording. */
+  beginning_cash_source: "prior_return" | "statements" | null
   beginning_capital_total: number
   ending_cash: number
   /** v1: assets = cash. */
@@ -142,6 +147,18 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
 
   // ── Capital roll-forward per member ──
   const allocatable = members.filter(m => m.pct !== null) as Array<ResolvedMember & { pct: number }>
+
+  // ── Beginning cash source (prior return → statements → none) ──
+  // Prior return wins (year-over-year tie-out). With no validated prior, fall
+  // back to the statements' opening balances — but ONLY when every account
+  // carries a running balance (a partial figure would mislead) AND there are
+  // members to hold the matching opening equity (so the balance sheet still
+  // ties: assets = equity). Otherwise leave it blank for staff to resolve.
+  const priorCash = priorEndingCash(priorReturn)
+  const allBanksHaveOpening = banks.length > 0 && banks.every(b => b.derived_beginning !== null)
+  const statementOpening = allBanksHaveOpening ? banks.reduce((s, b) => s + (b.derived_beginning as number), 0) : null
+  const usingStatementOpening = priorCash === null && statementOpening !== null && allocatable.length > 0
+
   const contribTxs = transactions.filter(t => t.category === "contribution")
   const distTxs = transactions.filter(t => t.category === "distribution")
 
@@ -172,7 +189,9 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     const share = m.pct / 100
     const contributions = own.contributions + unattributedContrib * share
     const distributions = own.distributions + unattributedDist * share
-    const beginning = priorBeginningCapital(priorReturn, m.name)
+    // No validated prior → seed opening capital from the statements' opening cash
+    // (by ownership %) so the balance sheet ties; else use the prior K-1 figure.
+    const beginning = usingStatementOpening ? statementOpening! * share : priorBeginningCapital(priorReturn, m.name)
     const incomeShare = pnl.netIncome * share
     return {
       name: m.name,
@@ -186,9 +205,13 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   })
 
   // ── Balance sheet (cash basis v1) ──
-  const beginningCash = priorEndingCash(priorReturn)
+  const beginningCash = priorCash ?? (usingStatementOpening ? statementOpening : null)
+  const beginningCashSource: FinancialDraft["beginning_cash_source"] =
+    priorCash !== null ? "prior_return" : (usingStatementOpening ? "statements" : null)
   const startCash = beginningCash ?? 0
-  if (beginningCash === null && priorReturn && priorReturn.case === "filed_elsewhere") {
+  if (usingStatementOpening) {
+    notes.push(`Beginning cash taken from your bank statements' opening balances (${statementOpening!.toFixed(2)}) — no prior-year return on file. Opening equity seeded from the same figure so the balance sheet ties; staff confirm during review.`)
+  } else if (beginningCash === null && priorReturn && priorReturn.case === "filed_elsewhere") {
     notes.push("Prior return is not validated — beginning cash assumed 0 until staff resolve it (gate 2 will not pass).")
   }
   const netMovement = transactions.reduce((s, t) => s + Number(t.amount), 0)
@@ -202,6 +225,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     members: memberCapital,
     banks,
     beginning_cash: beginningCash,
+    beginning_cash_source: beginningCashSource,
     beginning_capital_total: beginningCapitalTotal,
     ending_cash: endingCash,
     total_assets: endingCash,
