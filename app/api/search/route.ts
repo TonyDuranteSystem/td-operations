@@ -137,7 +137,7 @@ export async function GET(request: NextRequest) {
     const { data: directMatches } = await supabase
       .from('contacts')
       .select('id, full_name, email, phone, account_contacts(accounts(id, company_name))')
-      .or(`full_name.ilike.${pattern},email.ilike.${pattern}`)
+      .or(`full_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern}`)
       .limit(limit)
 
     // 2) Reverse lookup: find contacts linked to accounts matching the search query
