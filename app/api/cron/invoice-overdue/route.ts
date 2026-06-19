@@ -27,7 +27,14 @@ export async function GET(req: NextRequest) {
     }
 
     const today = new Date().toISOString().split('T')[0]
-    const results = { marked_overdue: 0, reminders_sent: 0, errors: [] as string[] }
+    const results = { marked_overdue: 0, reminders_sent: 0, autosend_disabled: false, errors: [] as string[] }
+
+    // Auto-send kill-switch (default OFF). Reminders only go out automatically
+    // when DUNNING_AUTOSEND_ENABLED === 'true'. Overdue-marking (step 1) ALWAYS
+    // runs so the dashboard Overdue list + manual/bulk "Send Reminder" still
+    // work — those are independent of this cron. Flip the env var to 'true'
+    // when ready to turn automatic chasing on. (dev_task d2af38a1)
+    const autoSendEnabled = process.env.DUNNING_AUTOSEND_ENABLED === 'true'
 
     // 1. Mark Sent/Partial invoices as Overdue when due_date < today
     // Uses syncInvoiceStatus for bidirectional sync (updates BOTH payments + client_invoices)
@@ -95,7 +102,10 @@ export async function GET(req: NextRequest) {
       .eq('invoice_status', 'Overdue')
       .order('due_date', { ascending: true })
 
-    if (overdueInvoices) {
+    if (!autoSendEnabled) {
+      results.autosend_disabled = true
+      console.warn('[invoice-overdue] Auto-send DISABLED (DUNNING_AUTOSEND_ENABLED != true) — marked overdue only, no reminders sent. Staff send manually from the dashboard.')
+    } else if (overdueInvoices) {
       for (const inv of overdueInvoices) {
         // Check if account has dunning paused
         const config = inv.account_id ? dunningMap[inv.account_id] : null
