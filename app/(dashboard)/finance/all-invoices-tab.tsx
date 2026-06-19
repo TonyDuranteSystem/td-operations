@@ -41,6 +41,10 @@ export interface InvoiceRecord {
   description: string | null
   account_id: string | null
   contact_id: string | null
+  reminder_count?: number
+  last_reminder_at?: string | null
+  reminders_auto?: number
+  reminders_manual?: number
   accounts: { company_name: string } | null
   contacts: { full_name: string } | null
 }
@@ -64,6 +68,16 @@ function formatDate(dateStr: string | null) {
 
 function getClientName(inv: InvoiceRecord): string {
   return inv.accounts?.company_name ?? inv.contacts?.full_name ?? '—'
+}
+
+/** Hover detail for the reminder badge: auto vs manual breakdown + last sent. */
+function reminderTooltip(inv: InvoiceRecord): string {
+  const auto = inv.reminders_auto ?? 0
+  const manual = inv.reminders_manual ?? 0
+  const parts: string[] = []
+  if (auto || manual) parts.push(`${auto} automatic, ${manual} manual`)
+  if (inv.last_reminder_at) parts.push(`last sent ${formatDate(inv.last_reminder_at)}`)
+  return parts.length ? `Reminders — ${parts.join(' · ')}` : 'Reminders sent'
 }
 
 export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
@@ -146,6 +160,10 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
           break
         }
       }
+      // Stable tiebreak by id so equal sort keys (e.g. same issue_date) keep a
+      // fixed order across refreshes — fixes "the list reorders and I lose my
+      // place" when chasing overdue invoices (dev_task d2af38a1).
+      if (cmp === 0) cmp = (a.id ?? '').localeCompare(b.id ?? '')
       return sortDir === 'asc' ? cmp : -cmp
     })
 
@@ -307,6 +325,15 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                       {inv.status}
                     </span>
+                    {(inv.reminder_count ?? 0) > 0 && (
+                      <div
+                        className="mt-1 text-[11px] text-amber-600 whitespace-nowrap cursor-default"
+                        title={reminderTooltip(inv)}
+                      >
+                        🔔 {inv.reminder_count} {inv.reminder_count === 1 ? 'reminder' : 'reminders'}
+                        {inv.last_reminder_at ? ` · ${formatDate(inv.last_reminder_at)}` : ''}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground tabular-nums">
                     {formatDate(inv.issue_date)}

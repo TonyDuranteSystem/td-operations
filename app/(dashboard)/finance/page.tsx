@@ -80,11 +80,23 @@ export default async function FinancePage({
   // ── Fetch ALL invoices for flat list view (from payments) ──
   const { data: allPaymentsFlat } = await supabaseAdmin
     .from('payments')
-    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, reminder_count, last_reminder_at, accounts:account_id(company_name), contacts:contact_id(full_name)')
     .not('invoice_status', 'is', null)
     .not('invoice_status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
     .limit(500)
+
+  // Per-invoice auto/manual reminder breakdown from the history log (Phase 2).
+  // One grouped read; empty until reminders start flowing post-deploy.
+  const { data: reminderLogRows } = await supabaseAdmin
+    .from('invoice_reminder_log' as never)
+    .select('payment_id, source')
+  const reminderBreakdown: Record<string, { auto: number; manual: number }> = {}
+  for (const row of (reminderLogRows ?? []) as Array<{ payment_id: string; source: string }>) {
+    const b = (reminderBreakdown[row.payment_id] ??= { auto: 0, manual: 0 })
+    if (row.source === 'auto') b.auto++
+    else b.manual++
+  }
 
   // Map payments to InvoiceRecord shape (rename invoice_status → status, amount_currency → currency)
   const allInvoicesFlat: InvoiceRecord[] = (allPaymentsFlat ?? []).map(p => ({
@@ -102,6 +114,10 @@ export default async function FinancePage({
     description: p.description ?? null,
     account_id: p.account_id,
     contact_id: p.contact_id,
+    reminder_count: Number((p as { reminder_count?: number }).reminder_count ?? 0),
+    last_reminder_at: (p as { last_reminder_at?: string | null }).last_reminder_at ?? null,
+    reminders_auto: reminderBreakdown[p.id]?.auto ?? 0,
+    reminders_manual: reminderBreakdown[p.id]?.manual ?? 0,
     accounts: p.accounts as unknown as { company_name: string } | null,
     contacts: p.contacts as unknown as { full_name: string } | null,
   }))
