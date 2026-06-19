@@ -127,10 +127,29 @@ export async function GET(request: NextRequest) {
     const { getExpenseBuckets } = await import('@/lib/tax/expense-buckets')
     const buckets = await getExpenseBuckets(db)
 
+    // Operating-expense breakdown by accountant bucket (Luca: "more detail in the
+    // P&L"). Matches the P&L's Operating-expenses composition: outflows booked
+    // expense/fee PLUS uncategorized outflows (which default to business expense).
+    // COGS + distributions are shown on their own lines, so excluded here.
+    const bucketLabelMap = new Map(buckets.map(b => [b.slug, b.label]))
+    const breakdownMap = new Map<string, number>()
+    for (const r of uncatRows) {
+      const cat = String(r.category ?? 'uncategorized')
+      const amt = Number(r.amount)
+      const isOpExpense = cat === 'expense' || cat === 'fee' || (cat === 'uncategorized' && amt < 0)
+      if (!isOpExpense) continue
+      const slug = (typeof r.ai_bucket === 'string' && bucketLabelMap.has(r.ai_bucket)) ? (r.ai_bucket as string) : 'other'
+      breakdownMap.set(slug, (breakdownMap.get(slug) ?? 0) + Math.abs(amt))
+    }
+    const expense_breakdown = Array.from(breakdownMap.entries())
+      .map(([slug, total]) => ({ label: bucketLabelMap.get(slug) ?? 'Other', total }))
+      .sort((a, b) => b.total - a.total)
+
     return NextResponse.json({
       ...view,
       questions,
       coverage,
+      expense_breakdown,
       buckets,
       attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),

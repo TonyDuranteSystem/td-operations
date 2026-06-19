@@ -20,7 +20,7 @@ interface CoverageQuestion { key: string; bank_key: string; kind: string; months
 interface View {
   coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
   draft: {
-    pnl: { totalIncome: number; totalCogs: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number }
+    pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number }
     members: Member[]
     beginning_cash: number | null
     ending_cash: number
@@ -34,6 +34,7 @@ interface View {
   transactionCount: number
   questions: QuestionGroup[]
   buckets: Bucket[]
+  expense_breakdown?: { label: string; total: number }[]
   attested: boolean
   files: FileCard[]
 }
@@ -283,8 +284,18 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
               <dl className="space-y-1.5 text-sm">
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Ricavi' : 'Revenue'}</dt><dd className="font-medium">{fmt(view.draft.pnl.totalIncome)}</dd></div>
                 {view.draft.pnl.totalCogs !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Costo del venduto' : 'Cost of goods sold'}</dt><dd className="font-medium">−{fmt(view.draft.pnl.totalCogs)}</dd></div>}
+                {view.draft.pnl.totalCogs !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Margine lordo' : 'Gross profit'}</dt><dd className="font-medium">{fmt(view.draft.pnl.grossProfit)}</dd></div>}
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Spese operative' : 'Operating expenses'}</dt><dd className="font-medium">−{fmt(view.draft.pnl.totalExpenses)}</dd></div>
+                {(view.expense_breakdown?.length ?? 0) > 0 && (
+                  <div className="pl-3 border-l border-zinc-100 ml-1 space-y-0.5">
+                    {view.expense_breakdown!.map(b => (
+                      <div key={b.label} className="flex justify-between text-xs text-zinc-400"><dt>{b.label}</dt><dd>−{fmt(b.total)}</dd></div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Utile netto' : 'Net income'}</dt><dd className="font-semibold">{fmt(view.draft.pnl.netIncome)}</dd></div>
+                {view.draft.pnl.totalDistributions !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Prelievi dei soci' : 'Owner distributions'}</dt><dd className="font-medium">−{fmt(view.draft.pnl.totalDistributions)}</dd></div>}
+                {view.draft.pnl.totalContributions !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Apporti dei soci' : 'Owner contributions'}</dt><dd className="font-medium">{fmt(view.draft.pnl.totalContributions)}</dd></div>}
               </dl>
             </section>
             <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
