@@ -4,6 +4,7 @@ import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
 import { resolveFlowsByContact } from '@/lib/flows/resolve-flows'
+import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
@@ -228,6 +229,10 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   // Contact-scoped flows (ITIN, etc.) — these SDs have no account, so the
   // account page can't surface them; show their chips here instead.
   const contactFlows = await resolveFlowsByContact(params.id)
+  // Contact-scoped in-progress Company Formation → prominent workspace banner.
+  const formationFlow = contactFlows.find(
+    (f) => f.flow_type === 'Company Formation' && f.status === 'active' && f.service_delivery_id,
+  )
 
   return (
     <div className="p-6 lg:p-8">
@@ -235,6 +240,12 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         <div className="mb-4 flex justify-end">
           <ViewAsClientButton contactId={contact.id} />
         </div>
+      )}
+      {formationFlow?.service_delivery_id && (
+        <FormationWorkspaceBanner
+          serviceDeliveryId={formationFlow.service_delivery_id}
+          stage={formationFlow.stage_name}
+        />
       )}
       <ContactDetail
         contact={contact}
