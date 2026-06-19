@@ -209,7 +209,20 @@ export default async function PortalDashboardPage() {
     //
     // Either way we render the same FormationDashboard. The component already
     // accepts account=null.
-    if (authTier === 'formation' && contactId) {
+    // Show the formation dashboard when EITHER the auth tier says formation OR
+    // (authoritative) the contact has an active Company Formation service
+    // delivery. The auth-metadata tier is unreliable here — it can be stale
+    // (e.g. left at 'active' after a prior formation completed) or never set —
+    // whereas the formation SD exists from "Payment Confirmed" onward, so it's
+    // the reliable signal that drives the 7-stage tracker at ANY stage. Reuses
+    // getInProgressFormations (1 query when there's no formation SD, so it's
+    // free for ordinary leads/onboarding clients). Short-circuits the lookup
+    // when the tier already says formation.
+    const hasActiveFormation =
+      authTier !== 'formation' &&
+      !!contactId &&
+      (await getInProgressFormations(contactId)).length > 0
+    if ((authTier === 'formation' || hasActiveFormation) && contactId) {
       const formationAccount = await getFormationAccount(contactId)
       // Contact-scoped Company Closure SD — surfaces a Closure CTA on the
       // formation dashboard when the same client also has an external LLC
