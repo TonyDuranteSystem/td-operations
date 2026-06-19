@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useMemo, useTransition } from 'react'
+import { useState, useMemo, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3, X, Plus,
-  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw, Bell,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment, sendBulkReminders } from './actions'
@@ -83,7 +83,7 @@ function reminderTooltip(inv: InvoiceRecord): string {
 /** Statuses for which a reminder can be sent (and thus bulk-selected). */
 const REMINDABLE_STATUSES = new Set(['Sent', 'Overdue', 'Partial'])
 
-export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
+export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: InvoiceRecord[]; isAdmin?: boolean }) {
   const [search, setSearch] = useState('')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
   const [dialogMode, setDialogMode] = useState<'invoice' | 'credit'>('invoice')
@@ -127,6 +127,46 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
     } finally {
       setBulkSending(false)
     }
+  }
+
+  // ── Automatic-reminder (dunning) controls — admin only ──
+  const [autoSend, setAutoSend] = useState<boolean | null>(null)
+  const [autoSaving, setAutoSaving] = useState(false)
+  const [dunningRunning, setDunningRunning] = useState(false)
+
+  useEffect(() => {
+    if (!isAdmin) return
+    fetch('/api/app-settings?key=dunning_autosend')
+      .then(r => r.json())
+      .then(d => setAutoSend(d?.value?.enabled === true))
+      .catch(() => setAutoSend(false))
+  }, [isAdmin])
+
+  async function toggleAutoSend() {
+    const next = !(autoSend ?? false)
+    if (next && !window.confirm('Turn ON automatic reminders?\n\nThe daily job (9:00) will start emailing overdue clients — 1st reminder at 7 days overdue, 2nd at 14 — up to 40 per run.')) return
+    setAutoSaving(true)
+    setAutoSend(next)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'dunning_autosend', value: { enabled: next } }),
+      })
+      if (!res.ok) { setAutoSend(!next); const d = await res.json().catch(() => ({})); toast.error(d.error ?? 'Failed to update'); return }
+      toast.success(next ? 'Automatic reminders turned ON' : 'Automatic reminders turned OFF')
+    } finally { setAutoSaving(false) }
+  }
+
+  async function runDunningNow() {
+    if (!window.confirm('Run reminders now?\n\nSends reminders to every due overdue invoice (up to 40 per run), respecting each client\'s timing, pause, and the 2-reminder limit.')) return
+    setDunningRunning(true)
+    try {
+      const res = await fetch('/api/invoices/run-dunning', { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(d.error ?? 'Failed to run reminders'); return }
+      toast.success(`Reminders — ${d.reminders_sent ?? 0} sent · ${d.skipped ?? 0} skipped · ${d.marked_overdue ?? 0} newly overdue${d.capped ? ' · 40-cap hit, run again for the rest' : ''}`)
+      newInvRouter.refresh()
+    } finally { setDunningRunning(false) }
   }
 
   // Counts per status
@@ -228,6 +268,34 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
 
   return (
     <div className="p-6 space-y-4">
+      {/* Automatic-reminder (dunning) controls — admin only */}
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-4 py-2.5 text-sm">
+          <Bell className="w-4 h-4 text-amber-600" />
+          <span className="font-medium text-foreground">Automatic reminders</span>
+          <button
+            onClick={toggleAutoSend}
+            disabled={autoSend === null || autoSaving}
+            className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${
+              autoSend ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-zinc-200 text-zinc-600 hover:bg-zinc-300'
+            }`}
+            title="Turn the daily automatic reminder schedule on or off"
+          >
+            {autoSend === null ? '…' : autoSend ? 'ON' : 'OFF'}
+          </button>
+          <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d · up to 40/run</span>
+          <button
+            onClick={runDunningNow}
+            disabled={dunningRunning}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
+            title="Run the reminder job right now (sends all that are due, up to 40)"
+          >
+            {dunningRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Run reminders now
+          </button>
+        </div>
+      )}
+
       {/* Summary bar */}
       <div className="flex items-center gap-6 text-sm text-muted-foreground bg-muted/50 rounded-lg px-4 py-3">
         <span>Total: <strong className="text-foreground">{summaryStats.total}</strong> invoices</span>
