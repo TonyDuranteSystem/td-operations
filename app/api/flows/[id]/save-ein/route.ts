@@ -25,6 +25,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { updateAccount } from '@/lib/operations/account'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { deriveFlowYear, buildFlowTopic } from '@/lib/flows/resolve-flows'
+import type { HandlerContext } from '@/lib/tasks/types'
 
 /** Normalize an EIN to XX-XXXXXXX, or null when it isn't 9 digits. */
 function normalizeEin(raw: string): string | null {
@@ -160,6 +161,36 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }).catch(() => {})
     } catch {
       /* chat message is best-effort — the EIN is already saved + the portal notification sent */
+    }
+
+    // ── Complete the formation ──
+    // Close the SD + spawn the recurring SDs (RA Renewal + Annual Report) + send
+    // the review request via the EXISTING sd.mark_complete primitive (no
+    // duplicated logic — we construct the minimal HandlerContext it reads), then
+    // upgrade the portal tier formation → active (which removes the "we're
+    // forming your LLC" banner). Best-effort + idempotent: the EIN is already
+    // saved, sdMarkComplete no-ops if the SD is already completed, and syncTier
+    // is safe to re-run. A failure here is logged, not fatal — staff can still
+    // "Mark Formation Complete" from the task card.
+    try {
+      const { sdMarkComplete } = await import('@/lib/tasks/workflow-handlers/sd-mark-complete')
+      const { defaultTaskAssignee } = await import('@/lib/tasks/default-assignee')
+      await sdMarkComplete({
+        task: { delivery_id: sd.id, account_id: sd.account_id },
+        action: { handler_params: { spawn_next_sds: ['State RA Renewal', 'State Annual Report'], send_review_request: true } },
+        workflow: { slug: 'formation_progress', default_assignee: defaultTaskAssignee() },
+        mode: 'execute',
+      } as unknown as HandlerContext)
+
+      const { syncTier } = await import('@/lib/operations/sync-tier')
+      await syncTier({
+        accountId: sd.account_id,
+        newTier: 'active',
+        reason: 'Company formation complete — EIN received',
+        actor: 'flow-save-ein',
+      })
+    } catch (e) {
+      console.error('[save-ein] formation completion (mark_complete / syncTier) failed:', e instanceof Error ? e.message : String(e))
     }
 
     return NextResponse.json({ success: true, ein_number: ein })
