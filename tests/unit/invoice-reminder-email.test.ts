@@ -62,4 +62,29 @@ describe("buildReminderEmail", () => {
     const { subject } = buildReminderEmail({ ...base, language: "it-IT" })
     expect(subject).toContain("Scaduta: Fattura")
   })
+
+  it("includes the brand logo image", () => {
+    const { html } = buildReminderEmail({ ...base, language: "en" })
+    expect(html).toContain("/images/logo.jpg")
+    expect(html).toContain('alt="Tony Durante LLC"')
+  })
+
+  it("EN: tells the client to pay via portal on desktop or the phone app — no link", () => {
+    const { html } = buildReminderEmail({ ...base, language: "en" })
+    expect(html).toContain("How to pay")
+    expect(html).toContain("log in to your client portal")
+    expect(html).toContain("TD Portal app on your phone")
+    expect(html).toContain("Invoices")
+    // No clickable links anywhere (Antonio: text instruction only, no portal URL).
+    expect(html).not.toContain("href=")
+  })
+
+  it("IT: portal payment instructions are localized — no link", () => {
+    const { html } = buildReminderEmail({ ...base, language: "it" })
+    expect(html).toContain("Come pagare")
+    expect(html).toContain("portale clienti")
+    expect(html).toContain("app TD Portal sul telefono")
+    expect(html).toContain("Fatture")
+    expect(html).not.toContain("href=")
+  })
 })

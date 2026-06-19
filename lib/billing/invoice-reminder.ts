@@ -24,6 +24,10 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
+import { APP_BASE_URL } from "@/lib/config"
+
+/** Brand logo for email headers (same asset the portal-notification emails use). */
+const LOGO_URL = `${APP_BASE_URL}/images/logo.jpg`
 
 export interface ReminderResult {
   ok: boolean
@@ -72,6 +76,9 @@ export function buildReminderEmail(input: ReminderEmailInput): { subject: string
         lblInvoice: "Fattura",
         lblAmount: "Importo Dovuto",
         lblDue: "Scadenza",
+        payTitle: "Come pagare",
+        payBody:
+          "Per pagare questa fattura, acceda al portale clienti — dal suo computer o dall'app TD Portal sul telefono — quindi apra la sezione <strong>Fatture</strong> e tocchi <strong>Paga</strong> accanto a questa fattura.",
         disclaimer:
           "Se ha già effettuato il pagamento, ignori questo promemoria. Per qualsiasi domanda, risponda direttamente a questa email.",
       }
@@ -87,13 +94,19 @@ export function buildReminderEmail(input: ReminderEmailInput): { subject: string
         lblInvoice: "Invoice",
         lblAmount: "Amount Due",
         lblDue: "Due Date",
+        payTitle: "How to pay",
+        payBody:
+          "To pay this invoice, log in to your client portal — on your computer or the TD Portal app on your phone — then open the <strong>Invoices</strong> section and tap <strong>Pay</strong> next to this invoice.",
         disclaimer:
           "If you have already sent payment, please disregard this reminder. For questions, reply directly to this email.",
       }
 
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <div style="background: ${accentColor}; padding: 24px; border-radius: 12px 12px 0 0;">
+      <div style="background: #ffffff; border: 1px solid #e5e7eb; border-bottom: none; padding: 20px 24px; text-align: center; border-radius: 12px 12px 0 0;">
+        <img src="${LOGO_URL}" alt="Tony Durante LLC" style="height: 44px;" />
+      </div>
+      <div style="background: ${accentColor}; padding: 18px 24px;">
         <h1 style="color: white; margin: 0; font-size: 20px;">${t.header}</h1>
       </div>
       <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
@@ -117,6 +130,10 @@ export function buildReminderEmail(input: ReminderEmailInput): { subject: string
               : ""
           }
         </table>
+        <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 16px 20px; margin: 24px 0;">
+          <p style="margin: 0; font-size: 13px; color: #1e40af; font-weight: 600;">${t.payTitle}</p>
+          <p style="margin: 8px 0 0; font-size: 14px; color: #1e3a8a;">${t.payBody}</p>
+        </div>
         <p style="color: #6b7280; font-size: 13px; margin-top: 24px;">${t.disclaimer}</p>
         <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
           Tony Durante LLC · 10225 Ulmerton Rd, STE 3D, Largo FL 33771
