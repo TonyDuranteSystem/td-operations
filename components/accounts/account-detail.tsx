@@ -9,7 +9,7 @@ import {
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
   Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
-  Rocket, Upload, Hash, DollarSign, ListOrdered,
+  Rocket, Upload, Hash, DollarSign, ListOrdered, Bell,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -877,7 +877,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <ServiziTab services={services} today={today} accountId={account.id} accountType={account.account_type ?? null} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} flows={flows} />
       )}
       {activeTab === 'payments' && (
-        <PagamentiTab payments={payments} today={today} />
+        <PagamentiTab payments={payments} today={today} account={account as unknown as { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null }} />
       )}
       {activeTab === 'tax' && (
         <TaxTab taxReturns={taxReturns} today={today} />
@@ -2675,7 +2675,11 @@ function ServiceCard({ service: s, today }: { service: Service; today: string })
 
 /* ── Pagamenti Tab ───────────────────────────────────── */
 
-function PagamentiTab({ payments, today }: { payments: Payment[]; today: string }) {
+function PagamentiTab({ payments, today, account }: {
+  payments: Payment[]
+  today: string
+  account: { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null }
+}) {
   // Split into invoiced (unified system) vs legacy tracking records
   const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0')
   const legacy = payments.filter(p => !p.invoice_number || p.invoice_number === '1.0' || p.invoice_number === '2.0')
@@ -2687,8 +2691,46 @@ function PagamentiTab({ payments, today }: { payments: Payment[]; today: string 
   const paid = invoiced.filter(p => invoiceStatus(p) === 'Paid')
   const otherInvoiced = invoiced.filter(p => !overdue.includes(p) && !pending.includes(p) && !paid.includes(p))
 
+  const dunningSave = (field: 'dunning_reminder_1_days' | 'dunning_reminder_2_days' | 'dunning_pause') =>
+    async (v: string) => {
+      const r = await updateAccountField(account.id, field, v, account.updated_at)
+      if (r.success) toast.success('Reminder settings saved')
+      else toast.error(r.error ?? 'Failed to save')
+      return r
+    }
+
   return (
     <div className="space-y-6">
+      {/* Payment reminder (dunning) settings — per-client cadence + pause */}
+      <div className="rounded-lg border bg-muted/30 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Bell className="h-4 w-4 text-amber-600" />
+          <h3 className="text-sm font-semibold">Payment Reminder Settings</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Automatic reminders for overdue invoices. The 1st goes out this many days after the due date, the 2nd later; the system stops after 2. Set <strong>Reminders</strong> to Paused to stop all automatic chasing for this client.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <EditableField
+            label="1st reminder (days after due)"
+            value={account.dunning_reminder_1_days != null ? String(account.dunning_reminder_1_days) : '7'}
+            onSave={dunningSave('dunning_reminder_1_days')}
+          />
+          <EditableField
+            label="2nd reminder (days after due)"
+            value={account.dunning_reminder_2_days != null ? String(account.dunning_reminder_2_days) : '14'}
+            onSave={dunningSave('dunning_reminder_2_days')}
+          />
+          <EditableField
+            label="Reminders"
+            type="select"
+            options={[{ label: 'Active', value: 'false' }, { label: 'Paused', value: 'true' }]}
+            value={account.dunning_pause ? 'true' : 'false'}
+            onSave={dunningSave('dunning_pause')}
+          />
+        </div>
+      </div>
+
       {overdue.length > 0 && (
         <PaymentSection title="Overdue" payments={overdue} color="text-red-600" today={today} />
       )}
