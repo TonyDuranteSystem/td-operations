@@ -62,6 +62,21 @@ export async function POST(req: NextRequest) {
   // the THW Global hijack (Adam Mihaly, 2026-05-20, dev_task 358e8cbe).
   const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
 
+  // TEMP RESUBMIT-DEBUG (remove after capture) — dev_task b2115fd3.
+  // Captures the exact failure point of the tax "Edit & re-submit" path. Gated
+  // on allow_resubmit so normal first-time submissions stay quiet.
+  if (allow_resubmit) {
+    console.warn('[RESUBMIT-DEBUG] entry', JSON.stringify({
+      wizard_type,
+      entity_type: entity_type ?? null,
+      progress_id: progress_id ?? null,
+      account_id: account_id ?? null,
+      contact_id: contact_id ?? null,
+      lead_id: lead_id ?? null,
+      has_data: !!data,
+    }))
+  }
+
   // ─── 0a. ISOLATION GUARD (default-deny) ───
   // The logged-in user must be allowed to submit for this subject. Without this
   // the route trusted the body's account_id / contact_id, so a member of one
@@ -199,6 +214,16 @@ export async function POST(req: NextRequest) {
         taxYear = tr?.tax_year ?? null
       }
 
+      // TEMP RESUBMIT-DEBUG (remove after capture) — dev_task b2115fd3.
+      if (allow_resubmit) {
+        console.warn('[RESUBMIT-DEBUG] tax_year resolution', JSON.stringify({
+          wizard_type,
+          submissionTable,
+          resolved_tax_year: taxYear,
+          note: taxYear === null ? 'no tax_returns row with data_received=false — tax_year omitted from upsert' : 'ok',
+        }))
+      }
+
       const submissionRecord: Record<string, unknown> = {
         token: submissionToken,
         contact_id: contact_id || null,
@@ -256,6 +281,15 @@ export async function POST(req: NextRequest) {
         )
       }
       submissionId = (sub as Record<string, unknown> | null)?.id as string || null
+
+      // TEMP RESUBMIT-DEBUG (remove after capture) — dev_task b2115fd3.
+      if (allow_resubmit) {
+        console.warn('[RESUBMIT-DEBUG] submission upsert OK', JSON.stringify({
+          submissionTable,
+          submissionToken,
+          submissionId,
+        }))
+      }
 
       // Prior-year return matrix (tax wizard, master plan §5): resolve the
       // client's answer — verify Case A against our records, extract+validate
@@ -496,13 +530,31 @@ export async function POST(req: NextRequest) {
         payload.changed_fields = null // Portal wizard doesn't track diffs
       }
 
-      const job = await enqueueJob({
-        job_type: jobType,
-        payload,
-        priority: 3, // Higher priority than default (lower number = higher)
-        account_id: account_id || undefined,
-        created_by: 'portal',
-      })
+      // TEMP RESUBMIT-DEBUG (remove after capture) — dev_task b2115fd3.
+      // enqueueJob is the prime re-submit suspect: the data writes above have
+      // already succeeded, so a throw here gives "data saved but the client saw
+      // an error". Capture the precise failure before re-throwing into the
+      // shared catch.
+      let job
+      try {
+        job = await enqueueJob({
+          job_type: jobType,
+          payload,
+          priority: 3, // Higher priority than default (lower number = higher)
+          account_id: account_id || undefined,
+          created_by: 'portal',
+        })
+      } catch (e) {
+        console.error('[RESUBMIT-DEBUG] enqueueJob threw', JSON.stringify({
+          allow_resubmit: !!allow_resubmit,
+          wizard_type,
+          jobType,
+          submissionToken,
+          account_id: account_id ?? null,
+          message: e instanceof Error ? e.message : String(e),
+        }), e instanceof Error ? e.stack : '')
+        throw e
+      }
 
       jobId = job.id
       console.warn(`[wizard-submit] Enqueued ${jobType} job ${jobId} for ${clientName}`)
@@ -553,7 +605,12 @@ export async function POST(req: NextRequest) {
       token: submissionToken,
     })
   } catch (err) {
-    console.error('[wizard-submit] Error:', err)
+    // TEMP RESUBMIT-DEBUG (remove after capture) — dev_task b2115fd3: stack + marker.
+    console.error(
+      allow_resubmit ? '[RESUBMIT-DEBUG] handler threw' : '[wizard-submit] Error:',
+      err instanceof Error ? err.message : err,
+      err instanceof Error ? err.stack : '',
+    )
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Submit failed' },
       { status: 500 }

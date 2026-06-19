@@ -253,6 +253,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             ? 'Preparati da noi sui tuoi estratti conto — controlla, rispondi alle domande rimaste e conferma.'
             : 'Prepared by us from your bank statements — check them, answer what remains, and confirm.'}
         </p>
+        <p className="text-xs text-zinc-500 mt-2">
+          {it ? 'Hai sbagliato qualcosa che hai inserito? ' : 'Made a mistake in something you entered? '}
+          <a href="/portal/wizard?type=tax" className="font-semibold text-blue-700 underline hover:text-blue-900">
+            {it ? 'Modifica le tue informazioni' : 'Edit my information'}
+          </a>
+          {it ? '. Le tue risposte e le categorie già scelte restano salvate.' : '. Your answers and the categories you already chose stay saved.'}
+        </p>
       </div>
 
       {error && (
@@ -392,7 +399,6 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                       </div>
                       <div className="space-y-2">
                         {groups.map(g => {
-                          const isOut = g.direction === 'out'
                           const lean = g.ai_lean === 'personal'
                             ? { txt: it ? 'Sembra personale' : 'Looks personal', cls: 'text-amber-700 bg-amber-50' }
                             : g.ai_lean === 'business'
