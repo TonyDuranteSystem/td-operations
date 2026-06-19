@@ -77,7 +77,7 @@ function renderComponent(
     case 'waiting_notice':
       return <WaitingNotice key={key} label={component.label} />
     case 'fax_irs':
-      return <FaxIrs key={key} account={account} />
+      return <FaxIrs key={key} account={account} serviceType={serviceDelivery.service_type} />
     case 'activate_ra':
       return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'ss4_panel':

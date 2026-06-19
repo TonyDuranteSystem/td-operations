@@ -3,16 +3,43 @@ import { Printer } from 'lucide-react'
 import type { WorkspaceAccount } from './types'
 
 /**
- * "Send Fax to IRS" action for the Tax Return "Signed" stage. Opens the Fax
- * tool (/tools/fax) pre-filled with recipient "IRS" and a cover note that
- * references the company. The IRS fax number is NOT pre-filled — it depends on
- * the form/IRS office, so staff enters it (and attaches the signed return, which
- * they download from the document viewer on this stage).
+ * "Send Fax to IRS" action. Shared by the Tax Return "Signed" stage, the ITIN
+ * "Submitted to IRS" stage, and the Company Formation "SS-4 Signed" stage — so
+ * the wording is keyed off the flow's service_type (a tax return is NOT an SS-4).
+ * Opens the Fax tool (/tools/fax) pre-filled with recipient "IRS" + a cover note
+ * referencing the company. The IRS fax number is NOT pre-filled — it depends on
+ * the form/IRS office, so staff enters it (and attaches the signed document,
+ * which they download from the document viewer on this stage).
  */
-export function FaxIrs({ account }: { account: WorkspaceAccount }) {
+export function FaxIrs({ account, serviceType }: { account: WorkspaceAccount; serviceType?: string | null }) {
   const company = account.company_name ?? 'this client'
-  const message = `Signed tax return for ${company}.`
-  const reason = `Tax Return filing - ${company}`
+
+  // Per-flow wording. `docLabel` is the noun used in the title + helper text.
+  let docLabel: string
+  let message: string
+  let reason: string
+  switch (serviceType) {
+    case 'Company Formation':
+      docLabel = 'signed SS-4'
+      message = `Signed SS-4 (EIN application) for ${company}.`
+      reason = `SS-4 / EIN application - ${company}`
+      break
+    case 'ITIN':
+      docLabel = 'signed W-7 package'
+      message = `Signed ITIN (W-7) application for ${company}.`
+      reason = `ITIN / W-7 filing - ${company}`
+      break
+    case 'Tax Return':
+      docLabel = 'signed return'
+      message = `Signed tax return for ${company}.`
+      reason = `Tax Return filing - ${company}`
+      break
+    default:
+      docLabel = 'signed document'
+      message = `Signed document for ${company}.`
+      reason = `IRS filing - ${company}`
+  }
+
   const href = `/tools/fax?to=${encodeURIComponent('IRS')}&message=${encodeURIComponent(message)}&reason=${encodeURIComponent(reason)}`
 
   return (
@@ -22,9 +49,9 @@ export function FaxIrs({ account }: { account: WorkspaceAccount }) {
           <Printer className="h-5 w-5 text-zinc-600" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-zinc-900">Fax the signed return to the IRS</p>
+          <p className="text-sm font-semibold text-zinc-900">Fax the {docLabel} to the IRS</p>
           <p className="text-xs text-zinc-500 mt-1">
-            Opens the Fax tool pre-filled for the IRS. Download the signed return from the documents above, then attach it and enter the IRS fax number.
+            Opens the Fax tool pre-filled for the IRS. Download the {docLabel} from the documents above, then attach it and enter the IRS fax number.
           </p>
         </div>
         <Link

@@ -335,6 +335,50 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
       .is("member_count", null)
   }
 
+  // ─── 10. REGISTER THE UNSIGNED SS-4 AS A FLOW DOCUMENT ───
+  // The unsigned SS-4 PDF is rendered live (GET /api/ss4/[token]/pdf), so there's
+  // no stored file — the documents row's drive_link points at that route so the
+  // workspace document_viewer + portal Documents "View" both open it. Stamped
+  // with the active Company Formation SD so it appears in the flow workspace.
+  // Non-fatal: a failure here must not undo the SS-4 we just created.
+  try {
+    const { data: sdRow } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("id, contact_id")
+      .eq("account_id", params.account_id)
+      .eq("service_type", "Company Formation")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (sdRow?.id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+      const { data: existingDoc } = await (supabaseAdmin as any)
+        .from("documents")
+        .select("id")
+        .eq("service_delivery_id", sdRow.id)
+        .eq("document_type_name", "SS-4")
+        .maybeSingle()
+      if (!existingDoc) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped service_delivery_id
+        await (supabaseAdmin as any).from("documents").insert({
+          account_id: params.account_id,
+          contact_id: contactId,
+          service_delivery_id: sdRow.id,
+          file_name: `SS-4 - ${account.company_name}.pdf`,
+          document_type_name: "SS-4",
+          category: 1,
+          status: "classified",
+          drive_link: `${APP_BASE_URL}/api/ss4/${ss4.token}/pdf?code=${ss4.access_code}`,
+          portal_visible: true,
+          processed_at: new Date().toISOString(),
+        })
+      }
+    }
+  } catch {
+    /* non-fatal — the SS-4 record already exists; the doc link is best-effort */
+  }
+
   return {
     ok: true,
     outcome: "created",
