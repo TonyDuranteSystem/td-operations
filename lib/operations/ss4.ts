@@ -16,6 +16,7 @@
  * messages — so the MCP tool's output is unchanged.
  */
 
+import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
@@ -300,6 +301,11 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
       responsible_party_title: title,
       language: "en",
       county_and_state: resolvedCountyAndState,
+      // Generate the access code explicitly (8 hex chars, matching the existing
+      // format) rather than relying on a DB column default — the default is
+      // absent in sandbox (schema drift), which left access_code NULL and broke
+      // the portal sign URL (/ss4/{token}/{access_code} → "Invalid access code").
+      access_code: randomBytes(4).toString("hex"),
       status: params.ready_to_sign ? "awaiting_signature" : "draft",
     })
     .select("id, token, access_code, status")
