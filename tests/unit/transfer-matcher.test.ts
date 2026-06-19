@@ -5,7 +5,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { matchTransferPairs, type TransferCandidate } from '@/lib/tax/transfer-matcher'
+import {
+  matchTransferPairs,
+  detectOwnEntityTransfers,
+  normalizeEntityName,
+  type TransferCandidate,
+  type OwnEntityRow,
+} from '@/lib/tax/transfer-matcher'
 
 const tx = (id: string, date: string, amount: number, bank: string, over: Partial<TransferCandidate> = {}): TransferCandidate => ({
   id, transaction_date: date, amount, currency: 'USD', bank_name: bank,
@@ -84,5 +90,73 @@ describe('matchTransferPairs', () => {
     expect(pairs).toHaveLength(2)
     expect(pairs.some(p => p.outflowId === 'w-out' && p.inflowId === 's-in')).toBe(true)
     expect(pairs.some(p => p.outflowId === 'm-out' && p.inflowId === 'r-in')).toBe(true)
+  })
+})
+
+describe('normalizeEntityName', () => {
+  it('lowercases, strips punctuation + entity suffixes, collapses spaces', () => {
+    expect(normalizeEntityName('Dynamiq SR LLC')).toBe('dynamiq')
+    expect(normalizeEntityName('DYNAMIQ S.R. L.L.C.')).toBe('dynamiq')
+    expect(normalizeEntityName('sent money to Dynamiq SR LLC')).toBe('sent money to dynamiq')
+    expect(normalizeEntityName('Premium Services, Inc.')).toBe('premium services')
+  })
+})
+
+describe('detectOwnEntityTransfers', () => {
+  const row = (id: string, description: string, category = 'expense', over: Partial<OwnEntityRow> = {}): OwnEntityRow =>
+    ({ id, description, counterparty: null, category, ...over })
+
+  it('flags outflows + inflows naming the company own entity (no matching leg needed)', () => {
+    const hits = detectOwnEntityTransfers(
+      [
+        row('o1', 'sent money to Dynamiq SR LLC'),
+        row('i1', 'received from DYNAMIQ S.R. LLC'),
+        row('v1', 'Google Ads'),
+      ],
+      { ownNames: ['Dynamiq SR LLC'] },
+    )
+    expect(hits.sort()).toEqual(['i1', 'o1'])
+  })
+
+  it('matches when the company name is on the counterparty field', () => {
+    const hits = detectOwnEntityTransfers(
+      [row('c1', 'Wire out', 'expense', { counterparty: 'Dynamiq SR LLC' })],
+      { ownNames: ['Dynamiq SR LLC'] },
+    )
+    expect(hits).toEqual(['c1'])
+  })
+
+  it('never touches distribution/contribution/income/cogs/conversion (member + sale precedence)', () => {
+    const hits = detectOwnEntityTransfers(
+      [
+        row('d1', 'sent money to Dynamiq SR LLC', 'distribution'),
+        row('n1', 'sent money to Dynamiq SR LLC', 'income'),
+        row('k1', 'sent money to Dynamiq SR LLC', 'conversion'),
+      ],
+      { ownNames: ['Dynamiq SR LLC'] },
+    )
+    expect(hits).toEqual([])
+  })
+
+  it('does NOT fire when the normalized own-name is too short/generic (avoids blanket vendor matches)', () => {
+    // "ABC Co" → "abc" (3 chars after suffix strip) is below the distinctiveness floor.
+    const hits = detectOwnEntityTransfers(
+      [row('x1', 'payment to ABC Hosting')],
+      { ownNames: ['ABC Co'] },
+    )
+    expect(hits).toEqual([])
+  })
+
+  it('requires the FULL multi-word name contiguously (a partial token is not a match)', () => {
+    const hits = detectOwnEntityTransfers(
+      [row('p1', 'Premium Hosting renewal')], // has "premium" but not "premium services"
+      { ownNames: ['Premium Services LLC'] },
+    )
+    expect(hits).toEqual([])
+  })
+
+  it('returns nothing when no own name is provided', () => {
+    expect(detectOwnEntityTransfers([row('o1', 'sent money to Dynamiq SR LLC')], { ownNames: [] })).toEqual([])
+    expect(detectOwnEntityTransfers([row('o1', 'sent money to Dynamiq SR LLC')], { ownNames: [''] })).toEqual([])
   })
 })

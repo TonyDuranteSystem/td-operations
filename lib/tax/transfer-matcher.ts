@@ -47,6 +47,75 @@ function daysBetween(a: string, b: string): number {
   return Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000)
 }
 
+// ── Own-entity self-transfer detection ────────────────────────────────────
+// Pure amount-pair matching (above) MISSES a self-transfer when its mirror leg
+// isn't in the data, or a fee/FX changed the amount (real case: Dynamiq's 84
+// "sent money to Dynamiq SR LLC" Wise moves — 0 had an equal-amount inflow
+// within 5 days, so all 84 fell through to the AI and were mis-booked as
+// expense). The strongest signal a CPA uses: the counterparty IS the company's
+// own name / own account — money to/from yourself is an internal transfer
+// regardless of whether a matching leg exists. dev_task 3639451c.
+
+const ENTITY_SUFFIX = /\b(llc|l\.l\.c|inc|incorporated|corp|corporation|ltd|limited|co|company|srl|s\.r\.l|sr)\b/g
+
+/** Normalize an entity/counterparty string for self-reference comparison:
+ *  lowercase, drop punctuation, strip common entity suffixes, collapse spaces.
+ *  "Dynamiq SR LLC" and "sent money to DYNAMIQ S.R. LLC" both reduce so one
+ *  contains the other. Exported for tests. */
+export function normalizeEntityName(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/\./g, "")        // collapse dotted abbreviations FIRST: s.r.l→srl, l.l.c→llc
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(ENTITY_SUFFIX, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+export interface OwnEntityRow {
+  id: string
+  description?: string | null
+  counterparty?: string | null
+  category: string
+}
+
+export interface OwnEntityOptions {
+  /** The company's own legal name(s) / own-account labels. */
+  ownNames: string[]
+  /** Categories a mis-booked self-transfer could be sitting in. Deliberately
+   *  EXCLUDES distribution/contribution (owner equity — member-name precedence)
+   *  and income/cogs/conversion, so this never reclassifies a real sale, an
+   *  owner draw, or an already-matched transfer. */
+  matchableCategories?: string[]
+}
+
+const OWN_ENTITY_MATCHABLE = ["uncategorized", "expense", "fee"]
+
+/**
+ * Rows whose description/counterparty names the company's OWN entity (money
+ * to/from yourself) → internal transfers, even with no matching leg.
+ *
+ * Conservative by construction:
+ * - only a DISTINCTIVE normalized own-name (≥5 chars after suffix-strip) fires,
+ *   so a short/generic name ("ABC Co" → "abc") can never blanket-match vendors;
+ * - the FULL normalized own-name must appear as a contiguous substring;
+ * - only matchable categories are touched (never distribution/income/manual).
+ * Returns the ids to reclassify as 'conversion'.
+ */
+export function detectOwnEntityTransfers(rows: OwnEntityRow[], opts: OwnEntityOptions): string[] {
+  const matchable = new Set(opts.matchableCategories ?? OWN_ENTITY_MATCHABLE)
+  const names = Array.from(new Set(opts.ownNames.map(normalizeEntityName))).filter(n => n.length >= 5)
+  if (names.length === 0) return []
+  const hits: string[] = []
+  for (const r of rows) {
+    if (!matchable.has(r.category)) continue
+    const hay = normalizeEntityName(`${r.description ?? ""} ${r.counterparty ?? ""}`)
+    if (!hay) continue
+    if (names.some(n => hay.includes(n))) hits.push(r.id)
+  }
+  return hits
+}
+
 /**
  * Find internal transfer pairs across the client's accounts.
  *

@@ -24,7 +24,7 @@ import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
-import { matchTransferPairs, type TransferCandidate } from "./transfer-matcher"
+import { matchTransferPairs, detectOwnEntityTransfers, type TransferCandidate } from "./transfer-matcher"
 import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions } from "./ai-categorizer"
 import { getExpenseBuckets } from "./expense-buckets"
 
@@ -171,6 +171,15 @@ export async function recategorizeAccountYear(
     .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
     .filter(n => n.length > 0)
 
+  // Company's own legal name — used by the own-entity self-transfer pass below
+  // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.
+  const { data: acctRow } = await supabaseAdmin
+    .from("accounts")
+    .select("company_name")
+    .eq("id", accountId)
+    .single()
+  const companyName = acctRow?.company_name ?? ""
+
   // Pass 1: rules. (ai_lean/ai_bucket are ADVISORY review hints — #2 — written
   // for residual rows even when their category stays uncategorized.)
   const updates = new Map<string, { category?: string; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string }>()
@@ -204,6 +213,27 @@ export async function recategorizeAccountYear(
     updates.set(p.inflowId, { category: "conversion", subcategory: "internal_transfer", notes: `transfer-pair → ${p.outflowId}` })
   }
 
+  // Pass 2b: own-entity self-transfers — money to/from the company's OWN name is
+  // an internal transfer even with no matching leg (Wise-fee / single-leg moves
+  // that pure pair-matching can't catch). Runs on post-rules categories, before
+  // the AI pass, so these never reach the AI to be guessed as expense. Member
+  // distributions are already booked by the rules pass and are excluded from the
+  // matchable set, preserving member-name precedence. dev_task 3639451c.
+  const ownHits = detectOwnEntityTransfers(
+    rows
+      .filter(r => !(r.notes ?? "").startsWith("manual:"))
+      .map(r => ({
+        id: r.id as string,
+        description: r.description as string | null,
+        counterparty: r.counterparty as string | null,
+        category: updates.get(r.id as string)?.category ?? (r.category as string),
+      })),
+    { ownNames: [companyName].filter(Boolean) },
+  )
+  for (const id of ownHits) {
+    updates.set(id, { category: "conversion", subcategory: "internal_transfer", notes: "own-entity transfer" })
+  }
+
   // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
   // the deterministic passes. Only high-confidence suggestions are applied,
   // tagged "ai:high" so staff and the review screen can always tell them apart.
@@ -227,11 +257,6 @@ export async function recategorizeAccountYear(
         : ["uncategorized", "income"].includes(cat)
     })
     if (toLabel.length > 0) {
-      const { data: acct } = await supabaseAdmin
-        .from("accounts")
-        .select("company_name")
-        .eq("id", accountId)
-        .single()
       // The client's own business-activity description (tax form) — lets the
       // AI mark business tools high-confidence instead of hedging. Note:
       // completed_at can be NULL on completed rows; select by status.
@@ -259,7 +284,7 @@ export async function recategorizeAccountYear(
       const buckets = await getExpenseBuckets(db)
       const ai = await aiSuggestCategories(
         txs,
-        { companyName: acct?.company_name ?? "the company", memberNames, bankNames, businessDescription, buckets },
+        { companyName: companyName || "the company", memberNames, bankNames, businessDescription, buckets },
         opts.aiOptions,
       )
       aiErrors = ai.errors
