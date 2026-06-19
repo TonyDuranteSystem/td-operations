@@ -369,7 +369,13 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
           document_type_name: "SS-4",
           category: 1,
           status: "classified",
-          drive_link: `${APP_BASE_URL}/api/ss4/${ss4.token}/pdf?code=${ss4.access_code}`,
+          // drive_file_id is NOT NULL on documents — the unsigned SS-4 is rendered
+          // live (no stored file), so use a sentinel marker (also keeps the row
+          // unique for idempotency). drive_link is RELATIVE so the workspace
+          // "View" opens the route on whatever origin it's viewed from (sandbox
+          // or prod) rather than a fixed APP_BASE_URL that could point at prod.
+          drive_file_id: `ss4-live:${ss4.token}`,
+          drive_link: `/api/ss4/${ss4.token}/pdf?code=${ss4.access_code}`,
           portal_visible: true,
           processed_at: new Date().toISOString(),
         })
