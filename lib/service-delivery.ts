@@ -609,6 +609,32 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 13b. Company Formation — best-effort SS-4 auto-generation when advancing into
+  // "SS-4 Prepared". Reuses the shared createSS4 core. It often can't complete
+  // yet (e.g. no Registered Agent set on the freshly materialized account, which
+  // Line 6 requires) — that's expected and NOT an error: it's logged to
+  // auto_triggers and staff click "Generate SS-4" in the workspace after setting
+  // the RA. Never fails the advance (the stage move already committed above).
+  if (
+    delivery.service_type === "Company Formation" &&
+    targetStage.stage_name === "SS-4 Prepared" &&
+    delivery.account_id
+  ) {
+    try {
+      const { createSS4 } = await import("@/lib/operations/ss4")
+      const r = await createSS4({ account_id: delivery.account_id })
+      if (r.ok) {
+        autoTriggers.push(`SS-4 generated (${r.ss4?.status ?? "draft"})`)
+      } else if (r.outcome === "already_exists") {
+        autoTriggers.push("SS-4 already exists — left as-is")
+      } else {
+        autoTriggers.push(`SS-4 not auto-generated (${r.outcome}): ${r.message ?? ""}`.trim())
+      }
+    } catch (ssErr) {
+      autoTriggers.push(`SS-4 auto-generation error: ${ssErr instanceof Error ? ssErr.message : String(ssErr)}`)
+    }
+  }
+
   // 14. Company Closure — cancel all active services, deactivate account
   if (
     delivery.service_type === "Company Closure" &&

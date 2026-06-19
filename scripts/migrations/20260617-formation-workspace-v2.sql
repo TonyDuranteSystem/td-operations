@@ -68,7 +68,7 @@ VALUES
   ('Company Formation', 5, 'SS-4 Prepared',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),
    'Sign your SS-4', 'Firma il modulo SS-4', 'FileSignature', true, true, false,
-   '{"description": "SS-4 (IRS EIN application) generated. Waiting for the client to sign it.", "components": [{"type": "document_viewer"}, {"type": "waiting_notice", "label": "Waiting for the client to sign the SS-4 form."}, {"type": "info_panel"}, {"type": "chat"}, {"type": "action_buttons", "actions": [{"key": "advance_next", "label": "Client Signed SS-4", "target": "SS-4 Signed"}]}]}'::jsonb),
+   '{"components": [{"type": "ss4_panel"}, {"type": "document_viewer"}, {"type": "info_panel"}, {"type": "chat"}, {"type": "action_buttons", "actions": [{"key": "advance_next", "label": "Client Signed SS-4", "target": "SS-4 Signed"}]}], "description": "SS-4 form generated. Review, send to client for signature."}'::jsonb),
 
   ('Company Formation', 6, 'SS-4 Signed',
    (SELECT id FROM catalog_entries WHERE catalog_id='services' AND slug='company_formation'),

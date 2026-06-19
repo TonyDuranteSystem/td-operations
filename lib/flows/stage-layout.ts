@@ -21,6 +21,7 @@ export const STAGE_COMPONENT_TYPES = [
   'waiting_notice',
   'fax_irs',
   'activate_ra',
+  'ss4_panel',
   'shipping_info',
   'formation_names',
   'notes',
