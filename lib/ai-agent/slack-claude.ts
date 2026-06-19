@@ -424,6 +424,7 @@ export async function fetchThreadHistory(
   channelId: string,
   threadTs: string,
   limit: number = 30,
+  charCap?: number,
 ): Promise<string> {
   const token = process.env.SLACK_BOT_TOKEN_CLAUDE
   if (!token) return ""
@@ -470,11 +471,147 @@ export async function fetchThreadHistory(
     }
 
     if (lines.length === 0) return ""
-    return lines.join("\n")
+    const out = lines.join("\n")
+    if (charCap && out.length > charCap) {
+      return `${out.slice(0, charCap)}…(truncated at ${charCap} chars)`
+    }
+    return out
   } catch (err) {
     console.warn("[slack-claude] fetchThreadHistory failed:", err)
     return ""
   }
+}
+
+// ── Referenced-message resolution (shared messages + pasted archive links) ──
+// When a Slack message SHARES another message (Slack's "Share message" action →
+// an attachment carrying the source channel + ts) or PASTES an archive link
+// (https://…/archives/C…/p…), the worker should read that referenced thread's
+// content. The webhook only ever captured `event.text`, so before this the
+// shared request was dropped at the front door (incident 2026-06-19: Antonio
+// shared Luca's P&L request onto a @Claude post → Claude replied "I don't see
+// the request"). These pure parsers extract a {channel, ts, thread_ts} pointer
+// from each reference so the worker can fetch the source thread.
+
+export interface SlackRef {
+  channel: string
+  ts: string
+  thread_ts: string
+}
+
+// Cap how many distinct referenced threads we resolve (token budget + latency).
+export const MAX_SLACK_REFERENCES = 3
+// Per-referenced-thread caps — worker-side, to protect the model's input budget
+// (every char is re-sent on each tool-loop step). Mirrors DOC_RESULT_CAP style.
+export const REFERENCED_THREAD_MSG_LIMIT = 30
+export const REFERENCED_THREAD_CHAR_CAP = 8000
+
+/**
+ * Convert a Slack archive-link `p` timestamp (e.g. "1781880779057309") into the
+ * dotted message ts ("1781880779.057309"). The last 6 digits are microseconds.
+ * Returns null if the input isn't a plausible Slack `p` value.
+ */
+export function pTimestampToTs(p: string): string | null {
+  if (!/^\d{10,}$/.test(p)) return null
+  return `${p.slice(0, -6)}.${p.slice(-6)}`
+}
+
+/**
+ * Parse Slack archive links out of plain message text. Matches
+ * `…/archives/<CHANNEL>/p<digits>` and an optional `?thread_ts=<ts>` query, so a
+ * pasted link to a reply still resolves to its parent thread. Pure + exported.
+ */
+export function parseSlackArchiveLinks(text: string): SlackRef[] {
+  if (!text) return []
+  const refs: SlackRef[] = []
+  // Channel ids are C… (public) / G… (private) / D… (DM). Capture the p-number
+  // and an optional thread_ts that may appear anywhere in the query string.
+  const re = /\/archives\/([CGD][A-Z0-9]+)\/p(\d{10,})(\?[^\s>|]*)?/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    const channel = m[1]
+    const ts = pTimestampToTs(m[2])
+    if (!ts) continue
+    const query = m[3] ?? ""
+    const threadMatch = query.match(/thread_ts=([\d.]+)/)
+    refs.push({ channel, ts, thread_ts: threadMatch ? threadMatch[1] : ts })
+  }
+  return refs
+}
+
+/**
+ * Parse Slack "Share message" attachments. A shared message arrives as an
+ * attachment carrying the source `channel_id` + `ts` (and `from_url`, from which
+ * an explicit `thread_ts` can be recovered). Pure + exported. Defensive: only
+ * keeps attachments that actually carry a channel + ts.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function parseSlackShareAttachments(attachments: any): SlackRef[] {
+  if (!Array.isArray(attachments)) return []
+  const refs: SlackRef[] = []
+  for (const att of attachments) {
+    const channel = typeof att?.channel_id === "string" ? att.channel_id : ""
+    const ts = typeof att?.ts === "string" ? att.ts : ""
+    if (!channel || !ts) continue
+    let threadTs = ts
+    const fromUrl = typeof att?.from_url === "string" ? att.from_url : ""
+    const threadMatch = fromUrl.match(/thread_ts=([\d.]+)/)
+    if (threadMatch) threadTs = threadMatch[1]
+    refs.push({ channel, ts, thread_ts: threadTs })
+  }
+  return refs
+}
+
+/**
+ * Collect all message references from a message's text + attachments, deduped by
+ * channel:thread_ts and capped at MAX_SLACK_REFERENCES. Pure + exported.
+ */
+export function collectSlackReferences(input: {
+  text?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  attachments?: any
+}): SlackRef[] {
+  const all = [
+    ...parseSlackShareAttachments(input.attachments),
+    ...parseSlackArchiveLinks(input.text ?? ""),
+  ]
+  const seen = new Set<string>()
+  const out: SlackRef[] = []
+  for (const ref of all) {
+    const key = `${ref.channel}:${ref.thread_ts}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(ref)
+    if (out.length >= MAX_SLACK_REFERENCES) break
+  }
+  return out
+}
+
+/**
+ * Resolve referenced threads into a single injectable context block. For each
+ * ref, fetch the source thread (reusing fetchThreadHistory, capped) and label it
+ * with the channel/ts so the worker knows it's a SHARED thread, not the current
+ * one. Skips a ref that resolves to the current thread (no double-injection) and
+ * any ref that returns no content (bot not in that channel, deleted, etc.).
+ * Best-effort: returns "" if nothing resolves.
+ */
+export async function fetchReferencedThreads(
+  refs: SlackRef[],
+  currentThreadTs: string | null | undefined,
+): Promise<string> {
+  if (!refs.length) return ""
+  const blocks: string[] = []
+  for (const ref of refs) {
+    // Don't re-inject the thread we're already reading as current-thread context.
+    if (currentThreadTs && ref.thread_ts === currentThreadTs) continue
+    const content = await fetchThreadHistory(
+      ref.channel,
+      ref.thread_ts,
+      REFERENCED_THREAD_MSG_LIMIT,
+      REFERENCED_THREAD_CHAR_CAP,
+    )
+    if (content) blocks.push(content)
+  }
+  return blocks.join("\n---\n")
 }
 
 /**
@@ -860,14 +997,44 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // the genuine thread ts (slack_thread_ts) — same gate as the thread-image
   // fallback above; a brand-new top-level mention has no prior thread to read.
   // Best-effort: returns "" on any failure, in which case we use row.body as-is.
-  let enrichedBody = row.body
+  const contextBlocks: string[] = []
   const historyThreadTs = ctx.slack_thread_ts as string | undefined
   if (historyThreadTs) {
     const slackThreadContext = await fetchThreadHistory(channelId, historyThreadTs)
     if (slackThreadContext) {
-      enrichedBody = `[SLACK THREAD CONTEXT — what others said in this thread]\n${slackThreadContext}\n\n[YOUR CURRENT MESSAGE]\n${row.body}`
+      contextBlocks.push(`[SLACK THREAD CONTEXT — what others said in this thread]\n${slackThreadContext}`)
     }
   }
+
+  // Referenced threads: a message can SHARE another message (Slack "Share
+  // message" → attachment, captured by the webhook into context_json.slack_referenced)
+  // or PASTE an archive link (parsed here from row.body as a safety net — the
+  // body survives even if the webhook saw no attachment). Resolve each into the
+  // real source thread so Claude can read what was shared instead of replying
+  // "I don't see the request." Best-effort; deduped against the current thread.
+  const referenced = collectSlackReferences({ text: row.body })
+  const stored = Array.isArray(ctx.slack_referenced) ? (ctx.slack_referenced as SlackRef[]) : []
+  const allRefs: SlackRef[] = []
+  const refSeen = new Set<string>()
+  for (const ref of [...stored, ...referenced]) {
+    if (!ref?.channel || !ref?.thread_ts) continue
+    const key = `${ref.channel}:${ref.thread_ts}`
+    if (refSeen.has(key)) continue
+    refSeen.add(key)
+    allRefs.push(ref)
+    if (allRefs.length >= MAX_SLACK_REFERENCES) break
+  }
+  if (allRefs.length > 0) {
+    const refContext = await fetchReferencedThreads(allRefs, historyThreadTs)
+    if (refContext) {
+      contextBlocks.unshift(`[REFERENCED SLACK THREAD(S) — shared into this conversation; read this, it's what's being asked about]\n${refContext}`)
+    }
+  }
+
+  const enrichedBody =
+    contextBlocks.length > 0
+      ? `${contextBlocks.join("\n\n")}\n\n[YOUR CURRENT MESSAGE]\n${row.body}`
+      : row.body
 
   // Animated "thinking" indicator. While callWorker runs (a single, non-
   // interruptible API call lasting ~8-15s), cycle the "On it 👍" ack through a

@@ -46,6 +46,12 @@ import {
   verifySlackSignature,
   parseSlackInteraction,
   STOP_THINKING_ACTION_ID,
+  pTimestampToTs,
+  parseSlackArchiveLinks,
+  parseSlackShareAttachments,
+  collectSlackReferences,
+  fetchReferencedThreads,
+  MAX_SLACK_REFERENCES,
 } from "@/lib/ai-agent/slack-claude"
 import { createHmac } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -1236,5 +1242,186 @@ describe("parseSlackInteraction", () => {
 
   it("returns null when there are no actions", () => {
     expect(parseSlackInteraction(encode({ type: "block_actions", actions: [] }))).toBeNull()
+  })
+})
+
+// -------------------------------------------------------------------------
+// Referenced-message resolution (shared messages + pasted archive links)
+// -------------------------------------------------------------------------
+
+describe("pTimestampToTs", () => {
+  it("inserts the decimal 6 digits from the end", () => {
+    expect(pTimestampToTs("1781880779057309")).toBe("1781880779.057309")
+  })
+  it("returns null for non-numeric / too-short input", () => {
+    expect(pTimestampToTs("abc")).toBeNull()
+    expect(pTimestampToTs("123")).toBeNull()
+    expect(pTimestampToTs("")).toBeNull()
+  })
+})
+
+describe("parseSlackArchiveLinks", () => {
+  it("parses a thread-reply archive link, recovering thread_ts from the query", () => {
+    const text =
+      "look at https://tdoperationsworkspace.slack.com/archives/C0BCNMQG1PA/p1781880779057309?thread_ts=1781880779.057309&cid=C0BCNMQG1PA please"
+    expect(parseSlackArchiveLinks(text)).toEqual([
+      { channel: "C0BCNMQG1PA", ts: "1781880779.057309", thread_ts: "1781880779.057309" },
+    ])
+  })
+
+  it("falls back to ts as thread_ts when no thread_ts query is present", () => {
+    const text = "https://x.slack.com/archives/C123ABC/p1700000000123456"
+    expect(parseSlackArchiveLinks(text)).toEqual([
+      { channel: "C123ABC", ts: "1700000000.123456", thread_ts: "1700000000.123456" },
+    ])
+  })
+
+  it("handles private (G) and DM (D) channel ids and multiple links", () => {
+    const text =
+      "a https://x.slack.com/archives/G999/p1700000000000001 b https://x.slack.com/archives/D888/p1700000000000002"
+    const out = parseSlackArchiveLinks(text)
+    expect(out.map((r) => r.channel)).toEqual(["G999", "D888"])
+  })
+
+  it("returns [] for text with no links", () => {
+    expect(parseSlackArchiveLinks("just a normal message")).toEqual([])
+    expect(parseSlackArchiveLinks("")).toEqual([])
+  })
+})
+
+describe("parseSlackShareAttachments", () => {
+  it("extracts channel + ts + thread_ts from a share attachment", () => {
+    const attachments = [
+      {
+        is_share: true,
+        channel_id: "C0BCNMQG1PA",
+        ts: "1781880779.057309",
+        from_url:
+          "https://x.slack.com/archives/C0BCNMQG1PA/p1781880779057309?thread_ts=1781880779.057309&cid=C0BCNMQG1PA",
+        text: "Luca's request…",
+      },
+    ]
+    expect(parseSlackShareAttachments(attachments)).toEqual([
+      { channel: "C0BCNMQG1PA", ts: "1781880779.057309", thread_ts: "1781880779.057309" },
+    ])
+  })
+
+  it("uses ts as thread_ts when from_url has no thread_ts", () => {
+    const attachments = [{ channel_id: "C1", ts: "100.001", from_url: "https://x/archives/C1/p100000001" }]
+    expect(parseSlackShareAttachments(attachments)[0].thread_ts).toBe("100.001")
+  })
+
+  it("skips attachments without channel + ts, and non-arrays", () => {
+    expect(parseSlackShareAttachments([{ text: "no ids" }])).toEqual([])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(parseSlackShareAttachments(undefined as any)).toEqual([])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(parseSlackShareAttachments("nope" as any)).toEqual([])
+  })
+})
+
+describe("collectSlackReferences", () => {
+  it("merges attachments + text links, dedupes by channel:thread_ts", () => {
+    const out = collectSlackReferences({
+      text: "https://x.slack.com/archives/C1/p1700000000000001?thread_ts=1700000000.000001",
+      attachments: [{ channel_id: "C1", ts: "1700000000.000001", from_url: "https://x/archives/C1/p1700000000000001?thread_ts=1700000000.000001" }],
+    })
+    expect(out).toHaveLength(1) // same channel:thread_ts → deduped
+    expect(out[0]).toEqual({ channel: "C1", ts: "1700000000.000001", thread_ts: "1700000000.000001" })
+  })
+
+  it("caps the number of references at MAX_SLACK_REFERENCES", () => {
+    const text = Array.from({ length: 6 }, (_, i) => `https://x.slack.com/archives/C${i}/p170000000000000${i}`).join(" ")
+    expect(collectSlackReferences({ text }).length).toBe(MAX_SLACK_REFERENCES)
+  })
+
+  it("returns [] when there are no references", () => {
+    expect(collectSlackReferences({ text: "hi", attachments: [] })).toEqual([])
+    expect(collectSlackReferences({})).toEqual([])
+  })
+})
+
+describe("fetchReferencedThreads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("fetches each ref's source thread and labels nothing about the current thread", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [{ user: "U0B9ZUE2Q75", text: "Luca's P&L idea", ts: "100.001" }],
+        }),
+    })
+    const out = await fetchReferencedThreads(
+      [{ channel: "C1", ts: "100.001", thread_ts: "100.001" }],
+      null,
+    )
+    expect(out).toContain("Luca: Luca's P&L idea")
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("conversations.replies"),
+      expect.any(Object),
+    )
+  })
+
+  it("skips a ref that points at the current thread (no double-injection)", async () => {
+    const out = await fetchReferencedThreads(
+      [{ channel: "C1", ts: "555.000", thread_ts: "555.000" }],
+      "555.000",
+    )
+    expect(out).toBe("")
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("returns '' for an empty ref list", async () => {
+    expect(await fetchReferencedThreads([], null)).toBe("")
+  })
+})
+
+describe("processSlackEvent — referenced-thread injection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("injects the referenced thread's content into the worker body", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "ok", toolsUsed: [] })
+
+    // conversations.replies (referenced thread) returns Luca's message; the
+    // chat.postMessage / other Slack calls also return ok. fetchThreadHistory for
+    // the (absent) current thread returns "" because there's no slack_thread_ts.
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes("conversations.replies")) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, messages: [{ user: "U0B9ZUE2Q75", text: "the P&L request", ts: "100.001" }] }),
+        })
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+
+    const row = {
+      id: "row-ref-001",
+      body: "do you Luca's request?",
+      thread_id: "t-ref",
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "200.000",
+        // no slack_thread_ts → no current-thread context, isolates the ref injection
+        slack_referenced: [{ channel: "C0BCNMQG1PA", ts: "100.001", thread_ts: "100.001" }],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    const [body] = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(body).toContain("[REFERENCED SLACK THREAD(S)")
+    expect(body).toContain("the P&L request")
+    expect(body).toContain("[YOUR CURRENT MESSAGE]")
+    expect(body).toContain("do you Luca's request?")
   })
 })

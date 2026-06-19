@@ -39,6 +39,7 @@ import {
   findOrCreateConversationThread,
   fetchSlackMessageText,
   slackScopeKey,
+  collectSlackReferences,
   SLACK_SUPPORTED_IMAGE_TYPES,
   SLACK_MAX_IMAGE_BYTES,
 } from "@/lib/ai-agent/slack-claude"
@@ -408,6 +409,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // the model knows to look at the attached image(s).
   const body = cleanText || text || (slackImages.length > 0 ? "(image attached — no caption)" : "")
 
+  // Referenced messages: a SHARED message (Slack "Share message" → attachment
+  // carrying source channel + ts) or a pasted archive link in the text. Pure
+  // extraction, no Slack API call — safe inside the 3s ACK window. The worker
+  // resolves these into the source thread's content (so "@Claude read this" with
+  // a shared message actually works). [] when none.
+  const slackReferenced = collectSlackReferences({ text, attachments: event.attachments })
+
+  // TEMPORARY DIAGNOSTIC (2026-06-19): confirm the share-attachment shape on the
+  // first real "Share message" → @Claude. Logs only attachment KEYS (not text)
+  // plus how many references we extracted. Remove once the share path is verified.
+  if (Array.isArray(event.attachments) && event.attachments.length > 0) {
+    console.warn(
+      "[slack-claude-webhook] attachment shape:",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      JSON.stringify(event.attachments.map((a: any) => Object.keys(a ?? {}))),
+      "→ refs extracted:",
+      slackReferenced.length,
+    )
+  }
+
   // INSERT agent_messages row
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: inserted, error: insertError } = await (supabaseAdmin as any)
@@ -429,6 +450,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         slack_user_id: userId,
         slack_ack_ts: ackTs, // null if the ack post failed → worker posts fresh
         slack_images: slackImages, // [] when no usable images
+        slack_referenced: slackReferenced, // [] when no shared/linked messages
       },
     })
     .select("id")

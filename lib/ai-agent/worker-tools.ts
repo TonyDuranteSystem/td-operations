@@ -1654,7 +1654,7 @@ export function oneParagraphSummary(reply: string): string {
  * for dispatch (the extra allow-list guard). Returns reachedMaxLoops=true only
  * when the loop is exhausted without a final answer.
  */
-async function runWorkerLoop(
+export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
   systemPrompt: string,
@@ -1757,6 +1757,60 @@ async function runWorkerLoop(
       { role: "assistant", content: data.content },
       { role: "user", content: toolResults },
     ]
+  }
+
+  // The tool loop is exhausted (hit maxLoops or ran out of wall-clock budget)
+  // WITHOUT the model ever producing a final text answer — historically this
+  // returned a generic "I reached my working limit" message, so an investigative
+  // question (which legitimately chains many read tools) got NO answer at all.
+  // Before giving up, make ONE final NO-TOOLS call forcing the model to
+  // synthesize what it found so far into a real answer. Without tools the model
+  // must reply in text. Guarded on remaining wall-clock budget so we never push
+  // the function past its hard cap; falls back to the generic message on any
+  // failure or empty reply.
+  const elapsedAtEnd = Date.now() - loopStart
+  if (elapsedAtEnd < WORKER_WALL_CLOCK_BUDGET_MS - CALL_DEADLINE_MARGIN_MS) {
+    try {
+      // Nudge: append the "answer now" instruction to the final (unsent)
+      // tool_results user turn so we don't create two consecutive user turns.
+      const last = currentMessages[currentMessages.length - 1]
+      const nudge =
+        "You've used all your investigation steps. Stop using tools and answer NOW with what you've found so far — be concrete and specific. If something is still unconfirmed, say so in one line, but give your best answer."
+      if (last?.role === "user" && Array.isArray(last.content)) {
+        last.content.push({ type: "text", text: nudge })
+      } else {
+        currentMessages.push({ role: "user", content: nudge })
+      }
+
+      const controller = new AbortController()
+      const callTimeout = callTimeoutForBudget(elapsedAtEnd, WORKER_WALL_CLOCK_BUDGET_MS, ANTHROPIC_TIMEOUT_MS)
+      const timeout = setTimeout(() => controller.abort(), callTimeout)
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 16384,
+          system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
+          // No tools → the model is forced to produce a text answer.
+          messages: currentMessages,
+        }),
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+      if (res.ok) {
+        const data = await res.json()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const reply = data.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim()
+        if (reply) return { reply, toolsUsed, reachedMaxLoops: true }
+      }
+    } catch (err) {
+      console.warn("[worker-loop] final-answer synthesis call failed:", err)
+    }
   }
 
   return {
