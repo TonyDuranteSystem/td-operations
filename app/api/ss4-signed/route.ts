@@ -45,6 +45,13 @@ export async function POST(req: NextRequest) {
 
     const results: { step: string; status: string; detail?: string }[] = []
 
+    // The active Company Formation SD (resolved in step 2) + whether a
+    // workspace-viewable signed doc got saved by the Drive path (step 3). Used to
+    // stamp the signed doc with the SD and to add a Storage fallback (sandbox /
+    // no-Drive) so the signed SS-4 always lands in the flow Documents section.
+    let formationSdId: string | null = null
+    let signedDocLinked = false
+
     // Track the merged PDF bytes for email attachment
     let mergedPdfBytes: Uint8Array | null = null
     let mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
@@ -101,6 +108,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
 
         if (sd) {
+          formationSdId = sd.id
           const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
           history.push({
             event: "ss4_signed",
@@ -166,15 +174,19 @@ export async function POST(req: NextRequest) {
 
               results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
-              // Auto-save to documents table
-              await autoSaveDocument({
+              // Auto-save to documents table — stamped with the formation SD so
+              // the signed SS-4 also shows in the flow workspace Documents section
+              // (which queries by service_delivery_id), not just the portal.
+              const saved = await autoSaveDocument({
                 accountId: ss4.account_id,
                 fileName,
-                documentType: "Form SS-4",
+                documentType: "Form SS-4 (Signed)",
                 category: 1, // Company
                 driveFileId: driveResult.id,
                 portalVisible: true,
+                serviceDeliveryId: formationSdId,
               })
+              if (saved.id) signedDocLinked = true
             } else {
               results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
             }
@@ -186,6 +198,58 @@ export async function POST(req: NextRequest) {
         }
       } catch (e) {
         results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 3b. STORAGE FALLBACK — signed doc for the flow Documents section ───
+    // When the Drive path above didn't save (no drive_folder_id — e.g. sandbox,
+    // or any account without a Drive folder), the signed SS-4 still lives in
+    // Supabase Storage (signed-ss4). Register an SD-stamped documents row backed
+    // by a long-lived signed URL so the workspace + portal "View" works in every
+    // environment. Idempotent + non-fatal.
+    if (!signedDocLinked && formationSdId) {
+      try {
+        const { data: files } = await supabaseAdmin.storage
+          .from("signed-ss4")
+          .list(ss4.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+        const file = files?.[0]
+        if (file) {
+          const path = `${ss4.token}/${file.name}`
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+          const { data: existingDoc } = await (supabaseAdmin as any)
+            .from("documents")
+            .select("id")
+            .eq("service_delivery_id", formationSdId)
+            .eq("document_type_name", "Form SS-4 (Signed)")
+            .maybeSingle()
+          if (!existingDoc) {
+            const { data: signed } = await supabaseAdmin.storage
+              .from("signed-ss4")
+              .createSignedUrl(path, 60 * 60 * 24 * 365)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped service_delivery_id
+            await (supabaseAdmin as any).from("documents").insert({
+              account_id: ss4.account_id,
+              contact_id: ss4.contact_id ?? null,
+              service_delivery_id: formationSdId,
+              file_name: `SS-4 (Signed) - ${ss4.company_name}.pdf`,
+              document_type_name: "Form SS-4 (Signed)",
+              category: 1,
+              status: "classified",
+              drive_file_id: `storage:signed-ss4/${path}`,
+              drive_link: signed?.signedUrl ?? null,
+              portal_visible: true,
+              processed_at: new Date().toISOString(),
+            })
+            signedDocLinked = true
+            results.push({ step: "signed_doc_storage", status: "ok", detail: "Signed SS-4 linked to flow from Storage" })
+          } else {
+            results.push({ step: "signed_doc_storage", status: "skipped", detail: "Signed doc already linked" })
+          }
+        } else {
+          results.push({ step: "signed_doc_storage", status: "skipped", detail: "No signed PDF in Storage yet" })
+        }
+      } catch (e) {
+        results.push({ step: "signed_doc_storage", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 

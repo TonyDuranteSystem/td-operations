@@ -9,8 +9,8 @@
  *   add_llc_name       — Append an admin-typed name candidate to the formation pool (verbatim, no LLC auto-append)
  *   remove_llc_name    — Remove an admin-added name candidate (wizard 3 are not removable)
  *   select_llc_name    — Pick a name (from wizard 3 OR admin-added) as the official LLC name; triggers account create/rename + Drive folder + SD rename + audit
- *   mark_fax_sent      — Mark SS-4 fax as sent to IRS + advance pipeline to EIN Submitted
- *   enter_ein          — Set EIN on account + advance pipeline to Post-Formation
+ *   mark_fax_sent      — Mark SS-4 fax as sent to IRS (SD stays at SS-4 Signed)
+ *   enter_ein          — Set EIN on account + advance pipeline to EIN Received
  *   process_documents  — Re-run Drive folder creation + passport processing for a contact
  *   cancel_service     — Cancel a service delivery (set status to cancelled)
  *   ocr_document       — Run OCR on an existing document (passport→MRZ, ITIN→number extraction)
@@ -568,7 +568,8 @@ export async function POST(req: NextRequest) {
           .in("status", ["signed", "submitted"])
         einSideEffects.push("SS-4 status → done")
 
-        // 3. Advance Company Formation pipeline to Post-Formation + Banking
+        // 3. Advance Company Formation pipeline to "EIN Received" (final stage of
+        // the 7-stage v2 pipeline; replaced the removed "Post-Formation + Banking").
         const { data: formationSds } = await supabaseAdmin
           .from("service_deliveries")
           .select("id")
@@ -582,12 +583,12 @@ export async function POST(req: NextRequest) {
           const { advanceFormationToStage } = await import("@/lib/pipeline-utils")
           const advResult = await advanceFormationToStage(
             formationSds[0].id,
-            "Post-Formation + Banking",
+            "EIN Received",
             "crm-admin",
             `EIN received: ${einFormatted}`,
           )
           if (advResult.advanced) {
-            einSideEffects.push("Pipeline advanced to Post-Formation + Banking")
+            einSideEffects.push("Pipeline advanced to EIN Received")
             einSideEffects.push(...advResult.sideEffects)
           } else {
             einSideEffects.push(`Pipeline advance: ${advResult.detail}`)

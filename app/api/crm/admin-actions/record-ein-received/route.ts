@@ -113,15 +113,17 @@ export async function POST(req: NextRequest) {
       bankingSdId = existingBankingSd.id
     }
 
-    // 3. Advance Company Formation SD directly to "Post-Formation + Banking"
+    // 3. Advance Company Formation SD to "EIN Received" (final stage of the
+    // 7-stage v2 pipeline; replaced the removed "Post-Formation + Banking").
+    const EIN_TARGET_STAGE = 'EIN Received'
     const advanceResult = await advanceStage({
       delivery_id: formationSD.id,
-      target_stage: 'Post-Formation + Banking',
+      target_stage: EIN_TARGET_STAGE,
       actor: 'crm-admin',
       notes: `EIN recorded: ${normalizedEIN}`,
     })
 
-    const sdStage = advanceResult.success ? 'Post-Formation + Banking' : (previousStage ?? 'unknown')
+    const sdStage = advanceResult.success ? EIN_TARGET_STAGE : (previousStage ?? 'unknown')
 
     // 4. Enqueue welcome package job explicitly (handler deduplicates via welcome_package_status)
     const welcomeJob = await enqueueJob({

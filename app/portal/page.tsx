@@ -3,7 +3,8 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
@@ -126,6 +127,10 @@ export default async function PortalDashboardPage() {
     if (selectedFormation) {
       const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
       const ctx = await getFormationContext(contactId)
+      const tracker = await getFormationTracker({ sdId: selectedFormation.sdId })
+      const trackerSteps = tracker?.currentStage
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+        : null
       return (
         <FormationDashboard
           firstName={firstName}
@@ -135,6 +140,7 @@ export default async function PortalDashboardPage() {
           ss4Data={ctx.ss4}
           oaData={ctx.oa}
           leaseData={ctx.lease}
+          trackerSteps={trackerSteps}
           formationLeadId={selectedFormation.leadId}
         />
       )
@@ -203,7 +209,20 @@ export default async function PortalDashboardPage() {
     //
     // Either way we render the same FormationDashboard. The component already
     // accepts account=null.
-    if (authTier === 'formation' && contactId) {
+    // Show the formation dashboard when EITHER the auth tier says formation OR
+    // (authoritative) the contact has an active Company Formation service
+    // delivery. The auth-metadata tier is unreliable here — it can be stale
+    // (e.g. left at 'active' after a prior formation completed) or never set —
+    // whereas the formation SD exists from "Payment Confirmed" onward, so it's
+    // the reliable signal that drives the 7-stage tracker at ANY stage. Reuses
+    // getInProgressFormations (1 query when there's no formation SD, so it's
+    // free for ordinary leads/onboarding clients). Short-circuits the lookup
+    // when the tier already says formation.
+    const hasActiveFormation =
+      authTier !== 'formation' &&
+      !!contactId &&
+      (await getInProgressFormations(contactId)).length > 0
+    if ((authTier === 'formation' || hasActiveFormation) && contactId) {
       const formationAccount = await getFormationAccount(contactId)
       // Contact-scoped Company Closure SD — surfaces a Closure CTA on the
       // formation dashboard when the same client also has an external LLC
@@ -249,6 +268,10 @@ export default async function PortalDashboardPage() {
             .limit(1)
             .maybeSingle(),
         ])
+        const tracker = await getFormationTracker({ accountId: formationAccount.id, contactId })
+        const trackerSteps = tracker?.currentStage
+          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+          : null
         return (
           <FormationDashboard
             firstName={firstName}
@@ -259,12 +282,17 @@ export default async function PortalDashboardPage() {
             oaData={oaRes.data}
             leaseData={leaseRes.data}
             closureData={closureSd}
+            trackerSteps={trackerSteps}
           />
         )
       }
 
       // Post-PR1 path: no account, contact-scoped reads.
       const ctx = await getFormationContext(contactId)
+      const tracker = await getFormationTracker({ contactId })
+      const trackerSteps = tracker?.currentStage
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+        : null
       return (
         <FormationDashboard
           firstName={firstName}
@@ -275,6 +303,7 @@ export default async function PortalDashboardPage() {
           oaData={ctx.oa}
           leaseData={ctx.lease}
           closureData={closureSd}
+          trackerSteps={trackerSteps}
         />
       )
     }
@@ -389,6 +418,10 @@ export default async function PortalDashboardPage() {
         .limit(1)
         .maybeSingle(),
     ])
+    const tracker = await getFormationTracker({ accountId: selectedAccountId, contactId })
+    const trackerSteps = tracker?.currentStage
+      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+      : null
     return (
       <FormationDashboard
         firstName={firstName}
@@ -407,6 +440,7 @@ export default async function PortalDashboardPage() {
         ss4Data={ss4Res.data}
         oaData={oaRes.data}
         leaseData={leaseRes.data}
+        trackerSteps={trackerSteps}
       />
     )
   }

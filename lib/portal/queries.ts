@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
 import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
+import type { FormationStageRow } from '@/lib/portal/formation-progress'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -128,6 +129,67 @@ export async function getFormationContext(contactId: string) {
     oa: oaRes.data,
     lease: leaseRes.data,
   }
+}
+
+/**
+ * Data for the client-facing Company Formation progress tracker: the formation
+ * SD's current stage + the 7 Company Formation pipeline stages (client labels).
+ * The tracker is driven entirely by this (SD stage + pipeline_stages), not by
+ * separate signals. Resolves the SD by, in priority: explicit sdId → active SD
+ * for accountId → contact-scoped (account_id NULL) active SD for contactId.
+ * Returns null when there are no Company Formation pipeline stages.
+ */
+export async function getFormationTracker(opts: {
+  sdId?: string | null
+  contactId?: string | null
+  accountId?: string | null
+}): Promise<{ currentStage: string | null; stages: FormationStageRow[] } | null> {
+  // Resolve the formation SD's current stage, cascading through the locators in
+  // priority order and stopping at the first hit (an account-scoped lookup falls
+  // back to the contact-scoped SD for not-yet-materialized formations).
+  let currentStage: string | null = null
+  if (opts.sdId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('stage')
+      .eq('id', opts.sdId)
+      .maybeSingle()
+    currentStage = (data?.stage as string | null) ?? null
+  }
+  if (currentStage == null && opts.accountId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('stage')
+      .eq('account_id', opts.accountId)
+      .eq('service_type', 'Company Formation')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    currentStage = (data?.stage as string | null) ?? null
+  }
+  if (currentStage == null && opts.contactId) {
+    const { data } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('stage')
+      .eq('contact_id', opts.contactId)
+      .is('account_id', null)
+      .eq('service_type', 'Company Formation')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    currentStage = (data?.stage as string | null) ?? null
+  }
+
+  const { data: stageRows } = await supabaseAdmin
+    .from('pipeline_stages')
+    .select('stage_name, stage_order, client_label, client_label_it')
+    .eq('service_type', 'Company Formation')
+    .order('stage_order', { ascending: true })
+
+  if (!stageRows || stageRows.length === 0) return null
+  return { currentStage, stages: stageRows as unknown as FormationStageRow[] }
 }
 
 export interface InProgressFormation {

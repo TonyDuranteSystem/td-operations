@@ -8,7 +8,9 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { FlowStageJourney, type ShippingCard } from '@/components/portal/flow-stage-journey'
+import { DecisionCard } from '@/components/portal/decision-card'
 import { DocumentList } from '@/components/portal/document-list'
+import type { DecisionRequest } from '@/lib/decisions'
 import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flows/flow-progress'
 import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, CONTACT_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
@@ -191,6 +193,21 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     id: string; sender_type: string; sender_name: string | null; message: string; created_at: string | null
   }>
 
+  // ── Client Decision Requests for this flow ──
+  // Newest first; only the most recent pending one is actionable, the rest are
+  // read-only (historical). New table — untyped accessor.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: decisionData } = await (supabaseAdmin as any)
+    .from('client_decision_requests')
+    .select('*')
+    .eq('service_delivery_id', sd.id)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  const decisions = (decisionData ?? []) as DecisionRequest[]
+  const newestPendingId = decisions.find((d) => d.status === 'pending')?.id ?? null
+  const actionableDecisions = decisions.filter((d) => d.id === newestPendingId)
+  const historicalDecisions = decisions.filter((d) => d.id !== newestPendingId)
+
   const teamLabel = locale === 'it' ? 'Team Tony Durante' : 'Tony Durante Team'
   const youLabel = locale === 'it' ? 'Tu' : 'You'
 
@@ -227,6 +244,27 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
         <div className="bg-white rounded-xl border shadow-sm p-5">
           <span className="text-sm text-zinc-600">{locale === 'it' ? 'Servizio attivo' : 'Service active'}</span>
         </div>
+      )}
+
+      {/* Client decision requests — actionable (newest pending) + history */}
+      {actionableDecisions.length > 0 && (
+        <div className="space-y-3">
+          {actionableDecisions.map((d) => (
+            <DecisionCard key={d.id} request={d} locale={locale} actionable />
+          ))}
+        </div>
+      )}
+      {historicalDecisions.length > 0 && (
+        <details className="group">
+          <summary className="cursor-pointer select-none text-xs font-medium text-zinc-500 hover:text-zinc-800">
+            {locale === 'it' ? 'Richieste precedenti' : 'Previous requests'} ({historicalDecisions.length})
+          </summary>
+          <div className="mt-2 space-y-2">
+            {historicalDecisions.map((d) => (
+              <DecisionCard key={d.id} request={d} locale={locale} actionable={false} />
+            ))}
+          </div>
+        </details>
       )}
 
       {/* Documents for this flow */}

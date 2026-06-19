@@ -1108,14 +1108,16 @@ function deriveJourneySteps({
   )
   const hasActiveServices = serviceDeliveries.some(sd => sd.status === 'active')
 
-  // Formation stage ordering for "beyond Data Collection" check
+  // Formation stage ordering (7-stage v2 pipeline) for the "beyond the initial
+  // data/review phase" check (i.e. the company is actually being filed onward).
   const FORMATION_STAGE_ORDER = [
-    'Data Collection', 'State Filing', 'EIN Application', 'EIN Submitted', 'Post-Formation + Banking', 'Closing',
+    'Payment Confirmed', 'Wizard Submitted', 'Filed with State', 'Articles Received',
+    'SS-4 Prepared', 'SS-4 Signed', 'EIN Received',
   ]
 
   const formationBeyondDataCollection = formationSds.some(sd => {
     const idx = FORMATION_STAGE_ORDER.indexOf(sd.stage ?? '')
-    return idx > 0 // anything after Data Collection
+    return idx > 1 // anything after Wizard Submitted (Filed with State onward)
   })
 
   // 1. Lead step
@@ -1200,12 +1202,12 @@ function deriveJourneySteps({
   let serviceStep: JourneyStep
   if (formationSds.length > 0) {
     const primaryFormation = formationSds[0]
-    if (primaryFormation.stage === 'Closing' || primaryFormation.status === 'completed') {
+    if (primaryFormation.stage === 'EIN Received' || primaryFormation.status === 'completed') {
       serviceStep = { label: 'Service', status: 'done', detail: 'Formation complete' }
     } else if (formationBeyondDataCollection) {
       serviceStep = { label: 'Service', status: 'current', detail: primaryFormation.stage ?? undefined }
-    } else if (primaryFormation.stage === 'Data Collection') {
-      serviceStep = { label: 'Service', status: 'current', detail: 'Data Collection' }
+    } else if (primaryFormation.stage === 'Payment Confirmed') {
+      serviceStep = { label: 'Service', status: 'current', detail: 'Payment Confirmed' }
     } else {
       serviceStep = { label: 'Service', status: 'current', detail: primaryFormation.stage ?? undefined }
     }
