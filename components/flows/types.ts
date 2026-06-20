@@ -14,6 +14,10 @@ export interface WorkspaceServiceDelivery {
   due_date: string | null
   stage_entered_at: string | null
   account_id: string
+  /** Client full_name for contact-scoped SDs (in-flight Company Formation, ITIN
+   *  — no account yet). Null when the SD has an account. Surfaced as a "Contact"
+   *  row in the Overview info panel. */
+  contact_name?: string | null
   /** Resolved client label for the current stage, if any. */
   current_client_label?: string | null
   /** Client-submitted shipping info (ITIN signed-package tracking). Null until

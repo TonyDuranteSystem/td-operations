@@ -106,8 +106,8 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
   }
 
   // Contact-scoped flows (in-flight Company Formation, ITIN) have no account yet,
-  // so there is no company_name. Fall back to the client's name so the workspace
-  // header + Overview "Company" row identify the client instead of showing "—".
+  // so there is no company_name. Load the client's name to surface as a separate
+  // "Contact" row in the Overview (COMPANY stays "—" — it is not the company).
   let contactName: string | null = null
   if (!sd.account_id && sd.contact_id) {
     const { data: contact } = await supabaseAdmin
@@ -120,7 +120,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
-    company_name: (accountRow?.company_name as string | null) ?? contactName,
+    company_name: (accountRow?.company_name as string | null) ?? null,
     state_of_formation: (accountRow?.state_of_formation as string | null) ?? formationState,
     annual_report_due_date: (accountRow?.annual_report_due_date as string | null) ?? null,
     ra_renewal_date: (accountRow?.ra_renewal_date as string | null) ?? null,
@@ -136,6 +136,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     due_date: sd.due_date ?? null,
     stage_entered_at: sd.stage_entered_at ?? null,
     account_id: sd.account_id ?? '',
+    contact_name: contactName,
     current_client_label: currentStageRow?.client_label ?? null,
     shipping_courier: (shipRow?.shipping_courier as string | null) ?? null,
     shipping_tracking_number: (shipRow?.shipping_tracking_number as string | null) ?? null,

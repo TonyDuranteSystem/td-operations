@@ -1,4 +1,4 @@
-import { Building2, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink } from 'lucide-react'
+import { Building2, Contact, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink } from 'lucide-react'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from './types'
 import { daysSince, formatUploadDate } from '@/lib/flows/workspace-format'
 
@@ -64,6 +64,11 @@ export function InfoPanel({ serviceDelivery: sd, account, secondInstallment }: I
       <h3 className="text-sm font-semibold text-zinc-900 mb-1">Overview</h3>
       <div className="divide-y divide-zinc-100">
         <Row icon={<Building2 className="h-4 w-4" />} label="Company" value={account.company_name ?? '—'} />
+        {/* Contact-scoped SDs (in-flight Company Formation, ITIN) have no account/
+            company yet — surface the client name so the workspace is identifiable. */}
+        {sd.contact_name && (
+          <Row icon={<Contact className="h-4 w-4" />} label="Contact" value={sd.contact_name} />
+        )}
         <Row
           icon={<Flag className="h-4 w-4" />}
           label="Current stage"
