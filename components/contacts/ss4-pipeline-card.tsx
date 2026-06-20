@@ -70,13 +70,19 @@ export function SS4PipelineCard({
   const account = accounts.find(a => a.id === ss4.account_id)
   const hasEin = !!account?.ein
   const stepStates = getStepStates(ss4.status, hasEin)
-  const badge = STATUS_BADGES[ss4.status] || STATUS_BADGES.draft
+  // Once the EIN is in, the whole application is complete — the header badge must
+  // read "EIN Received" regardless of the raw ss4 status (which can linger at
+  // 'signed' when the EIN was entered directly without marking the fax sent).
+  const badge = hasEin ? STATUS_BADGES.done : (STATUS_BADGES[ss4.status] || STATUS_BADGES.draft)
 
   const formationSd = serviceDeliveries.find(
     sd => sd.account_id === ss4.account_id && sd.service_type === 'Company Formation' && sd.status === 'active',
   )
 
-  const showMarkFaxButton = ss4.status === 'signed' || ss4.status === 'fax_failed'
+  // Never offer "Mark Fax as Sent" once the EIN exists — the formation is done.
+  // Without this guard a completed formation (EIN received, SD completed) still
+  // showed the amber fax button alongside the green "EIN Received" box.
+  const showMarkFaxButton = (ss4.status === 'signed' || ss4.status === 'fax_failed') && !hasEin
   const showEnterEinButton = (ss4.status === 'submitted' || ss4.status === 'done') && !hasEin
 
   const handleAction = async (action: string, actionParams: Record<string, unknown>) => {
