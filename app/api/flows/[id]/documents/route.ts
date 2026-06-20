@@ -48,7 +48,13 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    return NextResponse.json({ success: true, documents: data ?? [] })
+    // Explicit no-store so neither the browser nor any CDN caches the doc list —
+    // defense-in-depth alongside the client cache:'no-store' and the admin
+    // client's uncached fetch (the "documents not showing on sandbox" bug).
+    return NextResponse.json(
+      { success: true, documents: data ?? [] },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } },
+    )
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : String(e) },
