@@ -124,9 +124,33 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const company = account.company_name || 'your company'
     const message =
       language === 'it'
-        ? `Ottime notizie! Il tuo EIN (Employer Identification Number) è stato emesso: ${ein}. La tua azienda ${company} è ora completamente costituita. Prossimo passo: aprire il conto bancario aziendale.`
-        : `Great news! Your EIN (Employer Identification Number) has been issued: ${ein}. Your company ${company} is now fully formed. Next step: set up your business bank account.`
-    const title = language === 'it' ? 'EIN emesso — costituzione completata!' : 'EIN issued — formation complete!'
+        ? `Ottime notizie — l'IRS ha emesso il tuo EIN: ${ein}. ${company} è ora completamente costituita e attiva! 🎉
+
+Alcuni passaggi importanti:
+
+1) Conserva al sicuro i documenti della tua azienda. Il tuo Atto Costitutivo (Articles of Organization) e la lettera EIN (CP 575) sono nel portale, nella sezione Documenti. Scaricali e conservali in un luogo sicuro — ti serviranno per aprire il conto bancario, firmare contratti e presentare le tasse.
+
+2) Non condividere mai il modulo SS-4 firmato con nessuno. È un documento fiscale interno e NON serve per aprire il conto bancario né per gestire la tua attività. Per aprire un conto bancario aziendale ti bastano l'EIN e l'Atto Costitutivo.
+
+3) Apri il tuo conto bancario aziendale. Con l'EIN e l'Atto Costitutivo puoi fare domanda presso: Relay, Mercury, Sokin, Payset o Wise. Puoi candidarti anche a più di una banca.
+
+4) Descrivi chiaramente la tua attività quando fai domanda. Le banche chiedono cosa fa la tua azienda — fornisci una descrizione precisa e accurata: cosa vendi, a chi e come vieni pagato. Risposte vaghe come "consulenza" o "business online" rallentano l'approvazione o causano rifiuti.
+
+Non sai quale banca fa per te? Scrivici quando vuoi qui nel portale.`
+        : `Great news — the IRS has issued your EIN: ${ein}. ${company} is now fully formed and active! 🎉
+
+A few important next steps:
+
+1) Keep your company documents safe. Your Articles of Organization and EIN letter (CP 575) are in your portal under Documents. Download and store them somewhere secure — you'll use them to open a bank account, sign contracts, and file taxes.
+
+2) Never share your signed SS-4 form with anyone. It's an internal tax document and is NOT needed to open a bank account or run your business. To open a business bank account you only need your EIN and your Articles of Organization.
+
+3) Open your business bank account. With your EIN and Articles of Organization you can apply at: Relay, Mercury, Sokin, Payset, or Wise. You can apply to more than one.
+
+4) Describe your business clearly when you apply. Banks ask what your company does — give a specific, accurate description: what you sell, to whom, and how you get paid. Vague answers like "consulting" or "online business" slow approval or cause rejections.
+
+Not sure which bank fits you best? Message us anytime here in the portal.`
+    const title = language === 'it' ? 'EIN emesso — la tua azienda è costituita!' : 'EIN issued — your company is fully formed!'
 
     // ── Portal notification (push + digest email) ──
     createPortalNotification({

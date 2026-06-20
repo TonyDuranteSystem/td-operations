@@ -38,23 +38,33 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     .eq('id', params.id)
     .maybeSingle()
 
-  // Company Formation "Company Created" milestone — when the SD reaches
-  // "Articles Received", surface the confirmed LLC name (the candidate filed
-  // with the SOS, status 'filed' in the SD's name_checks JSONB).
+  // Company Formation — the confirmed LLC name (the candidate filed with the
+  // SOS, status 'filed' in the SD's name_checks JSONB). Used for two things:
+  //  - companyCreatedName: the "Company Created" milestone banner at "Articles Received".
+  //  - formationFiledName: collapses the SOS external_link to an "already filed"
+  //    confirmation on "Filed with State" once a name is filed.
   let companyCreatedName: string | null = null
-  if (sd.service_type === 'Company Formation' && sd.stage === 'Articles Received') {
+  let formationFiledName: string | null = null
+  if (sd.service_type === 'Company Formation') {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
     const { data: ncRow } = await (supabaseAdmin as any)
       .from('service_deliveries')
       .select('name_checks')
       .eq('id', params.id)
       .maybeSingle()
-    companyCreatedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
+    formationFiledName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
+    if (sd.stage === 'Articles Received') companyCreatedName = formationFiledName
   }
 
   const [{ data: accountRow }, { data: stageRows }] = await Promise.all([
     sd.account_id
-      ? supabaseAdmin.from('accounts').select('id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date').eq('id', sd.account_id).single()
+      ? supabaseAdmin
+          .from('accounts')
+          .select(
+            'id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date, ein_number, registered_agent_address, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)',
+          )
+          .eq('id', sd.account_id)
+          .single()
       : Promise.resolve({ data: null }),
     supabaseAdmin
       .from('pipeline_stages')
@@ -120,12 +130,26 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     contactName = (contact?.full_name as string | null) ?? null
   }
 
+  // Resolve a single mailing-address string: prefer the structured addresses FK
+  // (business_mailing_address_id), fall back to the account's free-text
+  // physical_address. Mirrors resolveMailingAddress in lib/portal/queries.ts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- addresses join + new columns not in generated types
+  const acctAny = accountRow as any
+  const ma = acctAny?.mailing_address ?? null
+  const structuredMailing = ma
+    ? [ma.address_line1, ma.address_line2, ma.city, ma.state, ma.zip].filter(Boolean).join(', ')
+    : ''
+  const mailingAddress = structuredMailing || (acctAny?.physical_address as string | null) || null
+
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
     company_name: (accountRow?.company_name as string | null) ?? null,
     state_of_formation: (accountRow?.state_of_formation as string | null) ?? formationState,
     annual_report_due_date: (accountRow?.annual_report_due_date as string | null) ?? null,
     ra_renewal_date: (accountRow?.ra_renewal_date as string | null) ?? null,
+    ein_number: (acctAny?.ein_number as string | null) ?? null,
+    registered_agent_address: (acctAny?.registered_agent_address as string | null) ?? null,
+    mailing_address: mailingAddress,
   }
 
   const serviceDelivery: WorkspaceServiceDelivery = {
@@ -140,6 +164,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     account_id: sd.account_id ?? '',
     contact_name: contactName,
     current_client_label: currentStageRow?.client_label ?? null,
+    formation_filed_name: formationFiledName,
     shipping_courier: (shipRow?.shipping_courier as string | null) ?? null,
     shipping_tracking_number: (shipRow?.shipping_tracking_number as string | null) ?? null,
     shipping_submitted_at: (shipRow?.shipping_submitted_at as string | null) ?? null,

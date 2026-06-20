@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { FileText, CheckCircle2, Clock, AlertTriangle, Loader2, Send, Hash } from 'lucide-react'
+import Link from 'next/link'
+import { FileText, CheckCircle2, Clock, AlertTriangle, Loader2, Send, Hash, ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface SS4ApplicationRecord {
@@ -131,6 +132,19 @@ export function SS4PipelineCard({
           </span>
         )}
       </div>
+
+      {/* Connect this account-level EIN tracker to the Company Formation
+          workspace — the single source of truth for the formation flow (this
+          card was previously disconnected from it). */}
+      {formationSd && (
+        <Link
+          href={`/flows/${formationSd.id}`}
+          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+        >
+          Open in Formation Workspace
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+      )}
 
       {/* Mini timeline */}
       <div className="flex items-center gap-1">

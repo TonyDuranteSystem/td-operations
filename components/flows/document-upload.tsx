@@ -4,6 +4,14 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Upload, Loader2, CheckCircle2, FileUp, X } from 'lucide-react'
 
+/** Window event fired after a flow document upload succeeds. The sibling
+ *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
+ *  alone does NOT re-run the viewer's client-side effect). */
+export const FLOW_DOC_UPLOADED_EVENT = 'flow-doc-uploaded'
+export interface FlowDocUploadedDetail {
+  serviceDeliveryId: string
+}
+
 interface DocumentUploadProps {
   /** Label from stage_layout, e.g. "Upload Extension Receipt". */
   label?: string
@@ -108,6 +116,11 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       }
       setDone(`${file.name} uploaded`)
       clearPick()
+      // Tell the sibling DocumentViewer to re-fetch immediately (router.refresh()
+      // re-runs server components but not the viewer's client effect).
+      window.dispatchEvent(
+        new CustomEvent<FlowDocUploadedDetail>(FLOW_DOC_UPLOADED_EVENT, { detail: { serviceDeliveryId } }),
+      )
       router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')

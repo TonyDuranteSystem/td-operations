@@ -7,8 +7,11 @@
  * without UX context. MMLLC clients should still be promoted via the explicit
  * "Record EIN Received" button.
  *
+ * Banking Fintech SD is NO LONGER created here (2026-06-20, Antonio): formation
+ * finishes at the EIN; banking is self-service (the client applies at a fintech
+ * with their EIN + Articles). banking_sd_id stays in the result, always null.
+ *
  * Idempotency:
- *   - Banking Fintech SD: existence check before createSD
  *   - Formation SD advance: advanceStage no-ops if already past target
  *   - syncTier: no-op if already at active
  *   - welcome_package_prepare job: handler dedupes via welcome_package_status
@@ -19,7 +22,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { createSD, advanceStage } from '@/lib/operations/service-delivery'
+import { advanceStage } from '@/lib/operations/service-delivery'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { enqueueJob } from '@/lib/jobs/queue'
 
@@ -71,34 +74,14 @@ export async function triggerEINReceivedWorkflow(
   const previousTier = account.portal_tier
   const previousStage = formationSD.stage
 
-  let bankingSdId: string | null = null
-  try {
-    const { data: existingBankingSd } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('id')
-      .eq('account_id', accountId)
-      .eq('service_type', 'Banking Fintech')
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle()
-
-    if (existingBankingSd) {
-      bankingSdId = existingBankingSd.id
-      side_effects.push('banking_sd_exists')
-    } else {
-      const banking = await createSD({
-        service_type: 'Banking Fintech',
-        service_name: `Banking Fintech - ${account.company_name}`,
-        account_id: accountId,
-        contact_id: formationSD.contact_id || null,
-        notes: `Auto-created on EIN received for ${account.company_name} (${einNumber})`,
-      })
-      bankingSdId = banking.id
-      side_effects.push('banking_sd_created')
-    }
-  } catch (e) {
-    side_effects.push(`banking_sd_failed:${e instanceof Error ? e.message : 'unknown'}`)
-  }
+  // Banking Fintech SD is intentionally NOT created anymore. Per Antonio
+  // (2026-06-20): formation finishes at the EIN. Banking is self-service —
+  // the client opens an account with their EIN + Articles of Organization at a
+  // fintech of their choice (Relay / Mercury / Sokin / Payset / Wise), surfaced
+  // as bank applications in the portal, not tracked as a service delivery. The
+  // result still carries banking_sd_id (always null) for backward compatibility.
+  const bankingSdId: string | null = null
+  side_effects.push('banking_sd_skipped')
 
   let advanceOk = false
   try {

@@ -43,6 +43,12 @@ interface FormationDashboardProps {
    * page falls through to that account's context and opens the wrong wizard
    * (tax/onboarding) instead of this new company's formation. */
   formationLeadId?: string | null
+  /** Current formation SD stage name (from getFormationTracker). Authoritative
+   * signal that the wizard is already submitted: once the SD is past "Payment
+   * Confirmed", the "Complete Formation Details" CTA must hide even when the
+   * wizard_progress row is keyed on contact_id (account_id NULL) and the
+   * account-scoped wizard lookup returned nothing. */
+  sdStage?: string | null
 }
 
 export function FormationDashboard({
@@ -56,6 +62,7 @@ export function FormationDashboard({
   closureData,
   trackerSteps,
   formationLeadId,
+  sdStage,
 }: FormationDashboardProps) {
   const tr = locale === 'it' ? IT : EN
   // New-company formations are lead-anchored: the wizard page only enters the
@@ -66,8 +73,13 @@ export function FormationDashboard({
     ? `/portal/wizard?lead=${formationLeadId}`
     : '/portal/wizard'
 
-  // Derive milestone completion
-  const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed'
+  // Derive milestone completion. The SD stage is authoritative: once the
+  // formation SD is past "Payment Confirmed" the wizard HAS been submitted, even
+  // if the account-scoped wizard_progress lookup missed a contact-keyed row
+  // (account_id NULL) — which otherwise left the "Complete Formation Details"
+  // CTA stuck on the dashboard after the company was materialized.
+  const sdPastWizard = !!sdStage && sdStage !== 'Payment Confirmed'
+  const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed' || sdPastWizard
   const stateConfirmed = !!account?.filing_id || !!account?.formation_date
   const ss4Ready = !!ss4Data
   const ss4AwaitingSignature = ss4Data?.status === 'awaiting_signature'

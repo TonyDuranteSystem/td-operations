@@ -175,15 +175,18 @@ export async function POST(req: NextRequest) {
               results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
               // Auto-save to documents table — stamped with the formation SD so
-              // the signed SS-4 also shows in the flow workspace Documents section
-              // (which queries by service_delivery_id), not just the portal.
+              // the signed SS-4 shows in the flow workspace Documents section
+              // (which queries by service_delivery_id). portalVisible:false —
+              // the signed SS-4 is an INTERNAL tax document (responsible party's
+              // tax ID) and must NEVER be shared with the client per Antonio.
+              // The client opens a bank account with the EIN + Articles only.
               const saved = await autoSaveDocument({
                 accountId: ss4.account_id,
                 fileName,
                 documentType: "Form SS-4 (Signed)",
                 category: 1, // Company
                 driveFileId: driveResult.id,
-                portalVisible: true,
+                portalVisible: false,
                 serviceDeliveryId: formationSdId,
               })
               if (saved.id) signedDocLinked = true
@@ -237,7 +240,9 @@ export async function POST(req: NextRequest) {
               status: "classified",
               drive_file_id: `storage:signed-ss4/${path}`,
               drive_link: signed?.signedUrl ?? null,
-              portal_visible: true,
+              // INTERNAL only — the signed SS-4 must never reach the client
+              // portal (responsible party's tax ID). Staff-only in the workspace.
+              portal_visible: false,
               processed_at: new Date().toISOString(),
             })
             signedDocLinked = true

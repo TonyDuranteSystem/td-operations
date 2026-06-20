@@ -1,4 +1,4 @@
-import { ExternalLink as ExternalLinkIcon } from 'lucide-react'
+import { ExternalLink as ExternalLinkIcon, CheckCircle2 } from 'lucide-react'
 import { resolveSecretaryOfStateLink, resolveFormationFilingLink } from '@/lib/flows/state-links'
 
 interface ExternalLinkCardProps {
@@ -15,6 +15,10 @@ interface ExternalLinkCardProps {
   stateOfFormation?: string | null
   /** SD service_type — Company Formation uses the formation-filing portal map. */
   serviceType?: string
+  /** Company Formation only — the name already filed with the SOS (name_checks
+   *  status 'filed'). When set, the file button collapses to a "filed"
+   *  confirmation: the filing is done, so the "go file" CTA no longer applies. */
+  filedName?: string | null
 }
 
 /**
@@ -25,7 +29,22 @@ interface ExternalLinkCardProps {
  *  - otherwise, no `url` → the annual-report Secretary of State portal from the
  *    account's state (NM has no annual report; unmapped states show a note).
  */
-export function ExternalLinkCard({ label, url, stateOfFormation, serviceType }: ExternalLinkCardProps) {
+export function ExternalLinkCard({ label, url, stateOfFormation, serviceType, filedName }: ExternalLinkCardProps) {
+  // Company Formation — once a name is filed on the SOS, the "go file" CTA is
+  // done. Collapse to a confirmation so staff aren't prompted to file again.
+  // (Checked before the literal-url branch so it also covers a layout that
+  // hardcodes the SOS url.)
+  if (serviceType === 'Company Formation' && filedName) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <CheckCircle2 className="h-4 w-4 shrink-0" />
+        <span>
+          <span className="font-semibold">{filedName}</span> filed with the Secretary of State.
+        </span>
+      </div>
+    )
+  }
+
   // Mode 1 — explicit URL from the layout.
   if (url) {
     return <LinkButton href={url} label={label || 'Open link'} />

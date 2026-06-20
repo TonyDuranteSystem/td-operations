@@ -65,6 +65,7 @@ function renderComponent(
           url={component.url}
           stateOfFormation={account.state_of_formation}
           serviceType={serviceDelivery.service_type}
+          filedName={serviceDelivery.formation_filed_name}
         />
       )
     case 'document_viewer':
