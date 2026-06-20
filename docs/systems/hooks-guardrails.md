@@ -1,5 +1,6 @@
 # Hooks, Guardrails & Safety System
-_Last verified against code: 2026-06-10 — Claude (dev-setup.sh now also wires the Slack MCP server into .mcp.json from SLACK_BOT_TOKEN_CLAUDE)_
+_Last verified against code: 2026-06-20 — Claude (`lib/supabase-admin.ts` — the service-role admin client now creates with a custom `global.fetch` that forces `cache:'no-store'` on every PostgREST/Storage request. Reason: Next.js's PRODUCTION fetch Data Cache (Vercel; NOT `next dev`) was serving STALE server-side reads even on `force-dynamic` routes — the "documents not showing on sandbox" bug. A service-role admin client must never read cached/stale data. The existing prod-ref guard + EXPECTED_SUPABASE_REF assertion are unchanged. See flows.md for the full incident.)_
+_Earlier 2026-06-10 — Claude (dev-setup.sh now also wires the Slack MCP server into .mcp.json from SLACK_BOT_TOKEN_CLAUDE)_
 
 ## What it is
 The automated safety net that keeps a session from breaking production or skipping discipline. Three kinds: **Claude Code hooks** (fire on session/tool events), **git pre-push/pre-commit gates**, and **code-level guards**. Plus the 35 policy rules (R-rules) in CLAUDE.md.
