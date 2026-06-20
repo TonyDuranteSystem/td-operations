@@ -42,6 +42,7 @@ export async function POST(req: NextRequest) {
       installment_currency: body.installment_currency,
       intro_en: body.intro_en,
       intro_it: body.intro_it,
+      call_summary: body.call_summary,
       strategy: body.strategy,
       next_steps: body.next_steps,
       future_developments: body.future_developments,

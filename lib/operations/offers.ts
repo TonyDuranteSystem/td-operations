@@ -161,6 +161,7 @@ export interface CreateOfferParams {
   future_developments?: unknown
   intro_en?: string | null
   intro_it?: string | null
+  call_summary?: string | null
   admin_notes?: string | null
   required_documents?: unknown
   installment_currency?: string | null
@@ -493,6 +494,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         future_developments: (params.future_developments ?? null) as Json,
         intro_en: params.intro_en ?? null,
         intro_it: params.intro_it ?? null,
+        call_summary: params.call_summary ?? null,
         admin_notes: params.admin_notes ?? null,
         required_documents: (params.required_documents ?? null) as Json,
         installment_currency: params.installment_currency ?? null,

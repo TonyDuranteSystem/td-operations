@@ -204,6 +204,7 @@ export function CreateOfferDialog({
   const [narrativeLoading, setNarrativeLoading] = useState(false)
   const [introEn, setIntroEn] = useState('')
   const [introIt, setIntroIt] = useState('')
+  const [callSummary, setCallSummary] = useState('')
   const [strategyJson, setStrategyJson] = useState('')
   const [nextStepsJson, setNextStepsJson] = useState('')
   const [futureDevJson, setFutureDevJson] = useState('')
@@ -319,6 +320,7 @@ export function CreateOfferDialog({
       // Populate editable fields
       setIntroEn(n.intro_en || '')
       setIntroIt(n.intro_it || '')
+      setCallSummary(n.call_summary || '')
       setStrategyJson(JSON.stringify(n.strategy, null, 2))
       setNextStepsJson(JSON.stringify(n.next_steps, null, 2))
       setFutureDevJson(JSON.stringify(n.future_developments, null, 2))
@@ -599,6 +601,7 @@ export function CreateOfferDialog({
             // Narrative content (client-facing)
             intro_en: introEn.trim() || null,
             intro_it: introIt.trim() || null,
+            call_summary: callSummary.trim() || null,
             strategy: parseJsonField(strategyJson),
             next_steps: parseJsonField(nextStepsJson),
             future_developments: parseJsonField(futureDevJson),
@@ -1131,7 +1134,7 @@ export function CreateOfferDialog({
               >
                 <Sparkles className="h-4 w-4 text-violet-500" />
                 Client-Facing Narrative
-                {(introEn || introIt) && <span className="text-xs font-normal text-violet-600 bg-violet-100 px-1.5 py-0.5 rounded">has content</span>}
+                {(introEn || introIt || callSummary) && <span className="text-xs font-normal text-violet-600 bg-violet-100 px-1.5 py-0.5 rounded">has content</span>}
                 {narrativeOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
               </button>
               <button
@@ -1156,6 +1159,10 @@ export function CreateOfferDialog({
                   <textarea value={introIt} onChange={e => setIntroIt(e.target.value)} rows={3} placeholder="Introduzione personalizzata per il cliente..." className="w-full mt-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
                 </div>
                 <div>
+                  <label className="text-xs font-medium text-zinc-700">Call Summary <span className="font-normal text-zinc-400">(recap of the client call — shown to the client)</span></label>
+                  <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} rows={5} placeholder="Detailed summary of what was discussed on the call..." className="w-full mt-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                <div>
                   <label className="text-xs font-medium text-zinc-700">Immediate Actions <span className="font-normal text-zinc-400">(JSON array)</span></label>
                   <textarea value={immediateActionsJson} onChange={e => setImmediateActionsJson(e.target.value)} rows={3} placeholder='[{"title": "...", "description": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
                 </div>
@@ -1171,8 +1178,8 @@ export function CreateOfferDialog({
                   <label className="text-xs font-medium text-zinc-700">Future Developments <span className="font-normal text-zinc-400">(JSON array)</span></label>
                   <textarea value={futureDevJson} onChange={e => setFutureDevJson(e.target.value)} rows={2} placeholder='[{"text": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
                 </div>
-                {(introEn || strategyJson) && (
-                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson('') }} className="text-xs text-red-500 hover:text-red-700">
+                {(introEn || strategyJson || callSummary) && (
+                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setCallSummary(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson('') }} className="text-xs text-red-500 hover:text-red-700">
                     Clear all narrative content
                   </button>
                 )}

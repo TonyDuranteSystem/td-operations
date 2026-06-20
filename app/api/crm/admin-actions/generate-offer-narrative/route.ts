@@ -30,6 +30,7 @@ Your writing style is:
 
 You must produce ALL output as a single JSON object with exactly these keys:
 ${introSpec}
+- "call_summary": A DETAILED, client-facing recap of the consultation call, written in ${otherSectionsLang}. Summarize what the client shared: their business and current situation, what they are trying to achieve, the specific needs/concerns they raised, and what was discussed or agreed during the call. Write 1-2 well-developed paragraphs (4-8 sentences total) in a warm, professional second-person voice (e.g. "During our call, you shared that..."). This is the ONE field that should be thorough — do NOT compress it. CLIENT-SAFETY RULE: base it ONLY on what the client themselves described. Do NOT include internal staff assessments, our private opinions about the client, pricing strategy, or any remark the client did not actually make — the notes may contain internal commentary; exclude all of it. If the notes contain NO information about an actual call with the client, set this field to an empty string "".
 - "strategy": An array of 3-5 strategic steps. Each: { "step_number": N, "title": "Short Title", "description": "1-2 sentence explanation" }. These describe the overall approach/plan for the client.
 - "next_steps": An array of 3-5 next steps after signing. Each: { "step_number": N, "title": "Short Title", "description": "1-2 sentence explanation" }. These describe what happens operationally after the client signs.
 - "future_developments": An array of 2-4 items. Each: { "text": "Description of a future opportunity" }. These are optional services or growth opportunities for later.
@@ -52,7 +53,7 @@ Other rules:
 - Strategy and next_steps should reflect the specific services in the offer.
 - Do NOT include pricing or amounts — those are handled separately.
 - Do NOT include legal disclaimers — the contract handles those.
-- Keep each description under 2 sentences.`
+- Keep each strategy / next_steps / future_developments / immediate_actions description under 2 sentences. This brevity rule does NOT apply to "call_summary", which should be detailed.`
 }
 
 function buildUserPrompt(
@@ -116,7 +117,7 @@ export async function POST(req: NextRequest) {
       const ai = await callAI({
         systemPrompt,
         userPrompt,
-        maxTokens: 2048,
+        maxTokens: 3000,
         temperature: 0.7,
         model: 'sonnet',
       })

@@ -5,6 +5,7 @@ function validNarrative(): NarrativeResponse {
   return {
     intro_en: 'Dear John, based on our conversation...',
     intro_it: 'Caro John, sulla base della nostra conversazione...',
+    call_summary: 'During our call, you shared that you run an e-commerce business and need a US LLC to access payment processors.',
     strategy: [
       { step_number: 1, title: 'LLC Formation', description: 'We will form your LLC in New Mexico.' },
       { step_number: 2, title: 'EIN Application', description: 'We will apply for your EIN with the IRS.' },
@@ -177,11 +178,54 @@ describe('validateNarrative — single-language mode (2026-05-07)', () => {
   })
 })
 
+describe('validateNarrative — call_summary (2026-06-19)', () => {
+  // Legacy (no-language) mode keeps both intros required and populated, so the
+  // fixture passes the intro checks and call_summary is the field under test.
+  it('accepts a non-empty call_summary string', () => {
+    const result = validateNarrative(validNarrative())
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.result.call_summary).toContain('e-commerce')
+  })
+
+  it('accepts an empty call_summary string (no call notes available)', () => {
+    const n = validNarrative()
+    n.call_summary = ''
+    const result = validateNarrative(n)
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.result.call_summary).toBe('')
+  })
+
+  it('normalizes a missing call_summary to empty string', () => {
+    const n = validNarrative() as unknown as Record<string, unknown>
+    delete n.call_summary
+    const result = validateNarrative(n)
+    expect(result.valid).toBe(true)
+    if (result.valid) expect((result.result as NarrativeResponse).call_summary).toBe('')
+  })
+
+  it('normalizes a null call_summary to empty string', () => {
+    const n = validNarrative() as unknown as Record<string, unknown>
+    n.call_summary = null
+    const result = validateNarrative(n)
+    expect(result.valid).toBe(true)
+    if (result.valid) expect(result.result.call_summary).toBe('')
+  })
+
+  it('rejects a non-string call_summary', () => {
+    const n = validNarrative() as unknown as Record<string, unknown>
+    n.call_summary = 123
+    const result = validateNarrative(n)
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect((result as { valid: false; error: string }).error).toContain('call_summary')
+  })
+})
+
 describe('NARRATIVE_KEYS', () => {
-  it('contains all 6 narrative field names', () => {
-    expect(NARRATIVE_KEYS).toHaveLength(6)
+  it('contains all 7 narrative field names', () => {
+    expect(NARRATIVE_KEYS).toHaveLength(7)
     expect(NARRATIVE_KEYS).toContain('intro_en')
     expect(NARRATIVE_KEYS).toContain('intro_it')
+    expect(NARRATIVE_KEYS).toContain('call_summary')
     expect(NARRATIVE_KEYS).toContain('strategy')
     expect(NARRATIVE_KEYS).toContain('next_steps')
     expect(NARRATIVE_KEYS).toContain('future_developments')

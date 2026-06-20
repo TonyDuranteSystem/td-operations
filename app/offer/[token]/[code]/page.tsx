@@ -16,6 +16,7 @@ const LABELS = {
     issues: 'Issues Identified',
     issuesIntro: 'During our consultation, the following situations emerged that require priority attention:',
     immediateActions: 'Recommended Immediate Actions',
+    callSummary: 'Summary of Our Call',
     strategy: 'Our Strategy',
     services: 'Proposed Services',
     servicesIntro: 'Based on your situation, you can choose between the following options.',
@@ -75,6 +76,7 @@ const LABELS = {
     issues: 'Criticità Identificate',
     issuesIntro: 'Durante la nostra call sono emerse alcune situazioni da risolvere con priorità:',
     immediateActions: 'Azioni Immediate Consigliate',
+    callSummary: 'Riepilogo della Nostra Call',
     strategy: 'La Strategia',
     services: 'Servizi Proposti',
     servicesIntro: 'In base alla vostra situazione, potete scegliere tra le opzioni seguenti.',
@@ -470,6 +472,14 @@ export default function OfferPageWithCode() {
               </div>
             )
           })()}
+
+          {/* Call Summary */}
+          {o.call_summary && o.call_summary.trim() && (
+            <div className="offer-section">
+              <div className="offer-section-title">{L.callSummary}</div>
+              <div className="offer-intro-text" style={{ whiteSpace: 'pre-line' }}>{o.call_summary}</div>
+            </div>
+          )}
 
           {/* Issues */}
           {o.issues && o.issues.length > 0 && (

@@ -6,6 +6,13 @@
 export interface NarrativeResponse {
   intro_en: string
   intro_it: string
+  /**
+   * Detailed, client-facing recap of the intake call — what the client shared
+   * about their situation, goals, and what was discussed. Optional: empty
+   * string when no call notes were available at generation time. Written in
+   * the client's preferred language only.
+   */
+  call_summary: string
   strategy: Array<{ step_number: number; title: string; description: string }>
   next_steps: Array<{ step_number: number; title: string; description: string }>
   future_developments: Array<{ text: string }>
@@ -13,7 +20,7 @@ export interface NarrativeResponse {
 }
 
 export const NARRATIVE_KEYS: (keyof NarrativeResponse)[] = [
-  'intro_en', 'intro_it', 'strategy', 'next_steps',
+  'intro_en', 'intro_it', 'call_summary', 'strategy', 'next_steps',
   'future_developments', 'immediate_actions',
 ]
 
@@ -64,6 +71,15 @@ export function validateNarrative(
     if (typeof obj.intro_it !== 'string' || !obj.intro_it.trim()) {
       return { valid: false, error: 'intro_it must be a non-empty string' }
     }
+  }
+
+  // call_summary: optional client-facing call recap. Empty/absent is valid
+  // (no call notes were available); normalize to '' so downstream code can
+  // always treat it as a string. Reject only a non-string, non-null value.
+  if (obj.call_summary == null) {
+    obj.call_summary = ''
+  } else if (typeof obj.call_summary !== 'string') {
+    return { valid: false, error: 'call_summary must be a string' }
   }
 
   // strategy: array of { step_number, title, description }

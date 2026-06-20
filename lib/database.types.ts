@@ -7554,6 +7554,7 @@ export type Database = {
           id: string
           immediate_actions: Json | null
           installment_currency: string | null
+          call_summary: string | null
           intro_en: string | null
           intro_it: string | null
           issues: Json | null
@@ -7612,6 +7613,7 @@ export type Database = {
           id?: string
           immediate_actions?: Json | null
           installment_currency?: string | null
+          call_summary?: string | null
           intro_en?: string | null
           intro_it?: string | null
           issues?: Json | null
@@ -7670,6 +7672,7 @@ export type Database = {
           id?: string
           immediate_actions?: Json | null
           installment_currency?: string | null
+          call_summary?: string | null
           intro_en?: string | null
           intro_it?: string | null
           issues?: Json | null

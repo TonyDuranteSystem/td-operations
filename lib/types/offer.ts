@@ -96,6 +96,7 @@ export interface Offer {
   language: 'en' | 'it'
   intro_en?: string
   intro_it?: string
+  call_summary?: string
   issues?: OfferIssue[]
   immediate_actions?: OfferImmediateAction[]
   strategy?: OfferStrategyStep[]
