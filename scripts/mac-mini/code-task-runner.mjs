@@ -427,6 +427,22 @@ async function tick(cfg) {
     auth: { persistSession: false },
   })
 
+  // 0) Liveness heartbeat → hermes_instances (generic instance-liveness table,
+  // reused). Runs every tick (~15s) so the CRM Code Tasks page can show
+  // "Mac Mini online / last seen Ns ago" and flag stuck jobs when the runner is
+  // down. Best-effort: a failure here never blocks claiming/processing a task.
+  try {
+    const hbIso = new Date().toISOString()
+    await supabase
+      .from("hermes_instances")
+      .upsert(
+        { instance_id: INSTANCE_ID, last_heartbeat: hbIso, status: "online", updated_at: hbIso },
+        { onConflict: "instance_id" },
+      )
+  } catch (e) {
+    log("heartbeat upsert failed (non-fatal):", e?.message || String(e))
+  }
+
   // 1) Find the oldest pending code task.
   const { data: pending, error: selErr } = await supabase
     .from("agent_messages")
