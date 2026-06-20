@@ -68,6 +68,14 @@ const INTERACTIVE_MAX_MS = 60 * 60 * 1000 // hard ceiling so a stuck session can
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
 
+// Timeout for a git push that triggers the `.husky/pre-push` gate (build + unit
+// + integration tests + ESLint + remote-sync). That gate routinely runs several
+// minutes — `next build` alone exceeds 2 min — so the old 120 s cap killed the
+// push mid-build with `spawnSync /bin/sh ETIMEDOUT`, falsely failing the task
+// even though the commits were fine (Fax History task, 2026-06-20). 10 min gives
+// the gate ample headroom and still sits well inside the 30-min task SIGKILL.
+const GATED_PUSH_TIMEOUT_MS = 10 * 60 * 1000
+
 // Progress heartbeats posted to the Slack thread while a long-running task is
 // still executing. Each fires once at its elapsed mark (cleared when the task
 // settles, so a fast task posts none). The Slack worker that queues the task
@@ -399,7 +407,7 @@ function promoteBranchToMain(cfg, branch) {
     // Clean merge → push to main. This is the human-approved production deploy.
     execSync("ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin HEAD:main", {
       cwd: wtPath,
-      timeout: 120000,
+      timeout: GATED_PUSH_TIMEOUT_MS,
       encoding: "utf8",
     })
     return { ok: true, output: `🚀 Shipped \`${branch}\` to production (merged into main and deployed).` }
@@ -632,7 +640,7 @@ async function tick(cfg) {
           threadTs,
           `📦 Pushing to branch \`${branch}\` for review (preview — NOT production)… _${title}_`,
         )
-        execSync(`git push -u origin "${branch}"`, { cwd: wtPath, timeout: 120000, encoding: "utf8" })
+        execSync(`git push -u origin "${branch}"`, { cwd: wtPath, timeout: GATED_PUSH_TIMEOUT_MS, encoding: "utf8" })
         branchPushed = true
         const repoWeb = repoWebUrlFromRemote(
           execSync("git remote get-url origin", { cwd: wtPath, encoding: "utf8" }),
