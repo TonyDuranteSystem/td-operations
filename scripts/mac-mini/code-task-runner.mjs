@@ -68,6 +68,14 @@ const INTERACTIVE_MAX_MS = 60 * 60 * 1000 // hard ceiling so a stuck session can
 const INTERVAL_MS = 15000
 const INSTANCE_ID = "code-runner-mac-mini"
 
+// Timeout for a git push that triggers the `.husky/pre-push` gate (build + unit
+// + integration tests + ESLint + remote-sync). That gate routinely runs several
+// minutes — `next build` alone exceeds 2 min — so the old 120 s cap killed the
+// push mid-build with `spawnSync /bin/sh ETIMEDOUT`, falsely failing the task
+// even though the commits were fine (Fax History task, 2026-06-20). 10 min gives
+// the gate ample headroom and still sits well inside the 30-min task SIGKILL.
+const GATED_PUSH_TIMEOUT_MS = 10 * 60 * 1000
+
 // Progress heartbeats posted to the Slack thread while a long-running task is
 // still executing. Each fires once at its elapsed mark (cleared when the task
 // settles, so a fast task posts none). The Slack worker that queues the task
@@ -147,8 +155,25 @@ function runInteractiveClaude(cfg, opts) {
       "--output-format", "stream-json",
       "--verbose",
       "--session-id", sessionId,
+      // Headless autonomy: the session runs in a THROWAWAY worktree cut from
+      // origin/main and must run git/npm itself (commit + push the review branch).
+      // `--permission-mode acceptEdits` only auto-approves EDITS, not Bash — and a
+      // fresh worktree lacks `.claude/settings.local.json` (gitignored) where the
+      // git/npm grants live, so Bash commands hung on a permission prompt no human
+      // can answer (Fax History task, 2026-06-20: "git write commands require
+      // approval"). Skip permissions entirely — safety is the isolated worktree +
+      // the pre-push build/test gate + review-branch + human "ship it", not a prompt.
+      "--dangerously-skip-permissions",
     ]
-    if (cfg.extraArgs) args.push(...cfg.extraArgs.split(/\s+/))
+    // Append any extra args, but DROP a `--permission-mode <x>` pair from the env
+    // (e.g. the plist's "acceptEdits") — it conflicts with --dangerously-skip-permissions.
+    if (cfg.extraArgs) {
+      const extra = cfg.extraArgs.split(/\s+/).filter(Boolean)
+      for (let i = 0; i < extra.length; i++) {
+        if (extra[i] === "--permission-mode") { i++; continue }
+        args.push(extra[i])
+      }
+    }
 
     let child
     try {
@@ -399,7 +424,7 @@ function promoteBranchToMain(cfg, branch) {
     // Clean merge → push to main. This is the human-approved production deploy.
     execSync("ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin HEAD:main", {
       cwd: wtPath,
-      timeout: 120000,
+      timeout: GATED_PUSH_TIMEOUT_MS,
       encoding: "utf8",
     })
     return { ok: true, output: `🚀 Shipped \`${branch}\` to production (merged into main and deployed).` }
@@ -418,6 +443,22 @@ async function tick(cfg) {
   const supabase = createClient(cfg.supabaseUrl, cfg.supabaseKey, {
     auth: { persistSession: false },
   })
+
+  // 0) Liveness heartbeat → hermes_instances (generic instance-liveness table,
+  // reused). Runs every tick (~15s) so the CRM Code Tasks page can show
+  // "Mac Mini online / last seen Ns ago" and flag stuck jobs when the runner is
+  // down. Best-effort: a failure here never blocks claiming/processing a task.
+  try {
+    const hbIso = new Date().toISOString()
+    await supabase
+      .from("hermes_instances")
+      .upsert(
+        { instance_id: INSTANCE_ID, last_heartbeat: hbIso, status: "online", updated_at: hbIso },
+        { onConflict: "instance_id" },
+      )
+  } catch (e) {
+    log("heartbeat upsert failed (non-fatal):", e?.message || String(e))
+  }
 
   // 1) Find the oldest pending code task.
   const { data: pending, error: selErr } = await supabase
@@ -632,7 +673,7 @@ async function tick(cfg) {
           threadTs,
           `📦 Pushing to branch \`${branch}\` for review (preview — NOT production)… _${title}_`,
         )
-        execSync(`git push -u origin "${branch}"`, { cwd: wtPath, timeout: 120000, encoding: "utf8" })
+        execSync(`git push -u origin "${branch}"`, { cwd: wtPath, timeout: GATED_PUSH_TIMEOUT_MS, encoding: "utf8" })
         branchPushed = true
         const repoWeb = repoWebUrlFromRemote(
           execSync("git remote get-url origin", { cwd: wtPath, encoding: "utf8" }),

@@ -33,5 +33,5 @@ docs/systems/mcp-tools.md|app/api/[transport]/route.ts,lib/mcp/instructions.ts,l
 docs/systems/partners-team.md|lib/partners/,app/(dashboard)/partners/,app/portal/partner/
 docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/
 docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/,lib/ai-agent/thread-summaries.ts,lib/ai-agent/thread-routing.ts,lib/ai-agent/thread-context.ts,lib/mcp/tools/agent-threads.ts,lib/ai-agent/approval-env.ts,lib/ai-agent/approval-executor.ts,lib/mcp/tools/agent-approvals.ts,lib/ai-agent/telegram-notify.ts
-docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/
+docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/,app/(dashboard)/code-tasks/,app/api/code-tasks/,lib/code-tasks/,scripts/mac-mini/
 docs/systems/fax.md|app/api/tools/fax/,app/(dashboard)/tools/fax/,components/flows/fax-irs.tsx
