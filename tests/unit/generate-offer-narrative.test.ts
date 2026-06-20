@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateNarrative, NARRATIVE_KEYS, type NarrativeResponse } from '@/lib/offer-narrative'
+import { validateNarrative, renderCallForOffer, NARRATIVE_KEYS, type NarrativeResponse } from '@/lib/offer-narrative'
 
 function validNarrative(): NarrativeResponse {
   return {
@@ -186,5 +186,55 @@ describe('NARRATIVE_KEYS', () => {
     expect(NARRATIVE_KEYS).toContain('next_steps')
     expect(NARRATIVE_KEYS).toContain('future_developments')
     expect(NARRATIVE_KEYS).toContain('immediate_actions')
+  })
+})
+
+// ── renderCallForOffer (transcript context for the narrative generator) ──
+
+describe('renderCallForOffer', () => {
+  it('renders notes + transcript turns with a header', () => {
+    const out = renderCallForOffer({
+      meeting_name: 'Intake — Acme LLC',
+      created_at: '2026-06-19T10:00:00Z',
+      notes: 'Client sells SaaS in the EU, wants a US LLC for Stripe.',
+      transcript: [
+        { speaker: 'Antonio', text: 'What do you sell?' },
+        { speaker: 'Client', text: 'SaaS subscriptions to EU businesses.' },
+      ],
+    })
+    expect(out).toContain('Call: Intake — Acme LLC')
+    expect(out).toContain('Client sells SaaS')
+    expect(out).toContain('[Antonio]: What do you sell?')
+    expect(out).toContain('[Client]: SaaS subscriptions to EU businesses.')
+    expect(out).toContain('2 turns')
+  })
+
+  it('handles the alternate {name, content} turn shape', () => {
+    const out = renderCallForOffer({
+      meeting_name: 'Call',
+      transcript: [{ name: 'Luca', content: 'Hello there' }],
+    })
+    expect(out).toContain('[Luca]: Hello there')
+  })
+
+  it('works notes-only (no transcript) and transcript-only (no notes)', () => {
+    expect(renderCallForOffer({ meeting_name: 'C', notes: 'just notes' })).toContain('just notes')
+    const tOnly = renderCallForOffer({ transcript: [{ speaker: 'A', text: 'hi' }] })
+    expect(tOnly).toContain('[A]: hi')
+    expect(tOnly).toContain('Client intake call') // default header when no meeting_name
+  })
+
+  it('returns "" when there is nothing useful (null, empty, blank turns)', () => {
+    expect(renderCallForOffer(null)).toBe('')
+    expect(renderCallForOffer(undefined)).toBe('')
+    expect(renderCallForOffer({ meeting_name: 'C', notes: '   ', transcript: [] })).toBe('')
+    expect(renderCallForOffer({ transcript: [{ speaker: 'A', text: '' }] })).toBe('')
+  })
+
+  it('caps very long transcripts', () => {
+    const turns = Array.from({ length: 5000 }, (_, i) => ({ speaker: 'X', text: `turn number ${i} with some words` }))
+    const out = renderCallForOffer({ meeting_name: 'Long', transcript: turns }, 2000)
+    expect(out.length).toBeLessThanOrEqual(2000 + 30)
+    expect(out).toContain('(transcript truncated)')
   })
 })

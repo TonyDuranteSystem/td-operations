@@ -1,8 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
-import { validateNarrative } from '@/lib/offer-narrative'
+import { validateNarrative, renderCallForOffer } from '@/lib/offer-narrative'
 import { callAI } from '@/lib/portal/ai-provider'
+import { supabaseAdmin } from '@/lib/supabase-admin'
+
+/**
+ * Fetch the most recent call's notes + full transcript for this lead/account
+ * from call_summaries, rendered as a context block for the offer-narrative AI.
+ * This is what turns a thin "summary" into a genuinely personalized narrative —
+ * the model gets what the client actually said, not just the capped notes the
+ * dialog pasted in. Best-effort: returns '' on no call / any error so the
+ * generator cleanly falls back to notes-only.
+ */
+async function fetchCallContext(leadId?: string | null, accountId?: string | null): Promise<string> {
+  if (!leadId && !accountId) return ''
+  try {
+    let query = supabaseAdmin
+      .from('call_summaries')
+      .select('meeting_name, created_at, notes, transcript')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    // Prefer the lead's call; fall back to the account's.
+    query = leadId ? query.eq('lead_id', leadId) : query.eq('account_id', accountId as string)
+    const { data, error } = await query.maybeSingle()
+    if (error || !data) return ''
+    return renderCallForOffer(data)
+  } catch (err) {
+    console.error('[generate-offer-narrative] call-context fetch failed (non-fatal):', err instanceof Error ? err.message : err)
+    return ''
+  }
+}
 
 // ── System prompt ──
 
@@ -13,27 +41,29 @@ function buildSystemPrompt(language: 'en' | 'it'): string {
   // welcome blocks for monolingual clients (Mojo / Sanjin case). Generator
   // now produces only the matching intro and leaves the other empty.
   const introSpec = language === 'it'
-    ? `- "intro_it": A 2-4 sentence personalized introduction in NATURAL Italian (not machine-translated). Address the client by name. Reference their specific situation from the notes. Explain what this offer covers.
+    ? `- "intro_it": A rich, 4-6 sentence personalized introduction in NATURAL Italian (not machine-translated). Open by referencing what the client actually shared on their call — their business, their goal, a specific concern or opportunity they raised. Then explain what this offer is designed to do for them and why this approach fits their situation. Make it personal and specific to THIS client, never generic.
 - "intro_en": MUST be an empty string "". Do not produce English intro content.`
-    : `- "intro_en": A 2-4 sentence personalized introduction in English. Address the client by name. Reference their specific situation from the notes. Explain what this offer covers.
+    : `- "intro_en": A rich, 4-6 sentence personalized introduction in English. Open by referencing what the client actually shared on their call — their business, their goal, a specific concern or opportunity they raised. Then explain what this offer is designed to do for them and why this approach fits their situation. Make it personal and specific to THIS client, never generic.
 - "intro_it": MUST be an empty string "". Do not produce Italian intro content.`
 
   const otherSectionsLang = language === 'it' ? 'Italian' : 'English'
 
-  return `You are a senior business consultant writing client-facing offer content for Tony Durante LLC, a professional consulting firm based in Florida that helps international entrepreneurs set up and manage U.S. LLCs.
+  return `You are a senior business consultant at Tony Durante LLC, a professional consulting firm based in Florida that helps international entrepreneurs set up and manage U.S. LLCs.
+
+Your job is to write a rich, professional, client-facing offer narrative — NOT a terse summary. The client reads this before signing, so it should feel like a tailored strategy memo from a consultant who listened carefully to their call and understands their situation deeply.
 
 Your writing style is:
-- Professional but warm and approachable
-- Clear and concise — no filler or jargon
+- Professional but warm and approachable — a trusted advisor, not a salesperson
+- Specific: pull real details from the call/notes (business model, country, goals, concerns raised). Every sentence should be about THIS client, not a template
 - Confident and authoritative about the services
-- Tailored to the specific client situation based on the notes provided
+- No filler, no jargon
 
 You must produce ALL output as a single JSON object with exactly these keys:
 ${introSpec}
-- "strategy": An array of 3-5 strategic steps. Each: { "step_number": N, "title": "Short Title", "description": "1-2 sentence explanation" }. These describe the overall approach/plan for the client.
-- "next_steps": An array of 3-5 next steps after signing. Each: { "step_number": N, "title": "Short Title", "description": "1-2 sentence explanation" }. These describe what happens operationally after the client signs.
-- "future_developments": An array of 2-4 items. Each: { "text": "Description of a future opportunity" }. These are optional services or growth opportunities for later.
-- "immediate_actions": An array of 2-4 items. Each: { "title": "Action Name", "description": "What needs to happen and why" }. These are things to address right away.
+- "strategy": An array of 4-5 strategic steps. Each: { "step_number": N, "title": "Short Title", "description": "2-3 sentence explanation of WHY this step matters for this client specifically, grounded in their situation — not just what it is" }. These describe the overall approach/plan for the client.
+- "next_steps": An array of 4-5 next steps after signing. Each: { "step_number": N, "title": "Short Title", "description": "2-3 sentences: what happens, who does what, and what the client can expect" }. These describe what happens operationally after the client signs.
+- "future_developments": An array of 3-4 items. Each: { "text": "A concrete future opportunity specific to their business model or goals, 1-2 sentences" }. These are growth opportunities for later.
+- "immediate_actions": An array of 2-3 items. Each: { "title": "Action Name", "description": "2-3 sentences: what needs to happen right away and why it matters for this client" }. These are things to address right away.
 
 LANGUAGE RULES (CRITICAL):
 - The client's preferred language is ${otherSectionsLang}. Generate ALL content in ${otherSectionsLang} only.
@@ -51,8 +81,7 @@ Other rules:
 - The intro must reference the client's actual situation, not be generic.
 - Strategy and next_steps should reflect the specific services in the offer.
 - Do NOT include pricing or amounts — those are handled separately.
-- Do NOT include legal disclaimers — the contract handles those.
-- Keep each description under 2 sentences.`
+- Do NOT include legal disclaimers — the contract handles those.`
 }
 
 function buildUserPrompt(
@@ -86,7 +115,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { client_name, language, services, notes_context, contract_type } = body
+    const { client_name, language, services, notes_context, contract_type, lead_id, account_id } = body
 
     if (!client_name || !services || !Array.isArray(services) || services.length === 0) {
       return NextResponse.json(
@@ -97,11 +126,20 @@ export async function POST(req: NextRequest) {
 
     const lang: 'en' | 'it' = language === 'it' ? 'it' : 'en'
     const systemPrompt = buildSystemPrompt(lang)
+
+    // Enrich the context with the client's actual call (notes + full transcript)
+    // so the narrative is grounded in what they really said, not just the capped
+    // summary the dialog pasted in. Best-effort — empty when no call exists.
+    const callContext = await fetchCallContext(lead_id, account_id)
+    const combinedContext = [notes_context || '', callContext]
+      .filter((s) => s && s.trim())
+      .join('\n\n──────────\n\n')
+
     const userPrompt = buildUserPrompt(
       client_name,
       lang,
       services as string[],
-      notes_context || '',
+      combinedContext,
       contract_type || 'formation',
     )
 
@@ -116,7 +154,7 @@ export async function POST(req: NextRequest) {
       const ai = await callAI({
         systemPrompt,
         userPrompt,
-        maxTokens: 2048,
+        maxTokens: 4096,
         temperature: 0.7,
         model: 'sonnet',
       })

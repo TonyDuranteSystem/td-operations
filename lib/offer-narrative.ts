@@ -3,6 +3,54 @@
  * Shared between the generation API endpoint and unit tests.
  */
 
+/** One transcript turn as stored in call_summaries.transcript (shape varies). */
+export interface CallTranscriptTurn {
+  speaker?: string
+  name?: string
+  text?: string
+  content?: string
+}
+
+/** A call_summaries row, narrowed to the fields the offer generator uses. */
+export interface OfferCallContext {
+  meeting_name?: string | null
+  created_at?: string | null
+  notes?: string | null
+  transcript?: unknown
+}
+
+/**
+ * Render a call's notes + full transcript into a plain-text block to feed the
+ * offer-narrative AI as richer context. Pure + exported so it's unit-tested
+ * without a DB/AI call. Returns "" when there's nothing useful to add (so the
+ * caller can cleanly fall back to notes-only). The transcript is capped at
+ * `charCap` to protect the model's token budget — full intake calls can be huge,
+ * and the generator needs the gist of the client's situation, not every word.
+ */
+export function renderCallForOffer(call: OfferCallContext | null | undefined, charCap = 14000): string {
+  if (!call) return ''
+  const sections: string[] = []
+  if (call.notes && typeof call.notes === 'string' && call.notes.trim()) {
+    sections.push(`Call notes:\n${call.notes.trim()}`)
+  }
+  const transcript = Array.isArray(call.transcript) ? (call.transcript as CallTranscriptTurn[]) : null
+  if (transcript && transcript.length) {
+    const turns: string[] = []
+    for (const t of transcript) {
+      const speaker = (t.speaker || t.name || '?').toString().trim() || '?'
+      const text = (t.text || t.content || '').toString().trim()
+      if (!text) continue
+      turns.push(`[${speaker}]: ${text}`)
+    }
+    if (turns.length) sections.push(`Full call transcript (${turns.length} turns):\n${turns.join('\n')}`)
+  }
+  if (sections.length === 0) return ''
+  const header = call.meeting_name ? `Call: ${call.meeting_name}` : 'Client intake call'
+  let out = `${header}\n\n${sections.join('\n\n')}`
+  if (out.length > charCap) out = out.slice(0, charCap) + '\n…(transcript truncated)'
+  return out
+}
+
 export interface NarrativeResponse {
   intro_en: string
   intro_it: string
