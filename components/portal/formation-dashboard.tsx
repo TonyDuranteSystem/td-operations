@@ -99,8 +99,15 @@ export function FormationDashboard({
   // formation's stage.
   const needsClosure = !!closureData
 
-  // Status message for waiting states
-  const waitingForState = wizardSubmitted && !stateConfirmed
+  // Status message for waiting states. "Your LLC is being filed / we submitted
+  // your Articles" only applies once we've ACTUALLY filed with the state — the
+  // "Filed with State" SD stage. The old (wizardSubmitted && !stateConfirmed)
+  // check fired it prematurely at "Wizard Submitted", where we're still reviewing
+  // the LLC name (no Articles filed yet). Gate on the SD stage when known; fall
+  // back to the legacy heuristic only when no stage signal is available.
+  const waitingForState = sdStage
+    ? sdStage === 'Filed with State' && !stateConfirmed
+    : wizardSubmitted && !stateConfirmed
   const waitingForEIN = ss4Faxed && !einReceived
 
   function formatDate(d: string | null): string {
