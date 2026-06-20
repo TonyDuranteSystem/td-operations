@@ -34,7 +34,7 @@ export function SignatureSend({ serviceDeliveryId, label }: SignatureSendProps) 
   // Check whether a document has been uploaded yet (gates the button).
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/flows/${serviceDeliveryId}/documents`)
+    fetch(`/api/flows/${serviceDeliveryId}/documents`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: { documents?: FlowDoc[] }) => {
         if (!cancelled) setDocCount(Array.isArray(d.documents) ? d.documents.length : 0)

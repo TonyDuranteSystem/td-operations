@@ -142,6 +142,7 @@ export default async function PortalDashboardPage() {
           leaseData={ctx.lease}
           trackerSteps={trackerSteps}
           formationLeadId={selectedFormation.leadId}
+          sdStage={tracker?.currentStage ?? null}
         />
       )
     }
@@ -283,6 +284,7 @@ export default async function PortalDashboardPage() {
             leaseData={leaseRes.data}
             closureData={closureSd}
             trackerSteps={trackerSteps}
+            sdStage={tracker?.currentStage ?? null}
           />
         )
       }
@@ -304,6 +306,7 @@ export default async function PortalDashboardPage() {
           leaseData={ctx.lease}
           closureData={closureSd}
           trackerSteps={trackerSteps}
+          sdStage={tracker?.currentStage ?? null}
         />
       )
     }
@@ -441,6 +444,7 @@ export default async function PortalDashboardPage() {
         oaData={oaRes.data}
         leaseData={leaseRes.data}
         trackerSteps={trackerSteps}
+        sdStage={tracker?.currentStage ?? null}
       />
     )
   }

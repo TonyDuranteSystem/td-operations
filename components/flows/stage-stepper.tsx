@@ -2,13 +2,34 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { CheckCircle2, Circle, ChevronRight, Loader2 } from 'lucide-react'
+import {
+  CheckCircle2, Circle, ChevronRight, Loader2,
+  ClipboardCheck, CreditCard, FileCheck, FileSignature, Landmark, Send,
+  type LucideIcon,
+} from 'lucide-react'
 
 export interface StepperStage {
   stage_name: string
   stage_order: number
   icon?: string | null
   client_label?: string | null
+}
+
+/**
+ * pipeline_stages.icon holds EITHER an emoji (older flows: "📄", "✅", …) OR a
+ * Lucide component NAME (Company Formation v2: "CreditCard", "Landmark", …).
+ * Emojis render fine as text; the Lucide names must map to a component, else the
+ * raw string "CreditCard" shows in the stepper. Only the names actually used by
+ * formation are mapped — anything else falls through to the emoji/text branch.
+ */
+const STAGE_ICONS: Record<string, LucideIcon> = {
+  CheckCircle2,
+  ClipboardCheck,
+  CreditCard,
+  FileCheck,
+  FileSignature,
+  Landmark,
+  Send,
 }
 
 interface StageStepperProps {
@@ -106,6 +127,11 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageS
               >
                 {isBusy ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
+                ) : s.icon && STAGE_ICONS[s.icon] ? (
+                  (() => {
+                    const Ic = STAGE_ICONS[s.icon as string]
+                    return <Ic className="h-3 w-3" aria-hidden />
+                  })()
                 ) : s.icon ? (
                   <span aria-hidden>{s.icon}</span>
                 ) : isPast ? (

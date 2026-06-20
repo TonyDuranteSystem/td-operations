@@ -123,6 +123,26 @@ export async function POST(req: NextRequest) {
             .eq("id", sd.id)
 
           results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history` })
+
+          // Advance the formation pipeline on signing: "SS-4 Prepared" → "SS-4
+          // Signed". Previously the SD stayed at "SS-4 Prepared" after the client
+          // signed (staff had to advance manually). Idempotent — only advances
+          // from that exact stage, so a re-fired sign on an already-advanced SD is
+          // a no-op. formationSdId is already captured above for the doc linking.
+          if (sd.stage === "SS-4 Prepared") {
+            try {
+              const { advanceServiceDelivery } = await import("@/lib/service-delivery")
+              await advanceServiceDelivery({
+                delivery_id: sd.id,
+                target_stage: "SS-4 Signed",
+                actor: "ss4-sign",
+                notes: `Client signed SS-4 for ${ss4.company_name}`,
+              })
+              results.push({ step: "sd_advance", status: "ok", detail: "SS-4 Prepared → SS-4 Signed" })
+            } catch (e) {
+              results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+            }
+          }
         } else {
           results.push({ step: "sd_history", status: "skipped", detail: "No active Company Formation SD" })
         }
@@ -175,15 +195,18 @@ export async function POST(req: NextRequest) {
               results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
               // Auto-save to documents table — stamped with the formation SD so
-              // the signed SS-4 also shows in the flow workspace Documents section
-              // (which queries by service_delivery_id), not just the portal.
+              // the signed SS-4 shows in the flow workspace Documents section
+              // (which queries by service_delivery_id). portalVisible:false —
+              // the signed SS-4 is an INTERNAL tax document (responsible party's
+              // tax ID) and must NEVER be shared with the client per Antonio.
+              // The client opens a bank account with the EIN + Articles only.
               const saved = await autoSaveDocument({
                 accountId: ss4.account_id,
                 fileName,
                 documentType: "Form SS-4 (Signed)",
                 category: 1, // Company
                 driveFileId: driveResult.id,
-                portalVisible: true,
+                portalVisible: false,
                 serviceDeliveryId: formationSdId,
               })
               if (saved.id) signedDocLinked = true
@@ -237,7 +260,9 @@ export async function POST(req: NextRequest) {
               status: "classified",
               drive_file_id: `storage:signed-ss4/${path}`,
               drive_link: signed?.signedUrl ?? null,
-              portal_visible: true,
+              // INTERNAL only — the signed SS-4 must never reach the client
+              // portal (responsible party's tax ID). Staff-only in the workspace.
+              portal_visible: false,
               processed_at: new Date().toISOString(),
             })
             signedDocLinked = true

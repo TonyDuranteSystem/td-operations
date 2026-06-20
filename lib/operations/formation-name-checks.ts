@@ -90,7 +90,11 @@ async function resolveState(row: SdRow): Promise<string> {
  * Best-effort: the decision request is already created — a chat failure here must
  * NOT fail the staff action.
  */
-async function sendNameProposalChatMessage(row: SdRow, displayName: string, state: string): Promise<void> {
+async function sendNameProposalChatMessage(row: SdRow, displayName: string, state: string, senderId: string | null): Promise<void> {
+  // portal_messages.sender_id is NOT NULL — without a real sender the insert
+  // throws and the best-effort catch below silently drops the message (the bug
+  // that left the name-proposal chat note never posting). Skip rather than null.
+  if (!senderId) return
   try {
     let language: 'en' | 'it' = 'en'
     if (row.contact_id) {
@@ -116,7 +120,7 @@ async function sendNameProposalChatMessage(row: SdRow, displayName: string, stat
       service_delivery_id: row.id,
       topic,
       sender_type: 'admin',
-      sender_id: null,
+      sender_id: senderId,
       message,
     })
 
@@ -174,6 +178,9 @@ export async function handleNameAction(params: {
   action: NameAction
   nameIndex: number
   actor: string
+  /** Auth user UUID — used as portal_messages.sender_id for the flow chat note
+   *  (that column is NOT NULL, so without it the heads-up message is dropped). */
+  actorId?: string | null
 }): Promise<NameActionResult> {
   const row = await loadSd(params.sdId)
   if (!row) return { ok: false, error: 'Service delivery not found.' }
@@ -211,7 +218,7 @@ export async function handleNameAction(params: {
     entry.status = 'sent_to_client'
     entry.decision_request_id = created.id ?? null
     entry.updated_at = now
-    await sendNameProposalChatMessage(row, displayName, state)
+    await sendNameProposalChatMessage(row, displayName, state, params.actorId ?? null)
   } else if (params.action === 'mark_sos_rejected') {
     entry.status = 'rejected_by_sos'
     entry.updated_at = now

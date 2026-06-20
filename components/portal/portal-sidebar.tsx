@@ -25,6 +25,7 @@ import {
   PlusCircle,
   Mail,
   MapPin,
+  Landmark,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -136,6 +137,9 @@ const companyItems: NavItem[] = [
   { key: 'nav.addresses', href: '/portal/addresses', icon: MapPin },
   { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
+  // Bank Applications — self-service guidance to open a business bank account
+  // (replaces the old Banking Fintech wizard/SD). Active company clients only.
+  { key: 'nav.bankApplications', href: '/portal/banks', icon: Landmark },
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
@@ -323,6 +327,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       return isTierFeatureVisible(portalTier || null, 'services', accountType, portalRole)
     }
 
+    // Bank Applications — only once the company is fully formed (EIN received →
+    // active tier). A formation-tier client (EIN pending) can't open an account
+    // yet, so the entry stays hidden until then.
+    if (item.key === 'nav.bankApplications') {
+      return (portalTier || 'lead') === 'active'
+    }
+
     if (item.key === 'nav.referrals') {
       return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
     }
@@ -382,12 +393,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     // for onboarding but was invisible to banking clients searching for "bank applications".
     let navLabel = t(item.key)
     if (item.key === 'nav.wizard') {
-      const isBankingContext = portalTier !== 'formation' && portalTier !== 'onboarding'
-      if (isBankingContext) {
-        navLabel = locale === 'it' ? 'Apertura Conto Bancario' : 'Bank Applications'
-      } else {
-        navLabel = locale === 'it' ? 'Completa Registrazione' : 'Complete Setup'
-      }
+      // The wizard is the formation/onboarding data-collection step. Banking is
+      // no longer a wizard — it's the dedicated /portal/banks "Bank Applications"
+      // item below — so this label is always "Complete Setup".
+      navLabel = locale === 'it' ? 'Completa Registrazione' : 'Complete Setup'
+    }
+    if (item.key === 'nav.bankApplications') {
+      navLabel = locale === 'it' ? 'Apertura Conto Bancario' : 'Bank Applications'
     }
 
     return (

@@ -124,9 +124,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const company = account.company_name || 'your company'
     const message =
       language === 'it'
-        ? `Ottime notizie! Il tuo EIN (Employer Identification Number) è stato emesso: ${ein}. La tua azienda ${company} è ora completamente costituita. Prossimo passo: aprire il conto bancario aziendale.`
-        : `Great news! Your EIN (Employer Identification Number) has been issued: ${ein}. Your company ${company} is now fully formed. Next step: set up your business bank account.`
-    const title = language === 'it' ? 'EIN emesso — costituzione completata!' : 'EIN issued — formation complete!'
+        ? `Ottime notizie — l'IRS ha emesso il tuo EIN: ${ein}. ${company} è ora completamente costituita e attiva! 🎉
+
+Alcuni passaggi importanti:
+
+1) Conserva al sicuro i documenti della tua azienda. Il tuo Atto Costitutivo (Articles of Organization) e la lettera EIN (CP 575) sono nel portale, nella sezione Documenti. Scaricali e conservali in un luogo sicuro — ti serviranno per aprire il conto bancario, firmare contratti e presentare le tasse.
+
+2) Non condividere mai il modulo SS-4 firmato con nessuno. È un documento fiscale interno e NON serve per aprire il conto bancario né per gestire la tua attività. Per aprire un conto bancario aziendale ti bastano l'EIN e l'Atto Costitutivo.
+
+3) Apri il tuo conto bancario aziendale. Vai su "Apertura Conto Bancario" nella barra laterale del portale per iniziare. Con l'EIN e l'Atto Costitutivo puoi fare domanda presso: Relay, Mercury, Sokin, Payset o Wise. Puoi candidarti anche a più di una banca. Per Wise, vai direttamente su wise.com e fai domanda lì.
+
+4) Descrivi chiaramente la tua attività quando fai domanda. Le banche chiedono cosa fa la tua azienda — fornisci una descrizione precisa e accurata: cosa vendi, a chi e come vieni pagato. Risposte vaghe come "consulenza" o "business online" rallentano l'approvazione o causano rifiuti.
+
+5) Durante ogni fase di questo processo, consultaci in chat se hai bisogno di aiuto. Se non sei sicuro di qualcosa, non procedere — contattaci prima. Questo è un passaggio importante, quindi abbi pazienza se non rispondiamo subito. Facci sapere quando intendi fare domanda così possiamo trovare un momento che vada bene per entrambi.
+
+Non sai quale banca fa per te? Scrivici quando vuoi qui nel portale.`
+        : `Great news — the IRS has issued your EIN: ${ein}. ${company} is now fully formed and active! 🎉
+
+A few important next steps:
+
+1) Keep your company documents safe. Your Articles of Organization and EIN letter (CP 575) are in your portal under Documents. Download and store them somewhere secure — you'll use them to open a bank account, sign contracts, and file taxes.
+
+2) Never share your signed SS-4 form with anyone. It's an internal tax document and is NOT needed to open a bank account or run your business. To open a business bank account you only need your EIN and your Articles of Organization.
+
+3) Open your business bank account. Go to Bank Applications in your portal sidebar to start. With your EIN and Articles of Organization you can apply at: Relay, Mercury, Sokin, Payset, or Wise. You can apply to more than one. For Wise, go directly to wise.com and apply there.
+
+4) Describe your business clearly when you apply. Banks ask what your company does — give a specific, accurate description: what you sell, to whom, and how you get paid. Vague answers like 'consulting' or 'online business' slow approval or cause rejections.
+
+5) During any step of this process, consult us in the chat if you need help. If you're not sure about something, don't continue — contact us first. This is an important step, so be patient if we don't reply right away. Let us know when you're going to apply so we can find a time that works for both of us.
+
+Not sure which bank fits you best? Message us anytime here in the portal.`
+    const title = language === 'it' ? 'EIN emesso — la tua azienda è costituita!' : 'EIN issued — your company is fully formed!'
 
     // ── Portal notification (push + digest email) ──
     createPortalNotification({

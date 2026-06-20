@@ -31,7 +31,7 @@ export function EinEntry({ serviceDeliveryId, accountId }: EinEntryProps) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/save-ein`)
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/save-ein`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (res.ok && data.success && data.ein_number) setSavedEin(data.ein_number)
     } finally {

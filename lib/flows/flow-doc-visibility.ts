@@ -20,6 +20,22 @@
 
 /** Per service_type, the flow_stage values whose documents are client-facing. */
 export const CLIENT_SAFE_FLOW_DOC_STAGES: Record<string, ReadonlySet<string>> = {
+  'Company Formation': new Set([
+    // Articles of Organization — uploaded on "Filed with State" (the upload then
+    // auto-advances to "Articles Received", but flow_stage records the
+    // pre-advance stage). The client's foundational company document.
+    'Filed with State',
+    'Articles Received',
+    // EIN Letter (CP 575) — uploaded on the final "EIN Received" stage.
+    'EIN Received',
+    // NOTE: the signed SS-4 (flow_stage="Signed") is intentionally NOT listed.
+    // Per Antonio it is an INTERNAL tax document that must NEVER be shared with
+    // the client (it carries the responsible party's tax ID and is not needed to
+    // open a bank account — the EIN + Articles of Organization suffice). The SS-4
+    // sign handler writes it portal_visible=false so it stays staff-only in the
+    // workspace document viewer (which is service_delivery_id-scoped, not
+    // portal_visible-gated) and never surfaces on the client portal.
+  ]),
   'State Annual Report': new Set([
     'Due Date', // the filed annual report
     'Filed',

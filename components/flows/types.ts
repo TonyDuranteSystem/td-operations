@@ -20,6 +20,9 @@ export interface WorkspaceServiceDelivery {
   contact_name?: string | null
   /** Resolved client label for the current stage, if any. */
   current_client_label?: string | null
+  /** Company Formation only — the name_checks entry with status 'filed', if any.
+   *  Drives the SOS external_link "already filed" state on "Filed with State". */
+  formation_filed_name?: string | null
   /** Client-submitted shipping info (ITIN signed-package tracking). Null until
    *  the client fills it in on the portal Client Signing stage. */
   shipping_courier?: string | null
@@ -54,4 +57,12 @@ export interface WorkspaceAccount {
   annual_report_due_date: string | null
   /** Next registered-agent renewal date. Surfaced on the Closed stage summary. */
   ra_renewal_date: string | null
+  /** Federal EIN once assigned (accounts.ein_number). Null until "EIN Received".
+   *  Surfaced in the Overview so staff see the number right after entering it. */
+  ein_number?: string | null
+  /** Registered Agent address (free text). Shown in the Overview when set. */
+  registered_agent_address?: string | null
+  /** Business mailing address — resolved from the addresses FK, falling back to
+   *  the account's physical_address. Shown in the Overview when set. */
+  mailing_address?: string | null
 }

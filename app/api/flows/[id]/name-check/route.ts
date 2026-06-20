@@ -54,7 +54,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     || (auth.user.email as string | undefined)
     || 'staff'
 
-  const result = await handleNameAction({ sdId: params.id, action, nameIndex, actor: who })
+  const result = await handleNameAction({ sdId: params.id, action, nameIndex, actor: who, actorId: auth.user.id })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, name_checks: result.name_checks })
 }

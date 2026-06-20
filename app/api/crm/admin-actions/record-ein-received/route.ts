@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 import { normalizeEIN } from '@/lib/jobs/validation'
-import { advanceStage, createSD } from '@/lib/operations/service-delivery'
+import { advanceStage } from '@/lib/operations/service-delivery'
 import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { enqueueJob } from '@/lib/jobs/queue'
@@ -83,35 +83,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Failed to save EIN: ${einWriteResult.error}` }, { status: 500 })
     }
 
-    // 2b. Create Banking Fintech SD (deferred from payment per SOP v7.2 Phase 0)
-    // Guard: skip if one already exists (idempotent — old clients may have it from before the formation SD filter fix)
-    let bankingSdId: string | null = null
-    const { data: existingBankingSd } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('id')
-      .eq('account_id', account_id)
-      .eq('service_type', 'Banking Fintech')
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle()
-
-    if (!existingBankingSd) {
-      try {
-        const bankingSd = await createSD({
-          service_type: 'Banking Fintech',
-          service_name: `Banking Fintech - ${account.company_name}`,
-          account_id,
-          contact_id: formationSD.contact_id || null,
-          notes: `Auto-created on EIN received for ${account.company_name} (${normalizedEIN})`,
-        })
-        bankingSdId = bankingSd.id
-      } catch (e) {
-        console.error('[record-ein-received] Banking Fintech SD creation failed:', e)
-        // Non-fatal — EIN recording continues
-      }
-    } else {
-      bankingSdId = existingBankingSd.id
-    }
+    // 2b. Banking Fintech SD is intentionally NOT created anymore. Per Antonio
+    // (2026-06-20): formation finishes at the EIN. Banking is self-service — the
+    // client opens an account with their EIN + Articles of Organization at a
+    // fintech of choice (Relay / Mercury / Sokin / Payset / Wise), surfaced as
+    // bank applications in the portal, not tracked as a service delivery. The
+    // response still carries banking_sd_id (always null) for compatibility.
+    const bankingSdId: string | null = null
 
     // 3. Advance Company Formation SD to "EIN Received" (final stage of the
     // 7-stage v2 pipeline; replaced the removed "Post-Formation + Banking").

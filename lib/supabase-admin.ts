@@ -39,7 +39,20 @@ export const supabaseAdmin = new Proxy({} as SupabaseClient<Database>, {
       }
       _supabaseAdmin = createClient<Database>(
         supabaseUrl,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        {
+          global: {
+            // Force every PostgREST/Storage request through an uncached fetch.
+            // Next.js patches global fetch and, in PRODUCTION (Vercel), caches GET
+            // responses in its Data Cache — so server-side reads (e.g. the flow
+            // document list) could be served STALE even though the route is
+            // `force-dynamic`. This manifested as "documents not showing" on
+            // sandbox while working in local dev (dev does not use the Data Cache).
+            // A service-role admin client must NEVER read stale data.
+            fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+              fetch(input, { ...init, cache: 'no-store' }),
+          },
+        },
       )
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -717,6 +717,37 @@ export async function materializeFormationCompany(
       detail: `${updatedSds?.length ?? 0} SD(s) linked to account`,
     })
 
+    // 10a. Backfill account_id on flow-stamped documents. The workspace "Filed
+    // with State" stage uploads the Articles of Organization BEFORE the company
+    // is materialized, so the documents row is stamped with the formation SD but
+    // account_id=NULL (the SD had no account yet). Once the account exists, link
+    // every such doc to it so it surfaces on the portal Documents page (which is
+    // account-scoped). Unlike step 10c below, this matches by service_delivery_id
+    // — flow uploads don't set document_type_name='Articles of Organization'.
+    const linkedSdIds = (updatedSds ?? []).map(s => s.id as string)
+    if (linkedSdIds.length > 0) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+        const { data: backfilled } = await (supabaseAdmin as any)
+          .from("documents")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .in("service_delivery_id", linkedSdIds)
+          .is("account_id", null)
+          .select("id")
+        steps.push({
+          step: "flow_docs_account_backfill",
+          status: "ok",
+          detail: `${backfilled?.length ?? 0} flow document(s) linked to account`,
+        })
+      } catch (backfillErr) {
+        steps.push({
+          step: "flow_docs_account_backfill",
+          status: "error",
+          detail: backfillErr instanceof Error ? backfillErr.message : String(backfillErr),
+        })
+      }
+    }
+
     // 10b. Self-heal: if we got here via wizard_progress fallback (no
     // formation_submissions row existed), write the canonical row now so
     // future audits, re-runs, and any code that queries formation_submissions

@@ -50,7 +50,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
     setError(null)
     setAuthError(false)
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`)
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`, { cache: 'no-store' })
       // Session lapse: middleware 307-redirects unauthenticated /api/flows
       // requests to the login page (HTML). Detect that (or a 401/403) and show
       // a clear "session" message — the names are NOT lost, they're in the DB.
