@@ -38,7 +38,7 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/flows/${serviceDeliveryId}/submission`)
+        const res = await fetch(`/api/flows/${serviceDeliveryId}/submission`, { cache: 'no-store' })
         const data = await res.json().catch(() => ({}))
         if (!res.ok || !data.success) {
           throw new Error(data.error || 'Could not load the submitted data.')

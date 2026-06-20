@@ -34,7 +34,10 @@ export function DocumentViewer({ serviceDeliveryId, label }: DocumentViewerProps
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/documents`)
+      // cache:'no-store' is REQUIRED — the browser otherwise serves a stale
+      // cached response, so newly-uploaded/relinked documents never appear (and
+      // old ones linger). This was the "documents not showing" bug.
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/documents`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not load documents.')

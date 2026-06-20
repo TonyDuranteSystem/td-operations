@@ -123,6 +123,26 @@ export async function POST(req: NextRequest) {
             .eq("id", sd.id)
 
           results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history` })
+
+          // Advance the formation pipeline on signing: "SS-4 Prepared" → "SS-4
+          // Signed". Previously the SD stayed at "SS-4 Prepared" after the client
+          // signed (staff had to advance manually). Idempotent — only advances
+          // from that exact stage, so a re-fired sign on an already-advanced SD is
+          // a no-op. formationSdId is already captured above for the doc linking.
+          if (sd.stage === "SS-4 Prepared") {
+            try {
+              const { advanceServiceDelivery } = await import("@/lib/service-delivery")
+              await advanceServiceDelivery({
+                delivery_id: sd.id,
+                target_stage: "SS-4 Signed",
+                actor: "ss4-sign",
+                notes: `Client signed SS-4 for ${ss4.company_name}`,
+              })
+              results.push({ step: "sd_advance", status: "ok", detail: "SS-4 Prepared → SS-4 Signed" })
+            } catch (e) {
+              results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+            }
+          }
         } else {
           results.push({ step: "sd_history", status: "skipped", detail: "No active Company Formation SD" })
         }

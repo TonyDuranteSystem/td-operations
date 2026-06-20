@@ -27,7 +27,7 @@ export function SignatureStatus({ serviceDeliveryId, label }: SignatureStatusPro
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/flows/${serviceDeliveryId}/signature`)
+    fetch(`/api/flows/${serviceDeliveryId}/signature`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: { request?: SigRequest | null }) => {
         if (!cancelled) setReq(d.request ?? null)

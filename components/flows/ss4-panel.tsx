@@ -37,7 +37,7 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/generate-ss4`)
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/generate-ss4`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (res.ok && data.success) setSs4(data.ss4 ?? null)
     } finally {
