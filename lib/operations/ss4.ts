@@ -376,7 +376,12 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
           // or prod) rather than a fixed APP_BASE_URL that could point at prod.
           drive_file_id: `ss4-live:${ss4.token}`,
           drive_link: `/api/ss4/${ss4.token}/pdf?code=${ss4.access_code}`,
-          portal_visible: true,
+          // INTERNAL ONLY — the SS-4 (signed or unsigned) carries the responsible
+          // party's tax ID and must NEVER reach the client portal (Antonio's rule).
+          // The client signs via the Sign-Documents flow (driven by
+          // ss4_applications.status), NOT this documents row. Staff still see it in
+          // the workspace viewer (service_delivery_id-scoped, not portal-gated).
+          portal_visible: false,
           processed_at: new Date().toISOString(),
         })
       }
