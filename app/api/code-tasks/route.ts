@@ -28,14 +28,19 @@ export async function GET() {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tasks = (data ?? []).map((r: any) => ({
-    id: r.id,
-    title: r.context_json?.title ?? r.subject ?? "Code task",
-    status: r.status,
-    code_branch: r.context_json?.code_branch ?? null,
-    is_promote: !!r.context_json?.promote_branch,
-    created_at: r.created_at,
-    updated_at: r.updated_at,
-  }))
+  const tasks = (data ?? [])
+    // Hide tasks the admin dismissed from the CRM (cosmetic — the row is kept).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .filter((r: any) => !r.context_json?.dismissed)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((r: any) => ({
+      id: r.id,
+      title: r.context_json?.title ?? r.subject ?? "Code task",
+      status: r.status,
+      code_branch: r.context_json?.code_branch ?? null,
+      is_promote: !!r.context_json?.promote_branch,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }))
   return NextResponse.json({ tasks })
 }
