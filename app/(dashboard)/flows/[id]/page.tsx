@@ -105,11 +105,13 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     formationState = typeof s === 'string' && s.trim() ? s.trim() : null
   }
 
-  // Contact-scoped flows (in-flight Company Formation, ITIN) have no account yet,
-  // so there is no company_name. Load the client's name to surface as a separate
-  // "Contact" row in the Overview (COMPANY stays "—" — it is not the company).
+  // Load the client's name for ANY contact-linked SD to surface as a separate
+  // "Contact" row in the Overview (COMPANY is left untouched — it's the company,
+  // not the contact). Contact-scoped flows (in-flight Company Formation, ITIN)
+  // have no account/company_name; account-scoped SDs that also carry a contact_id
+  // now show both rows. The info panel renders the row only when contact_name is set.
   let contactName: string | null = null
-  if (!sd.account_id && sd.contact_id) {
+  if (sd.contact_id) {
     const { data: contact } = await supabaseAdmin
       .from('contacts')
       .select('full_name')
