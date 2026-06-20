@@ -105,9 +105,22 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     formationState = typeof s === 'string' && s.trim() ? s.trim() : null
   }
 
+  // Contact-scoped flows (in-flight Company Formation, ITIN) have no account yet,
+  // so there is no company_name. Fall back to the client's name so the workspace
+  // header + Overview "Company" row identify the client instead of showing "—".
+  let contactName: string | null = null
+  if (!sd.account_id && sd.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name')
+      .eq('id', sd.contact_id)
+      .maybeSingle()
+    contactName = (contact?.full_name as string | null) ?? null
+  }
+
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
-    company_name: (accountRow?.company_name as string | null) ?? null,
+    company_name: (accountRow?.company_name as string | null) ?? contactName,
     state_of_formation: (accountRow?.state_of_formation as string | null) ?? formationState,
     annual_report_due_date: (accountRow?.annual_report_due_date as string | null) ?? null,
     ra_renewal_date: (accountRow?.ra_renewal_date as string | null) ?? null,

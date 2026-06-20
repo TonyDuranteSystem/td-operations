@@ -13,6 +13,8 @@ import {
   type NameCheckStatus,
 } from '@/lib/flows/name-checks'
 import { createDecisionRequest } from '@/lib/operations/decision-request'
+import { buildFlowTopic, deriveFlowYear } from '@/lib/flows/resolve-flows'
+import { notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import type { DecisionRequest } from '@/lib/decisions'
 
 // name_checks is not in the generated DB types yet.
@@ -31,13 +33,18 @@ interface SdRow {
   contact_id: string | null
   account_id: string | null
   name_checks: NameCheck[] | null
+  service_type: string | null
+  due_date: string | null
+  stage_entered_at: string | null
+  created_at: string | null
 }
 
 async function loadSd(sdId: string): Promise<SdRow | null> {
   // NOTE: state_of_formation lives on `accounts`, NOT service_deliveries —
   // selecting it here errors the whole query (and silently empties name_checks).
+  // service_type + the date columns feed the flow-chat topic/year (send_to_client).
   const { data } = await sd()
-    .select('id, contact_id, account_id, name_checks')
+    .select('id, contact_id, account_id, name_checks, service_type, due_date, stage_entered_at, created_at')
     .eq('id', sdId)
     .maybeSingle()
   return (data as SdRow | null) ?? null
@@ -74,6 +81,54 @@ async function resolveState(row: SdRow): Promise<string> {
     if (typeof s === 'string' && s.trim()) return s.trim()
   }
   return 'New Mexico'
+}
+
+/**
+ * Post a heads-up message to the flow chat when a name is sent to the client for
+ * approval, so the client sees it in their portal chat alongside the decision
+ * request. Mirrors the EIN-save flow-chat pattern (app/api/flows/[id]/save-ein).
+ * Best-effort: the decision request is already created — a chat failure here must
+ * NOT fail the staff action.
+ */
+async function sendNameProposalChatMessage(row: SdRow, displayName: string, state: string): Promise<void> {
+  try {
+    let language: 'en' | 'it' = 'en'
+    if (row.contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('language')
+        .eq('id', row.contact_id)
+        .maybeSingle()
+      if (contact?.language === 'it') language = 'it'
+    }
+
+    const message =
+      language === 'it'
+        ? `Abbiamo verificato i nomi della tua LLC e ${displayName} è disponibile in ${state}. Ti abbiamo inviato una richiesta di conferma — controlla il tuo portale.`
+        : `We checked your LLC names and ${displayName} is available in ${state}. We've sent you a request to confirm — please check your portal.`
+
+    const topic = buildFlowTopic(row.service_type, deriveFlowYear(row)) || null
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+    await (supabaseAdmin as any).from('portal_messages').insert({
+      account_id: row.account_id,
+      contact_id: row.contact_id,
+      service_delivery_id: row.id,
+      topic,
+      sender_type: 'admin',
+      sender_id: null,
+      message,
+    })
+
+    notifyClientOfAdminMessage({
+      account_id: row.account_id,
+      contact_id: row.contact_id,
+      topic,
+      messagePreview: message,
+    }).catch(() => {})
+  } catch {
+    /* best-effort — the decision request is already created + the name marked sent */
+  }
 }
 
 /**
@@ -156,6 +211,7 @@ export async function handleNameAction(params: {
     entry.status = 'sent_to_client'
     entry.decision_request_id = created.id ?? null
     entry.updated_at = now
+    await sendNameProposalChatMessage(row, displayName, state)
   } else if (params.action === 'mark_sos_rejected') {
     entry.status = 'rejected_by_sos'
     entry.updated_at = now
