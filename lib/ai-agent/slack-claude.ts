@@ -446,6 +446,26 @@ export function parseSlackInteractionFull(rawBody: string): SlackInteractionFull
 }
 
 /**
+ * Clean Slack mrkdwn into readable plain text for the CRM panel: resolve <@USER>
+ * mentions to names, unwrap <url|label> links, strip :emoji: shortcodes, and remove
+ * *bold* / _italic_ / ~strike~ / `code` wrappers.
+ */
+export function cleanSlackText(text: string): string {
+  let t = text ?? ""
+  t = t.replace(/<@([A-Z0-9]+)>/g, (_m, id) => {
+    if (id === "U0B9S675WTT") return "Claude"
+    if (id === "U0BAALR4Y4Q") return "Antonio"
+    if (id === SLACK_USER_LUCA) return "Luca"
+    return "@member"
+  })
+  t = t.replace(/<#[A-Z0-9]+\|([^>]+)>/g, "#$1").replace(/<#[A-Z0-9]+>/g, "")
+  t = t.replace(/<((?:https?:)?[^|>]+)\|([^>]+)>/g, "$2").replace(/<((?:https?:)?[^>]+)>/g, "$1")
+  t = t.replace(/:[a-z0-9_'+-]+:/g, "")
+  t = t.replace(/[*~`]/g, "")
+  return t.replace(/[ \t]+/g, " ").trim()
+}
+
+/**
  * Fetch a Slack thread's messages for display in the CRM (the collapsible
  * client-conversation panel). Returns author + text + ts per message, oldest first.
  * Best-effort: returns [] on any error (missing token, bot not in channel, deleted).
@@ -475,7 +495,7 @@ export async function fetchSlackThreadMessages(
     if (!data.ok || !Array.isArray(data.messages)) return []
     return data.messages.map((m) => ({
       author: label(m),
-      text: typeof m.text === "string" ? m.text : "",
+      text: cleanSlackText(typeof m.text === "string" ? m.text : ""),
       ts: typeof m.ts === "string" ? m.ts : "",
     }))
   } catch (err) {

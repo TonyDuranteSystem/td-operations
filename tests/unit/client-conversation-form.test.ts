@@ -15,6 +15,7 @@ import {
   parseSlackInteractionFull,
   buildClientConversationModalView,
   buildClientConversationButtonBlocks,
+  cleanSlackText,
   slugifyTopic,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
@@ -121,6 +122,22 @@ describe("buildClientConversationModalView", () => {
     expect(newTopic.optional).toBe(true)
     expect(newTopic.element.type).toBe("plain_text_input")
     expect(newTopic.element.action_id).toBe(NEW_TOPIC_ACTION_ID)
+  })
+})
+
+describe("cleanSlackText", () => {
+  it("resolves mentions, strips emoji shortcodes and mrkdwn wrappers", () => {
+    const raw = ":card_index_dividers: *Alessandro Gritti* · *billing* — started by <@U0BAALR4Y4Q>."
+    const out = cleanSlackText(raw)
+    expect(out).toContain("Alessandro Gritti")
+    expect(out).toContain("billing")
+    expect(out).toContain("Antonio")
+    expect(out).not.toContain(":card_index_dividers:")
+    expect(out).not.toContain("*")
+    expect(out).not.toContain("<@")
+  })
+  it("unwraps <url|label> links to the label", () => {
+    expect(cleanSlackText("see <https://x.com|the doc>")).toBe("see the doc")
   })
 })
 

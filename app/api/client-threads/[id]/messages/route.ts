@@ -32,9 +32,22 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
+  // Backfilled CRM-log rows: source_ref is a conversations row id — return its
+  // stored message/response so the historical entry is readable here too.
+  if (row.source === "crm_log" && typeof row.source_ref === "string") {
+    const { data: conv } = await db
+      .from("conversations")
+      .select("client_message, response_sent, handled_by, channel, created_at")
+      .eq("id", row.source_ref)
+      .maybeSingle()
+    const messages: Array<{ author: string; text: string; ts: string }> = []
+    if (conv?.client_message) messages.push({ author: "Client", text: conv.client_message, ts: "" })
+    if (conv?.response_sent) messages.push({ author: conv.handled_by || "Team", text: conv.response_sent, ts: "" })
+    return NextResponse.json({ messages, channel: conv?.channel ?? null })
+  }
+
   if (row.source !== "slack" || typeof row.source_ref !== "string" || !row.source_ref.includes(":")) {
-    // Non-Slack source (e.g. backfilled crm_log) has no live thread to fetch.
-    return NextResponse.json({ messages: [], note: "No Slack thread for this conversation." })
+    return NextResponse.json({ messages: [], note: "No content for this conversation." })
   }
 
   const [channelId, threadTs] = row.source_ref.split(":")
