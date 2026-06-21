@@ -72,6 +72,13 @@ export interface WorkflowSnapshot {
     /** Slice 10: staff inbox override; default "support@tonydurante.us"; empty string = skip email. */
     notify_email_to?: string
   }
+  /**
+   * When true, the TaskCard renders as a read-only pointer to the SD's
+   * `/flows/[delivery_id]` workspace (current stage + "Open in Workspace" link)
+   * instead of inline action buttons — the workspace is the single control
+   * surface. Such a workflow may carry an empty `actions` array.
+   */
+  workspace_pointer?: boolean
   actions: WorkflowActionDefinition[]
 }
 

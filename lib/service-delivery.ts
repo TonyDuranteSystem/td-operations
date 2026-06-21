@@ -179,6 +179,52 @@ export async function advanceServiceDelivery(
     "service_deliveries.update"
   )
 
+  const autoTriggers: string[] = []
+
+  // 6b. Sync the formation_progress workflow task's task_meta with the new SD
+  // stage. The workspace advances the SD through THIS function, a different path
+  // from the workflow engine's chain.advance_sd_stage handler (which already
+  // patches task_meta) — so without this the task card showed a stale stage.
+  // The formation_progress card is now a read-only pointer to the workspace, so
+  // this only keeps its displayed stage honest. Best-effort: never fail the
+  // advance. Scoped to Company Formation (the only service_type with a
+  // formation_progress workflow).
+  if (delivery.service_type === "Company Formation") {
+    try {
+      const { mergeSdStageIntoTaskMeta } = await import("@/lib/tasks/sd-stage-sync")
+      const { data: wfTasks } = await supabaseAdmin
+        .from("tasks")
+        .select("id, task_meta")
+        .eq("workflow_slug", "formation_progress")
+        .or(`delivery_id.eq.${delivery_id},task_meta->>service_delivery_id.eq.${delivery_id}`)
+      for (const t of wfTasks ?? []) {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+          supabaseAdmin
+            .from("tasks")
+            .update({
+              task_meta: mergeSdStageIntoTaskMeta(
+                t.task_meta as Record<string, unknown> | null,
+                targetStage.stage_name,
+              ) as never,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", t.id),
+          "tasks.update",
+        )
+      }
+      if (wfTasks?.length) {
+        autoTriggers.push(
+          `Synced ${wfTasks.length} formation_progress task(s) → sd_stage="${targetStage.stage_name}"`,
+        )
+      }
+    } catch (syncErr) {
+      autoTriggers.push(
+        `Workflow task stage sync failed: ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`,
+      )
+    }
+  }
+
   // 7. Create auto-tasks (unless skipped)
   const createdTasks: string[] = []
   const failedTasks: { title: string; error: string }[] = []
@@ -212,8 +258,6 @@ export async function advanceServiceDelivery(
       }
     }
   }
-
-  const autoTriggers: string[] = []
 
   // 8. Portal notification for client. Accept either account-scoped SDs or
   // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
