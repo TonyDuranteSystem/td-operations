@@ -31,6 +31,7 @@ import { DeactivateServiceButton, ReactivateServiceButton } from './service-stat
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
+import { AccountDocumentsList } from './account-documents-list'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
@@ -883,7 +884,13 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <TaxTab taxReturns={taxReturns} today={today} />
       )}
       {activeTab === 'documents' && (
-        <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
+        <div className="space-y-4">
+          {/* Source-of-truth list of ALL documents linked to the account —
+              includes Storage-backed formation uploads the Drive-only
+              FileManager can't render. */}
+          <AccountDocumentsList documents={documents} />
+          <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
+        </div>
       )}
       {activeTab === 'correspondence' && (
         <div className="p-4">
