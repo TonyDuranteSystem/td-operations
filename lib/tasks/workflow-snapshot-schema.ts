@@ -117,7 +117,22 @@ export const WorkflowSnapshotSchema = z.object({
       notify_email_to: z.string().optional(),
     })
     .optional(),
-  actions: z.array(WorkflowActionDefinitionSchema).min(1),
+  // When `workspace_pointer` is true, the TaskCard renders as a read-only
+  // pointer to the SD's `/flows/[delivery_id]` workspace (current stage + an
+  // "Open in Workspace" link) and shows NO inline action buttons — the
+  // workspace is the single control surface (formation_progress, 2026-06-20).
+  // Such workflows may legitimately carry an empty `actions` array; every other
+  // workflow still requires ≥1 action (enforced by the refine below).
+  workspace_pointer: z.boolean().optional(),
+  actions: z.array(WorkflowActionDefinitionSchema),
+}).superRefine((snap, ctx) => {
+  if (!snap.workspace_pointer && snap.actions.length < 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["actions"],
+      message: "actions must contain at least 1 action unless workspace_pointer is true",
+    })
+  }
 })
 
 /** Parse + validate a snapshot value from JSONB. Throws on failure. */

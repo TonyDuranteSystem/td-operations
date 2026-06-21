@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Clock, MoreHorizontal } from 'lucide-react'
+import { ChevronDown, Clock, MoreHorizontal, ExternalLink } from 'lucide-react'
 import { ChatWithClientButton } from '@/components/tasks/task-card'
 import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
@@ -91,9 +91,22 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
       ? ((task.task_meta as Record<string, unknown>).sd_stage as string | undefined)
       : undefined
 
+  // Workspace-pointer workflows (e.g. formation_progress) render NO inline
+  // action buttons — the SD's /flows/[delivery_id] workspace is the single
+  // control surface. The card just shows the current stage + a link to it.
+  const workspacePointer = snapshot.workspace_pointer === true
+  const pointerDeliveryId =
+    task.delivery_id ??
+    (task.task_meta && typeof task.task_meta === 'object'
+      ? ((task.task_meta as Record<string, unknown>).service_delivery_id as string | undefined)
+      : undefined)
+
   const visibleActions = useMemo(
-    () => filterActionsByStage(filterActionsByRole(snapshot.actions, role), currentSdStage),
-    [snapshot.actions, role, currentSdStage],
+    () =>
+      workspacePointer
+        ? []
+        : filterActionsByStage(filterActionsByRole(snapshot.actions, role), currentSdStage),
+    [workspacePointer, snapshot.actions, role, currentSdStage],
   )
   const { primary, rest } = useMemo(() => splitPrimary(visibleActions), [visibleActions])
 
@@ -225,6 +238,17 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
 
         <div className="flex items-center gap-1">
           <ChatWithClientButton accountId={task.account_id} contactId={task.contact_id} />
+          {/* Workspace-pointer mode: a single link to the SD workspace (the
+              control surface). No inline advance buttons. */}
+          {workspacePointer && pointerDeliveryId && (
+            <a
+              href={`/flows/${pointerDeliveryId}`}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Open in Workspace
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
           {primary && (
             <button
               type="button"
