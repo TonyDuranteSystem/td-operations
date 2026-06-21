@@ -15,10 +15,13 @@ import {
   parseSlackInteractionFull,
   buildClientConversationModalView,
   buildClientConversationButtonBlocks,
+  slugifyTopic,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
   CLIENT_SELECT_ACTION_ID,
   TOPIC_SELECT_ACTION_ID,
+  NEW_TOPIC_BLOCK_ID,
+  NEW_TOPIC_ACTION_ID,
 } from "@/lib/ai-agent/slack-claude"
 
 function body(payload: unknown): string {
@@ -102,6 +105,25 @@ describe("buildClientConversationModalView", () => {
     expect(client.element.action_id).toBe(CLIENT_SELECT_ACTION_ID)
     expect(topic.element.type).toBe("static_select")
     expect(topic.element.options.map((o: { value: string }) => o.value)).toEqual(["banking", "tax"])
+    // Topic is optional because a new topic can be typed instead.
+    expect(topic.optional).toBe(true)
+    // The "or type a new topic" free-text field exists.
+    const newTopic = blocks.find((b) => b.block_id === NEW_TOPIC_BLOCK_ID)
+    expect(newTopic.optional).toBe(true)
+    expect(newTopic.element.type).toBe("plain_text_input")
+    expect(newTopic.element.action_id).toBe(NEW_TOPIC_ACTION_ID)
+  })
+})
+
+describe("slugifyTopic", () => {
+  it("lowercases and underscores free text into a catalog-safe slug", () => {
+    expect(slugifyTopic("Wire Transfer")).toBe("wire_transfer")
+    expect(slugifyTopic("  EIN / SS-4 ")).toBe("ein_ss_4")
+    expect(slugifyTopic("Banking")).toBe("banking")
+  })
+  it("returns empty string for non-alphanumeric junk", () => {
+    expect(slugifyTopic("!!!")).toBe("")
+    expect(slugifyTopic("")).toBe("")
   })
 })
 

@@ -331,6 +331,51 @@ export const OPEN_CLIENT_CONVERSATION_ACTION_ID = "open_client_conversation"
 export const CLIENT_CONVERSATION_MODAL_CALLBACK = "client_conversation_modal"
 export const CLIENT_SELECT_ACTION_ID = "client_select"
 export const TOPIC_SELECT_ACTION_ID = "topic_select"
+export const NEW_TOPIC_BLOCK_ID = "new_topic_block"
+export const NEW_TOPIC_ACTION_ID = "new_topic_input"
+
+/** Slugify free text into a catalog-safe topic slug (lowercase, underscores). */
+export function slugifyTopic(text: string): string {
+  return (text ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40)
+}
+
+/**
+ * Resolve a typed new topic to a slug, adding it to the topic_templates catalog
+ * (active) so it's reusable next time. Deduped by slug (ON CONFLICT do nothing).
+ * Returns the slug, or null if the text slugifies to nothing.
+ */
+export async function ensureTopicSlugFromText(text: string): Promise<string | null> {
+  const slug = slugifyTopic(text)
+  if (!slug) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  try {
+    const { data: existing } = await db
+      .from("catalog_entries")
+      .select("id")
+      .eq("catalog_id", "topic_templates")
+      .eq("slug", slug)
+      .maybeSingle()
+    if (!existing) {
+      await db.from("catalog_entries").insert({
+        catalog_id: "topic_templates",
+        slug,
+        display_name: text.trim().slice(0, 60),
+        status: "active",
+        tags: ["topic", "user_added"],
+      })
+    }
+  } catch (err) {
+    console.error("[slack-claude] ensureTopicSlugFromText failed:", err)
+    // Still return the slug — tagging with it is better than failing the form.
+  }
+  return slug
+}
 
 /**
  * Richer parse of a Slack interactivity payload — covers the modal flow:
@@ -463,12 +508,25 @@ export function buildClientConversationModalView(args: {
       {
         type: "input",
         block_id: "topic_block",
+        optional: true,
         label: { type: "plain_text", text: "Topic" },
         element: {
           type: "static_select",
           action_id: TOPIC_SELECT_ACTION_ID,
           placeholder: { type: "plain_text", text: "Pick a topic" },
           options: topicOpts,
+        },
+      },
+      {
+        type: "input",
+        block_id: NEW_TOPIC_BLOCK_ID,
+        optional: true,
+        label: { type: "plain_text", text: "Or type a new topic" },
+        element: {
+          type: "plain_text_input",
+          action_id: NEW_TOPIC_ACTION_ID,
+          max_length: 40,
+          placeholder: { type: "plain_text", text: "e.g. wire transfer (leave blank if you picked one above)" },
         },
       },
     ],

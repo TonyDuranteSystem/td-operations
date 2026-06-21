@@ -34,11 +34,14 @@ import {
   buildClientConversationModalView,
   searchClientsForSlackOptions,
   createClientConversationFromModal,
+  ensureTopicSlugFromText,
   STOP_THINKING_ACTION_ID,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
   CLIENT_SELECT_ACTION_ID,
   TOPIC_SELECT_ACTION_ID,
+  NEW_TOPIC_BLOCK_ID,
+  NEW_TOPIC_ACTION_ID,
 } from "@/lib/ai-agent/slack-claude"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,11 +72,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (it.type === "view_submission" && it.viewCallbackId === CLIENT_CONVERSATION_MODAL_CALLBACK) {
     const channelId = it.viewPrivateMetadata
     const clientValue = selectedValue(it.viewState, "client_block", CLIENT_SELECT_ACTION_ID)
-    const topicSlug = selectedValue(it.viewState, "topic_block", TOPIC_SELECT_ACTION_ID)
-    if (!channelId || !clientValue || !topicSlug) {
+    // A typed new topic wins over the dropdown; ensure it's a catalog slug (reusable next time).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const newTopicText = ((it.viewState as any)?.values?.[NEW_TOPIC_BLOCK_ID]?.[NEW_TOPIC_ACTION_ID]?.value ?? "")
+      .toString()
+      .trim()
+    let topicSlug = selectedValue(it.viewState, "topic_block", TOPIC_SELECT_ACTION_ID)
+    if (newTopicText) topicSlug = await ensureTopicSlugFromText(newTopicText)
+
+    if (!channelId || !clientValue) {
       return NextResponse.json({
         response_action: "errors",
-        errors: { client_block: "Pick a client and a topic to start." },
+        errors: { client_block: "Pick a client to start." },
+      })
+    }
+    if (!topicSlug) {
+      return NextResponse.json({
+        response_action: "errors",
+        errors: { topic_block: "Pick a topic or type a new one." },
       })
     }
     const res = await createClientConversationFromModal({

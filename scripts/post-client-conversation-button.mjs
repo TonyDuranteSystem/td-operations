@@ -16,6 +16,9 @@
 const TOKEN = process.env.SLACK_BOT_TOKEN_CLAUDE
 const CHANNEL = process.argv[2] || process.env.SLACK_SUPPORT_CHANNEL_ID || "C0BA802S9LH"
 const OPEN_ACTION_ID = "open_client_conversation"
+// The button MUST be posted by the Claude app so clicks route to its interactivity
+// endpoint. This is the Claude bot user id; Hermes (dismissed) is U0B9D3MAD9B.
+const EXPECTED_CLAUDE_BOT_USER = "U0B9S675WTT"
 
 if (!TOKEN) {
   console.error("❌ SLACK_BOT_TOKEN_CLAUDE not set (must be the Claude bot token, xoxb-…).")
@@ -52,6 +55,23 @@ async function slack(method, body) {
   })
   return res.json()
 }
+
+// Guard: refuse any token that isn't the Claude bot (e.g. Hermes). Otherwise the
+// button posts under the wrong app and its clicks never reach our endpoint.
+const who = await slack("auth.test", {})
+if (!who.ok) {
+  console.error(`❌ Token check failed: ${who.error}. Use the Claude app's Bot User OAuth Token (xoxb-…).`)
+  process.exit(1)
+}
+if (who.user_id !== EXPECTED_CLAUDE_BOT_USER) {
+  console.error(
+    `❌ Wrong app. This token belongs to "${who.user}" (user ${who.user_id}), not the Claude bot ` +
+      `(${EXPECTED_CLAUDE_BOT_USER}). Get the token from the CLAUDE app (App ID A0B9LUJRLMB) → ` +
+      `OAuth & Permissions → Bot User OAuth Token. Nothing was posted.`,
+  )
+  process.exit(1)
+}
+console.log(`✓ Authenticated as the Claude bot (${who.user}).`)
 
 const post = await slack("chat.postMessage", {
   channel: CHANNEL,
