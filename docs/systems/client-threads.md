@@ -83,3 +83,17 @@ Origin: Antonio (#td-support, 2026-06-21). dev_task `54f89912`. Plan:
 - Production status: `client_threads` exists in SANDBOX only as of 2026-06-21; promote the two
   migration files + run `npm run gen:types` + set `SLACK_SUPPORT_CHANNEL_ID` on production
   promotion (Phase 1 not yet shipped to prod).
+
+---
+
+## Phase 2 — Slack client-conversation form (2026-06-21)
+
+**Why:** Antonio works in Slack, not the CRM. He wants to start a client conversation *from Slack* — pick the client + topic from fields, talk to the worker — and have it recorded in the CRM (when/what/whom). The CRM is the record; Slack is where the work happens.
+
+**Flow:** a pinned **"➕ New client conversation"** button in #td-support → `views.open` modal (client `external_select` live CRM search + topic `static_select` from `topic_templates`) → submit posts a labeled root message ("🗂️ Client · Topic") that starts the thread + writes a `client_threads` tag (`source_kind='manual'`, `confidence=1`, `confirmed_at`). In that thread the worker is grounded with the client+topic (`lookupClientThreadContext` by `source_ref`), and each worker exchange is logged to the CRM `conversations` table (`channel='Slack'`) via `recordClientThreadExchange` → readable in the account/contact Activity tab.
+
+**Key files:** `lib/ai-agent/slack-claude.ts` (`parseSlackInteractionFull`, `openSlackModal`, `buildClientConversationButtonBlocks`, `buildClientConversationModalView`, `searchClientsForSlackOptions`, `createClientConversationFromModal`, `lookupClientThreadContext`, `recordClientThreadExchange` + action_id/callback constants); `app/api/webhooks/slack-interactions/route.ts` (block_actions / block_suggestion / view_submission — Stop path unchanged). Migration `20260621-1600-conversations-add-slack-channel.sql` (adds 'Slack' to `conversation_channel` enum). Tests: `tests/unit/client-conversation-form.test.ts`.
+
+**Activation (one-time):** (1) prod enum: run `ALTER TYPE conversation_channel ADD VALUE IF NOT EXISTS 'Slack'`; (2) Slack app → Interactivity → **Options Load URL** = the `/api/webhooks/slack-interactions` route (Request URL already set); (3) post + pin the button in #td-support using `SLACK_BOT_TOKEN_CLAUDE` (must be the Claude app so clicks route to its interactivity endpoint — NOT the slack MCP app).
+
+**Gotchas:** view_submission carries no channel → stashed in the modal's `private_metadata`. The external_select button MUST be posted by the Claude bot (interactivity is per-app). Lead-only threads are skipped by `recordClientThreadExchange` (`conversations` has no `lead_id`) — the `client_threads` tag still indexes them. "Type a new topic" in the modal is a fast-follow (needs the catalog-pending flow); v1 modal lists existing `topic_templates` only.

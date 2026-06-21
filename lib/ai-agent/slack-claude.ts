@@ -323,6 +323,338 @@ export function parseSlackInteraction(rawBody: string): SlackInteraction | null 
   return { actionId, messageTs, channelId }
 }
 
+// ── Client-conversation form (Phase 2) — Slack-only ──────────────────────────
+// A pinned button in #td-support opens a Block Kit modal to pick a client + topic,
+// which starts a labeled, tagged thread. action_ids/callback_ids are stable strings
+// matched in the interactivity route. dev_task 54f89912 (Phase 2).
+export const OPEN_CLIENT_CONVERSATION_ACTION_ID = "open_client_conversation"
+export const CLIENT_CONVERSATION_MODAL_CALLBACK = "client_conversation_modal"
+export const CLIENT_SELECT_ACTION_ID = "client_select"
+export const TOPIC_SELECT_ACTION_ID = "topic_select"
+
+/**
+ * Richer parse of a Slack interactivity payload — covers the modal flow:
+ *   - block_actions    (button click → has trigger_id)
+ *   - view_submission  (modal submit → has view.state.values + callback_id)
+ *   - block_suggestion (external_select typing → has action_id + value)
+ * Kept SEPARATE from parseSlackInteraction so the Stop-button path is untouched.
+ * Pure (no I/O) → unit-testable. Returns null only when the body has no `payload`.
+ */
+export interface SlackInteractionFull {
+  type: string | null
+  actionId: string | null
+  triggerId: string | null
+  channelId: string | null
+  messageTs: string | null
+  userId: string | null
+  viewCallbackId: string | null
+  viewState: Record<string, unknown> | null
+  viewPrivateMetadata: string | null
+  suggestionValue: string | null
+}
+
+export function parseSlackInteractionFull(rawBody: string): SlackInteractionFull | null {
+  const json = new URLSearchParams(rawBody).get("payload")
+  if (!json) return null
+  let p: Record<string, unknown>
+  try {
+    p = JSON.parse(json)
+  } catch {
+    return null
+  }
+  const actions = p.actions as Array<Record<string, unknown>> | undefined
+  const view = p.view as Record<string, unknown> | undefined
+  const channel = p.channel as Record<string, unknown> | undefined
+  const container = p.container as Record<string, unknown> | undefined
+  const user = p.user as Record<string, unknown> | undefined
+  const message = p.message as Record<string, unknown> | undefined
+
+  return {
+    type: (p.type as string | undefined) ?? null,
+    actionId:
+      (actions?.[0]?.action_id as string | undefined) ??
+      (p.action_id as string | undefined) ?? // block_suggestion carries it top-level
+      null,
+    triggerId: (p.trigger_id as string | undefined) ?? null,
+    channelId:
+      (channel?.id as string | undefined) ??
+      (container?.channel_id as string | undefined) ??
+      // view_submission has no channel; we stash it in the view's private_metadata
+      null,
+    messageTs:
+      (message?.ts as string | undefined) ??
+      (container?.message_ts as string | undefined) ??
+      null,
+    userId: (user?.id as string | undefined) ?? null,
+    viewCallbackId: (view?.callback_id as string | undefined) ?? null,
+    viewState: (view?.state as Record<string, unknown> | undefined) ?? null,
+    viewPrivateMetadata: (view?.private_metadata as string | undefined) ?? null,
+    suggestionValue: (p.value as string | undefined) ?? null,
+  }
+}
+
+/** Open a Block Kit modal (views.open) with a trigger_id from a button click. */
+export async function openSlackModal(
+  triggerId: string,
+  view: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  const r = await slackApiCall("views.open", { trigger_id: triggerId, view })
+  if (!r.ok) console.error(`[slack-claude] views.open failed: ${r.error}`)
+  return r
+}
+
+/** The pinned "➕ New client conversation" message blocks (its button opens the modal). */
+export function buildClientConversationButtonBlocks(): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Client conversations* — start one tagged by client + topic so it's saved in the CRM.",
+      },
+    },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "➕ New client conversation", emoji: true },
+          action_id: OPEN_CLIENT_CONVERSATION_ACTION_ID,
+          style: "primary",
+          value: OPEN_CLIENT_CONVERSATION_ACTION_ID,
+        },
+      ],
+    },
+  ]
+}
+
+/**
+ * Build the client-conversation modal. `channelId` is stashed in private_metadata
+ * because Slack's view_submission payload carries no channel. `topicOptions` come
+ * from the topic_templates catalog (no hardcoding).
+ */
+export function buildClientConversationModalView(args: {
+  channelId: string
+  topicOptions: Array<{ slug: string; label: string }>
+}): Record<string, unknown> {
+  const topicOpts = args.topicOptions.slice(0, 100).map((t) => ({
+    text: { type: "plain_text", text: t.label.slice(0, 75) },
+    value: t.slug,
+  }))
+  return {
+    type: "modal",
+    callback_id: CLIENT_CONVERSATION_MODAL_CALLBACK,
+    private_metadata: args.channelId,
+    title: { type: "plain_text", text: "New conversation" },
+    submit: { type: "plain_text", text: "Start" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "client_block",
+        label: { type: "plain_text", text: "Client" },
+        element: {
+          type: "external_select",
+          action_id: CLIENT_SELECT_ACTION_ID,
+          min_query_length: 2,
+          placeholder: { type: "plain_text", text: "Search account, contact, or lead…" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "topic_block",
+        label: { type: "plain_text", text: "Topic" },
+        element: {
+          type: "static_select",
+          action_id: TOPIC_SELECT_ACTION_ID,
+          placeholder: { type: "plain_text", text: "Pick a topic" },
+          options: topicOpts,
+        },
+      },
+    ],
+  }
+}
+
+/**
+ * Search clients (account | contact | lead) for the modal's external_select.
+ * Returns Slack option objects whose value encodes "<type>:<uuid>". Best-effort:
+ * a query failure yields an empty list (Slack shows "no results").
+ */
+export async function searchClientsForSlackOptions(
+  query: string,
+): Promise<Array<{ text: { type: "plain_text"; text: string }; value: string }>> {
+  const q = (query ?? "").trim()
+  if (q.length < 2) return []
+  const pattern = `%${q}%`
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const opt = (label: string, value: string) => ({
+    text: { type: "plain_text" as const, text: label.slice(0, 75) },
+    value,
+  })
+  try {
+    const [accs, conts, leads] = await Promise.all([
+      db.from("accounts").select("id, company_name").ilike("company_name", pattern).limit(8),
+      db.from("contacts").select("id, full_name").ilike("full_name", pattern).limit(8),
+      db.from("leads").select("id, full_name").ilike("full_name", pattern).limit(8),
+    ])
+    const out: Array<{ text: { type: "plain_text"; text: string }; value: string }> = []
+    for (const a of accs.data ?? []) out.push(opt(`🏢 ${a.company_name}`, `account:${a.id}`))
+    for (const c of conts.data ?? []) out.push(opt(`👤 ${c.full_name}`, `contact:${c.id}`))
+    for (const l of leads.data ?? []) out.push(opt(`🎯 ${l.full_name} (lead)`, `lead:${l.id}`))
+    return out.slice(0, 100)
+  } catch (err) {
+    console.error("[slack-claude] searchClientsForSlackOptions failed:", err)
+    return []
+  }
+}
+
+/**
+ * Handle the modal submit: post a labeled root message that starts the thread,
+ * tag it in client_threads (source_kind='manual' — a human picked it), and return
+ * the new thread ts. clientValue is "<type>:<uuid>" from the external_select.
+ */
+export async function createClientConversationFromModal(args: {
+  channelId: string
+  userId: string | null
+  clientValue: string
+  topicSlug: string
+}): Promise<{ ok: boolean; threadTs?: string; error?: string }> {
+  const [kind, id] = (args.clientValue ?? "").split(":")
+  if (!["account", "contact", "lead"].includes(kind) || !id) {
+    return { ok: false, error: "invalid client selection" }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+
+  // Resolve a display name for the label.
+  let name = "Client"
+  try {
+    if (kind === "account") {
+      const { data } = await db.from("accounts").select("company_name").eq("id", id).maybeSingle()
+      name = data?.company_name ?? name
+    } else {
+      const { data } = await db.from(kind === "contact" ? "contacts" : "leads").select("full_name").eq("id", id).maybeSingle()
+      name = data?.full_name ?? name
+    }
+  } catch {
+    // keep default name
+  }
+
+  const by = args.userId ? `<@${args.userId}>` : "the team"
+  const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\nReply in this thread; mention @Claude to bring in the worker. Everything here is saved to the CRM.`
+  const threadTs = await postSlackMessage(args.channelId, text, null)
+  if (!threadTs) return { ok: false, error: "could not post the conversation message" }
+
+  const row: Record<string, unknown> = {
+    account_id: kind === "account" ? id : null,
+    contact_id: kind === "contact" ? id : null,
+    lead_id: kind === "lead" ? id : null,
+    topic_slug: args.topicSlug,
+    source: "slack",
+    source_ref: `${args.channelId}:${threadTs}`,
+    source_kind: "manual",
+    confidence: 1,
+    confirmed_at: new Date().toISOString(),
+  }
+  const ins = await db.from("client_threads").insert(row).select("id").single()
+  if (ins.error && !/duplicate key/i.test(ins.error.message ?? "")) {
+    console.error("[slack-claude] client_threads insert failed:", ins.error)
+  }
+  return { ok: true, threadTs }
+}
+
+export interface ClientThreadContext {
+  accountId: string | null
+  contactId: string | null
+  leadId: string | null
+  topicSlug: string | null
+  clientName: string
+  clientType: "account" | "contact" | "lead"
+}
+
+/**
+ * If this Slack thread is a tagged client conversation, return its client + topic
+ * so the worker can ground its reply and the exchange can be recorded. Looks up
+ * client_threads by the stable source_ref (channelId:threadTs). Best-effort →
+ * null on miss/error (the worker then behaves exactly as before).
+ */
+export async function lookupClientThreadContext(
+  channelId: string,
+  threadTs: string | null | undefined,
+): Promise<ClientThreadContext | null> {
+  if (!channelId || !threadTs) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  try {
+    const { data } = await db
+      .from("client_threads")
+      .select("account_id, contact_id, lead_id, topic_slug")
+      .eq("source", "slack")
+      .eq("source_ref", `${channelId}:${threadTs}`)
+      .maybeSingle()
+    if (!data) return null
+    let clientName = "the client"
+    let clientType: ClientThreadContext["clientType"] = "account"
+    if (data.account_id) {
+      clientType = "account"
+      const { data: a } = await db.from("accounts").select("company_name").eq("id", data.account_id).maybeSingle()
+      clientName = a?.company_name ?? clientName
+    } else if (data.contact_id) {
+      clientType = "contact"
+      const { data: c } = await db.from("contacts").select("full_name").eq("id", data.contact_id).maybeSingle()
+      clientName = c?.full_name ?? clientName
+    } else if (data.lead_id) {
+      clientType = "lead"
+      const { data: l } = await db.from("leads").select("full_name").eq("id", data.lead_id).maybeSingle()
+      clientName = l?.full_name ?? clientName
+    }
+    return {
+      accountId: data.account_id ?? null,
+      contactId: data.contact_id ?? null,
+      leadId: data.lead_id ?? null,
+      topicSlug: data.topic_slug ?? null,
+      clientName,
+      clientType,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Record one exchange of a tagged client thread into the CRM `conversations` log
+ * (the "when / what / to whom" record) so it's readable in the account/contact
+ * Activity tab. Best-effort, never throws. Lead-only threads are skipped (the
+ * conversations table has no lead_id) — the client_threads tag still indexes them.
+ */
+export async function recordClientThreadExchange(args: {
+  ctx: ClientThreadContext
+  clientMessage: string
+  responseSent: string
+  topicSlug: string | null
+}): Promise<void> {
+  const { ctx } = args
+  if (!ctx.accountId && !ctx.contactId) return // conversations has no lead_id (MVP)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  try {
+    await db.from("conversations").insert({
+      account_id: ctx.accountId,
+      contact_id: ctx.contactId,
+      topic: args.topicSlug ?? null,
+      channel: "Slack",
+      direction: "Inbound",
+      client_message: args.clientMessage?.slice(0, 4000) ?? null,
+      response_sent: args.responseSent?.slice(0, 4000) ?? null,
+      handled_by: "Claude",
+      status: "Sent",
+    })
+  } catch (err) {
+    console.error("[slack-claude] recordClientThreadExchange failed:", err)
+  }
+}
+
 /**
  * Replace the text of an already-posted message in place (chat.update). Used to
  * morph the "On it 👍" acknowledgment into the real answer so the thread isn't
@@ -899,6 +1231,11 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   const isSupportChannel =
     !!process.env.SLACK_SUPPORT_CHANNEL_ID && channelId === process.env.SLACK_SUPPORT_CHANNEL_ID
 
+  // Phase 2: if this thread was started from the client-conversation form (or
+  // otherwise tagged), pull its client + topic so the worker is grounded and the
+  // exchange can be recorded in the CRM. Best-effort (null = behave as before).
+  const clientThreadCtx = await lookupClientThreadContext(channelId, replyThreadTs)
+
   // ── In-channel approval completion (loop fix) ──────────────────────────────
   // A message that is EXACTLY a 6-digit code from the authorized approver
   // (Antonio) is an approval, not a chat turn. Resolve it deterministically and
@@ -972,6 +1309,13 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // actually offered (support channel) — keeps the prompt clean elsewhere.
   if (isSupportChannel) {
     slackSystemPrompt = `${slackSystemPrompt}\n\nCLIENT THREADS (this is #td-support): every thread here is about a client. When you can CONFIDENTLY identify the client this conversation is about — an account (LLC), a contact (person), or a lead (prospect), resolved with the CRM search tools — call tag_client_thread ONCE with that client's id + a topic slug (banking, billing, closure, documents, formation, general, itin, lease, tax; use 'general' if unsure). Then end your reply with "📌 Tagged: <client name> · <topic> — reply to change". If you CANNOT resolve a real client (e.g. it's an internal/dev note), do NOT tag. To pull up a client's past threads, use find_client_threads.`
+  }
+
+  // Phase 2: this thread is a tagged client conversation (started from the form).
+  // Tell the worker who/what it's about so the user needn't repeat it, and that the
+  // exchange is being logged to the CRM. Overrides the "go tag it" nudge above.
+  if (clientThreadCtx) {
+    slackSystemPrompt = `${slackSystemPrompt}\n\nTHIS CLIENT CONVERSATION: this thread is about ${clientThreadCtx.clientName} (${clientThreadCtx.clientType})${clientThreadCtx.topicSlug ? `, topic "${clientThreadCtx.topicSlug}"` : ""}. The person may not restate who it's about — use this. Help with this client's matter; what's said here is recorded in the CRM automatically (you don't need to tag it).`
   }
 
   // Only add `images` to the opts when there are blocks — keeps the text-only
@@ -1204,6 +1548,17 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
       // not lost) and drop the Stop button.
       await updateSlackMessage(channelId, ackTs, reply, [])
     }
+  }
+
+  // Phase 2: record this exchange into the CRM conversations log so it's readable
+  // in the account/contact Activity tab (when/what/whom). Best-effort, never blocks.
+  if (clientThreadCtx) {
+    await recordClientThreadExchange({
+      ctx: clientThreadCtx,
+      clientMessage: row.body,
+      responseSent: reply,
+      topicSlug: clientThreadCtx.topicSlug,
+    })
   }
 
   // Mark done, but guard on status='processing' so a Stop that lands in the tiny

@@ -453,3 +453,6 @@ While the worker runs `callWorker` (one non-interruptible API call, ~8–15 s), 
 
 ---
 _2026-06-21 — Client Threads (Phase 1, dev_task 54f89912): added the Slack-only `tag_client_thread` (write) + `find_client_threads` (read) tools in `lib/ai-agent/worker-tools.ts` (gated via `enableClientThreadTag`/`enableClientThreadRead`, kept OUT of `WORKER_TOOLS`, R108) and wired the `#td-support` auto-tag in `lib/ai-agent/slack-claude.ts::processSlackEvent`. Full subsystem doc: [client-threads.md](client-threads.md)._
+
+---
+_2026-06-21 (Phase 2) — Client-conversation form: a pinned button in #td-support opens a Block Kit modal (client external_select + topic) that starts a labeled, tagged thread; the worker is grounded with the client/topic and each exchange is logged to the CRM. New helpers + interactivity-route handlers in slack-claude.ts / slack-interactions route. See [client-threads.md](client-threads.md)._

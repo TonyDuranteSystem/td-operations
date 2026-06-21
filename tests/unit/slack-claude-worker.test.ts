@@ -338,7 +338,18 @@ describe("processSlackEvent", () => {
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+    ;(supabaseAdmin as any).from = vi.fn((t: string) => {
+      // This thread is NOT a form-started client conversation → the client_threads
+      // lookup must return null, else the generic mock fakes a tag and adds the
+      // "THIS CLIENT CONVERSATION" prompt block (changing systemPromptOverride).
+      if (t === "client_threads") {
+        const c = makeProcessChain()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(c as any).maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }))
+        return c
+      }
+      return makeProcessChain()
+    })
 
     const row = {
       id: "row-id-001",
