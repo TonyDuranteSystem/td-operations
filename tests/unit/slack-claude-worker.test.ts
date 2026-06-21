@@ -155,7 +155,18 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // read_drive_file — read every source the dev system can, after the worker hit
     // "the KB has nothing" while the installment rule lived in a sysdoc).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(9600)
+    // → 10200 (2026-06-21, SELF-SERVE BEFORE ASKING discipline: look up facts in
+    // the system — CRM record, run_sql_query, KB/SOPs — instead of asking Antonio;
+    // added after the worker asked "which language?" when the contact's language
+    // was already in the CRM (Gritti/Evolue)).
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(10200)
+  })
+
+  it("instructs SELF-SERVE: look facts up in the system before asking Antonio", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SELF-SERVE/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/look it up|look up|Look it up/i)
+    // The specific case that prompted it — don't ask which language when it's in the CRM.
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/which language/i)
   })
 
   it("instructs human-tone, asterisk-free client DRAFTS (emails + portal messages)", () => {
