@@ -445,6 +445,45 @@ export function parseSlackInteractionFull(rawBody: string): SlackInteractionFull
   }
 }
 
+/**
+ * Fetch a Slack thread's messages for display in the CRM (the collapsible
+ * client-conversation panel). Returns author + text + ts per message, oldest first.
+ * Best-effort: returns [] on any error (missing token, bot not in channel, deleted).
+ */
+export async function fetchSlackThreadMessages(
+  channelId: string,
+  threadTs: string,
+): Promise<Array<{ author: string; text: string; ts: string }>> {
+  if (!channelId || !threadTs) return []
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) return []
+  const label = (m: Record<string, unknown>): string => {
+    const bp = m.bot_profile as { name?: string } | undefined
+    if (bp?.name) return bp.name
+    const u = m.user as string | undefined
+    if (u === "U0B9S675WTT") return "Claude"
+    if (u === "U0BAALR4Y4Q") return "Antonio"
+    if (u === SLACK_USER_LUCA) return "Luca"
+    return "Team"
+  }
+  try {
+    const res = await fetch(
+      `https://slack.com/api/conversations.replies?channel=${encodeURIComponent(channelId)}&ts=${encodeURIComponent(threadTs)}&limit=100`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const data = (await res.json()) as { ok: boolean; messages?: Array<Record<string, unknown>> }
+    if (!data.ok || !Array.isArray(data.messages)) return []
+    return data.messages.map((m) => ({
+      author: label(m),
+      text: typeof m.text === "string" ? m.text : "",
+      ts: typeof m.ts === "string" ? m.ts : "",
+    }))
+  } catch (err) {
+    console.error("[slack-claude] fetchSlackThreadMessages failed:", err)
+    return []
+  }
+}
+
 /** Open a Block Kit modal (views.open) with a trigger_id from a button click. */
 export async function openSlackModal(
   triggerId: string,

@@ -17,6 +17,7 @@ import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
+import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
 import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
@@ -54,6 +55,7 @@ const TABS = [
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
   { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'One-screen view of every audit check for this contact — diagnostic + chain audit together.' },
   { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
+  { key: 'conversations', label: 'Conversations', icon: MessageSquare, tooltip: 'Slack client conversations tagged to this contact — topic, date, and the full thread.' },
   { key: 'journey', label: 'Journey', icon: GitBranch, tooltip: 'Full client journey — offers, payments, activations, services, wizards, documents, tasks, and portal messages in one feed.' },
   { key: 'backend', label: 'Backend', icon: Activity, tooltip: 'Read-only view of CRM actions, background jobs, webhook events, and session checkpoints that touched this contact.' },
 ]
@@ -487,6 +489,9 @@ export function ContactDetail({
       )}
       {activeTab === 'activity' && (
         <ActivityTab conversations={conversations} />
+      )}
+      {activeTab === 'conversations' && (
+        <ClientConversationsPanel entityType="contact" entityId={contact.id} />
       )}
       {activeTab === 'journey' && (
         <ActivityFeed kind="contact" contactId={contact.id} accountIds={accounts.map((a) => a.id)} />
