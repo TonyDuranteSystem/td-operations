@@ -37,6 +37,7 @@ import {
   ensureTopicSlugFromText,
   STOP_THINKING_ACTION_ID,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
+  CLIENT_CONVERSATION_SHORTCUT_CALLBACK,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
   CLIENT_SELECT_ACTION_ID,
   TOPIC_SELECT_ACTION_ID,
@@ -48,6 +49,20 @@ import {
 function selectedValue(viewState: any, blockId: string, actionId: string): string | null {
   const sel = viewState?.values?.[blockId]?.[actionId]?.selected_option
   return (sel?.value as string | undefined) ?? null
+}
+
+/** Open the client-conversation modal for a given trigger + target channel. */
+async function openConversationModal(triggerId: string, channelId: string): Promise<void> {
+  let topicOptions: Array<{ slug: string; label: string }> = []
+  try {
+    const entries = await listEntries("topic_templates", { status: "active" })
+    topicOptions = entries
+      .map((e) => ({ slug: e.slug, label: e.display_name }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  } catch {
+    topicOptions = []
+  }
+  await openSlackModal(triggerId, buildClientConversationModalView({ channelId, topicOptions }))
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -108,19 +123,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({})
   }
 
-  // ── Button: open the client-conversation modal ─────────────────────────────
+  // ── Global shortcut (⚡ menu, always available) → open the modal ────────────
+  // A global shortcut carries no channel, so the new thread defaults to #td-support
+  // (SLACK_SUPPORT_CHANNEL_ID). This is the persistent entry point that never scrolls away.
+  if (it.type === "shortcut" && it.shortcutCallbackId === CLIENT_CONVERSATION_SHORTCUT_CALLBACK) {
+    const channelId = process.env.SLACK_SUPPORT_CHANNEL_ID
+    if (!it.triggerId || !channelId) return NextResponse.json({ ok: true })
+    await openConversationModal(it.triggerId, channelId)
+    return NextResponse.json({ ok: true })
+  }
+
+  // ── Button (in-channel, optional): open the client-conversation modal ──────
   if (it.type === "block_actions" && it.actionId === OPEN_CLIENT_CONVERSATION_ACTION_ID) {
     if (!it.triggerId || !it.channelId) return NextResponse.json({ ok: true })
-    let topicOptions: Array<{ slug: string; label: string }> = []
-    try {
-      const entries = await listEntries("topic_templates", { status: "active" })
-      topicOptions = entries
-        .map((e) => ({ slug: e.slug, label: e.display_name }))
-        .sort((a, b) => a.label.localeCompare(b.label))
-    } catch {
-      topicOptions = []
-    }
-    await openSlackModal(it.triggerId, buildClientConversationModalView({ channelId: it.channelId, topicOptions }))
+    await openConversationModal(it.triggerId, it.channelId)
     return NextResponse.json({ ok: true })
   }
 

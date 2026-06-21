@@ -59,6 +59,15 @@ describe("parseSlackInteractionFull", () => {
     expect(r?.suggestionValue).toBe("moj")
   })
 
+  it("parses a global shortcut (top-level callback_id + trigger_id, no channel)", () => {
+    const r = parseSlackInteractionFull(
+      body({ type: "shortcut", callback_id: "new_client_conversation", trigger_id: "trg-2", user: { id: "U999" } }),
+    )
+    expect(r?.type).toBe("shortcut")
+    expect(r?.shortcutCallbackId).toBe("new_client_conversation")
+    expect(r?.triggerId).toBe("trg-2")
+  })
+
   it("parses a view_submission (callback, state, private_metadata=channel)", () => {
     const r = parseSlackInteractionFull(
       body({

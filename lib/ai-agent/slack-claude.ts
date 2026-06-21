@@ -328,6 +328,9 @@ export function parseSlackInteraction(rawBody: string): SlackInteraction | null 
 // which starts a labeled, tagged thread. action_ids/callback_ids are stable strings
 // matched in the interactivity route. dev_task 54f89912 (Phase 2).
 export const OPEN_CLIENT_CONVERSATION_ACTION_ID = "open_client_conversation"
+// Global shortcut callback_id — the always-available entry in the ⚡ shortcuts menu
+// (configured once in the Slack app: Interactivity & Shortcuts → Create New Shortcut).
+export const CLIENT_CONVERSATION_SHORTCUT_CALLBACK = "new_client_conversation"
 export const CLIENT_CONVERSATION_MODAL_CALLBACK = "client_conversation_modal"
 export const CLIENT_SELECT_ACTION_ID = "client_select"
 export const TOPIC_SELECT_ACTION_ID = "topic_select"
@@ -396,6 +399,8 @@ export interface SlackInteractionFull {
   viewState: Record<string, unknown> | null
   viewPrivateMetadata: string | null
   suggestionValue: string | null
+  /** Top-level callback_id — present on `shortcut` payloads (global/message shortcuts). */
+  shortcutCallbackId: string | null
 }
 
 export function parseSlackInteractionFull(rawBody: string): SlackInteractionFull | null {
@@ -435,6 +440,7 @@ export function parseSlackInteractionFull(rawBody: string): SlackInteractionFull
     viewState: (view?.state as Record<string, unknown> | undefined) ?? null,
     viewPrivateMetadata: (view?.private_metadata as string | undefined) ?? null,
     suggestionValue: (p.value as string | undefined) ?? null,
+    shortcutCallbackId: (p.callback_id as string | undefined) ?? null,
   }
 }
 

@@ -73,3 +73,5 @@ _2026-06-21 — Client Threads (Phase 1, dev_task 54f89912): added the Slack-onl
 _2026-06-21 (Phase 2) — Client-conversation form: a pinned button in #td-support opens a Block Kit modal (client external_select + topic) that starts a labeled, tagged thread; the worker is grounded with the client/topic and each exchange is logged to the CRM. New helpers + interactivity-route handlers in slack-claude.ts / slack-interactions route. See [client-threads.md](client-threads.md)._
 
 _2026-06-21 (Phase 2.1) — modal now supports "Or type a new topic": optional free-text field; `ensureTopicSlugFromText` slugifies it and adds it to the topic_templates catalog (reusable next time). Script `post-client-conversation-button.mjs` hardened with an auth.test guard (refuses any non-Claude bot token)._
+
+_2026-06-21 (Phase 2.2) — added a GLOBAL SHORTCUT entry point ("new_client_conversation") so the form opens from the ⚡ shortcuts menu (always available, never scrolls away) instead of relying on an in-channel button. Global shortcut has no channel → defaults the new thread to SLACK_SUPPORT_CHANNEL_ID. Route handles type="shortcut"; openConversationModal shared by button + shortcut._
