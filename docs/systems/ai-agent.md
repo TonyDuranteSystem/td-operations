@@ -65,3 +65,6 @@ Several tool params/filters map to real Postgres ENUM columns (`task_priority`, 
 - Read `lib/ai-agent/providers.ts` (the models + provider order), `lib/ai-agent/tools.ts` (the tool list), `app/api/ai-agent/route.ts` (access gate + rate limit).
 - Team access state: `SELECT value FROM app_settings WHERE key='ai_agent';`
 - Note (R096): sandbox via sandbox MCP / `psql`; production `execute_sql` hits production.
+
+---
+_2026-06-21 — Client Threads (Phase 1, dev_task 54f89912): added the Slack-only `tag_client_thread` (write) + `find_client_threads` (read) tools in `lib/ai-agent/worker-tools.ts` (gated via `enableClientThreadTag`/`enableClientThreadRead`, kept OUT of `WORKER_TOOLS`, R108) and wired the `#td-support` auto-tag in `lib/ai-agent/slack-claude.ts::processSlackEvent`. Full subsystem doc: [client-threads.md](client-threads.md)._

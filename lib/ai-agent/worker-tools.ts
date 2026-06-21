@@ -382,6 +382,59 @@ export const SEND_EMAIL_TOOL: ToolDef = {
   },
 }
 
+// ── Client Threads (Phase 1) — Slack-only ────────────────────────────────────
+// tag_client_thread (WRITE) + find_client_threads (READ). Both gated Slack-only:
+// tag is injected only when CallWorkerOptions.enableClientThreadTag is set (which
+// processSlackEvent sets ONLY for the #td-support channel), find when
+// enableClientThreadRead is set. Kept OUT of WORKER_TOOLS so the Hermes/Telegram
+// research worker never gets them (R108), plus an executor availableNames gate.
+// The tag write lands in the purpose-built `client_threads` table (NOT the trusted
+// CRM `conversations` log), as source_kind='auto' + low confidence, so a wrong guess
+// has low blast radius and is correctable by re-tagging. dev_task 54f89912.
+
+/** Default confidence for an auto-tag when the model doesn't supply one. */
+const CLIENT_THREAD_AUTO_CONFIDENCE = 0.5
+
+export const TAG_CLIENT_THREAD_TOOL: ToolDef = {
+  name: "tag_client_thread",
+  description: [
+    "Tag THIS Slack support thread with the client it's about + the topic, so it can be pulled up later by client or topic (in Slack and the CRM).",
+    "Call this ONCE when you can confidently identify the client this conversation is about. Provide ONE of account_id (LLC) / contact_id (person) / lead_id (prospect) — resolve it first with the CRM search tools. account_id + contact_id may BOTH be given when a contact belongs to an account.",
+    "`topic` must be one of the known topic slugs (banking, billing, closure, documents, formation, general, itin, lease, tax). If unsure, use 'general'.",
+    "Do NOT call this if you cannot resolve a real client (no client → don't tag). If you got the client/topic wrong, just call it again with the correct values — it updates the same thread's tag.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      account_id: { type: "string", description: "Account (LLC) UUID this thread is about." },
+      contact_id: { type: "string", description: "Contact (person) UUID this thread is about." },
+      lead_id: { type: "string", description: "Lead (prospect) UUID this thread is about." },
+      topic: { type: "string", description: "Topic slug: banking|billing|closure|documents|formation|general|itin|lease|tax." },
+      confidence: { type: "number", description: "0..1 — how sure you are about the client match. Optional; defaults to 0.5." },
+    },
+    required: ["topic"],
+  },
+}
+
+export const FIND_CLIENT_THREADS_TOOL: ToolDef = {
+  name: "find_client_threads",
+  description: [
+    "Look up tagged support conversations ('client threads') by client and/or topic — e.g. 'what's open for this client', 'show banking threads'.",
+    "Provide any of account_id / contact_id / lead_id (resolve the client first with CRM search) and/or topic (a topic slug). Returns the matching threads with their topic, status, source, and a link back.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      account_id: { type: "string", description: "Filter by account (LLC) UUID." },
+      contact_id: { type: "string", description: "Filter by contact (person) UUID." },
+      lead_id: { type: "string", description: "Filter by lead (prospect) UUID." },
+      topic: { type: "string", description: "Filter by topic slug." },
+      limit: { type: "number", description: "Max results (default 20, max 50)." },
+    },
+    required: [],
+  },
+}
+
 // ── Circleback call reading (Slack-only, READ-ONLY) ──────────────────────────
 // The Slack worker can read CALL data from Circleback (stored in call_summaries):
 // metadata + notes + action items + the FULL word-for-word transcript. Gated behind
@@ -986,6 +1039,162 @@ export async function sendPortalMessageFromWorker(input: {
 }
 
 /**
+ * tag_client_thread — Slack-only WRITE to the purpose-built `client_threads` table.
+ * Links THIS Slack thread to a client (account|contact|lead) + topic so it can be
+ * pulled up later. Lands as source_kind='auto' + low confidence (a wrong guess has
+ * low blast radius — it's NOT the trusted CRM `conversations` log). Idempotent per
+ * (source, source_ref) via the partial unique index: re-tagging UPDATES the same row.
+ * Topic is validated against the `topic_templates` catalog (no free-text fragmentation).
+ */
+export async function tagClientThreadFromWorker(input: {
+  account_id?: unknown
+  contact_id?: unknown
+  lead_id?: unknown
+  topic?: unknown
+  confidence?: unknown
+}): Promise<string> {
+  const accountId = typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
+  const contactId = typeof input.contact_id === "string" && input.contact_id.length > 0 ? input.contact_id : null
+  const leadId = typeof input.lead_id === "string" && input.lead_id.length > 0 ? input.lead_id : null
+  if (!accountId && !contactId && !leadId) {
+    return "❌ tag_client_thread needs a client — pass account_id, contact_id, or lead_id. If you can't resolve a real client, don't tag."
+  }
+
+  const topic = typeof input.topic === "string" ? input.topic.trim().toLowerCase() : ""
+  if (!topic) return "❌ tag_client_thread needs a topic slug."
+
+  // Validate topic against the topic_templates catalog (no free-text fragmentation).
+  let validSlugs: string[] = []
+  try {
+    const { listEntries } = await import("@/lib/catalog/framework")
+    const entries = await listEntries("topic_templates", { status: "active" })
+    validSlugs = entries.map((e) => e.slug)
+  } catch {
+    // catalog unreadable → reject below with an empty list
+  }
+  if (!validSlugs.includes(topic)) {
+    return `❌ "${topic}" is not a known topic. Use one of: ${validSlugs.join(", ") || "(topic catalog unavailable)"}.`
+  }
+
+  // Slack scope → stable per-thread key (channelId:threadRootTs).
+  const { _currentSlackCtx } = await import("./slack-claude")
+  const channelId = _currentSlackCtx.channelId ?? null
+  const threadTs = _currentSlackCtx.threadTs ?? null
+  if (!channelId || !threadTs) return "❌ No Slack thread context — can't tag this conversation."
+  const source = "slack"
+  const sourceRef = `${channelId}:${threadTs}`
+
+  let confidence =
+    typeof input.confidence === "number" && Number.isFinite(input.confidence)
+      ? input.confidence
+      : CLIENT_THREAD_AUTO_CONFIDENCE
+  if (confidence < 0) confidence = 0
+  if (confidence > 1) confidence = 1
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const row = {
+    account_id: accountId,
+    contact_id: contactId,
+    lead_id: leadId,
+    topic_slug: topic,
+    source,
+    source_ref: sourceRef,
+    source_kind: "auto",
+    confidence,
+  }
+
+  // Race-safe upsert on the partial unique index (source, source_ref): try INSERT,
+  // on unique violation UPDATE the existing row. The DB index — not this code — is
+  // what guarantees one row per thread even under the two Slack write paths.
+  const ins = await db.from("client_threads").insert(row).select("id").single()
+  if (!ins.error && ins.data) {
+    logAction({
+      actor: "claude.slack",
+      action_type: "create",
+      table_name: "client_threads",
+      record_id: ins.data.id,
+      account_id: accountId ?? undefined,
+      contact_id: contactId ?? undefined,
+      summary: `Tagged Slack thread → topic=${topic} (auto, conf=${confidence})`,
+    })
+    return `📌 Tagged this thread (${topic}). id=${ins.data.id}`
+  }
+  if (ins.error && (ins.error.code === "23505" || /duplicate key/i.test(ins.error.message ?? ""))) {
+    const upd = await db
+      .from("client_threads")
+      .update({
+        account_id: accountId,
+        contact_id: contactId,
+        lead_id: leadId,
+        topic_slug: topic,
+        confidence,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("source", source)
+      .eq("source_ref", sourceRef)
+      .select("id")
+      .single()
+    if (upd.error) return `❌ Failed to update the existing tag: ${upd.error.message}`
+    return `📌 Updated this thread's tag (${topic}). id=${upd.data?.id}`
+  }
+  return `❌ Failed to tag: ${ins.error?.message ?? "unknown error"}`
+}
+
+/**
+ * find_client_threads — Slack-only READ over `client_threads`. Pulls up tagged
+ * conversations by client and/or topic (e.g. "what's open for this client",
+ * "show banking threads"). Requires at least one filter.
+ */
+export async function findClientThreadsForWorker(input: {
+  account_id?: unknown
+  contact_id?: unknown
+  lead_id?: unknown
+  topic?: unknown
+  limit?: unknown
+}): Promise<string> {
+  const accountId = typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
+  const contactId = typeof input.contact_id === "string" && input.contact_id.length > 0 ? input.contact_id : null
+  const leadId = typeof input.lead_id === "string" && input.lead_id.length > 0 ? input.lead_id : null
+  const topic = typeof input.topic === "string" && input.topic.length > 0 ? input.topic.trim().toLowerCase() : null
+  let limit = typeof input.limit === "number" && Number.isFinite(input.limit) ? Math.floor(input.limit) : 20
+  if (limit < 1) limit = 1
+  if (limit > 50) limit = 50
+
+  if (!accountId && !contactId && !leadId && !topic) {
+    return "find_client_threads needs at least one filter: account_id, contact_id, lead_id, or topic."
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  let q = db
+    .from("client_threads")
+    .select("id, account_id, contact_id, lead_id, topic_slug, source, source_ref, status, created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit)
+  if (accountId) q = q.eq("account_id", accountId)
+  if (contactId) q = q.eq("contact_id", contactId)
+  if (leadId) q = q.eq("lead_id", leadId)
+  if (topic) q = q.eq("topic_slug", topic)
+
+  const { data, error } = await q
+  if (error) return `❌ find_client_threads failed: ${error.message}`
+  if (!data || data.length === 0) return "No tagged conversations match that filter yet."
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lines = (data as any[]).map((r) => {
+    const when = typeof r.created_at === "string" ? r.created_at.slice(0, 10) : ""
+    let link = ""
+    if (r.source === "slack" && typeof r.source_ref === "string" && r.source_ref.includes(":")) {
+      const [ch, ts] = r.source_ref.split(":")
+      if (ch && ts) link = ` — https://slack.com/archives/${ch}/p${ts.replace(".", "")}`
+    }
+    return `• [${r.topic_slug ?? "untagged"}] ${r.status} (${when})${link}`
+  })
+  return `Found ${data.length} tagged conversation(s):\n${lines.join("\n")}`
+}
+
+/**
  * memory_save — knowledge-only write (Phase 3, Decision Memory). It writes ONLY
  * to the decision_memory knowledge store (a correction / business decision /
  * pricing rule the worker learned); it NEVER touches client or business data and
@@ -1370,6 +1579,21 @@ export async function executeWorkerTool(
     // start_code_task above.
     return sendPortalMessageFromWorker(params)
   }
+  // Client Threads — Slack-only. Executor-gate too (defense-in-depth, R108): the
+  // tag WRITE and the lookup READ must never fire for the Hermes research worker
+  // even if a name leaks. tag is only offered for #td-support (enableClientThreadTag).
+  if (name === "tag_client_thread") {
+    if (!availableNames?.has("tag_client_thread")) {
+      return `❌ Tool "tag_client_thread" is not permitted in this worker call (client-thread tagging not enabled).`
+    }
+    return tagClientThreadFromWorker(params)
+  }
+  if (name === "find_client_threads") {
+    if (!availableNames?.has("find_client_threads")) {
+      return `❌ Tool "find_client_threads" is not permitted in this worker call (client-thread lookup not enabled).`
+    }
+    return findClientThreadsForWorker(params)
+  }
   if (name === "propose_action") {
     // Inject the originating agent_messages id server-side so the proposal links
     // to the conversation that produced it (the Slack worker later resolves a
@@ -1654,6 +1878,21 @@ export interface CallWorkerOptions {
    * Kept out of WORKER_TOOLS so the Hermes/Telegram research worker never gets it (R108).
    */
   enableFullToolReach?: boolean
+  /**
+   * Expose the Slack-only WRITE tool tag_client_thread for this call. Set by the
+   * Slack worker (processSlackEvent) ONLY for the #td-support channel
+   * (SLACK_SUPPORT_CHANNEL_ID). When true, TAG_CLIENT_THREAD_TOOL is appended to the
+   * resolved tool list. Kept OUT of WORKER_TOOLS so the Hermes/Telegram research
+   * worker never gets it (R108). The write lands in the purpose-built client_threads
+   * table (not the trusted CRM log), source_kind='auto'.
+   */
+  enableClientThreadTag?: boolean
+  /**
+   * Expose the Slack-only READ tool find_client_threads for this call. Set by the
+   * Slack worker (processSlackEvent). Read-only ("what's open for this client").
+   * Kept OUT of WORKER_TOOLS so the Hermes/Telegram research worker never gets it (R108).
+   */
+  enableClientThreadRead?: boolean
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -2030,6 +2269,17 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     for (const t of [FIND_TOOL_TOOL, USE_TOOL_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
+  }
+
+  // Slack-only: Client Threads tagging (WRITE) + lookup (READ). tag is gated on
+  // enableClientThreadTag (set ONLY for #td-support), find on enableClientThreadRead.
+  // Both kept off the Hermes research worker (R108) and never double-add; the executor
+  // re-checks availableNames (defense-in-depth).
+  if (opts.enableClientThreadTag && !tools.some((t) => t.name === TAG_CLIENT_THREAD_TOOL.name)) {
+    tools = [...tools, TAG_CLIENT_THREAD_TOOL]
+  }
+  if (opts.enableClientThreadRead && !tools.some((t) => t.name === FIND_CLIENT_THREADS_TOOL.name)) {
+    tools = [...tools, FIND_CLIENT_THREADS_TOOL]
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send

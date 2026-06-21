@@ -450,3 +450,6 @@ While the worker runs `callWorker` (one non-interruptible API call, ~8–15 s), 
 
 - [`agent-bridge.md`](agent-bridge.md) — Hermes ↔ Claude bridge (same `agent_messages` table, same `callWorker` pattern)
 - [`hooks-guardrails.md`](hooks-guardrails.md) — Sandbox enforcement (SANDBOX_MODE blocks `/api/webhooks/*`)
+
+---
+_2026-06-21 — Client Threads (Phase 1, dev_task 54f89912): added the Slack-only `tag_client_thread` (write) + `find_client_threads` (read) tools in `lib/ai-agent/worker-tools.ts` (gated via `enableClientThreadTag`/`enableClientThreadRead`, kept OUT of `WORKER_TOOLS`, R108) and wired the `#td-support` auto-tag in `lib/ai-agent/slack-claude.ts::processSlackEvent`. Full subsystem doc: [client-threads.md](client-threads.md)._

@@ -893,6 +893,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     throw new Error(`agent_messages row ${row.id} missing slack_channel_id in context_json`)
   }
 
+  // Client Threads (Phase 1): auto-tagging is scoped to the #td-support channel only
+  // (NOISE GATE 1). SLACK_SUPPORT_CHANNEL_ID must be set in Vercel; when unset, tagging
+  // stays OFF (safe default) so a dev/internal channel can never create client tags.
+  const isSupportChannel =
+    !!process.env.SLACK_SUPPORT_CHANNEL_ID && channelId === process.env.SLACK_SUPPORT_CHANNEL_ID
+
   // ── In-channel approval completion (loop fix) ──────────────────────────────
   // A message that is EXACTLY a 6-digit code from the authorized approver
   // (Antonio) is an approval, not a chat turn. Resolve it deterministically and
@@ -961,6 +967,13 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external is queued for Antonio's approval — show him the draft and wait for his explicit OK before proposing; a few tools (raw SQL, deletes) are blocked. Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available. CRITICAL: before ever telling Antonio a tool or capability "doesn't exist", you MUST search the full catalog with find_tool first — your named tools are only a small slice of what's available, so never answer "I don't have that" from memory. MATCH THE NOUN TO THE RIGHT DATA: a word usually has a DEDICATED tool — e.g. "offers" means the actual offer records (use_tool with offer_list), NOT leads or deals in an "Offer Sent" pipeline stage (a different thing with a different count). When the question is about offers / invoices / leases / calls / a specific record type, find_tool that exact noun and use its dedicated tool — do NOT substitute a search_leads / search_deals proxy and present it as the answer.`
   }
 
+  // Client Threads (#td-support only): instruct the worker to auto-tag the thread
+  // with the client + topic so it's pullable later. Only added when the tool is
+  // actually offered (support channel) — keeps the prompt clean elsewhere.
+  if (isSupportChannel) {
+    slackSystemPrompt = `${slackSystemPrompt}\n\nCLIENT THREADS (this is #td-support): every thread here is about a client. When you can CONFIDENTLY identify the client this conversation is about — an account (LLC), a contact (person), or a lead (prospect), resolved with the CRM search tools — call tag_client_thread ONCE with that client's id + a topic slug (banking, billing, closure, documents, formation, general, itin, lease, tax; use 'general' if unsure). Then end your reply with "📌 Tagged: <client name> · <topic> — reply to change". If you CANNOT resolve a real client (e.g. it's an internal/dev note), do NOT tag. To pull up a client's past threads, use find_client_threads.`
+  }
+
   // Only add `images` to the opts when there are blocks — keeps the text-only
   // call shape identical to before (and to the Hermes/Telegram path).
   const workerOpts: CallWorkerOptions = {
@@ -969,6 +982,10 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     systemPromptOverride: slackSystemPrompt,
     enableCodeTasks: true,
     enableSlackSend: true,
+    // Client Threads: lookup (READ) available in any Slack channel; tagging (WRITE)
+    // only in #td-support (NOISE GATE 1). Kept off the Hermes worker (R108).
+    enableClientThreadRead: true,
+    enableClientThreadTag: isSupportChannel,
     // Dig-in gear: read-only SQL for deep client investigation, plus more tool-loop
     // headroom than the default 8 so a real investigation doesn't get cut off.
     enableDbRead: true,
@@ -1108,6 +1125,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableCallReads: true,
           enableDocReads: true,
           enableCalendly: true,
+          enableClientThreadRead: true,
+          enableClientThreadTag: isSupportChannel,
           enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
           maxIterations: 20,
         }

@@ -365,6 +365,10 @@ describe("processSlackEvent", () => {
       enableCallReads: true,
       enableDocReads: true,
       enableCalendly: true,
+      // Client Threads: read available everywhere; tag OFF here (channel is #td-dev,
+      // not the SLACK_SUPPORT_CHANNEL_ID-gated #td-support).
+      enableClientThreadRead: true,
+      enableClientThreadTag: false,
       enableFullToolReach: false,
       maxIterations: 20,
     })

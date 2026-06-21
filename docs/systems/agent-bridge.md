@@ -327,3 +327,6 @@ _Shipped 2026-06-05 (sandbox-first; branch `feat/macmini-executor`). No new migr
 - Production sanity: `vercel cron list` in the production project should show `/api/cron/hermes-bridge` at `*/5 * * * *`.
 - Sandbox QA scenarios are listed in dev_task `1a0d1354`'s description (idempotency, race, stale recovery, failure path).
 - **Phase 2 Slice 2:** `npm run test:unit -- approval-executor` should pass. Confirm the executor cron is registered: `grep -A2 approval-executor vercel.json`. Confirm the kill switch: the executor route returns `{disabled:true}` unless `APPROVAL_RAIL_ENABLED='true'`. `approval_queue` needs no Slice 2 migration — verify its columns (`decided_by`, `claimed_at`, `executed_at`, `result`, `error_text`) and the `approval_status` enum (`executing`/`executed`/`failed`/`expired`) exist: `psql "$SUPABASE_DB_URL" -c "\d approval_queue"` against sandbox.
+
+---
+_2026-06-21 — Client Threads (Phase 1, dev_task 54f89912): added the Slack-only `tag_client_thread` (write) + `find_client_threads` (read) tools in `lib/ai-agent/worker-tools.ts` (gated via `enableClientThreadTag`/`enableClientThreadRead`, kept OUT of `WORKER_TOOLS`, R108) and wired the `#td-support` auto-tag in `lib/ai-agent/slack-claude.ts::processSlackEvent`. Full subsystem doc: [client-threads.md](client-threads.md)._

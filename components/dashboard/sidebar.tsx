@@ -33,6 +33,7 @@ import {
   PhoneIncoming,
   Mail,
   ClipboardCheck,
+  Tag,
   MapPin,
   LayoutGrid,
 } from 'lucide-react'
@@ -94,6 +95,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
+  { id: 'conversations', name: 'Conversations', href: '/conversations', icon: Tag, tooltip: 'Client threads tagged by client + topic — pull up everything for a client or a topic. Auto-tagged from #td-support.' },
   { id: 'client-audit', name: 'Client Audit', href: '/clients/audit', icon: ClipboardCheck, tooltip: 'Point zero — review every active client account, establish ground truth, fix data inconsistencies.' },
   { id: 'addresses', name: 'Addresses', href: '/addresses', icon: MapPin, tooltip: 'Address registry — manage shared legal, mailing, and registered agent addresses used across all accounts.' },
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
