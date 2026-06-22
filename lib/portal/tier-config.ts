@@ -113,6 +113,14 @@ export function isPartnerPortal(portalRole: string | null | undefined): boolean 
   return portalRole === 'partner'
 }
 
+export function hasPartnerRole(portalRole: string | null | undefined): boolean {
+  return portalRole === 'partner' || portalRole === 'client+partner'
+}
+
+export function hasClientRole(portalRole: string | null | undefined): boolean {
+  return !portalRole || portalRole === 'client' || portalRole === 'client+partner'
+}
+
 // Features excluded for One-Time accounts (standalone service customers)
 // They get portal access but don't need annual management tools.
 // 'billing' is intentionally NOT excluded — One-Time customers still receive

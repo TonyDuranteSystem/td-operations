@@ -98,11 +98,18 @@ export default async function PortalDashboardPage() {
     )
   }
 
-  // Partners have their own section — redirect immediately
+  // Partners have their own section — redirect immediately UNLESS they are also a client
   if (contactId) {
-    const { getPortalRoleByContact } = await import('@/lib/portal/queries')
+    const { getPortalRoleByContact, parsePortalRoles } = await import('@/lib/portal/queries')
     const portalRole = await getPortalRoleByContact(contactId)
-    if (portalRole === 'partner') redirect('/portal/partner/clients')
+    const { isClient, isPartner } = parsePortalRoles(portalRole)
+    if (isPartner && !isClient) redirect('/portal/partner/clients')
+    // Dual-role users: check if they chose partner mode
+    if (isPartner && isClient) {
+      const cookieStore = await cookies()
+      const activeRoleCookieVal = cookieStore.get('portal_active_role')?.value
+      if (activeRoleCookieVal === 'partner') redirect('/portal/partner/clients')
+    }
   }
 
   // Get accounts (may be empty for leads)

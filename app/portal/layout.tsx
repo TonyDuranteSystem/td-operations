@@ -151,6 +151,10 @@ export default async function PortalLayout({
   const [contactTier, portalRole] = contactId
     ? await Promise.all([getPortalTierByContact(contactId), getPortalRoleByContact(contactId)])
     : [(user.app_metadata?.portal_tier as string) || 'lead', null]
+  // Dual-role: read which viewing mode the user chose (defaults to 'client')
+  const activeRoleCookieVal = cookieStore.get('portal_active_role')?.value
+  const activeRoleMode: 'client' | 'partner' =
+    (portalRole === 'client+partner' && activeRoleCookieVal === 'partner') ? 'partner' : 'client'
   const selected = resolveSelectedEntity({
     accounts, inProgress, accountCookie: cookieAccountId, formationCookie: cookieFormation, fallbackTier: contactTier,
   })
@@ -222,6 +226,7 @@ export default async function PortalLayout({
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
             portalRole={portalRole}
+            activeRoleMode={activeRoleMode}
             hasWizardPending={hasWizardPending}
             inProgress={inProgress}
             selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}

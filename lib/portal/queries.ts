@@ -949,13 +949,28 @@ export async function getPortalTierByContact(contactId: string): Promise<string>
 }
 
 export async function getPortalRoleByContact(contactId: string): Promise<string | null> {
-  const { data } = await supabaseAdmin
+  const { data: raw } = await supabaseAdmin
     .from('contacts')
-    .select('portal_role')
+    .select('portal_role, portal_roles')
     .eq('id', contactId)
-    .single()
+    .maybeSingle()
+  if (!raw) return null
+  const data = raw as unknown as { portal_role: string | null; portal_roles: string[] | null }
+  // portal_roles array is authoritative when present
+  if (data.portal_roles && data.portal_roles.length > 0) {
+    const roles = data.portal_roles
+    if (roles.includes('client') && roles.includes('partner')) return 'client+partner'
+    return roles[0]
+  }
+  // Fallback: legacy portal_role column
+  return data.portal_role ?? null
+}
 
-  return data?.portal_role || null
+export function parsePortalRoles(portalRole: string | null): { isClient: boolean; isPartner: boolean } {
+  if (portalRole === 'client+partner') return { isClient: true, isPartner: true }
+  if (portalRole === 'partner') return { isClient: false, isPartner: true }
+  if (portalRole === 'client') return { isClient: true, isPartner: false }
+  return { isClient: true, isPartner: false }
 }
 
 /**
