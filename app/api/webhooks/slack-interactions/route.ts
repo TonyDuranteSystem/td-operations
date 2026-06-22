@@ -25,13 +25,13 @@ export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
 import {
   verifySlackSignature,
   parseSlackInteractionFull,
   updateSlackMessage,
   openClientConversationModal,
   searchClientsForSlackOptions,
-  createClientConversationFromModal,
   findOpenConversationForEntityTopic,
   buildDuplicateConfirmView,
   ensureTopicSlugFromText,
@@ -49,6 +49,37 @@ import {
 function selectedValue(viewState: any, blockId: string, actionId: string): string | null {
   const sel = viewState?.values?.[blockId]?.[actionId]?.selected_option
   return (sel?.value as string | undefined) ?? null
+}
+
+/**
+ * Fire-and-forget the actual thread creation to a background endpoint so the modal
+ * submit can respond within Slack's ~3s window even on a cold start. Mirrors
+ * fireWorkerTrigger in the @Claude events path: we await only long enough to
+ * dispatch the request, then abort — the background function keeps running
+ * server-side and does the slow chat.postMessage + client_threads insert.
+ */
+async function fireClientThreadCreate(args: {
+  channelId: string
+  userId: string | null
+  clientValue: string
+  topicSlug: string
+}): Promise<void> {
+  const url = `${getInternalBaseUrl()}/api/cron/client-thread-create`
+  const cronSecret = process.env.CRON_SECRET ?? ""
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 1500)
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cronSecret}`, "content-type": "application/json" },
+      body: JSON.stringify(args),
+      signal: controller.signal,
+    })
+  } catch {
+    // AbortError is expected — the background function keeps running server-side.
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -83,15 +114,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     if (confirm) {
       if (!confirm.channel || !confirm.clientValue || !confirm.topicSlug) return NextResponse.json({})
-      const res = await createClientConversationFromModal({
+      // Create in the background so we respond within Slack's 3s window.
+      await fireClientThreadCreate({
         channelId: confirm.channel,
         userId: it.userId,
         clientValue: confirm.clientValue,
         topicSlug: confirm.topicSlug,
       })
-      if (!res.ok) {
-        return NextResponse.json({ response_action: "errors", errors: { client_block: res.error ?? "Failed." } })
-      }
       return NextResponse.json({})
     }
 
@@ -135,18 +164,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       })
     }
 
-    const res = await createClientConversationFromModal({
-      channelId,
-      userId: it.userId,
-      clientValue,
-      topicSlug,
-    })
-    if (!res.ok) {
-      return NextResponse.json({
-        response_action: "errors",
-        errors: { client_block: res.error ?? "Could not start the conversation — try again." },
-      })
-    }
+    // No open duplicate — create in the background so we respond within Slack's 3s
+    // window (cold-start of chat.postMessage + insert can otherwise exceed it and
+    // surface "We had some trouble connecting" even though the thread was created).
+    await fireClientThreadCreate({ channelId, userId: it.userId, clientValue, topicSlug })
     // Empty 200 closes the modal cleanly.
     return NextResponse.json({})
   }
