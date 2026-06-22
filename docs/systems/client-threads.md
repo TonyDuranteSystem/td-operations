@@ -107,3 +107,5 @@ _2026-06-21 (Phase 1b) — per-entity COLLAPSIBLE Conversations panel on contact
 _2026-06-21 (Phase 1b polish) — cleanSlackText() renders thread messages readable in the CRM panel (resolves <@user> mentions to names, strips :emoji: shortcodes + *bold*/_italic_/`code`, unwraps <url|label>). Backfilled crm_log rows now expand to their stored conversations content (client_message/response_sent) instead of "no thread"._
 
 _2026-06-22 (Phase 2.3) — CLOSE a conversation (frozen transcript). New client_threads cols transcript/closed_at/closed_by (migration 20260622-0900). closeClientThread snapshots the full thread into transcript + status=closed; reopenClientThread reverts to live. Close from CRM (Close/Reopen button in the panel → /api/client-threads/[id]/close) OR from Slack (✅ reaction on the conversation's starting message). Closed → messages endpoint serves the frozen snapshot (permanent, survives Slack deletion)._
+
+_2026-06-22 (Phase 1b polish) — Conversations panel now shows timestamps: each message renders its date+time (fmtSlackTs), and the row header shows "Opened <date time>" (fmtDateTime)._

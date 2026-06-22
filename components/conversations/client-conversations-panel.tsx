@@ -19,10 +19,27 @@ interface ThreadMessage {
   ts: string
 }
 
+/** Format an ISO timestamp as a readable date + time. */
+function fmtDateTime(iso: string): string {
+  if (!iso) return ""
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+}
+
+/** Format a Slack message ts ("epoch.micro") as a readable date + time. */
+function fmtSlackTs(ts: string): string {
+  if (!ts) return ""
+  const sec = parseFloat(ts)
+  if (!isFinite(sec)) return ""
+  const d = new Date(Math.floor(sec) * 1000)
+  return isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+}
+
 /**
  * Collapsible Conversations list for a single CRM entity (no rollup): shows the
- * client_threads tagged to this contact / account / lead. Each row = topic · date ·
- * Slack link; expanding a row pulls the thread's messages LIVE from Slack.
+ * client_threads tagged to this contact / account / lead. Each row = topic · opened
+ * date/time · Slack link; expanding a row pulls the thread's messages (each with its
+ * own date/time) LIVE from Slack.
  */
 export function ClientConversationsPanel({
   entityType,
@@ -129,7 +146,7 @@ export function ClientConversationsPanel({
               <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700 text-xs font-medium shrink-0">
                 {t.topic_slug ?? "untagged"}
               </span>
-              <span className="text-zinc-500 text-sm shrink-0">{t.created_at?.slice(0, 10)}</span>
+              <span className="text-zinc-500 text-sm shrink-0">Opened {fmtDateTime(t.created_at)}</span>
               {t.status === "closed" && (
                 <span className="px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-600 text-[10px] font-medium shrink-0">
                   Closed
@@ -189,11 +206,16 @@ export function ClientConversationsPanel({
                   </div>
                 )}
                 {Array.isArray(msgs) && msgs.length > 0 && (
-                  <div className="space-y-2 py-2">
+                  <div className="space-y-2.5 py-2">
                     {msgs.map((m, i) => (
                       <div key={i} className="text-sm">
-                        <span className="font-medium text-zinc-800">{m.author}: </span>
-                        <span className="text-zinc-700 whitespace-pre-wrap">{m.text}</span>
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-medium text-zinc-800">{m.author}</span>
+                          {fmtSlackTs(m.ts) && (
+                            <span className="text-[11px] text-zinc-400">{fmtSlackTs(m.ts)}</span>
+                          )}
+                        </div>
+                        <div className="text-zinc-700 whitespace-pre-wrap">{m.text}</div>
                       </div>
                     ))}
                   </div>
