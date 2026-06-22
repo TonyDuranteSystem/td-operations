@@ -16,7 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getOrInitNameChecks, handleNameAction, type NameAction } from '@/lib/operations/formation-name-checks'
 
-const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected']
+const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names']
 
 async function requireStaff() {
   const supabase = createClient()
@@ -46,15 +46,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!ACTIONS.includes(action)) {
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 })
   }
-  if (!Number.isInteger(nameIndex) || nameIndex < 0) {
+  // request_new_names is not tied to a specific candidate, so it needs no index.
+  if (action !== 'request_new_names' && (!Number.isInteger(nameIndex) || nameIndex < 0)) {
     return NextResponse.json({ success: false, error: 'name_index must be a non-negative integer.' }, { status: 400 })
   }
+  const idx = Number.isInteger(nameIndex) && nameIndex >= 0 ? nameIndex : 0
 
   const who = (auth.user.user_metadata?.full_name as string | undefined)
     || (auth.user.email as string | undefined)
     || 'staff'
 
-  const result = await handleNameAction({ sdId: params.id, action, nameIndex, actor: who, actorId: auth.user.id })
+  const result = await handleNameAction({ sdId: params.id, action, nameIndex: idx, actor: who, actorId: auth.user.id })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, name_checks: result.name_checks })
 }

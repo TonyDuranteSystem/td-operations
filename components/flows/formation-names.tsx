@@ -37,6 +37,8 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   const [authError, setAuthError] = useState(false)
   const [busyIndex, setBusyIndex] = useState<number | null>(null)
   const [advancing, setAdvancing] = useState(false)
+  const [requestingNames, setRequestingNames] = useState(false)
+  const [requestSent, setRequestSent] = useState(false)
 
   const sos = resolveFormationFilingLink(stateOfFormation)
   // The name-selection workflow (check on SOS → mark available → send to client →
@@ -91,6 +93,25 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
       setError(err instanceof Error && err.message ? err.message : 'Could not update the name.')
     } finally {
       setBusyIndex(null)
+    }
+  }
+
+  async function requestNewNames() {
+    setRequestingNames(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'request_new_names', name_index: 0 }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not send the request to the client.')
+      setRequestSent(true)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not send the request to the client.')
+    } finally {
+      setRequestingNames(false)
     }
   }
 
@@ -168,6 +189,16 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   }
 
   const canAdvance = hasFiledName(checks)
+  // Every candidate is a dead end (unavailable / rejected by client or SOS) and
+  // none is still viable — offer to ask the client for a fresh set of names.
+  const allDead =
+    checks.length > 0 &&
+    checks.every(
+      (c) =>
+        c.status === 'not_available' ||
+        c.status === 'rejected_by_client' ||
+        c.status === 'rejected_by_sos',
+    )
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
@@ -218,6 +249,28 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
             )
           })}
         </ul>
+      )}
+
+      {selectionStage && allDead && (
+        <div className="mt-4 border-t border-zinc-100 pt-3">
+          {requestSent ? (
+            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              Request sent — waiting for the client to propose new names. They&apos;ll appear here once submitted.
+            </p>
+          ) : (
+            <>
+              <button
+                onClick={requestNewNames}
+                disabled={requestingNames}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {requestingNames ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                Request New Names from Client
+              </button>
+              <p className="mt-1.5 text-[11px] text-zinc-400">None of the current names are viable — ask the client to propose 3 new LLC names.</p>
+            </>
+          )}
+        </div>
       )}
 
       {stage === 'Wizard Submitted' && (

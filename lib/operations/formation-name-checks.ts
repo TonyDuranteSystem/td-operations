@@ -27,6 +27,9 @@ export type NameAction =
   | 'send_to_client'
   | 'mark_filed'
   | 'mark_sos_rejected'
+  // Not tied to a specific candidate — asks the client for a fresh set of names
+  // when none of the current ones are viable (all unavailable / rejected).
+  | 'request_new_names'
 
 interface SdRow {
   id: string
@@ -186,6 +189,29 @@ export async function handleNameAction(params: {
   if (!row) return { ok: false, error: 'Service delivery not found.' }
 
   const checks = await getOrInitNameChecks(params.sdId)
+
+  // request_new_names is not tied to a specific candidate — it asks the client
+  // for a fresh set when none of the current names are viable. Handle before the
+  // per-name entry lookup (no nameIndex required).
+  if (params.action === 'request_new_names') {
+    const created = await createDecisionRequest({
+      service_delivery_id: params.sdId,
+      request_type: 'text_input',
+      title: 'New LLC Names Needed',
+      message: `Unfortunately none of your proposed LLC names are available. Please propose 3 new LLC names so we can check their availability.`,
+      message_it: `Purtroppo nessuno dei nomi proposti per la tua LLC è disponibile. Proponi 3 nuovi nomi così possiamo verificarne la disponibilità.`,
+      options: {
+        prompt: 'Please propose 3 new LLC names',
+        placeholder: 'NameOne LLC, NameTwo LLC, NameThree LLC',
+        required: true,
+        name_check: { kind: 'new_names' },
+      },
+      created_by: params.actor,
+    })
+    if (!created.ok) return { ok: false, error: created.error }
+    return { ok: true, name_checks: checks }
+  }
+
   const entry = checks[params.nameIndex]
   if (!entry) return { ok: false, error: 'Name not found at that index.' }
 
@@ -242,6 +268,30 @@ export async function handleNameAction(params: {
   }
 
   await writeNameChecks(params.sdId, checks)
+
+  // After an SOS rejection, revert the SD to "Wizard Submitted" so the name
+  // panel becomes actionable again for the client's resubmitted names (at
+  // "Filed with State" the panel is read-only). Use the canonical advance path
+  // so the formation_progress task's sd_stage stays synced; skip_tasks +
+  // skip_notify so we neither re-spawn stage tasks nor send the client a
+  // confusing "moved to Wizard Submitted" notification. Best-effort — the name
+  // is already rejected and the new-names request already created.
+  if (params.action === 'mark_sos_rejected') {
+    try {
+      const { advanceServiceDelivery } = await import('@/lib/service-delivery')
+      await advanceServiceDelivery({
+        delivery_id: params.sdId,
+        target_stage: 'Wizard Submitted',
+        skip_tasks: true,
+        skip_notify: true,
+        actor: 'name-sos-rejected',
+        notes: `SOS rejected "${entry.name}" — reverted to Wizard Submitted for name re-selection`,
+      })
+    } catch {
+      /* best-effort: stage revert is non-critical to the rejection itself */
+    }
+  }
+
   return { ok: true, name_checks: checks }
 }
 
