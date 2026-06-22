@@ -710,12 +710,56 @@ export async function materializeFormationCompany(
       .eq("contact_id", params.contact_id)
       .eq("service_type", "Company Formation")
       .eq("status", "active")
-      .select("id")
+      .select("id, source_offer_token")
     steps.push({
       step: "sd_link",
       status: "ok",
       detail: `${updatedSds?.length ?? 0} SD(s) linked to account`,
     })
+
+    // 10d. Link the formation OFFER to the new account. The portal "Set up your
+    // new company" banner (app/portal/page.tsx) shows for COMPLETED formation
+    // offers with account_id IS NULL — once the company is real, that offer must
+    // carry the account_id or the banner persists forever. Match by the SD's
+    // source_offer_token (canonical link), falling back to the formation lead.
+    // Best-effort — never fail materialization over a banner link.
+    try {
+      const offerTokens = (updatedSds ?? [])
+        .map((s) => (s as { source_offer_token?: string | null }).source_offer_token)
+        .filter((tok): tok is string => !!tok)
+      let linkedOffers = 0
+      if (offerTokens.length > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
+        const { data: upd } = await supabaseAdmin
+          .from("offers")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .in("token", offerTokens)
+          .is("account_id", null)
+          .select("token")
+        linkedOffers = upd?.length ?? 0
+      } else if (wp?.lead_id) {
+        // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
+        const { data: upd } = await supabaseAdmin
+          .from("offers")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .eq("lead_id", wp.lead_id)
+          .eq("contract_type", "formation")
+          .is("account_id", null)
+          .select("token")
+        linkedOffers = upd?.length ?? 0
+      }
+      steps.push({
+        step: "offer_account_link",
+        status: "ok",
+        detail: `${linkedOffers} formation offer(s) linked to account ${offerTokens.length ? "(by token)" : wp?.lead_id ? "(by lead)" : "(no link available)"}`,
+      })
+    } catch (offerErr) {
+      steps.push({
+        step: "offer_account_link",
+        status: "error",
+        detail: offerErr instanceof Error ? offerErr.message : String(offerErr),
+      })
+    }
 
     // 10a. Backfill account_id on flow-stamped documents. The workspace "Filed
     // with State" stage uploads the Articles of Organization BEFORE the company
