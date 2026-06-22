@@ -115,6 +115,28 @@ async function parentMessageMentionsClaude(channelId: string, threadTs: string):
   }
 }
 
+/**
+ * Is this thread an OPEN /client conversation (a client_threads row)? If so, plain
+ * replies are processed by the worker WITHOUT requiring @Claude — these threads are
+ * dedicated worker conversations. Only OPEN ones (closed = done). Best-effort: any
+ * failure → false (falls back to the strict @-mention gate). dev_task 54f89912.
+ */
+async function isOpenClientConversationThread(channelId: string, threadTs: string): Promise<boolean> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabaseAdmin as any)
+      .from("client_threads")
+      .select("id")
+      .eq("source", "slack")
+      .eq("source_ref", `${channelId}:${threadTs}`)
+      .eq("status", "open")
+      .maybeSingle()
+    return !!data
+  } catch {
+    return false
+  }
+}
+
 async function fireWorkerTrigger(messageId: string): Promise<void> {
   const url = `${getInternalBaseUrl()}/api/cron/slack-claude-worker?message_id=${encodeURIComponent(messageId)}`
   const cronSecret = process.env.CRON_SECRET ?? ""
@@ -373,8 +395,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Case 2 — aimed at another user/bot, not Claude.
         return NextResponse.json({ ok: true, skipped: "directed_at_other" })
       }
-      // Case 3 — no @mention: only continue a thread Claude was invited into.
-      if (!threadTs || !(await parentMessageMentionsClaude(channelId, threadTs))) {
+      // Case 3 — no @mention: continue a thread Claude was invited into, OR an
+      // OPEN /client conversation thread (a dedicated worker conversation, where
+      // every reply is for the worker — no @Claude needed). dev_task 54f89912.
+      if (
+        !threadTs ||
+        (!(await parentMessageMentionsClaude(channelId, threadTs)) &&
+          !(await isOpenClientConversationThread(channelId, threadTs)))
+      ) {
         return NextResponse.json({ ok: true, skipped: "not_invited" })
       }
     }

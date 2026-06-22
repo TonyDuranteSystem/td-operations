@@ -764,7 +764,7 @@ export async function createClientConversationFromModal(args: {
   }
 
   const by = args.userId ? `<@${args.userId}>` : "the team"
-  const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\nReply in this thread; mention @Claude to bring in the worker. Everything here is saved to the CRM.`
+  const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\nJust reply here — I'm listening (no need to @ me). Everything is saved to the CRM.`
   const threadTs = await postSlackMessage(args.channelId, text, null)
   if (!threadTs) return { ok: false, error: "could not post the conversation message" }
 
