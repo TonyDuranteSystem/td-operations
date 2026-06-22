@@ -504,6 +504,57 @@ export async function fetchSlackThreadMessages(
   }
 }
 
+/**
+ * Close a client conversation: snapshot the full thread into client_threads.transcript
+ * (frozen, permanent), set status='closed' + closed_at. Idempotent. Returns ok=false
+ * only on a genuine lookup error.
+ */
+export async function closeClientThread(
+  id: string,
+  closedBy?: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { data: row, error } = await db
+    .from("client_threads")
+    .select("source, source_ref, status")
+    .eq("id", id)
+    .maybeSingle()
+  if (error) return { ok: false, error: error.message }
+  if (!row) return { ok: false, error: "not found" }
+  if (row.status === "closed") return { ok: true }
+
+  let transcript: Array<{ author: string; text: string; ts: string }> = []
+  if (row.source === "slack" && typeof row.source_ref === "string" && row.source_ref.includes(":")) {
+    const [ch, ts] = row.source_ref.split(":")
+    transcript = await fetchSlackThreadMessages(ch, ts)
+  }
+  await db
+    .from("client_threads")
+    .update({
+      status: "closed",
+      closed_at: new Date().toISOString(),
+      closed_by: closedBy ?? null,
+      transcript,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .neq("status", "closed")
+  return { ok: true }
+}
+
+/** Reopen a closed conversation: back to live (status='open', clear the frozen snapshot). */
+export async function reopenClientThread(id: string): Promise<{ ok: boolean; error?: string }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { error } = await db
+    .from("client_threads")
+    .update({ status: "open", closed_at: null, transcript: null, updated_at: new Date().toISOString() })
+    .eq("id", id)
+  if (error) return { ok: false, error: error.message }
+  return { ok: true }
+}
+
 /** Open a Block Kit modal (views.open) with a trigger_id from a button click. */
 export async function openSlackModal(
   triggerId: string,

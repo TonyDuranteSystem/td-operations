@@ -26,11 +26,16 @@ export async function GET(
   const db = supabaseAdmin as any
   const { data: row, error } = await db
     .from("client_threads")
-    .select("source, source_ref")
+    .select("source, source_ref, status, transcript")
     .eq("id", params.id)
     .maybeSingle()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  // Closed conversation → serve the frozen snapshot (permanent, independent of Slack).
+  if (row.status === "closed" && Array.isArray(row.transcript)) {
+    return NextResponse.json({ messages: row.transcript, closed: true })
+  }
 
   // Backfilled CRM-log rows: source_ref is a conversations row id — return its
   // stored message/response so the historical entry is readable here too.

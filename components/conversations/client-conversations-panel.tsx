@@ -70,6 +70,31 @@ export function ClientConversationsPanel({
     [openId, messages],
   )
 
+  const setStatus = useCallback((id: string, status: string) => {
+    setThreads((ts) => (ts ? ts.map((t) => (t.id === id ? { ...t, status } : t)) : ts))
+  }, [])
+
+  const closeThread = useCallback(
+    async (id: string, reopen: boolean) => {
+      try {
+        const r = await fetch(`/api/client-threads/${id}/close${reopen ? "?reopen=1" : ""}`, {
+          method: "POST",
+        })
+        if (!r.ok) return
+        setStatus(id, reopen ? "open" : "closed")
+        // Drop cached messages so the next expand reflects frozen (close) or live (reopen).
+        setMessages((m) => {
+          const c = { ...m }
+          delete c[id]
+          return c
+        })
+      } catch {
+        /* best-effort */
+      }
+    },
+    [setStatus],
+  )
+
   if (error) return <div className="text-sm text-red-600 p-4">{error}</div>
   if (threads === null)
     return (
@@ -105,7 +130,37 @@ export function ClientConversationsPanel({
                 {t.topic_slug ?? "untagged"}
               </span>
               <span className="text-zinc-500 text-sm shrink-0">{t.created_at?.slice(0, 10)}</span>
+              {t.status === "closed" && (
+                <span className="px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-600 text-[10px] font-medium shrink-0">
+                  Closed
+                </span>
+              )}
               <span className="flex-1" />
+              {t.status === "closed" ? (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeThread(t.id, true)
+                  }}
+                  className="text-zinc-500 hover:text-zinc-800 text-xs shrink-0 cursor-pointer"
+                >
+                  Reopen
+                </span>
+              ) : (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeThread(t.id, false)
+                  }}
+                  className="text-zinc-500 hover:text-red-600 text-xs shrink-0 cursor-pointer"
+                >
+                  Close
+                </span>
+              )}
               {t.slackLink && (
                 <a
                   href={t.slackLink}

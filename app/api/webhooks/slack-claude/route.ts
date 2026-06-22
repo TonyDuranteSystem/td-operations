@@ -165,6 +165,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const event = payload.event ?? {}
   const eventId: string = payload.event_id ?? ""
 
+  // ── Client Threads: ✅ reaction on a conversation's STARTING message → close it ──
+  // Only the labeled root message has `${channel}:${ts}` as a client_threads.source_ref
+  // (thread replies have different ts), so this is deliberate — react ✅ on the start
+  // message to close. Snapshots the transcript (frozen record). Needs the same
+  // reaction_added subscription as the 🧠 handler below.
+  if (event.type === "reaction_added" && event.reaction === "white_check_mark") {
+    if (event.user === CLAUDE_BOT_USER_ID) return NextResponse.json({ ok: true })
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (itemChannel && itemTs) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: ct } = await (supabaseAdmin as any)
+        .from("client_threads")
+        .select("id, status")
+        .eq("source", "slack")
+        .eq("source_ref", `${itemChannel}:${itemTs}`)
+        .maybeSingle()
+      if (ct && ct.status !== "closed") {
+        try {
+          const { closeClientThread } = await import("@/lib/ai-agent/slack-claude")
+          await closeClientThread(ct.id, null)
+          return NextResponse.json({ ok: true, closed: ct.id })
+        } catch (err) {
+          console.warn("[slack-claude-webhook] ✅ close failed:", err)
+        }
+      }
+    }
+    return NextResponse.json({ ok: true })
+  }
+
   // ── Decision Memory Phase 7: 🧠 reaction → save the message as a memory ──
   // Slack delivers reaction_added as an event_callback. The app must subscribe
   // to the `reaction_added` bot event for these to arrive (admin config — noted
