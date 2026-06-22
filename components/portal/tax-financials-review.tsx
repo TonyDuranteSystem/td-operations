@@ -17,8 +17,14 @@ interface FileCard { source_file_id: string; bank_name: string; count: number; f
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
 
+type IncomeAnswer = 'earn_spend' | 'parked_only'
+interface CompletenessItem { code: string; severity: 'warn' | 'info'; amount?: number; detail?: string }
+interface IncomeQuestionState { required: boolean; foreign_total: number; answer: IncomeAnswer | null }
+interface CompletenessSummary { items: CompletenessItem[]; income_question: IncomeQuestionState; can_accept_as_is: boolean }
+
 interface View {
   coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
+  completeness: CompletenessSummary
   draft: {
     pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number }
     members: Member[]
@@ -246,6 +252,65 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)
+    }
+  }
+
+  const answerIncome = async (value: IncomeAnswer) => {
+    setBusy('income')
+    try {
+      const res = await fetch('/api/portal/tax-financials/income-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, answer: value }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Plain-English (EN/IT) rendering of a completeness code → what it means +
+  // what would make it complete. Driven off the server's machine codes so the
+  // i18n lives in one place (the gate text itself stays technical/internal).
+  const completenessText = (item: CompletenessItem): string => {
+    const amt = item.amount !== undefined ? fmt(Math.abs(item.amount)) : ''
+    switch (item.code) {
+      case 'reconciliation_gap':
+        return it
+          ? 'Uno dei tuoi estratti conto non torna — di solito mancano dei mesi o l\'export è stato filtrato. Ricaricare l\'intero anno renderebbe il dato esatto.'
+          : 'One of your statements doesn\'t add up — usually some months are missing or the export was filtered. Re-uploading the full year would make it exact.'
+      case 'no_prior_year':
+        return it
+          ? 'Non abbiamo la dichiarazione dell\'anno scorso, quindi i saldi iniziali di quest\'anno provengono dai tuoi estratti conto. Se ce l\'hai, condividerla collegherebbe i due anni.'
+          : 'We don\'t have last year\'s tax return, so this year\'s opening balances come from your bank statements. If you have it, sharing it would tie the two years together.'
+      case 'balance_sheet_off':
+        return it
+          ? `Lo stato patrimoniale non quadra per $${amt} — di solito un conto mancante, dei mesi mancanti, o denaro tenuto in un'altra valuta o conto che non vediamo.`
+          : `Your balance sheet is off by $${amt} — usually a missing account, missing months, or money held in another currency or account we don't see.`
+      case 'capital_rollforward':
+        return it
+          ? 'I conti capitale dei soci non quadrano ancora del tutto — lo sistemiamo noi in fase di revisione.'
+          : 'The owners\' capital accounts don\'t fully tie out yet — we\'ll finish this during review.'
+      case 'ownership_incomplete':
+        return it
+          ? 'Ci serve ancora la percentuale di proprietà di ogni socio per ripartire i K-1.'
+          : 'We still need each owner\'s ownership percentage to split the K-1s.'
+      case 'unattributed_owner_moves':
+        return it
+          ? `Abbiamo trovato $${amt} di movimenti dei soci (entrate/uscite) che non siamo riusciti ad attribuire a un socio per nome — li abbiamo ripartiti per percentuale. Diccelo se è importante per te.`
+          : `We found $${amt} of owner money in/out we couldn't match to a specific owner by name — we split it by ownership %. Tell us who if it matters to you.`
+      case 'missing_fx_rate':
+        return it
+          ? `Non abbiamo un tasso di cambio ufficiale per ${item.detail} (${taxYear}), quindi quegli importi sono mostrati nella valuta originale. Aggiungiamo il tasso noi in revisione.`
+          : `We don't have an official exchange rate on file for ${item.detail} (${taxYear}), so those amounts are shown in their original currency. We'll add the rate during review.`
+      default:
+        return item.detail ?? ''
     }
   }
 
@@ -639,6 +704,88 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             </section>
           )}
 
+          {/* Completeness summary + income question (dev_task 95127bb2) —
+              translate the checks that didn't fully pass into plain language,
+              and (when there's foreign/cross-account movement) require the
+              income question before accept-as-is. */}
+          {!attested && (view.completeness.items.length > 0 || view.completeness.income_question.required) && (
+            <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5 space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Cosa abbiamo trovato' : 'What we found'}</h2>
+                <p className="text-xs text-zinc-600 mt-1">
+                  {it
+                    ? 'Questi numeri sono pronti. Alcune cose qui sotto restano incerte — puoi fornire più informazioni (modifica i tuoi dati o carica file qui sopra) oppure accettarli così come sono qui in fondo.'
+                    : 'These numbers are ready. A few things below are still uncertain — you can provide more (edit your info or upload above) or accept them as they are at the bottom.'}
+                </p>
+              </div>
+
+              {view.completeness.items.length > 0 && (
+                <ul className="space-y-2">
+                  {view.completeness.items.map((item, i) => (
+                    <li key={`${item.code}-${i}`} className="flex items-start gap-2.5">
+                      <span className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${item.severity === 'warn' ? 'text-amber-700 bg-amber-100' : 'text-zinc-500 bg-zinc-100'}`}>
+                        {item.severity === 'warn' ? '!' : 'i'}
+                      </span>
+                      <span className="text-xs text-zinc-700">{completenessText(item)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {view.completeness.income_question.required && (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 sm:p-4">
+                  <div className="text-sm font-medium text-zinc-800">
+                    {it
+                      ? 'Vediamo denaro convertito da un\'altra valuta o spostato da un altro conto. Guadagni o spendi anche direttamente in quell\'altro conto, oppure lo converti soltanto e lo sposti qui?'
+                      : 'We can see money converted from another currency or moved from another account. Do you also earn or spend money directly in that other account, or do you only convert it and move it here?'}
+                  </div>
+                  {view.completeness.income_question.answer === null ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => void answerIncome('parked_only')}
+                        className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                      >
+                        {it ? 'Lo converto soltanto e lo sposto qui' : 'I only convert it and move it here'}
+                      </button>
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => void answerIncome('earn_spend')}
+                        className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                      >
+                        {it ? 'Guadagno o spendo anche direttamente lì' : 'I also earn or spend directly there'}
+                      </button>
+                    </div>
+                  ) : view.completeness.income_question.answer === 'earn_spend' ? (
+                    <div className="mt-2 text-xs text-amber-800">
+                      {it
+                        ? 'Ricevuto. Poiché ci sono incassi o spese in un conto che non vediamo, quegli importi vanno nelle dichiarazioni dei soci nel loro Paese. Puoi comunque confermare con ciò che hai — ti ricontattiamo.'
+                        : 'Got it. Because there\'s income or spending in an account we don\'t see, those amounts belong on your partners\' home-country returns. You can still confirm with what you have — we\'ll follow up.'}
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => void answerIncome('parked_only')}
+                        className="ml-2 underline text-zinc-500 hover:text-zinc-800"
+                      >
+                        {it ? 'Cambia risposta' : 'Change answer'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-emerald-700">
+                      {it ? '✓ Grazie — registrato.' : '✓ Thanks — recorded.'}
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => void answerIncome('earn_spend')}
+                        className="ml-2 underline text-zinc-500 hover:text-zinc-800"
+                      >
+                        {it ? 'Cambia risposta' : 'Change answer'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Download + Attest */}
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 space-y-4">
             <a
@@ -658,22 +805,24 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                   <input type="checkbox" checked={attestChecked} onChange={e => setAttestChecked(e.target.checked)} className="mt-0.5" />
                   <span>
                     {it
-                      ? 'Confermo di aver controllato il Conto Economico e lo Stato Patrimoniale e che i numeri corrispondono alla realtà della mia società.'
-                      : 'I confirm I have checked the Profit & Loss and Balance Sheet and the numbers reflect my company’s reality.'}
+                      ? 'Confermo di aver controllato il Conto Economico e lo Stato Patrimoniale e accetto questi numeri così come sono, sulla base delle informazioni che ho fornito. Capisco che eventuali conti o redditi non comunicati sono una mia responsabilità.'
+                      : 'I confirm I have checked the Profit & Loss and Balance Sheet and I accept these numbers as they are, based on the information I have provided. I understand that any accounts or income I have not reported are my responsibility.'}
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.canConfirm || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || busy !== null}
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || busy !== null}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >
-                  {it ? 'Confermo i numeri' : 'Confirm the numbers'}
+                  {it ? 'Accetto e confermo' : 'Accept and confirm'}
                 </button>
-                {(!view.canConfirm || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
+                {(!view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0) && (
                   <p className="text-xs text-amber-700">
                     {view.coverage.incomplete > 0
                       ? (it ? 'Hai indicato che un export è incompleto — sostituisci il file, poi potrai confermare.' : 'You marked an export as incomplete — replace the file, then you can confirm.')
-                      : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
+                      : (view.completeness.income_question.required && view.completeness.income_question.answer === null)
+                        ? (it ? 'Rispondi prima alla domanda sull\'attività in valuta/altri conti qui sopra — poi potrai confermare.' : 'Answer the question about your foreign / other-account activity above first — then you can confirm.')
+                        : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
                   </p>
                 )}
               </div>

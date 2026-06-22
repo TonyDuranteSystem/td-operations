@@ -47,6 +47,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: blocked || 'Not everything is verified yet.' }, { status: 422 })
     }
 
+    // Income question (dev_task 95127bb2): when there is meaningful foreign /
+    // cross-account movement, it must be answered before accept-as-is — so
+    // finalizing never silently ships understated income. Either answer
+    // unblocks; we only require that the client made the call.
+    if (view.completeness.income_question.required && view.completeness.income_question.answer === null) {
+      return NextResponse.json({ error: 'Please answer the question about your foreign / other-account activity first — then you can confirm.' }, { status: 422 })
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any // financials_meta not yet in database.types.ts
     const { data: sub } = await db

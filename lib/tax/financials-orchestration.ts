@@ -17,8 +17,9 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 import { buildFinancialDraft, type DraftTransaction, type FinancialDraft } from "./financials-engine"
-import type { FxRates } from "./fx"
+import { toUsd, type FxRates } from "./fx"
 import { evaluateGates, canConfirm, type GateResult } from "./verification-gates"
+import { buildCompletenessSummary, type CompletenessSummary, type IncomeAnswer } from "./completeness"
 import { resolveOwnership, type OwnershipResolution, type OwnershipSource } from "./ownership-resolution"
 import type { PriorReturnCaseRecord } from "./prior-return-case"
 
@@ -26,6 +27,9 @@ export interface FinancialsView {
   draft: FinancialDraft
   gates: GateResult[]
   canConfirm: boolean
+  /** Plain-English "what's complete / what's uncertain" + the income question
+   *  + the accept-as-is gate (dev_task 95127bb2). */
+  completeness: CompletenessSummary
   ownership: OwnershipResolution
   priorReturn: PriorReturnCaseRecord | null
   transactionCount: number
@@ -74,16 +78,17 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   // Latest completed submission carries the wizard answers + the prior-return record.
   const { data: sub } = await supabaseAdmin
     .from("tax_return_submissions")
-    .select("submitted_data, prior_return_extracted")
+    .select("submitted_data, prior_return_extracted, financials_meta")
     .eq("account_id", accountId)
     .eq("tax_year", taxYear)
     .eq("status", "completed")
     .order("created_at", { ascending: false })
     .limit(1)
-    .maybeSingle() as { data: { submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null } | null }
+    .maybeSingle() as { data: { submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null; financials_meta: Record<string, unknown> | null } | null }
 
   const submittedData = sub?.submitted_data ?? {}
   const priorReturn = sub?.prior_return_extracted ?? null
+  const incomeAnswer = ((sub?.financials_meta?.income_attestation as { answer?: string } | undefined)?.answer ?? null) as IncomeAnswer | null
 
   // Paginated read — buildFinancialDraft re-sorts internally, so `id` order is
   // fine here; the point is to get EVERY row past the 1000-row cap (a >1000-tx
@@ -160,7 +165,22 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates })
   const gates = evaluateGates({ draft, ownership, priorReturn })
 
-  return { draft, gates, canConfirm: canConfirm(gates), ownership, priorReturn, transactionCount: transactions.length }
+  // Completeness summary (dev_task 95127bb2) — the foreign/conversion movement
+  // that drives the income question, plus any non-USD currency lacking a rate.
+  // Conversion rows + non-USD rows, in USD, are the "is there an account we
+  // don't see?" signal. Pairs may double-count — harmless for a ≥-floor gate
+  // (it only ever makes the one-tap question MORE likely to ask).
+  const foreignActivityTotal = transactions.reduce((sum, t) => {
+    const cur = (t.currency ?? "").trim().toUpperCase()
+    const isForeign = t.category === "conversion" || (cur !== "" && cur !== "USD")
+    if (!isForeign) return sum
+    const usd = fxRates ? toUsd(Number(t.amount), t.currency, fxRates).usd : Number(t.amount)
+    return sum + Math.abs(usd)
+  }, 0)
+  const missingFxCurrencies = foreignCurrencies.filter(c => !fxRates || !(fxRates[c] > 0))
+  const completeness = buildCompletenessSummary({ gates, draft, foreignActivityTotal, missingFxCurrencies, incomeAnswer })
+
+  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length }
 }
 
 /** Write resolved percentages back to account_contacts where they differ. */
