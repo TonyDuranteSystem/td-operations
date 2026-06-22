@@ -17,6 +17,7 @@ export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClientConversationFromModal, slackApiCall } from "@/lib/ai-agent/slack-claude"
+import { refreshOpenConversationsCanvas } from "@/lib/ai-agent/client-thread-follows"
 
 function isAuthorized(req: NextRequest): boolean {
   const authHeader = req.headers.get("authorization")
@@ -69,5 +70,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     return NextResponse.json({ ok: false, error: res.error }, { status: 200 })
   }
+  // New open conversation → reflect it on the shared Canvas (best-effort).
+  await refreshOpenConversationsCanvas()
   return NextResponse.json({ ok: true, threadTs: res.threadTs })
 }

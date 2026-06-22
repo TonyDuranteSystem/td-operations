@@ -197,6 +197,94 @@ export async function refreshUserFollowDigest(slackUserId: string): Promise<void
   }
 }
 
+/**
+ * Pure renderer for the shared "🗂️ Open client conversations" Canvas (markdown).
+ * Each row is a markdown link that opens the thread. Exported for unit tests.
+ */
+export function renderCanvasMarkdown(rows: FollowDigestRow[]): string {
+  const header =
+    "# 🗂️ Open client conversations\n\n_Updated automatically. Tap a conversation to open its Slack thread._\n\n"
+  if (rows.length === 0) {
+    return header + "_No open conversations right now._"
+  }
+  const lines = rows.map((r) => {
+    const opened = r.openedAt ? ` — opened ${fmtOpened(r.openedAt)}` : ""
+    const label = `${r.clientName} · ${r.topic}`
+    return r.permalink ? `- [${label}](${r.permalink})${opened}` : `- ${label}${opened}`
+  })
+  return header + lines.join("\n")
+}
+
+/**
+ * Find (or create) the channel canvas id for a channel. Prefers an existing canvas
+ * (conversations.info → channel.properties.canvas), else creates one. Returns null on
+ * failure (best-effort). Needs canvases:write/read (+ channels:read for info).
+ */
+async function ensureChannelCanvasId(channelId: string): Promise<string | null> {
+  try {
+    const info = (await slackApiCall("conversations.info", { channel: channelId })) as unknown as {
+      ok: boolean
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      channel?: { properties?: { canvas?: { file_id?: string; document_id?: string } } }
+    }
+    const existing = info.channel?.properties?.canvas?.file_id ?? info.channel?.properties?.canvas?.document_id
+    if (info.ok && existing) return existing
+  } catch (err) {
+    console.error("[client-thread-follows] conversations.info failed:", err)
+  }
+  // None yet — create the channel canvas.
+  const created = (await slackApiCall("conversations.canvases.create", {
+    channel_id: channelId,
+    document_content: { type: "markdown", markdown: "# 🗂️ Open client conversations" },
+  })) as unknown as { ok: boolean; canvas_id?: string; error?: string }
+  if (created.ok && created.canvas_id) return created.canvas_id
+  console.error("[client-thread-follows] conversations.canvases.create failed:", created.error)
+  return null
+}
+
+const CANVAS_CAP = 50
+
+/**
+ * Rebuild the shared "Open client conversations" Canvas in #td-support from the DB
+ * (all open Slack client_threads, across channels). Best-effort — never throws.
+ * Lives in SLACK_SUPPORT_CHANNEL_ID; each row links to its own thread (any channel).
+ */
+export async function refreshOpenConversationsCanvas(): Promise<void> {
+  const boardChannel = process.env.SLACK_SUPPORT_CHANNEL_ID
+  if (!boardChannel) return
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  try {
+    const { data: threads } = await db
+      .from("client_threads")
+      .select("account_id, contact_id, lead_id, topic_slug, source_ref, created_at")
+      .eq("source", "slack")
+      .eq("status", "open")
+      .order("created_at", { ascending: false })
+      .limit(CANVAS_CAP)
+
+    const rows: FollowDigestRow[] = []
+    for (const t of threads ?? []) {
+      const clientName = await resolveEntityName(db, t)
+      let permalink: string | null = null
+      if (typeof t.source_ref === "string" && t.source_ref.includes(":")) {
+        const [ch, ts] = t.source_ref.split(":")
+        if (ch && ts) permalink = await getSlackPermalink(ch, ts)
+      }
+      rows.push({ clientName, topic: t.topic_slug ?? "general", openedAt: t.created_at ?? null, permalink })
+    }
+
+    const canvasId = await ensureChannelCanvasId(boardChannel)
+    if (!canvasId) return
+    await slackApiCall("canvases.edit", {
+      canvas_id: canvasId,
+      changes: [{ operation: "replace", document_content: { type: "markdown", markdown: renderCanvasMarkdown(rows) } }],
+    })
+  } catch (err) {
+    console.error("[client-thread-follows] refreshOpenConversationsCanvas failed:", err)
+  }
+}
+
 /** Refresh the DM list of every follower of a thread (used on close/reopen). */
 export async function refreshFollowersDigests(clientThreadId: string): Promise<void> {
   const followers = await getFollowersOfThread(clientThreadId)
@@ -240,6 +328,8 @@ export async function removeClientThreadCard(args: {
   for (const u of followers) {
     await refreshUserFollowDigest(u)
   }
+  // Drop it from the shared Canvas too.
+  await refreshOpenConversationsCanvas()
 
   if (args.reactedBy) {
     await slackApiCall("chat.postEphemeral", {
