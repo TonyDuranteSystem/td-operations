@@ -34,6 +34,8 @@ import {
   buildClientConversationModalView,
   searchClientsForSlackOptions,
   createClientConversationFromModal,
+  findOpenConversationForEntityTopic,
+  buildDuplicateConfirmView,
   ensureTopicSlugFromText,
   STOP_THINKING_ACTION_ID,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
@@ -85,6 +87,30 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── Modal submit → start the labeled, tagged thread ────────────────────────
   if (it.type === "view_submission" && it.viewCallbackId === CLIENT_CONVERSATION_MODAL_CALLBACK) {
+    // "Start new anyway" confirm step: private_metadata is JSON with confirm:true,
+    // carrying the original selection. Skip the dedup check and create directly.
+    let confirm: { channel?: string; clientValue?: string; topicSlug?: string } | null = null
+    try {
+      const j = JSON.parse(it.viewPrivateMetadata ?? "")
+      if (j && j.confirm) confirm = j
+    } catch {
+      /* initial submit — private_metadata is the plain channel id */
+    }
+
+    if (confirm) {
+      if (!confirm.channel || !confirm.clientValue || !confirm.topicSlug) return NextResponse.json({})
+      const res = await createClientConversationFromModal({
+        channelId: confirm.channel,
+        userId: it.userId,
+        clientValue: confirm.clientValue,
+        topicSlug: confirm.topicSlug,
+      })
+      if (!res.ok) {
+        return NextResponse.json({ response_action: "errors", errors: { client_block: res.error ?? "Failed." } })
+      }
+      return NextResponse.json({})
+    }
+
     const channelId = it.viewPrivateMetadata
     const clientValue = selectedValue(it.viewState, "client_block", CLIENT_SELECT_ACTION_ID)
     // A typed new topic wins over the dropdown; ensure it's a catalog slug (reusable next time).
@@ -107,6 +133,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         errors: { topic_block: "Pick a topic or type a new one." },
       })
     }
+
+    // Dedup: if an OPEN conversation already exists for this client+topic, don't
+    // create a duplicate — update the modal to propose continuing the existing one.
+    const existing = await findOpenConversationForEntityTopic(clientValue, topicSlug)
+    if (existing) {
+      return NextResponse.json({
+        response_action: "update",
+        view: buildDuplicateConfirmView({
+          channel: channelId,
+          clientValue,
+          topicSlug,
+          clientName: existing.clientName,
+          openedAt: existing.openedAt,
+          slackLink: existing.slackLink,
+        }),
+      })
+    }
+
     const res = await createClientConversationFromModal({
       channelId,
       userId: it.userId,

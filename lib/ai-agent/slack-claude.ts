@@ -739,6 +739,96 @@ export async function createClientConversationFromModal(args: {
   return { ok: true, threadTs }
 }
 
+/**
+ * Dedup helper: find an existing OPEN Slack conversation for the same entity + topic,
+ * so the form can propose continuing it instead of creating a duplicate. clientValue
+ * is "<account|contact|lead>:<uuid>". Returns null when none is open.
+ */
+export async function findOpenConversationForEntityTopic(
+  clientValue: string,
+  topicSlug: string,
+): Promise<{ clientName: string; openedAt: string; slackLink: string | null } | null> {
+  const [kind, id] = (clientValue ?? "").split(":")
+  if (!["account", "contact", "lead"].includes(kind) || !id || !topicSlug) return null
+  const col = kind === "account" ? "account_id" : kind === "contact" ? "contact_id" : "lead_id"
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { data } = await db
+    .from("client_threads")
+    .select("source_ref, created_at")
+    .eq(col, id)
+    .eq("topic_slug", topicSlug)
+    .eq("status", "open")
+    .eq("source", "slack")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (!data) return null
+
+  let slackLink: string | null = null
+  if (typeof data.source_ref === "string" && data.source_ref.includes(":")) {
+    const [ch, ts] = data.source_ref.split(":")
+    if (ch && ts) slackLink = `https://slack.com/archives/${ch}/p${ts.replace(".", "")}`
+  }
+  let clientName = "this client"
+  try {
+    if (kind === "account") {
+      const { data: a } = await db.from("accounts").select("company_name").eq("id", id).maybeSingle()
+      clientName = a?.company_name ?? clientName
+    } else {
+      const { data: c } = await db.from(kind === "contact" ? "contacts" : "leads").select("full_name").eq("id", id).maybeSingle()
+      clientName = c?.full_name ?? clientName
+    }
+  } catch {
+    /* keep default */
+  }
+  return { clientName, openedAt: data.created_at, slackLink }
+}
+
+/**
+ * The "already open" confirm modal (returned via response_action:'update' from the
+ * first submit). Carries the selection in private_metadata with confirm:true so a
+ * second submit ("Start new anyway") skips the dedup check and creates a new one.
+ */
+export function buildDuplicateConfirmView(args: {
+  channel: string
+  clientValue: string
+  topicSlug: string
+  clientName: string
+  openedAt: string
+  slackLink: string | null
+}): Record<string, unknown> {
+  const pm = JSON.stringify({
+    channel: args.channel,
+    clientValue: args.clientValue,
+    topicSlug: args.topicSlug,
+    confirm: true,
+  })
+  const opened = args.openedAt
+    ? new Date(args.openedAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
+    : "earlier"
+  const linkLine = args.slackLink
+    ? `\n\n👉 <${args.slackLink}|Open the existing conversation> and continue there.`
+    : ""
+  return {
+    type: "modal",
+    callback_id: CLIENT_CONVERSATION_MODAL_CALLBACK,
+    private_metadata: pm,
+    title: { type: "plain_text", text: "Already open" },
+    submit: { type: "plain_text", text: "Start new anyway" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `⚠️ *${args.clientName}* already has an OPEN *${args.topicSlug}* conversation (opened ${opened}).${linkLine}\n\nContinue that one, or press *Start new anyway* to create a separate conversation.`,
+        },
+      },
+    ],
+  }
+}
+
 export interface ClientThreadContext {
   accountId: string | null
   contactId: string | null

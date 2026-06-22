@@ -15,6 +15,7 @@ import {
   parseSlackInteractionFull,
   buildClientConversationModalView,
   buildClientConversationButtonBlocks,
+  buildDuplicateConfirmView,
   cleanSlackText,
   slugifyTopic,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
@@ -138,6 +139,27 @@ describe("cleanSlackText", () => {
   })
   it("unwraps <url|label> links to the label", () => {
     expect(cleanSlackText("see <https://x.com|the doc>")).toBe("see the doc")
+  })
+})
+
+describe("buildDuplicateConfirmView (propose-continue)", () => {
+  it("carries the selection in private_metadata with confirm:true and offers 'Start new anyway'", () => {
+    const v = buildDuplicateConfirmView({
+      channel: "C0BA802S9LH",
+      clientValue: "account:acc-1",
+      topicSlug: "billing",
+      clientName: "Ad Astra Strategic Advisors LLC",
+      openedAt: "2026-06-22T00:55:14Z",
+      slackLink: "https://slack.com/archives/C0BA802S9LH/p1782089738409799",
+    })
+    const pm = JSON.parse(v.private_metadata as string)
+    expect(pm).toMatchObject({ channel: "C0BA802S9LH", clientValue: "account:acc-1", topicSlug: "billing", confirm: true })
+    expect((v.submit as { text: string }).text).toBe("Start new anyway")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const text = (v.blocks as any[])[0].text.text as string
+    expect(text).toContain("Ad Astra Strategic Advisors LLC")
+    expect(text).toContain("billing")
+    expect(text).toContain("Open the existing conversation")
   })
 })
 
