@@ -843,6 +843,43 @@ export async function materializeFormationCompany(
       })
     }
 
+    // 10d. Link the formation offer to the new account so the portal's
+    // "Set up your new company" banner disappears after materialization.
+    // The banner fires on: contract_type='formation' AND status='completed'
+    // AND account_id IS NULL — setting account_id here eliminates it.
+    // The offer is anchored to this formation via wizard_progress.lead_id.
+    if (wp?.lead_id) {
+      try {
+        const { data: linkedOffers, error: offerLinkErr } = await supabaseAdmin
+          .from("offers")
+          .update({ account_id: accountId })
+          .eq("lead_id", wp.lead_id)
+          .eq("contract_type", "formation")
+          .eq("status", "completed")
+          .is("account_id", null)
+          .select("id")
+        steps.push({
+          step: "offer_link",
+          status: offerLinkErr ? "error" : "ok",
+          detail: offerLinkErr
+            ? offerLinkErr.message
+            : `${linkedOffers?.length ?? 0} formation offer(s) linked to account`,
+        })
+      } catch (offerErr) {
+        steps.push({
+          step: "offer_link",
+          status: "error",
+          detail: offerErr instanceof Error ? offerErr.message : String(offerErr),
+        })
+      }
+    } else {
+      steps.push({
+        step: "offer_link",
+        status: "skipped",
+        detail: "No lead_id on wizard_progress — cannot resolve formation offer",
+      })
+    }
+
     // 11. Sync portal tier.
     // allowDowngrade:true is REQUIRED here: accounts.portal_tier defaults to
     // 'active' at insert, so a plain syncTier('formation') is treated as a
