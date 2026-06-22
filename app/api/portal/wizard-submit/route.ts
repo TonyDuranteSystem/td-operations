@@ -6,8 +6,14 @@
  * 2. Enqueues a background job for the full auto-chain (non-blocking)
  * 3. Returns immediately so client gets fast response
  *
- * The background job (onboarding_setup / formation_setup / tax_form_setup)
- * handles ALL heavy work: Drive, CRM updates, OA, Lease, Banking, notifications.
+ * All wizard types use fire-and-forget execution:
+ * - banking_payset / banking_relay: inline IIFE, early return (step 4b)
+ * - tax_form_setup: inline IIFE, then return (step 6)
+ * - all others (onboarding_setup, formation_setup, itin_review, etc.): cron at
+ *   /api/cron/process-jobs picks up the enqueued job
+ *
+ * The background handlers handle ALL heavy work: Drive, CRM updates, OA, Lease,
+ * Banking, notifications. Data is always saved before the response is sent.
  */
 
 export const dynamic = 'force-dynamic'
@@ -492,44 +498,46 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 6. DIRECT HANDLER EXECUTION (for tax jobs) ───
-    // Claim and run the handler inline — more reliable than fire-and-forget HTTP.
-    // For tax_form_setup: blocks the response until processing completes (~10-30s).
-    // If claim fails (worker already picked it up), skip — it will be handled.
-    // Cron at /api/cron/process-jobs acts as safety net for anything missed.
+    // ─── 6. FIRE-AND-FORGET EXECUTION (for tax jobs) ───
+    // Data is already saved (step 2 + step 4). Return success immediately so the
+    // client gets a clean confirmation screen regardless of how long the handler
+    // takes. The handler runs in the background; the client gets a portal message
+    // when it completes (step 10 of handleTaxFormSetup). Cron at
+    // /api/cron/process-jobs acts as safety net if the background task fails.
     if (jobType === 'tax_form_setup' && jobId) {
-      const claimNow = new Date().toISOString()
-      const { data: claimedJob } = await supabaseAdmin
-        .from('job_queue')
-        .update({ status: 'processing', started_at: claimNow, attempts: 1 })
-        .eq('id', jobId)
-        .eq('status', 'pending')
-        .select('*')
-        .single()
+      const capturedJobId = jobId
 
-      if (claimedJob) {
+      ;(async () => {
+        const claimNow = new Date().toISOString()
+        const { data: claimedJob } = await supabaseAdmin
+          .from('job_queue')
+          .update({ status: 'processing', started_at: claimNow, attempts: 1 })
+          .eq('id', capturedJobId)
+          .eq('status', 'pending')
+          .select('*')
+          .single()
+
+        if (!claimedJob) {
+          console.warn(`[wizard-submit] Tax job ${capturedJobId} already claimed by worker — skipping background execution`)
+          return
+        }
+
         try {
           const { handleTaxFormSetup } = await import('@/lib/jobs/handlers/tax-form-setup')
           const result = await handleTaxFormSetup(claimedJob as unknown as Job)
           if (result.ok === false) {
-            // Handler reached a failure path but didn't throw — mark the
-            // job failed so the Exception Center picks it up. Same rule as
-            // the /api/cron/process-jobs branch.
-            await failJob(jobId, result.summary || 'Handler reported failure', result)
-            console.warn(`[wizard-submit] Job ${jobId} inline-completed as failed: ${result.summary}`)
+            await failJob(capturedJobId, result.summary || 'Handler reported failure', result)
+            console.warn(`[wizard-submit] Tax job ${capturedJobId} background-completed as failed: ${result.summary}`)
           } else {
-            await completeJob(jobId, result)
-            console.warn(`[wizard-submit] Job ${jobId} completed inline: ${result.summary}`)
+            await completeJob(capturedJobId, result)
+            console.warn(`[wizard-submit] Tax job ${capturedJobId} completed in background: ${result.summary}`)
           }
         } catch (handlerErr) {
           const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
-          await failJob(jobId, errMsg)
-          console.error(`[wizard-submit] Job ${jobId} failed inline:`, errMsg)
-          // Still return success — data was saved, cron will retry
+          await failJob(capturedJobId, errMsg)
+          console.error(`[wizard-submit] Tax job ${capturedJobId} failed in background:`, errMsg)
         }
-      } else {
-        console.warn(`[wizard-submit] Job ${jobId} already claimed by worker — skipping inline execution`)
-      }
+      })().catch(err => console.error('[wizard-submit] Tax background task error:', err))
     }
 
     return NextResponse.json({
