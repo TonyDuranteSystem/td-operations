@@ -175,6 +175,22 @@ const SIMPLE_STATUS: Partial<Record<NameAction, NameCheckStatus>> = {
   mark_filed: 'filed',
 }
 
+/**
+ * Supersede any still-pending "new names" (text_input) request for this SD before
+ * creating a fresh one, so the client never sees TWO name-request windows at once
+ * (e.g. an unanswered "all names unavailable" request plus a later SOS-rejection
+ * request). Only the latest request stays pending.
+ */
+async function cancelPendingNewNamesRequests(sdId: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+  await (supabaseAdmin as any)
+    .from('client_decision_requests')
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    .eq('service_delivery_id', sdId)
+    .eq('status', 'pending')
+    .eq('request_type', 'text_input')
+}
+
 /** Apply a staff name action; creates decision requests for send/sos-reject. */
 export async function handleNameAction(params: {
   sdId: string
@@ -194,6 +210,7 @@ export async function handleNameAction(params: {
   // for a fresh set when none of the current names are viable. Handle before the
   // per-name entry lookup (no nameIndex required).
   if (params.action === 'request_new_names') {
+    await cancelPendingNewNamesRequests(params.sdId)
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'text_input',
@@ -248,6 +265,7 @@ export async function handleNameAction(params: {
   } else if (params.action === 'mark_sos_rejected') {
     entry.status = 'rejected_by_sos'
     entry.updated_at = now
+    await cancelPendingNewNamesRequests(params.sdId)
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'text_input',
