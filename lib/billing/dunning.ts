@@ -45,15 +45,40 @@ export function shouldRemindNow(p: { daysOverdue: number; reminderCount: number;
   return false
 }
 
-/** Read the UI-controlled automatic-send flag from app_settings. Default OFF. */
-export async function isAutoSendEnabled(): Promise<boolean> {
+/** Max sends allowed per run — clamps the configurable cap so a typo can't
+ *  blast thousands or exceed the serverless function time budget. */
+export const DUNNING_CAP_MAX = 200
+
+/** Clamp a user-entered per-run cap to a safe integer in [1, DUNNING_CAP_MAX].
+ *  Invalid input falls back to the default DUNNING_RUN_CAP. */
+export function clampCap(n: unknown): number {
+  const v = Math.floor(Number(n))
+  if (!Number.isFinite(v) || v < 1) return DUNNING_RUN_CAP
+  return Math.min(v, DUNNING_CAP_MAX)
+}
+
+/** Read the dunning settings (enabled + per-run cap) from app_settings. */
+async function readDunningSettings(): Promise<{ enabled: boolean; cap: number }> {
   const { data } = await supabaseAdmin
     .from("app_settings")
     .select("value")
     .eq("key", DUNNING_AUTOSEND_KEY)
     .single()
-  const value = (data as { value?: { enabled?: boolean } } | null)?.value
-  return value?.enabled === true
+  const value = (data as { value?: { enabled?: boolean; cap?: number } } | null)?.value
+  return {
+    enabled: value?.enabled === true,
+    cap: value?.cap == null ? DUNNING_RUN_CAP : clampCap(value.cap),
+  }
+}
+
+/** Read the UI-controlled automatic-send flag from app_settings. Default OFF. */
+export async function isAutoSendEnabled(): Promise<boolean> {
+  return (await readDunningSettings()).enabled
+}
+
+/** Read the UI-controlled per-run send cap from app_settings. Default 40. */
+export async function getDunningCap(): Promise<number> {
+  return (await readDunningSettings()).cap
 }
 
 /** Step 1 — mark Sent/Partial invoices Overdue when past due (skips paused). */
@@ -142,7 +167,7 @@ async function sendDueReminders(cap: number, errors: string[]): Promise<{ sent: 
  * button passes true). `cap` throttles sends per run.
  */
 export async function runDunning(opts: { cap?: number; autoSend: boolean }): Promise<DunningSummary> {
-  const cap = opts.cap ?? DUNNING_RUN_CAP
+  const cap = opts.cap ?? (await getDunningCap())
   const errors: string[] = []
   const marked_overdue = await markOverdueInvoices(errors)
 

@@ -131,34 +131,71 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
 
   // ── Automatic-reminder (dunning) controls — admin only ──
   const [autoSend, setAutoSend] = useState<boolean | null>(null)
+  const [cap, setCap] = useState<number>(40)
+  const [capDraft, setCapDraft] = useState<string>('40')
   const [autoSaving, setAutoSaving] = useState(false)
   const [dunningRunning, setDunningRunning] = useState(false)
+
+  const CAP_MAX = 200
+  function normalizeCap(n: unknown): number {
+    const v = Math.floor(Number(n))
+    if (!Number.isFinite(v) || v < 1) return 40
+    return Math.min(v, CAP_MAX)
+  }
 
   useEffect(() => {
     if (!isAdmin) return
     fetch('/api/app-settings?key=dunning_autosend')
       .then(r => r.json())
-      .then(d => setAutoSend(d?.value?.enabled === true))
-      .catch(() => setAutoSend(false))
+      .then(d => {
+        setAutoSend(d?.value?.enabled === true)
+        const c = d?.value?.cap == null ? 40 : normalizeCap(d.value.cap)
+        setCap(c); setCapDraft(String(c))
+      })
+      .catch(() => { setAutoSend(false); setCap(40); setCapDraft('40') })
   }, [isAdmin])
+
+  // Write the full dunning_autosend value (enabled + cap) so neither control
+  // clobbers the other.
+  async function saveDunning(next: { enabled: boolean; cap: number }) {
+    const res = await fetch('/api/app-settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'dunning_autosend', value: next }),
+    })
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ?? 'Failed to update') }
+  }
 
   async function toggleAutoSend() {
     const next = !(autoSend ?? false)
-    if (next && !window.confirm('Turn ON automatic reminders?\n\nThe daily job (9:00) will start emailing overdue clients — 1st reminder at 7 days overdue, 2nd at 14 — up to 40 per run.')) return
+    if (next && !window.confirm(`Turn ON automatic reminders?\n\nThe daily job (9:00) will start emailing overdue clients — 1st reminder at 7 days overdue, 2nd at 14 — up to ${cap} per run.`)) return
     setAutoSaving(true)
     setAutoSend(next)
     try {
-      const res = await fetch('/api/app-settings', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'dunning_autosend', value: { enabled: next } }),
-      })
-      if (!res.ok) { setAutoSend(!next); const d = await res.json().catch(() => ({})); toast.error(d.error ?? 'Failed to update'); return }
+      await saveDunning({ enabled: next, cap })
       toast.success(next ? 'Automatic reminders turned ON' : 'Automatic reminders turned OFF')
+    } catch (err) {
+      setAutoSend(!next)
+      toast.error(err instanceof Error ? err.message : 'Failed to update')
+    } finally { setAutoSaving(false) }
+  }
+
+  async function saveCap() {
+    const newCap = normalizeCap(capDraft)
+    if (newCap === cap) { setCapDraft(String(cap)); return }
+    setAutoSaving(true)
+    const prev = cap
+    setCap(newCap); setCapDraft(String(newCap))
+    try {
+      await saveDunning({ enabled: autoSend ?? false, cap: newCap })
+      toast.success(`Per-run limit set to ${newCap}`)
+    } catch (err) {
+      setCap(prev); setCapDraft(String(prev))
+      toast.error(err instanceof Error ? err.message : 'Failed to update')
     } finally { setAutoSaving(false) }
   }
 
   async function runDunningNow() {
-    if (!window.confirm('Run reminders now?\n\nSends reminders to every due overdue invoice (up to 40 per run), respecting each client\'s timing, pause, and the 2-reminder limit.')) return
+    if (!window.confirm(`Run reminders now?\n\nSends reminders to every due overdue invoice (up to ${cap} per run), respecting each client's timing, pause, and the 2-reminder limit.`)) return
     setDunningRunning(true)
     try {
       const res = await fetch('/api/invoices/run-dunning', { method: 'POST' })
@@ -283,12 +320,24 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
           >
             {autoSend === null ? '…' : autoSend ? 'ON' : 'OFF'}
           </button>
-          <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d · up to 40/run</span>
+          <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d</span>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={`Max reminders sent per run (1–${CAP_MAX}). More than this roll to the next run.`}>
+            Max per run
+            <input
+              type="number" min={1} max={CAP_MAX}
+              value={capDraft}
+              onChange={e => setCapDraft(e.target.value)}
+              onBlur={saveCap}
+              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+              disabled={autoSaving}
+              className="w-16 px-2 py-1 border rounded-md text-xs text-foreground disabled:opacity-50"
+            />
+          </label>
           <button
             onClick={runDunningNow}
             disabled={dunningRunning}
             className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
-            title="Run the reminder job right now (sends all that are due, up to 40)"
+            title={`Run the reminder job right now (sends all that are due, up to ${cap})`}
           >
             {dunningRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             Run reminders now

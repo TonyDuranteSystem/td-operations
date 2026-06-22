@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { shouldRemindNow, DUNNING_RUN_CAP } from "@/lib/billing/dunning"
+import { shouldRemindNow, DUNNING_RUN_CAP, clampCap, DUNNING_CAP_MAX } from "@/lib/billing/dunning"
 
 describe("shouldRemindNow", () => {
   const cfg = { r1: 7, r2: 14 }
@@ -31,5 +31,26 @@ describe("shouldRemindNow", () => {
   it("exposes a sane per-run cap", () => {
     expect(DUNNING_RUN_CAP).toBeGreaterThan(0)
     expect(DUNNING_RUN_CAP).toBeLessThanOrEqual(100)
+  })
+})
+
+describe("clampCap", () => {
+  it("keeps valid values", () => {
+    expect(clampCap(40)).toBe(40)
+    expect(clampCap(1)).toBe(1)
+    expect(clampCap(150)).toBe(150)
+  })
+  it("floors the configured max", () => {
+    expect(clampCap(DUNNING_CAP_MAX)).toBe(DUNNING_CAP_MAX)
+    expect(clampCap(DUNNING_CAP_MAX + 500)).toBe(DUNNING_CAP_MAX)
+  })
+  it("falls back to default for junk / non-positive", () => {
+    expect(clampCap(0)).toBe(DUNNING_RUN_CAP)
+    expect(clampCap(-5)).toBe(DUNNING_RUN_CAP)
+    expect(clampCap("abc")).toBe(DUNNING_RUN_CAP)
+    expect(clampCap(null)).toBe(DUNNING_RUN_CAP)
+  })
+  it("floors decimals", () => {
+    expect(clampCap(40.9)).toBe(40)
   })
 })
