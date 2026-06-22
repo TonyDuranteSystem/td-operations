@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     const autoSend = await isAutoSendEnabled()
     const summary = await runDunning({ autoSend })
 
-    console.warn(`[invoice-overdue] Done: ${summary.marked_overdue} marked overdue, ${summary.reminders_sent} reminders sent (autoSend=${autoSend}, capped=${summary.capped})`)
+    console.warn(`[invoice-overdue] Done: ${summary.marked_overdue} marked overdue, ${summary.reminders_queued} reminders queued (autoSend=${autoSend}, capped=${summary.capped})`)
     logCron({ endpoint: '/api/cron/invoice-overdue', status: 'success', duration_ms: Date.now() - startTime, details: summary as unknown as Record<string, unknown> })
 
     return NextResponse.json({ message: 'Invoice overdue check complete', ...summary })

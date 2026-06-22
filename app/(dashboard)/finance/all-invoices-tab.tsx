@@ -136,7 +136,7 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
   const [autoSaving, setAutoSaving] = useState(false)
   const [dunningRunning, setDunningRunning] = useState(false)
 
-  const CAP_MAX = 200
+  const CAP_MAX = 1000
   function normalizeCap(n: unknown): number {
     const v = Math.floor(Number(n))
     if (!Number.isFinite(v) || v < 1) return 40
@@ -195,13 +195,13 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
   }
 
   async function runDunningNow() {
-    if (!window.confirm(`Run reminders now?\n\nSends reminders to every due overdue invoice (up to ${cap} per run), respecting each client's timing, pause, and the 2-reminder limit.`)) return
+    if (!window.confirm(`Run reminders now?\n\nQueues a reminder for every due overdue invoice (up to ${cap} this pass), respecting each client's timing, pause, and the 2-reminder limit. They send gradually in the background over the next several minutes.`)) return
     setDunningRunning(true)
     try {
       const res = await fetch('/api/invoices/run-dunning', { method: 'POST' })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { toast.error(d.error ?? 'Failed to run reminders'); return }
-      toast.success(`Reminders — ${d.reminders_sent ?? 0} sent · ${d.skipped ?? 0} skipped · ${d.marked_overdue ?? 0} newly overdue${d.capped ? ' · 40-cap hit, run again for the rest' : ''}`)
+      toast.success(`Queued ${d.reminders_queued ?? 0} reminder${(d.reminders_queued ?? 0) === 1 ? '' : 's'} · ${d.skipped ?? 0} already queued · ${d.marked_overdue ?? 0} newly overdue${d.capped ? ` · ${cap}-cap hit, run again for the rest` : ''}. They send gradually in the background.`)
       newInvRouter.refresh()
     } finally { setDunningRunning(false) }
   }
@@ -320,8 +320,8 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
           >
             {autoSend === null ? '…' : autoSend ? 'ON' : 'OFF'}
           </button>
-          <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d</span>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={`Max reminders sent per run (1–${CAP_MAX}). More than this roll to the next run.`}>
+          <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d · sends gradually in the background</span>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={`Max reminders queued per pass (1–${CAP_MAX}). The rest roll to the next pass; all send gradually in the background.`}>
             Max per run
             <input
               type="number" min={1} max={CAP_MAX}

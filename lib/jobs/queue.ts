@@ -99,6 +99,47 @@ export async function enqueueJob(params: {
 }
 
 /**
+ * Enqueue MANY jobs in one bulk insert + a SINGLE worker trigger.
+ * Use this instead of looping enqueueJob() when queuing a batch (e.g. the
+ * dunning pass) — it avoids N HTTP worker triggers. Returns the new job IDs.
+ */
+export async function enqueueJobs(
+  jobs: Array<{
+    job_type: string
+    payload: JobPayload
+    priority?: number
+    max_attempts?: number
+    account_id?: string
+    lead_id?: string
+    related_entity_type?: string
+    related_entity_id?: string
+    created_by?: string
+  }>,
+): Promise<{ ids: string[] }> {
+  if (jobs.length === 0) return { ids: [] }
+
+  const rows = jobs.map((j) => ({
+    job_type: j.job_type,
+    payload: j.payload as unknown as Json,
+    priority: j.priority ?? 5,
+    max_attempts: j.max_attempts ?? 3,
+    account_id: j.account_id || null,
+    lead_id: j.lead_id || null,
+    related_entity_type: j.related_entity_type || null,
+    related_entity_id: j.related_entity_id || null,
+    created_by: j.created_by ?? "claude",
+  }))
+
+  const { data, error } = await supabaseAdmin.from("job_queue").insert(rows).select("id")
+  if (error) throw new Error(`Failed to enqueue jobs: ${error.message}`)
+
+  // One trigger for the whole batch; the safety-net cron drains the rest.
+  triggerWorker().catch(() => {})
+
+  return { ids: (data ?? []).map((r) => r.id) }
+}
+
+/**
  * Claim the next pending job for processing.
  * Uses an atomic UPDATE ... RETURNING to prevent race conditions.
  */
