@@ -19,12 +19,16 @@ import {
   cleanSlackText,
   slugifyTopic,
   buildSlackThreadDeepLink,
+  buildClientThreadRootBlocks,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
   CLIENT_SELECT_ACTION_ID,
   TOPIC_SELECT_ACTION_ID,
   NEW_TOPIC_BLOCK_ID,
   NEW_TOPIC_ACTION_ID,
+  CHANNEL_SELECT_BLOCK_ID,
+  CHANNEL_SELECT_ACTION_ID,
+  FOLLOW_CLIENT_THREAD_ACTION_ID,
 } from "@/lib/ai-agent/slack-claude"
 
 function body(payload: unknown): string {
@@ -124,6 +128,30 @@ describe("buildClientConversationModalView", () => {
     expect(newTopic.optional).toBe(true)
     expect(newTopic.element.type).toBe("plain_text_input")
     expect(newTopic.element.action_id).toBe(NEW_TOPIC_ACTION_ID)
+  })
+
+  it("includes an optional channel picker (conversations_select) so topic channels can be targeted", () => {
+    const view = buildClientConversationModalView({ channelId: "C123", topicOptions: [] })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const blocks = view.blocks as any[]
+    const channel = blocks.find((b) => b.block_id === CHANNEL_SELECT_BLOCK_ID)
+    expect(channel.optional).toBe(true)
+    expect(channel.element.type).toBe("conversations_select")
+    expect(channel.element.action_id).toBe(CHANNEL_SELECT_ACTION_ID)
+    expect(channel.element.default_to_current_conversation).toBe(true)
+  })
+})
+
+describe("buildClientThreadRootBlocks", () => {
+  it("renders the text section + a 👀 Follow button carrying the follow action_id", () => {
+    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing — started by @x")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const section = blocks.find((b: any) => b.type === "section") as any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const actions = blocks.find((b: any) => b.type === "actions") as any
+    expect(section.text.text).toContain("ACME")
+    expect(actions.elements[0].action_id).toBe(FOLLOW_CLIENT_THREAD_ACTION_ID)
+    expect(actions.elements[0].text.text).toContain("Follow")
   })
 })
 

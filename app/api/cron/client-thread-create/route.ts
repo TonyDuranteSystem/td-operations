@@ -16,7 +16,7 @@
 export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
-import { createClientConversationFromModal } from "@/lib/ai-agent/slack-claude"
+import { createClientConversationFromModal, slackApiCall } from "@/lib/ai-agent/slack-claude"
 
 function isAuthorized(req: NextRequest): boolean {
   const authHeader = req.headers.get("authorization")
@@ -30,7 +30,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 })
   }
 
-  let body: { channelId?: string; userId?: string | null; clientValue?: string; topicSlug?: string }
+  let body: {
+    channelId?: string
+    notifyChannel?: string
+    userId?: string | null
+    clientValue?: string
+    topicSlug?: string
+  }
   try {
     body = await req.json()
   } catch {
@@ -51,6 +57,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!res.ok) {
     console.error("[client-thread-create] create failed:", res.error)
+    // Tell the user (in a channel where the bot can reach them) instead of failing
+    // silently — most common cause is the bot not being a member of the picked channel.
+    const notify = body.notifyChannel || channelId
+    if (body.userId) {
+      await slackApiCall("chat.postEphemeral", {
+        channel: notify,
+        user: body.userId,
+        text: `Couldn't start the conversation in <#${channelId}> — make sure I'm a member there (invite me with \`/invite @Claude\`), then try again. Nothing was created.`,
+      }).catch(() => {})
+    }
     return NextResponse.json({ ok: false, error: res.error }, { status: 200 })
   }
   return NextResponse.json({ ok: true, threadTs: res.threadTs })

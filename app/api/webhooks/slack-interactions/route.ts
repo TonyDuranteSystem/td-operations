@@ -36,6 +36,7 @@ import {
   buildDuplicateConfirmView,
   ensureTopicSlugFromText,
   STOP_THINKING_ACTION_ID,
+  FOLLOW_CLIENT_THREAD_ACTION_ID,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_SHORTCUT_CALLBACK,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
@@ -43,12 +44,21 @@ import {
   TOPIC_SELECT_ACTION_ID,
   NEW_TOPIC_BLOCK_ID,
   NEW_TOPIC_ACTION_ID,
+  CHANNEL_SELECT_BLOCK_ID,
+  CHANNEL_SELECT_ACTION_ID,
 } from "@/lib/ai-agent/slack-claude"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function selectedValue(viewState: any, blockId: string, actionId: string): string | null {
   const sel = viewState?.values?.[blockId]?.[actionId]?.selected_option
   return (sel?.value as string | undefined) ?? null
+}
+
+// conversations_select returns `selected_conversation` (a channel id), not selected_option.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function selectedConversation(viewState: any, blockId: string, actionId: string): string | null {
+  const v = viewState?.values?.[blockId]?.[actionId]?.selected_conversation
+  return (typeof v === "string" && v) ? v : null
 }
 
 /**
@@ -60,11 +70,26 @@ function selectedValue(viewState: any, blockId: string, actionId: string): strin
  */
 async function fireClientThreadCreate(args: {
   channelId: string
+  notifyChannel?: string
   userId: string | null
   clientValue: string
   topicSlug: string
 }): Promise<void> {
-  const url = `${getInternalBaseUrl()}/api/cron/client-thread-create`
+  await fireBackground("/api/cron/client-thread-create", args)
+}
+
+/** Fire-and-forget the "👀 Follow" toggle to its background endpoint (see that route). */
+async function fireFollowToggle(args: {
+  channelId: string
+  messageTs: string
+  userId: string
+}): Promise<void> {
+  await fireBackground("/api/cron/client-thread-follow", args)
+}
+
+/** Shared fire-and-forget POST to an internal /api/cron endpoint (1.5s dispatch cap). */
+async function fireBackground(path: string, args: Record<string, unknown>): Promise<void> {
+  const url = `${getInternalBaseUrl()}${path}`
   const cronSecret = process.env.CRON_SECRET ?? ""
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 1500)
@@ -104,7 +129,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (it.type === "view_submission" && it.viewCallbackId === CLIENT_CONVERSATION_MODAL_CALLBACK) {
     // "Start new anyway" confirm step: private_metadata is JSON with confirm:true,
     // carrying the original selection. Skip the dedup check and create directly.
-    let confirm: { channel?: string; clientValue?: string; topicSlug?: string } | null = null
+    let confirm: { channel?: string; notifyChannel?: string; clientValue?: string; topicSlug?: string } | null = null
     try {
       const j = JSON.parse(it.viewPrivateMetadata ?? "")
       if (j && j.confirm) confirm = j
@@ -117,6 +142,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // Create in the background so we respond within Slack's 3s window.
       await fireClientThreadCreate({
         channelId: confirm.channel,
+        notifyChannel: confirm.notifyChannel ?? confirm.channel,
         userId: it.userId,
         clientValue: confirm.clientValue,
         topicSlug: confirm.topicSlug,
@@ -124,7 +150,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({})
     }
 
-    const channelId = it.viewPrivateMetadata
+    // Where the modal was opened from (the bot is reachable here for error feedback).
+    const invokingChannel = it.viewPrivateMetadata
+    // Where to post the conversation — the picked channel, else the invoking channel.
+    const targetChannel =
+      selectedConversation(it.viewState, CHANNEL_SELECT_BLOCK_ID, CHANNEL_SELECT_ACTION_ID) || invokingChannel
     const clientValue = selectedValue(it.viewState, "client_block", CLIENT_SELECT_ACTION_ID)
     // A typed new topic wins over the dropdown; ensure it's a catalog slug (reusable next time).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -134,7 +164,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let topicSlug = selectedValue(it.viewState, "topic_block", TOPIC_SELECT_ACTION_ID)
     if (newTopicText) topicSlug = await ensureTopicSlugFromText(newTopicText)
 
-    if (!channelId || !clientValue) {
+    if (!targetChannel || !clientValue) {
       return NextResponse.json({
         response_action: "errors",
         errors: { client_block: "Pick a client to start." },
@@ -154,7 +184,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({
         response_action: "update",
         view: buildDuplicateConfirmView({
-          channel: channelId,
+          channel: targetChannel,
+          notifyChannel: invokingChannel ?? targetChannel,
           clientValue,
           topicSlug,
           clientName: existing.clientName,
@@ -167,7 +198,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // No open duplicate — create in the background so we respond within Slack's 3s
     // window (cold-start of chat.postMessage + insert can otherwise exceed it and
     // surface "We had some trouble connecting" even though the thread was created).
-    await fireClientThreadCreate({ channelId, userId: it.userId, clientValue, topicSlug })
+    await fireClientThreadCreate({
+      channelId: targetChannel,
+      notifyChannel: invokingChannel ?? targetChannel,
+      userId: it.userId,
+      clientValue,
+      topicSlug,
+    })
     // Empty 200 closes the modal cleanly.
     return NextResponse.json({})
   }
@@ -186,6 +223,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (it.type === "block_actions" && it.actionId === OPEN_CLIENT_CONVERSATION_ACTION_ID) {
     if (!it.triggerId || !it.channelId) return NextResponse.json({ ok: true })
     await openClientConversationModal(it.triggerId, it.channelId)
+    return NextResponse.json({ ok: true })
+  }
+
+  // ── "👀 Follow" button → toggle a per-user follow (work runs in the background) ─
+  if (it.type === "block_actions" && it.actionId === FOLLOW_CLIENT_THREAD_ACTION_ID) {
+    if (it.channelId && it.messageTs && it.userId) {
+      await fireFollowToggle({ channelId: it.channelId, messageTs: it.messageTs, userId: it.userId })
+    }
     return NextResponse.json({ ok: true })
   }
 

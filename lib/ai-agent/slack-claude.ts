@@ -169,7 +169,7 @@ export function slackScopeKey(channelId: string, threadTs: string | null | undef
   return threadTs ? `${channelId}:${threadTs}` : channelId
 }
 
-async function slackApiCall(
+export async function slackApiCall(
   method: string,
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; ts?: string; error?: string }> {
@@ -337,10 +337,20 @@ export const CLIENT_SELECT_ACTION_ID = "client_select"
 export const TOPIC_SELECT_ACTION_ID = "topic_select"
 export const NEW_TOPIC_BLOCK_ID = "new_topic_block"
 export const NEW_TOPIC_ACTION_ID = "new_topic_input"
+// Channel picker in the modal — lets the ⚡ shortcut / button target a topic channel
+// (e.g. #td-taxreturn), not just #td-support. conversations_select returns
+// `selected_conversation` (a channel id), not `selected_option`.
+export const CHANNEL_SELECT_BLOCK_ID = "channel_block"
+export const CHANNEL_SELECT_ACTION_ID = "channel_select"
 // URL button on the "Conversation started" ephemeral — opens the thread deep link.
 // Clicking it still sends a block_actions interaction, which the interactions route
 // safely ACKs via its unknown-action fall-through (no handler needed).
 export const OPEN_CLIENT_THREAD_LINK_ACTION_ID = "open_client_thread_link"
+// "👀 Follow" button on the 🗂️ folder root message — toggles a per-user follow so the
+// conversation shows in that user's "📌 Following" DM list until it closes. The handler
+// resolves the thread from the clicked message (channel:message_ts = source_ref), so the
+// button needs no value. See lib/ai-agent/client-thread-follows.ts.
+export const FOLLOW_CLIENT_THREAD_ACTION_ID = "follow_client_thread"
 
 /** Slugify free text into a catalog-safe topic slug (lowercase, underscores). */
 export function slugifyTopic(text: string): string {
@@ -572,6 +582,15 @@ export async function closeClientThread(
   } catch (err) {
     console.warn("[slack-claude] closeClientThread memory feed failed (non-fatal):", err)
   }
+
+  // A closed conversation must drop out of every follower's "📌 Following" DM list.
+  // Best-effort; dynamic import avoids a load-time cycle with client-thread-follows.
+  try {
+    const { refreshFollowersDigests } = await import("./client-thread-follows")
+    await refreshFollowersDigests(id)
+  } catch (err) {
+    console.warn("[slack-claude] closeClientThread follower-digest refresh failed (non-fatal):", err)
+  }
   return { ok: true }
 }
 
@@ -584,6 +603,14 @@ export async function reopenClientThread(id: string): Promise<{ ok: boolean; err
     .update({ status: "open", closed_at: null, transcript: null, updated_at: new Date().toISOString() })
     .eq("id", id)
   if (error) return { ok: false, error: error.message }
+
+  // Reopened → it should reappear in followers' "📌 Following" DM lists. Best-effort.
+  try {
+    const { refreshFollowersDigests } = await import("./client-thread-follows")
+    await refreshFollowersDigests(id)
+  } catch (err) {
+    console.warn("[slack-claude] reopenClientThread follower-digest refresh failed (non-fatal):", err)
+  }
   return { ok: true }
 }
 
@@ -664,6 +691,19 @@ export function buildClientConversationModalView(args: {
     blocks: [
       {
         type: "input",
+        block_id: CHANNEL_SELECT_BLOCK_ID,
+        optional: true,
+        label: { type: "plain_text", text: "Channel" },
+        element: {
+          type: "conversations_select",
+          action_id: CHANNEL_SELECT_ACTION_ID,
+          default_to_current_conversation: true,
+          filter: { include: ["public", "private"], exclude_bot_users: true },
+          placeholder: { type: "plain_text", text: "Where to post (defaults to here)" },
+        },
+      },
+      {
+        type: "input",
         block_id: "client_block",
         label: { type: "plain_text", text: "Client" },
         element: {
@@ -740,6 +780,28 @@ export async function searchClientsForSlackOptions(
  * tag it in client_threads (source_kind='manual' — a human picked it), and return
  * the new thread ts. clientValue is "<type>:<uuid>" from the external_select.
  */
+/**
+ * Block Kit for the 🗂️ folder root message: the text section + a "👀 Follow" button.
+ * Clicking Follow toggles a per-user follow (handler resolves the thread from the
+ * clicked message's channel:ts = source_ref, so no button value is needed).
+ */
+export function buildClientThreadRootBlocks(text: string): Array<Record<string, unknown>> {
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "👀 Follow", emoji: true },
+          action_id: FOLLOW_CLIENT_THREAD_ACTION_ID,
+          value: "follow",
+        },
+      ],
+    },
+  ]
+}
+
 export async function createClientConversationFromModal(args: {
   channelId: string
   userId: string | null
@@ -769,7 +831,7 @@ export async function createClientConversationFromModal(args: {
 
   const by = args.userId ? `<@${args.userId}>` : "the team"
   const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\n💬 Reply *inside this thread* to continue (open it and type in the thread's reply box — not the main channel box). No need to @ me; everything is saved to the CRM.`
-  const threadTs = await postSlackMessage(args.channelId, text, null)
+  const threadTs = await postSlackMessage(args.channelId, text, null, buildClientThreadRootBlocks(text))
   if (!threadTs) return { ok: false, error: "could not post the conversation message" }
 
   const row: Record<string, unknown> = {
@@ -918,6 +980,7 @@ export async function findOpenConversationForEntityTopic(
  */
 export function buildDuplicateConfirmView(args: {
   channel: string
+  notifyChannel?: string
   clientValue: string
   topicSlug: string
   clientName: string
@@ -926,6 +989,7 @@ export function buildDuplicateConfirmView(args: {
 }): Record<string, unknown> {
   const pm = JSON.stringify({
     channel: args.channel,
+    notifyChannel: args.notifyChannel ?? args.channel,
     clientValue: args.clientValue,
     topicSlug: args.topicSlug,
     confirm: true,

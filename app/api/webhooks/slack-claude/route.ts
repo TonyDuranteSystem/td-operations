@@ -217,6 +217,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true })
   }
 
+  // ── Client Threads: 🗑️ reaction on the STARTING message → remove the card ──
+  // Hard-removes a mistaken/duplicate conversation: deletes the Slack folder message
+  // AND the client_threads row (CASCADE removes its follows), then refreshes followers'
+  // DM lists. Like ✅, keyed on the root message's source_ref; ignores non-card messages.
+  if (event.type === "reaction_added" && event.reaction === "wastebasket") {
+    if (event.user === CLAUDE_BOT_USER_ID) return NextResponse.json({ ok: true })
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (itemChannel && itemTs) {
+      try {
+        const { removeClientThreadCard } = await import("@/lib/ai-agent/client-thread-follows")
+        await removeClientThreadCard({ channelId: itemChannel, messageTs: itemTs, reactedBy: event.user ?? null })
+      } catch (err) {
+        console.warn("[slack-claude-webhook] 🗑️ remove failed:", err)
+      }
+    }
+    return NextResponse.json({ ok: true })
+  }
+
   // ── Decision Memory Phase 7: 🧠 reaction → save the message as a memory ──
   // Slack delivers reaction_added as an event_callback. The app must subscribe
   // to the `reaction_added` bot event for these to arrive (admin config — noted
