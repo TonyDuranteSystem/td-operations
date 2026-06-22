@@ -311,13 +311,24 @@ export async function applyNameDecisionResponse(
   const checks = await getOrInitNameChecks(req.service_delivery_id)
   const now = new Date().toISOString()
 
+  let rejectedName: string | null = null
+  let rejectionNote: string | null = null
+
   if (marker.kind === 'approval') {
     // Prefer matching by the stored decision_request_id; fall back to name_index.
     let idx = checks.findIndex((c) => c.decision_request_id === req.id)
     if (idx < 0 && typeof marker.name_index === 'number') idx = marker.name_index
     if (idx >= 0 && checks[idx]) {
-      checks[idx].status = status === 'approved' ? 'accepted' : 'rejected_by_client'
+      const approved = status === 'approved'
+      checks[idx].status = approved ? 'accepted' : 'rejected_by_client'
       checks[idx].updated_at = now
+      if (!approved) {
+        // Store the client's note ON the name so the workspace row can show it.
+        const note = typeof response.note === 'string' && response.note.trim() ? response.note.trim() : null
+        checks[idx].note = note
+        rejectedName = checks[idx].name
+        rejectionNote = note
+      }
     }
   } else if (marker.kind === 'new_names') {
     for (const name of parseProposedNames(response.text)) {
@@ -326,4 +337,31 @@ export async function applyNameDecisionResponse(
   }
 
   await writeNameChecks(req.service_delivery_id, checks)
+
+  // Post an SD-scoped flow-chat note when the client rejects a name, so staff see
+  // the rejection (and the client's reason) in the workspace chat — the generic
+  // What's New note isn't service-delivery-scoped. System sender
+  // (portal_messages.sender_id is NOT NULL). Best-effort: the rejection status +
+  // note are already saved.
+  if (rejectedName) {
+    try {
+      const row = await loadSd(req.service_delivery_id)
+      const topic = row ? buildFlowTopic(row.service_type, deriveFlowYear(row)) || null : null
+      const message = rejectionNote
+        ? `Client rejected "${rejectedName}" — "${rejectionNote}"`
+        : `Client rejected "${rejectedName}".`
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+      await (supabaseAdmin as any).from('portal_messages').insert({
+        account_id: req.account_id ?? null,
+        contact_id: req.contact_id ?? null,
+        service_delivery_id: req.service_delivery_id,
+        topic,
+        sender_type: 'system',
+        sender_id: '00000000-0000-0000-0000-000000000000',
+        message,
+      })
+    } catch {
+      /* best-effort */
+    }
+  }
 }

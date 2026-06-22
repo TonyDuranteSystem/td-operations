@@ -157,7 +157,9 @@ export interface RespondDecisionResult {
 /** Short human summary of a response, for the staff What's New note. */
 function summarizeResponse(req: DecisionRequestRow, response: Record<string, unknown>): string {
   if (req.request_type === 'approval') {
-    return response.decision === 'approved' ? 'Approved' : 'Rejected'
+    const label = response.decision === 'approved' ? 'Approved' : 'Rejected'
+    const note = typeof response.note === 'string' && response.note.trim() ? response.note.trim() : null
+    return note ? `${label} — "${note}"` : label
   }
   if (req.request_type === 'choice') {
     const rawChoices = req.options?.choices
