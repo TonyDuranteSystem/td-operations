@@ -111,3 +111,5 @@ _2026-06-22 (Phase 2.3) — CLOSE a conversation (frozen transcript). New client
 _2026-06-22 (Phase 1b polish) — Conversations panel now shows timestamps: each message renders its date+time (fmtSlackTs), and the row header shows "Opened <date time>" (fmtDateTime)._
 
 _2026-06-22 (Phase 2.4) — propose-continue dedup: the form, on submit, checks for an existing OPEN conversation for the same client+topic (findOpenConversationForEntityTopic). If found, it updates the modal (buildDuplicateConfirmView) showing "already open, opened <date>" + a link to continue there, or "Start new anyway" (carries the selection in private_metadata confirm:true → second submit skips the check and creates). Prevents form+@Claude duplicates; one open conversation per client+topic._
+
+_2026-06-22 (Phase 2.5) — /client SLASH COMMAND: new app/api/webhooks/slack-commands route opens the same client-conversation modal by typing /client (reliable entry point since the global shortcut is hard to find). Shared openClientConversationModal helper now used by all three entry points (button, shortcut, slash command); interactions route refactored to it._

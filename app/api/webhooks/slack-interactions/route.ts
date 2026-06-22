@@ -25,13 +25,11 @@ export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { listEntries } from "@/lib/catalog/framework"
 import {
   verifySlackSignature,
   parseSlackInteractionFull,
   updateSlackMessage,
-  openSlackModal,
-  buildClientConversationModalView,
+  openClientConversationModal,
   searchClientsForSlackOptions,
   createClientConversationFromModal,
   findOpenConversationForEntityTopic,
@@ -51,20 +49,6 @@ import {
 function selectedValue(viewState: any, blockId: string, actionId: string): string | null {
   const sel = viewState?.values?.[blockId]?.[actionId]?.selected_option
   return (sel?.value as string | undefined) ?? null
-}
-
-/** Open the client-conversation modal for a given trigger + target channel. */
-async function openConversationModal(triggerId: string, channelId: string): Promise<void> {
-  let topicOptions: Array<{ slug: string; label: string }> = []
-  try {
-    const entries = await listEntries("topic_templates", { status: "active" })
-    topicOptions = entries
-      .map((e) => ({ slug: e.slug, label: e.display_name }))
-      .sort((a, b) => a.label.localeCompare(b.label))
-  } catch {
-    topicOptions = []
-  }
-  await openSlackModal(triggerId, buildClientConversationModalView({ channelId, topicOptions }))
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -173,14 +157,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (it.type === "shortcut" && it.shortcutCallbackId === CLIENT_CONVERSATION_SHORTCUT_CALLBACK) {
     const channelId = process.env.SLACK_SUPPORT_CHANNEL_ID
     if (!it.triggerId || !channelId) return NextResponse.json({ ok: true })
-    await openConversationModal(it.triggerId, channelId)
+    await openClientConversationModal(it.triggerId, channelId)
     return NextResponse.json({ ok: true })
   }
 
   // ── Button (in-channel, optional): open the client-conversation modal ──────
   if (it.type === "block_actions" && it.actionId === OPEN_CLIENT_CONVERSATION_ACTION_ID) {
     if (!it.triggerId || !it.channelId) return NextResponse.json({ ok: true })
-    await openConversationModal(it.triggerId, it.channelId)
+    await openClientConversationModal(it.triggerId, it.channelId)
     return NextResponse.json({ ok: true })
   }
 

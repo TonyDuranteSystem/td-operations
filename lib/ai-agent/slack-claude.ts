@@ -565,6 +565,25 @@ export async function openSlackModal(
   return r
 }
 
+/**
+ * Open the client-conversation modal for a trigger + target channel. Shared by all
+ * three entry points (in-channel button, global shortcut, and the /client slash
+ * command). Loads the topic options from the topic_templates catalog (no hardcoding).
+ */
+export async function openClientConversationModal(triggerId: string, channelId: string): Promise<void> {
+  let topicOptions: Array<{ slug: string; label: string }> = []
+  try {
+    const { listEntries } = await import("@/lib/catalog/framework")
+    const entries = await listEntries("topic_templates", { status: "active" })
+    topicOptions = entries
+      .map((e) => ({ slug: e.slug, label: e.display_name }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  } catch {
+    topicOptions = []
+  }
+  await openSlackModal(triggerId, buildClientConversationModalView({ channelId, topicOptions }))
+}
+
 /** The pinned "➕ New client conversation" message blocks (its button opens the modal). */
 export function buildClientConversationButtonBlocks(): Array<Record<string, unknown>> {
   return [
