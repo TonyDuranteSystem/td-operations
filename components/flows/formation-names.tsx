@@ -236,6 +236,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm font-semibold text-zinc-900 break-words">{c.name}</span>
                   {c.source === 'client_resubmit' && <span className="text-[10px] text-zinc-400">(client-proposed)</span>}
+                  {c.source === 'client_suggestion' && <span className="text-[10px] font-medium text-blue-500">(client suggested)</span>}
                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${BADGE_CLS[c.status]}`}>
                     {meta.emoji} {meta.label}
                   </span>

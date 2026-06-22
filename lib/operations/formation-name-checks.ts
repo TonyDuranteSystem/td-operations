@@ -313,6 +313,7 @@ export async function applyNameDecisionResponse(
 
   let rejectedName: string | null = null
   let rejectionNote: string | null = null
+  let suggestedNewName: string | null = null
 
   if (marker.kind === 'approval') {
     // Prefer matching by the stored decision_request_id; fall back to name_index.
@@ -328,6 +329,14 @@ export async function applyNameDecisionResponse(
         checks[idx].note = note
         rejectedName = checks[idx].name
         rejectionNote = note
+        // The client may suggest a replacement name → add it as a new pending
+        // candidate so it appears immediately in the workspace name panel.
+        // Dedupe (case-insensitive) so we don't double-add an existing name.
+        const suggested = typeof response.suggested_name === 'string' ? response.suggested_name.trim() : ''
+        if (suggested && !checks.some((c) => c.name.toLowerCase() === suggested.toLowerCase())) {
+          checks.push({ name: suggested, source: 'client_suggestion', status: 'pending', updated_at: now })
+          suggestedNewName = suggested
+        }
       }
     }
   } else if (marker.kind === 'new_names') {
@@ -347,9 +356,12 @@ export async function applyNameDecisionResponse(
     try {
       const row = await loadSd(req.service_delivery_id)
       const topic = row ? buildFlowTopic(row.service_type, deriveFlowYear(row)) || null : null
-      const message = rejectionNote
+      const base = rejectionNote
         ? `Client rejected "${rejectedName}" — "${rejectionNote}"`
         : `Client rejected "${rejectedName}".`
+      const message = suggestedNewName
+        ? `${base} They suggested "${suggestedNewName}" instead — added to the name list.`
+        : base
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
       await (supabaseAdmin as any).from('portal_messages').insert({
         account_id: req.account_id ?? null,

@@ -131,9 +131,16 @@ export function validateDecisionResponse(
     if (decision !== 'approved' && decision !== 'rejected') {
       return { ok: false, error: 'Response.decision must be "approved" or "rejected".' }
     }
+    // On a rejection the client may suggest a name to use instead — preserve it
+    // (the formation name flow turns it into a new pending candidate).
+    const suggestedName = str(r.suggested_name) ?? undefined
     return {
       ok: true,
-      response: { decision, ...(note ? { note } : {}) },
+      response: {
+        decision,
+        ...(note ? { note } : {}),
+        ...(decision === 'rejected' && suggestedName ? { suggested_name: suggestedName } : {}),
+      },
       status: decision,
     }
   }

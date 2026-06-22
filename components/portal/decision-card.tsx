@@ -20,6 +20,8 @@ const T = {
     no: "No, I don't approve",
     submit: 'Submit',
     notePlaceholder: 'Add a comment (optional)',
+    suggestNameLabel: 'Suggest a name instead (optional):',
+    suggestNamePlaceholder: 'e.g. Sunshine LLC',
     youResponded: 'Your response',
     pending: 'A response is pending.',
     expired: 'This request has expired.',
@@ -35,6 +37,8 @@ const T = {
     no: 'No, non approvo',
     submit: 'Invia',
     notePlaceholder: 'Aggiungi un commento (facoltativo)',
+    suggestNameLabel: 'Suggerisci un nome (facoltativo):',
+    suggestNamePlaceholder: 'es. Sunshine LLC',
     youResponded: 'La tua risposta',
     pending: 'In attesa di una risposta.',
     expired: 'Questa richiesta è scaduta.',
@@ -63,6 +67,11 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
   const [note, setNote] = useState('')
   const [selected, setSelected] = useState('')
   const [text, setText] = useState('')
+  const [suggestedName, setSuggestedName] = useState('')
+
+  // Formation name-approval requests carry a name_check marker — only those show
+  // the "suggest a name instead" field (generic approvals don't).
+  const isNameRequest = !!(opts as { name_check?: unknown }).name_check
 
   const effectiveStatus = localResponse?.status ?? request.status
   const effectiveResponse = localResponse?.response ?? request.response
@@ -156,6 +165,20 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
                 rows={2}
                 className="w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />
+              {/* Name-approval only: let the client propose a name to use instead.
+                  Sent with a rejection; it becomes a pending candidate for staff. */}
+              {isNameRequest && (
+                <label className="block text-sm text-zinc-600">
+                  {t.suggestNameLabel}
+                  <input
+                    type="text"
+                    value={suggestedName}
+                    onChange={(e) => setSuggestedName(e.target.value)}
+                    placeholder={t.suggestNamePlaceholder}
+                    className="mt-1 w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
+                  />
+                </label>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   disabled={submitting}
@@ -167,7 +190,11 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
                 </button>
                 <button
                   disabled={submitting}
-                  onClick={() => respond({ decision: 'rejected', ...(note.trim() ? { note: note.trim() } : {}) })}
+                  onClick={() => respond({
+                    decision: 'rejected',
+                    ...(note.trim() ? { note: note.trim() } : {}),
+                    ...(isNameRequest && suggestedName.trim() ? { suggested_name: suggestedName.trim() } : {}),
+                  })}
                   className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
                 >
                   <XCircle className="h-4 w-4" />

@@ -27,7 +27,7 @@ export type NameCheckStatus =
 
 export interface NameCheck {
   name: string
-  source: 'wizard' | 'client_resubmit'
+  source: 'wizard' | 'client_resubmit' | 'client_suggestion'
   field?: string | null
   status: NameCheckStatus
   updated_at: string | null
