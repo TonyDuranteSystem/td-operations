@@ -337,6 +337,10 @@ export const CLIENT_SELECT_ACTION_ID = "client_select"
 export const TOPIC_SELECT_ACTION_ID = "topic_select"
 export const NEW_TOPIC_BLOCK_ID = "new_topic_block"
 export const NEW_TOPIC_ACTION_ID = "new_topic_input"
+// URL button on the "Conversation started" ephemeral — opens the thread deep link.
+// Clicking it still sends a block_actions interaction, which the interactions route
+// safely ACKs via its unknown-action fall-through (no handler needed).
+export const OPEN_CLIENT_THREAD_LINK_ACTION_ID = "open_client_thread_link"
 
 /** Slugify free text into a catalog-safe topic slug (lowercase, underscores). */
 export function slugifyTopic(text: string): string {
@@ -764,7 +768,7 @@ export async function createClientConversationFromModal(args: {
   }
 
   const by = args.userId ? `<@${args.userId}>` : "the team"
-  const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\nJust reply here — I'm listening (no need to @ me). Everything is saved to the CRM.`
+  const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\n💬 Reply *inside this thread* to continue (open it and type in the thread's reply box — not the main channel box). No need to @ me; everything is saved to the CRM.`
   const threadTs = await postSlackMessage(args.channelId, text, null)
   if (!threadTs) return { ok: false, error: "could not post the conversation message" }
 
@@ -783,7 +787,79 @@ export async function createClientConversationFromModal(args: {
   if (ins.error && !/duplicate key/i.test(ins.error.message ?? "")) {
     console.error("[slack-claude] client_threads insert failed:", ins.error)
   }
+
+  // One-click jump into the thread. Slack gives apps no way to auto-open a panel in
+  // a user's client, so we post an ephemeral (only the creator sees it) message at
+  // their composer with a deep link that opens this thread directly. The url button
+  // sends a harmless block_actions interaction the interactions route already ACKs.
+  if (args.userId) {
+    const deepLink =
+      (await getSlackPermalink(args.channelId, threadTs)) ??
+      buildSlackThreadDeepLink(args.channelId, threadTs)
+    await slackApiCall("chat.postEphemeral", {
+      channel: args.channelId,
+      user: args.userId,
+      text: `✅ Conversation started for ${name} · ${args.topicSlug} — open it to start chatting.`,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `✅ Conversation started for *${name}* · *${args.topicSlug}*. Open it and reply in the thread to chat — everything is saved to the CRM.`,
+          },
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "💬 Open conversation", emoji: true },
+              url: deepLink,
+              action_id: OPEN_CLIENT_THREAD_LINK_ACTION_ID,
+              style: "primary",
+            },
+          ],
+        },
+      ],
+    }).catch((err: unknown) => {
+      console.error("[slack-claude] postEphemeral (open conversation) failed:", err)
+      return { ok: false }
+    })
+  }
+
   return { ok: true, threadTs }
+}
+
+/**
+ * Deep link that opens a specific thread in the user's Slack client (right-side
+ * panel on desktop, full-screen on mobile). The `thread_ts` + `cid` params are what
+ * make Slack open the THREAD view rather than just scrolling to the channel message.
+ */
+export function buildSlackThreadDeepLink(channelId: string, threadTs: string): string {
+  const tsNoDot = threadTs.replace(".", "")
+  return `https://slack.com/archives/${channelId}/p${tsNoDot}?thread_ts=${threadTs}&cid=${channelId}`
+}
+
+/**
+ * Canonical message permalink from Slack's chat.getPermalink — the exact link
+ * "Copy link to message" produces, which always opens correctly in the Slack client
+ * (team subdomain + thread_ts + cid). The hand-built `buildSlackThreadDeepLink` is a
+ * fallback when the API call fails; a bare `/archives/CH/pTS` link (no thread_ts/cid)
+ * gave "You don't have access to this message" on thread parents, which is why this
+ * exists. Returns null on failure so callers can fall back.
+ */
+export async function getSlackPermalink(channelId: string, messageTs: string): Promise<string | null> {
+  try {
+    const r = (await slackApiCall("chat.getPermalink", {
+      channel: channelId,
+      message_ts: messageTs,
+    })) as unknown as { ok: boolean; permalink?: string; error?: string }
+    if (r.ok && r.permalink) return r.permalink
+    console.error("[slack-claude] chat.getPermalink not ok:", r.error)
+  } catch (err) {
+    console.error("[slack-claude] chat.getPermalink failed:", err)
+  }
+  return null
 }
 
 /**
@@ -815,7 +891,10 @@ export async function findOpenConversationForEntityTopic(
   let slackLink: string | null = null
   if (typeof data.source_ref === "string" && data.source_ref.includes(":")) {
     const [ch, ts] = data.source_ref.split(":")
-    if (ch && ts) slackLink = `https://slack.com/archives/${ch}/p${ts.replace(".", "")}`
+    if (ch && ts) {
+      // Canonical permalink (opens reliably); fall back to the constructed deep link.
+      slackLink = (await getSlackPermalink(ch, ts)) ?? buildSlackThreadDeepLink(ch, ts)
+    }
   }
   let clientName = "this client"
   try {

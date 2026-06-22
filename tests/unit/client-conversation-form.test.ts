@@ -18,6 +18,7 @@ import {
   buildDuplicateConfirmView,
   cleanSlackText,
   slugifyTopic,
+  buildSlackThreadDeepLink,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
   CLIENT_SELECT_ACTION_ID,
@@ -172,6 +173,21 @@ describe("slugifyTopic", () => {
   it("returns empty string for non-alphanumeric junk", () => {
     expect(slugifyTopic("!!!")).toBe("")
     expect(slugifyTopic("")).toBe("")
+  })
+})
+
+describe("buildSlackThreadDeepLink", () => {
+  it("builds a thread-opening deep link (thread_ts + cid open the thread view)", () => {
+    const link = buildSlackThreadDeepLink("C0BA802S9LH", "1782141518.486979")
+    expect(link).toBe(
+      "https://slack.com/archives/C0BA802S9LH/p1782141518486979?thread_ts=1782141518.486979&cid=C0BA802S9LH",
+    )
+  })
+  it("strips only the dot from the ts in the /p segment but keeps it in thread_ts", () => {
+    const link = buildSlackThreadDeepLink("C123", "1700000000.000100")
+    expect(link).toContain("/p1700000000000100?")
+    expect(link).toContain("thread_ts=1700000000.000100")
+    expect(link).toContain("cid=C123")
   })
 })
 
