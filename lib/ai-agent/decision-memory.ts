@@ -69,6 +69,11 @@ export interface SaveDecisionMemoryParams {
   actors?: string[]
   /** 0..1 confidence in this memory. Defaults to 0.8 (DB default). */
   confidence?: number
+  /**
+   * Client scope, "account:<id>" | "contact:<id>" | "lead:<id>" (Phase 3). When set,
+   * the memory is recallable per-client via match_decision_memory_client. Null = global.
+   */
+  clientKey?: string | null
 }
 
 /** Options for recallDecisionMemory. */
@@ -172,6 +177,7 @@ export async function saveDecisionMemory(params: SaveDecisionMemoryParams): Prom
       source_ref: params.sourceRef ?? null,
       actors: params.actors ?? [],
       confidence: params.confidence ?? 0.8,
+      client_key: params.clientKey ?? null,
     })
     .select("id")
     .single()
@@ -216,6 +222,33 @@ export async function recallDecisionMemory(
     })
   }
 
+  return matches
+}
+
+/**
+ * Recall the memories most similar to `query` SCOPED TO ONE CLIENT (Phase 3).
+ * Calls match_decision_memory_client (separate from the global recall). Best-effort
+ * stat bump. Returns [] when the client has no memories yet.
+ */
+export async function recallClientDecisionMemory(
+  query: string,
+  clientKey: string,
+  opts: { matchThreshold?: number; matchCount?: number; status?: string; trackRecall?: boolean } = {},
+): Promise<DecisionMemoryMatch[]> {
+  if (!query?.trim() || !clientKey?.trim()) return []
+  const embedding = await generateEmbedding(query)
+  const { data, error } = await db.rpc("match_decision_memory_client", {
+    query_embedding: embedding as unknown as string,
+    filter_client_key: clientKey,
+    match_threshold: opts.matchThreshold ?? 0.4,
+    match_count: opts.matchCount ?? 5,
+    filter_status: opts.status ?? "active",
+  })
+  if (error) throw new Error(`recallClientDecisionMemory RPC failed: ${error.message}`)
+  const matches = (data ?? []) as DecisionMemoryMatch[]
+  if (matches.length > 0 && opts.trackRecall !== false) {
+    await bumpRecallStats(matches.map((m) => m.id)).catch(() => {})
+  }
   return matches
 }
 

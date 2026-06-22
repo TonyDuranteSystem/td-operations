@@ -391,6 +391,9 @@ describe("processSlackEvent", () => {
       // not the SLACK_SUPPORT_CHANNEL_ID-gated #td-support).
       enableClientThreadRead: true,
       enableClientThreadTag: false,
+      // Phase 3: no client scope here (thread isn't a tagged client conversation).
+      clientKey: null,
+      clientName: null,
       enableFullToolReach: false,
       maxIterations: 20,
     })

@@ -517,7 +517,7 @@ export async function closeClientThread(
   const db = supabaseAdmin as any
   const { data: row, error } = await db
     .from("client_threads")
-    .select("source, source_ref, status")
+    .select("source, source_ref, status, account_id, contact_id, lead_id, topic_slug")
     .eq("id", id)
     .maybeSingle()
   if (error) return { ok: false, error: error.message }
@@ -540,6 +540,34 @@ export async function closeClientThread(
     })
     .eq("id", id)
     .neq("status", "closed")
+
+  // Phase 3 feed: a CLOSED conversation is a human-confirmed record → save it as a
+  // client-scoped memory so the worker recalls it next time (no auto-poisoning: only
+  // closed/confirmed conversations feed the brain). Best-effort; never fails the close.
+  try {
+    if (transcript.length > 0) {
+      const entityId = row.account_id ?? row.contact_id ?? row.lead_id
+      const kind = row.account_id ? "account" : row.contact_id ? "contact" : row.lead_id ? "lead" : null
+      if (entityId && kind) {
+        const clientKey = `${kind}:${entityId}`
+        const topic = row.topic_slug ?? "general"
+        const body = transcript.map((m) => `${m.author}: ${m.text}`).join("\n").slice(0, 2000)
+        const { saveDecisionMemory } = await import("./decision-memory")
+        await saveDecisionMemory({
+          situation: `Client conversation about ${topic}`,
+          decision: body,
+          domain: topic,
+          sourceType: "client_thread_close",
+          sourceRef: row.source_ref ?? undefined,
+          clientKey,
+          confidence: 0.6,
+          tags: ["client_thread", topic],
+        })
+      }
+    }
+  } catch (err) {
+    console.warn("[slack-claude] closeClientThread memory feed failed (non-fatal):", err)
+  }
   return { ok: true }
 }
 
@@ -1519,6 +1547,10 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // otherwise tagged), pull its client + topic so the worker is grounded and the
   // exchange can be recorded in the CRM. Best-effort (null = behave as before).
   const clientThreadCtx = await lookupClientThreadContext(channelId, replyThreadTs)
+  // Phase 3: client scope key for per-client memory recall ("WHAT WE KNOW ABOUT …").
+  const clientKey = clientThreadCtx
+    ? `${clientThreadCtx.clientType}:${clientThreadCtx.accountId ?? clientThreadCtx.contactId ?? clientThreadCtx.leadId}`
+    : null
 
   // ── In-channel approval completion (loop fix) ──────────────────────────────
   // A message that is EXACTLY a 6-digit code from the authorized approver
@@ -1614,6 +1646,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // only in #td-support (NOISE GATE 1). Kept off the Hermes worker (R108).
     enableClientThreadRead: true,
     enableClientThreadTag: isSupportChannel,
+    clientKey,
+    clientName: clientThreadCtx?.clientName ?? null,
     // Dig-in gear: read-only SQL for deep client investigation, plus more tool-loop
     // headroom than the default 8 so a real investigation doesn't get cut off.
     enableDbRead: true,
@@ -1755,6 +1789,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableCalendly: true,
           enableClientThreadRead: true,
           enableClientThreadTag: isSupportChannel,
+          clientKey,
+          clientName: clientThreadCtx?.clientName ?? null,
           enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
           maxIterations: 20,
         }

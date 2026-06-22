@@ -330,3 +330,5 @@ _Shipped 2026-06-05 (sandbox-first; branch `feat/macmini-executor`). No new migr
 
 ---
 _2026-06-21 — Client Threads (Phase 1, dev_task 54f89912): added the Slack-only `tag_client_thread` (write) + `find_client_threads` (read) tools in `lib/ai-agent/worker-tools.ts` (gated via `enableClientThreadTag`/`enableClientThreadRead`, kept OUT of `WORKER_TOOLS`, R108) and wired the `#td-support` auto-tag in `lib/ai-agent/slack-claude.ts::processSlackEvent`. Full subsystem doc: [client-threads.md](client-threads.md)._
+
+_2026-06-22 — worker-tools.ts: added buildClientRecallSuffix + CallWorkerOptions.clientKey/clientName for Phase 3 per-client memory recall (Client Threads). See docs/systems/client-threads.md._

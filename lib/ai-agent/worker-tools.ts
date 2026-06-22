@@ -1893,6 +1893,13 @@ export interface CallWorkerOptions {
    * Kept OUT of WORKER_TOOLS so the Hermes/Telegram research worker never gets it (R108).
    */
   enableClientThreadRead?: boolean
+  /**
+   * Phase 3 — per-client brain. When set (a tagged client thread), the worker
+   * recalls memories scoped to this client and prepends "WHAT WE KNOW ABOUT
+   * <clientName>" before answering. clientKey = "account|contact|lead:<id>".
+   */
+  clientKey?: string | null
+  clientName?: string | null
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -2159,6 +2166,29 @@ export async function buildAutoRecallSuffix(query: string): Promise<string> {
   }
 }
 
+/**
+ * Phase 3 — the per-client brain. Build a "WHAT WE KNOW ABOUT <client>" suffix by
+ * recalling memories scoped to this client (client_key) similar to the current
+ * request. Best-effort (returns "" on any failure or when the client has none yet).
+ */
+export async function buildClientRecallSuffix(
+  query: string,
+  clientKey: string,
+  clientName: string,
+): Promise<string> {
+  try {
+    if (!query?.trim() || !clientKey?.trim()) return ""
+    const { recallClientDecisionMemory } = await import("./decision-memory")
+    const recalled = await recallClientDecisionMemory(query, clientKey, { matchCount: 5 })
+    const lessons = formatRecalledLessons(recalled)
+    if (!lessons) return ""
+    return `\n\nWHAT WE KNOW ABOUT ${clientName} (from past decisions/notes for this client — use it, don't ask for what's already here):\n${lessons}`
+  } catch (err) {
+    console.warn("[client-recall] failed (non-fatal):", err)
+    return ""
+  }
+}
+
 export async function callWorker(userBody: string, opts: CallWorkerOptions = {}): Promise<WorkerResponse> {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured")
 
@@ -2295,6 +2325,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // stays available for deeper/explicit lookups. Shared with the in-dashboard
   // agent via buildAutoRecallSuffix (best-effort; never fails a reply).
   systemPrompt = `${systemPrompt}${await buildAutoRecallSuffix(userBody)}`
+
+  // Phase 3 — per-client brain: in a tagged client thread, also prepend what we
+  // already know about THIS client (client-scoped memories). Best-effort.
+  if (opts.clientKey && opts.clientName) {
+    systemPrompt = `${systemPrompt}${await buildClientRecallSuffix(userBody, opts.clientKey, opts.clientName)}`
+  }
 
   const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null)
 
