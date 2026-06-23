@@ -175,6 +175,22 @@ const SIMPLE_STATUS: Partial<Record<NameAction, NameCheckStatus>> = {
   mark_filed: 'filed',
 }
 
+/**
+ * Supersede any still-pending "new names" (text_input) request for this SD before
+ * creating a fresh one, so the client never sees TWO name-request windows at once
+ * (e.g. an unanswered "all names unavailable" request plus a later SOS-rejection
+ * request). Only the latest request stays pending.
+ */
+async function cancelPendingNewNamesRequests(sdId: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+  await (supabaseAdmin as any)
+    .from('client_decision_requests')
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    .eq('service_delivery_id', sdId)
+    .eq('status', 'pending')
+    .eq('request_type', 'text_input')
+}
+
 /** Apply a staff name action; creates decision requests for send/sos-reject. */
 export async function handleNameAction(params: {
   sdId: string
@@ -194,6 +210,7 @@ export async function handleNameAction(params: {
   // for a fresh set when none of the current names are viable. Handle before the
   // per-name entry lookup (no nameIndex required).
   if (params.action === 'request_new_names') {
+    await cancelPendingNewNamesRequests(params.sdId)
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'text_input',
@@ -248,6 +265,7 @@ export async function handleNameAction(params: {
   } else if (params.action === 'mark_sos_rejected') {
     entry.status = 'rejected_by_sos'
     entry.updated_at = now
+    await cancelPendingNewNamesRequests(params.sdId)
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'text_input',
@@ -311,13 +329,33 @@ export async function applyNameDecisionResponse(
   const checks = await getOrInitNameChecks(req.service_delivery_id)
   const now = new Date().toISOString()
 
+  let rejectedName: string | null = null
+  let rejectionNote: string | null = null
+  let suggestedNewName: string | null = null
+
   if (marker.kind === 'approval') {
     // Prefer matching by the stored decision_request_id; fall back to name_index.
     let idx = checks.findIndex((c) => c.decision_request_id === req.id)
     if (idx < 0 && typeof marker.name_index === 'number') idx = marker.name_index
     if (idx >= 0 && checks[idx]) {
-      checks[idx].status = status === 'approved' ? 'accepted' : 'rejected_by_client'
+      const approved = status === 'approved'
+      checks[idx].status = approved ? 'accepted' : 'rejected_by_client'
       checks[idx].updated_at = now
+      if (!approved) {
+        // Store the client's note ON the name so the workspace row can show it.
+        const note = typeof response.note === 'string' && response.note.trim() ? response.note.trim() : null
+        checks[idx].note = note
+        rejectedName = checks[idx].name
+        rejectionNote = note
+        // The client may suggest a replacement name → add it as a new pending
+        // candidate so it appears immediately in the workspace name panel.
+        // Dedupe (case-insensitive) so we don't double-add an existing name.
+        const suggested = typeof response.suggested_name === 'string' ? response.suggested_name.trim() : ''
+        if (suggested && !checks.some((c) => c.name.toLowerCase() === suggested.toLowerCase())) {
+          checks.push({ name: suggested, source: 'client_suggestion', status: 'pending', updated_at: now })
+          suggestedNewName = suggested
+        }
+      }
     }
   } else if (marker.kind === 'new_names') {
     for (const name of parseProposedNames(response.text)) {
@@ -326,4 +364,34 @@ export async function applyNameDecisionResponse(
   }
 
   await writeNameChecks(req.service_delivery_id, checks)
+
+  // Post an SD-scoped flow-chat note when the client rejects a name, so staff see
+  // the rejection (and the client's reason) in the workspace chat — the generic
+  // What's New note isn't service-delivery-scoped. System sender
+  // (portal_messages.sender_id is NOT NULL). Best-effort: the rejection status +
+  // note are already saved.
+  if (rejectedName) {
+    try {
+      const row = await loadSd(req.service_delivery_id)
+      const topic = row ? buildFlowTopic(row.service_type, deriveFlowYear(row)) || null : null
+      const base = rejectionNote
+        ? `Client rejected "${rejectedName}" — "${rejectionNote}"`
+        : `Client rejected "${rejectedName}".`
+      const message = suggestedNewName
+        ? `${base} They suggested "${suggestedNewName}" instead — added to the name list.`
+        : base
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+      await (supabaseAdmin as any).from('portal_messages').insert({
+        account_id: req.account_id ?? null,
+        contact_id: req.contact_id ?? null,
+        service_delivery_id: req.service_delivery_id,
+        topic,
+        sender_type: 'system',
+        sender_id: '00000000-0000-0000-0000-000000000000',
+        message,
+      })
+    } catch {
+      /* best-effort */
+    }
+  }
 }

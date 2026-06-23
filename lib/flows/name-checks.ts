@@ -27,12 +27,14 @@ export type NameCheckStatus =
 
 export interface NameCheck {
   name: string
-  source: 'wizard' | 'client_resubmit'
+  source: 'wizard' | 'client_resubmit' | 'client_suggestion'
   field?: string | null
   status: NameCheckStatus
   updated_at: string | null
   decision_request_id?: string | null
   sos_result?: string | null
+  /** The client's free-text note when they rejected this proposed name. */
+  note?: string | null
 }
 
 /** Display metadata per status (label + emoji) for the staff panel + badges. */
