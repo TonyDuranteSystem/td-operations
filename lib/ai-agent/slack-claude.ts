@@ -155,7 +155,10 @@ CALLS (Circleback): you can read recorded calls (sales/intake/client calls). Use
 
 MEMORY: Use memory_recall to see how a similar situation was handled before; use memory_save
 to remember a durable lesson (a correction, decision, or pricing/policy rule). memory_save
-writes only to the knowledge store — no approval needed.
+writes only to the knowledge store — no approval needed. For THIS conversation's own history —
+what was said, decided, or done earlier in this thread, even weeks or months ago — use
+recall_thread (optionally with a keyword) BEFORE ever saying you don't remember or that
+something "didn't happen": the full transcript is on permanent record, so look it up first.
 
 PORTAL CHAT REPLIES: To reply to a client in portal chat, after Antonio's explicit "send it",
 call send_portal_message (account_id for an LLC, or contact_id for a person, plus the message). It
@@ -1274,6 +1277,19 @@ const SLACK_USER_CLAUDE = "U0B9S675WTT"
 const SLACK_USER_ANTONIO = "U0BAALR4Y4Q"
 const SLACK_USER_LUCA = "U0B9ZUE2Q75"
 
+// Claude's OWN Slack messages are normally skipped in thread history (they're
+// already in agent_messages memory). The EXCEPTION is code-task lifecycle posts:
+// the "picked it up" launch line and the "— done" deliverable are posted to Slack
+// by the Mac Mini runner, NOT written to agent_messages — so they live ONLY in the
+// Slack thread. Keeping them is what lets the worker know which code tasks it
+// launched and how they ended; without it the worker re-reads the thread, sees none
+// of its own work, and (incident 2026-06-23) denies a task notification it created.
+// Matches launch ("Mac Mini picked it up"), done ("— done" with em or hyphen dash),
+// and the review-branch push. Pure progress frames / acks deliberately do NOT match.
+const CODE_TASK_HISTORY_MARKER = /Mac Mini picked it up|[—-]\s*done\b|Pushing to branch/i
+// Cap a kept code-task post so a long deliverable report can't dominate the transcript.
+const CODE_TASK_HISTORY_MAX_CHARS = 300
+
 /**
  * Fetch recent messages from a Slack thread for shared context.
  * Returns a formatted string of who said what, so Claude can see what the rest
@@ -1283,10 +1299,11 @@ const SLACK_USER_LUCA = "U0B9ZUE2Q75"
  * `row.body` (the current message) + Claude's own agent_messages memory — it
  * never sees what teammates said. This injects the real Slack transcript so
  * Claude has the full picture and can attribute each message to the person who
- * actually sent it. Claude's own messages are skipped (already in its
- * agent_messages context). Best-effort: a missing token, non-ok response (e.g.
- * missing channels:history scope), or network error returns "" (logged) so the
- * worker still answers.
+ * actually sent it. Claude's own chat messages are skipped (already in its
+ * agent_messages context); its code-task lifecycle posts are the one exception —
+ * they live only in Slack, so they're kept (see CODE_TASK_HISTORY_MARKER).
+ * Best-effort: a missing token, non-ok response (e.g. missing channels:history
+ * scope), or network error returns "" (logged) so the worker still answers.
  */
 export async function fetchThreadHistory(
   channelId: string,
@@ -1316,24 +1333,36 @@ export async function fetchThreadHistory(
 
     const lines: string[] = []
     for (const msg of data.messages) {
-      // Skip Claude's own messages — already in its agent_messages context.
-      if (msg.user === SLACK_USER_CLAUDE) continue
-
       const text = (msg.text || "").trim()
+
+      // Claude's own messages are already in its agent_messages memory, so skip them
+      // to avoid duplication — EXCEPT code-task lifecycle posts (launch / done), which
+      // the Mac Mini posts straight to Slack and never to agent_messages. Keep those so
+      // the worker knows what it launched and how it ended (see CODE_TASK_HISTORY_MARKER).
+      const isClaude = msg.user === SLACK_USER_CLAUDE
+      const isKeptCodeTaskPost = isClaude && CODE_TASK_HISTORY_MARKER.test(text)
+      if (isClaude && !isKeptCodeTaskPost) continue
+
       const fileNote = msg.files?.length ? ` [+${msg.files.length} file(s)]` : ""
       if (!text && !fileNote) continue
 
       // Determine who sent it
       let sender = "Someone"
-      if (msg.user === SLACK_USER_ANTONIO) sender = "Antonio"
+      if (isClaude) sender = "Claude (code task)"
+      else if (msg.user === SLACK_USER_ANTONIO) sender = "Antonio"
       else if (msg.user === SLACK_USER_LUCA) sender = "Luca"
       else if (msg.bot_id) sender = "Bot"
 
       // Clean up Slack mention formatting so the worker reads plain @names.
-      const cleanText = text
+      let cleanText = text
         .replace(/<@U0B9S675WTT(\|[^>]*)?>/g, "@Claude")
         .replace(/<@U0B9ZUE2Q75(\|[^>]*)?>/g, "@Luca")
         .replace(/<@U0BAALR4Y4Q(\|[^>]*)?>/g, "@Antonio")
+
+      // Truncate a kept code-task post (a "done" message can carry a full deliverable).
+      if (isKeptCodeTaskPost && cleanText.length > CODE_TASK_HISTORY_MAX_CHARS) {
+        cleanText = `${cleanText.slice(0, CODE_TASK_HISTORY_MAX_CHARS)}…`
+      }
 
       lines.push(`${sender}: ${cleanText}${fileNote}`)
     }
@@ -1847,6 +1876,36 @@ export async function findOrCreateConversationThread(
     if (channelLevelFallback) return channelLevelFallback
   }
 
+  // Third pass: DURABLE THREAD ANCHOR (no time bound). A reply in the SAME Slack
+  // thread is the SAME conversation no matter how long the gap. The 30-min window
+  // above only sees real @Claude turns (agent_messages rows); a long-running code
+  // task posts its progress via the Mac Mini runner (direct Slack posts, NOT
+  // agent_messages), so a build that runs >30 min between turns silently ages the
+  // window out — the worker then opens a brand-new EMPTY memory mid-conversation
+  // and forgets everything it just did (incident 2026-06-23: a 47-min WhatsApp-import
+  // build, after which the worker denied the code task it had launched). Anchoring on
+  // the Slack thread fixes that: find the newest agent_messages row that belongs to
+  // THIS exact thread — either a reply tagged with this thread_ts, or the thread's
+  // opener whose own event_ts equals this thread_ts — and reuse its thread_id. Strictly
+  // thread-scoped (channel + thread_ts/event_ts), so it never leaks across threads the
+  // way the old bare-channel match did. Only runs when the windowed passes found
+  // nothing, so the common path is unchanged.
+  if (threadTs) {
+    for (const tsKey of ["slack_thread_ts", "slack_event_ts"] as const) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: anchor } = await (supabaseAdmin as any)
+        .from("agent_messages")
+        .select("thread_id")
+        .not("thread_id", "is", null)
+        .filter("context_json->>slack_channel_id", "eq", channelId)
+        .filter(`context_json->>${tsKey}`, "eq", threadTs)
+        .order("created_at", { ascending: false })
+        .limit(1)
+      const anchorThreadId = anchor?.[0]?.thread_id
+      if (typeof anchorThreadId === "string") return anchorThreadId
+    }
+  }
+
   // New scope — create a thread_summaries row for conversation memory
   const threadId = randomUUID()
   await createThreadSummary(threadId, "investigation", `Slack ${scopeKey}`)
@@ -2003,6 +2062,10 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Dig-in gear: read-only SQL for deep client investigation, plus more tool-loop
     // headroom than the default 8 so a real investigation doesn't get cut off.
     enableDbRead: true,
+    // Persistent memory: recall this conversation's full permanent transcript on
+    // demand (verbatim / keyword search), even months later — so the worker can
+    // always reconstruct what was said/decided/done instead of forgetting.
+    enableThreadRecall: true,
     // Direct email send (support@/antonio@, same-thread replies) — only after
     // Antonio's explicit "send it" in the thread (enforced by the prompt).
     enableEmailSend: true,
@@ -2143,6 +2206,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableCodeTasks: true,
           enableSlackSend: true,
           enableDbRead: true,
+          enableThreadRecall: true,
           enableEmailSend: true,
           enableCallReads: true,
           enableDocReads: true,

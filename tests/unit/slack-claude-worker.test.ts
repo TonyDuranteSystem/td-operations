@@ -161,7 +161,10 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // the system — CRM record, run_sql_query, KB/SOPs — instead of asking Antonio;
     // added after the worker asked "which language?" when the contact's language
     // was already in the CRM (Gritti/Evolue)).
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(10200)
+    // → 10700 (2026-06-23, ATTACHMENTS line (multi-format file reader) + recall_thread
+    // guidance in the MEMORY block (persistent memory: read this conversation's full
+    // permanent transcript on demand before saying you don't remember)).
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(10700)
   })
 
   it("instructs SELF-SERVE: look facts up in the system before asking Antonio", () => {
@@ -229,6 +232,7 @@ describe("findOrCreateConversationThread", () => {
       select: vi.fn().mockReturnThis(),
       not: vi.fn().mockReturnThis(),
       gt: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue({ data: [], error: null }),
     }
@@ -328,6 +332,54 @@ describe("findOrCreateConversationThread", () => {
     expect(result).not.toBe("existing-thread")
     expect(createThreadSummary).toHaveBeenCalled()
   })
+
+  it("recovers a thread across a >30-min gap via the durable Slack-thread anchor", async () => {
+    // Incident 2026-06-23: a 47-min code-task build aged the 30-min window out, so the
+    // windowed passes find NOTHING — but the reply is in the same Slack thread, so the
+    // anchor query (by thread_ts) must recover the original thread_id, not mint a new one.
+    const anchoredThreadId = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    const mockChain = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      gt: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi
+        .fn()
+        // 1st call = the 30-min windowed query → empty (gap aged it out)
+        .mockResolvedValueOnce({ data: [], error: null })
+        // 2nd call = anchor query on slack_thread_ts → finds the original thread
+        .mockResolvedValueOnce({ data: [{ thread_id: anchoredThreadId }], error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(mockChain)
+
+    const result = await findOrCreateConversationThread("C123", "1781000000.000100")
+    expect(result).toBe(anchoredThreadId)
+    expect(createThreadSummary).not.toHaveBeenCalled()
+  })
+
+  it("does NOT reuse memory from a different Slack thread (anchor finds nothing → new thread)", async () => {
+    // The anchor query is filtered by channel + this thread's ts, so a different thread's
+    // rows never match. With no window match and no anchor match, a fresh thread is created.
+    const mockChain = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      gt: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({ data: [], error: null }), // window + both anchor queries empty
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(mockChain)
+    ;(createThreadSummary as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    const result = await findOrCreateConversationThread("C123", "9999999999.000999")
+    expect(typeof result).toBe("string")
+    expect(createThreadSummary).toHaveBeenCalled()
+  })
 })
 
 // -------------------------------------------------------------------------
@@ -385,6 +437,7 @@ describe("processSlackEvent", () => {
       enableCodeTasks: true,
       enableSlackSend: true,
       enableDbRead: true,
+      enableThreadRecall: true,
       enableEmailSend: true,
       enableCallReads: true,
       enableDocReads: true,
@@ -1130,6 +1183,47 @@ describe("fetchThreadHistory", () => {
     })
     const out = await fetchThreadHistory("C123", "100.000")
     expect(out).toBe("Bot: automated note\nSomeone: hello")
+  })
+
+  it("keeps Claude's code-task lifecycle posts (launch + done) but still drops acks/progress", async () => {
+    // The Mac Mini posts these as the Claude bot; they live ONLY in Slack (not in
+    // agent_messages), so the worker must see them — otherwise it forgets/denies the
+    // task it launched (incident 2026-06-23). Acks, thinking frames and progress
+    // spinners (also Claude) must STAY skipped.
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", text: "clean up periskope" }, // Antonio — kept
+            { user: "U0B9S675WTT", text: "On it 👍" }, // ack — skipped
+            { user: "U0B9S675WTT", text: "🔧 *Periskope Cleanup* — Mac Mini picked it up, working on it…" }, // launch — kept
+            { user: "U0B9S675WTT", text: "🧪 Running tests… _Periskope Cleanup_" }, // progress — skipped
+            { user: "U0B9S675WTT", text: "✅ *Periskope Cleanup* — done. Branch pushed for review." }, // done — kept
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    const linesByLabel = out.split("\n")
+    expect(out).toContain("Antonio: clean up periskope")
+    expect(out).toContain("Claude (code task): 🔧 *Periskope Cleanup* — Mac Mini picked it up")
+    expect(out).toContain("Claude (code task): ✅ *Periskope Cleanup* — done")
+    expect(out).not.toContain("On it 👍")
+    expect(out).not.toContain("Running tests")
+    // exactly three kept lines (1 Antonio + 2 code-task), nothing else
+    expect(linesByLabel).toHaveLength(3)
+  })
+
+  it("truncates a long kept code-task deliverable post", async () => {
+    const longDeliverable = "✅ *WhatsApp Import* — done. " + "x".repeat(1000)
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, messages: [{ user: "U0B9S675WTT", text: longDeliverable }] }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out.startsWith("Claude (code task): ✅ *WhatsApp Import* — done")).toBe(true)
+    expect(out.endsWith("…")).toBe(true)
+    // sender label + 300-char cap + ellipsis — far shorter than the 1000-char body
+    expect(out.length).toBeLessThan(360)
   })
 
   it("returns '' when the Slack API responds not-ok (e.g. missing scope)", async () => {
