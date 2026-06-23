@@ -39,7 +39,15 @@ function timeFmt(locale: string, timeZone?: string) {
   })
 }
 
-export function OfficeClock() {
+export function OfficeClock({
+  clientTimeZone,
+  clientTimeZoneLabel,
+}: {
+  /** IANA timezone resolved from the client's stored country. When set, "YOUR
+   *  TIME" uses it; when absent we fall back to the device/browser timezone. */
+  clientTimeZone?: string
+  clientTimeZoneLabel?: string
+} = {}) {
   const { locale } = useLocale()
   const [now, setNow] = useState<Date | null>(null)
 
@@ -61,15 +69,19 @@ export function OfficeClock() {
   const open = status.open
 
   const ourTime = timeFmt(locale, OFFICE_TZ).format(now)
-  const yourTime = timeFmt(locale).format(now)
-  // The visitor's own timezone, e.g. "Europe/Rome" → "Rome".
-  const yourTz = (() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone?.split('/').pop()?.replace(/_/g, ' ') ?? ''
-    } catch {
-      return ''
-    }
-  })()
+  // "YOUR TIME": prefer the client's stored-country timezone (works even when
+  // staff open the client's portal); fall back to the device/browser timezone.
+  const yourTime = timeFmt(locale, clientTimeZone).format(now)
+  const yourTz =
+    clientTimeZoneLabel ??
+    (() => {
+      try {
+        // The device's own timezone, e.g. "Europe/Rome" → "Rome".
+        return Intl.DateTimeFormat().resolvedOptions().timeZone?.split('/').pop()?.replace(/_/g, ' ') ?? ''
+      } catch {
+        return ''
+      }
+    })()
 
   return (
     <div

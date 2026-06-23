@@ -11,6 +11,7 @@ import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { OfficeClock } from '@/components/portal/office-clock'
+import { countryToTimeZone } from '@/lib/portal/client-timezone'
 import { getUnopenedDocsCount } from '@/lib/portal/document-alerts'
 import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
@@ -126,6 +127,20 @@ export default async function PortalLayout({
   let accounts = contactId ? await getPortalAccounts(contactId) : []
   const inProgress = contactId ? await getInProgressFormations(contactId) : []
 
+  // Office clock "YOUR TIME": resolve the (logged-in / viewed) client's timezone
+  // from their stored country, so it reflects the CLIENT — not the device — even
+  // under staff "View as". Unknown/empty country → null → clock falls back to the
+  // device/browser timezone (R-decision: browser fallback).
+  let clientTz: { tz: string; label: string } | null = null
+  if (contactId) {
+    const { data: ctzRow } = await supabaseAdmin
+      .from('contacts')
+      .select('address_country')
+      .eq('id', contactId)
+      .maybeSingle()
+    clientTz = countryToTimeZone(ctzRow?.address_country ?? null)
+  }
+
   // If admin without contact_id, show empty portal (debugging mode)
   if (!isClient(user) && accounts.length === 0) {
     accounts = []
@@ -237,7 +252,7 @@ export default async function PortalLayout({
           {/* International office clock — shows US (ET) office time + Open/Closed
               status + the client's own local time, on every page. */}
           <div className="px-4 pt-4 sm:px-6 lg:px-8">
-            <OfficeClock />
+            <OfficeClock clientTimeZone={clientTz?.tz} clientTimeZoneLabel={clientTz?.label} />
           </div>
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
           {contactId && (
