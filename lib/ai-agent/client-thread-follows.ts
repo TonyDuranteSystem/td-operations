@@ -421,13 +421,23 @@ export async function handleCardAction(args: {
     return
   }
 
-  if (args.action === "close") {
-    await closeClientThread(row.id, args.userId)
-  } else {
-    await reopenClientThread(row.id)
+  // NOTE: closed_by is a uuid column — a Slack user id (e.g. "U0B…") is NOT a uuid and
+  // would make the whole UPDATE fail (close silently never persists). Pass null.
+  const result =
+    args.action === "close" ? await closeClientThread(row.id, null) : await reopenClientThread(row.id)
+  if (!result.ok) {
+    if (args.userId) {
+      await slackApiCall("chat.postEphemeral", {
+        channel: args.channelId,
+        user: args.userId,
+        text: `Couldn't ${args.action} this conversation — ${result.error ?? "please try again"}.`,
+      })
+    }
+    // Do NOT redraw the card to a state the DB didn't actually reach.
+    return
   }
 
-  // Redraw the card with the new state's buttons.
+  // Redraw the card with the new state's buttons (only after the DB change succeeded).
   const name = await resolveEntityName(db, row)
   const topic = row.topic_slug ?? "general"
   const status: "open" | "closed" = args.action === "close" ? "closed" : "open"
