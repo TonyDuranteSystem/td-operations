@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildCompletenessSummary, FOREIGN_ACTIVITY_FLOOR, type CompletenessInput } from "@/lib/tax/completeness"
+import { buildCompletenessSummary, type CompletenessInput } from "@/lib/tax/completeness"
 import type { GateResult } from "@/lib/tax/verification-gates"
 import type { FinancialDraft } from "@/lib/tax/financials-engine"
 
@@ -34,14 +34,13 @@ function draft(over: Partial<FinancialDraft> = {}): FinancialDraft {
 }
 
 function input(over: Partial<CompletenessInput> = {}): CompletenessInput {
-  return { gates: passingGates(), draft: draft(), foreignActivityTotal: 0, incomeAnswer: null, ...over }
+  return { gates: passingGates(), draft: draft(), ...over }
 }
 
 describe("buildCompletenessSummary", () => {
-  it("a clean all-USD return has no items, no income question, and accepts as-is", () => {
+  it("a clean all-USD return has no items and accepts as-is", () => {
     const r = buildCompletenessSummary(input())
     expect(r.items).toEqual([])
-    expect(r.income_question.required).toBe(false)
     expect(r.can_accept_as_is).toBe(true)
   })
 
@@ -83,18 +82,6 @@ describe("buildCompletenessSummary", () => {
   it("emits missing_fx_rate listing the currencies", () => {
     const r = buildCompletenessSummary(input({ missingFxCurrencies: ["AED", "GBP"] }))
     expect(r.items.find(i => i.code === "missing_fx_rate")?.detail).toBe("AED, GBP")
-  })
-
-  it("requires the income question at/above the floor, not below it", () => {
-    expect(buildCompletenessSummary(input({ foreignActivityTotal: FOREIGN_ACTIVITY_FLOOR - 0.01 })).income_question.required).toBe(false)
-    expect(buildCompletenessSummary(input({ foreignActivityTotal: FOREIGN_ACTIVITY_FLOOR })).income_question.required).toBe(true)
-  })
-
-  it("blocks accept-as-is while a required income question is unanswered; either answer unblocks", () => {
-    const base = { foreignActivityTotal: 50_000 }
-    expect(buildCompletenessSummary(input({ ...base, incomeAnswer: null })).can_accept_as_is).toBe(false)
-    expect(buildCompletenessSummary(input({ ...base, incomeAnswer: "parked_only" })).can_accept_as_is).toBe(true)
-    expect(buildCompletenessSummary(input({ ...base, incomeAnswer: "earn_spend" })).can_accept_as_is).toBe(true)
   })
 
   it("soft-warn gaps (gates 1/3/5 failing, non-blocking) never block accept-as-is", () => {

@@ -1,37 +1,32 @@
 /**
  * Financials completeness summary (generic, all clients) — PURE.
  *
- * After the engine computes the P&L + Balance Sheet, the portal review must
- * tell the client, in plain language, WHAT is complete and WHAT is still
- * uncertain — then let them either provide more or accept as-is (owning the
+ * After the engine computes the P&L + Balance Sheet, the portal review tells
+ * the client, in plain language, WHAT is complete and WHAT is still uncertain —
+ * then lets them either provide more or accept as-is (owning the
  * responsibility). This module turns the structured draft + the verification
- * gates into:
- *   - a list of machine CODES (the UI renders bilingual text — see
- *     components/portal/tax-financials-review.tsx) with the numbers each line
- *     needs (amount off, owner-movement totals, etc.);
- *   - a targeted INCOME question that fires only when there is meaningful
- *     foreign-currency / cross-account movement (evidence of an account we may
- *     not see). It must be ANSWERED before accept-as-is — so finalizing never
- *     silently ships understated income (which flows to partners' home-country
- *     returns). Either answer unblocks (the client owns it); "earn_spend" just
- *     surfaces a prominent warning + is recorded for staff/K-1 follow-up.
+ * gates into a list of machine CODES (the UI renders bilingual text — see
+ * components/portal/tax-financials-review.tsx) with the numbers each line needs
+ * (amount off, owner-movement totals, etc.).
  *
- * Design (Antonio, dev_task 95127bb2): soft-warn ALL balance-sheet/tie-out
- * gaps (never hard-block — these clients owe no US tax and the balance sheet
- * is informational), but REQUIRE the income question on suspected-missing
- * income. No prose parsing — everything is driven off structured fields so the
- * mapping is unit-testable.
+ * Scope (CPA-correct, 2026-06-23): we file the LLC's US return from the LLC's
+ * own books. The only completeness concern is whether those books are whole —
+ * a missing LLC account, missing months, an unbalanced sheet, unresolved
+ * ownership. We do NOT ask about the owners' personal / home-country activity:
+ * the LLC invoices everything, and what owners do outside the US is not our
+ * concern and not on the return. (An earlier "income question" built on the
+ * opposite premise was removed.)
+ *
+ * Soft-warn ALL balance-sheet/tie-out gaps — never hard-block; these clients
+ * may owe no US tax and the balance sheet is informational, so the client can
+ * accept as-is and own it. The only hard block is a BLOCKING gate (gate 6 —
+ * uncategorized; auto-passes in the portal). Coverage questions are enforced
+ * separately by the caller. No prose parsing — driven off structured fields so
+ * the mapping is unit-testable.
  */
 
 import type { FinancialDraft } from "./financials-engine"
 import type { GateResult } from "./verification-gates"
-
-/** Foreign/conversion movement (USD, absolute) at/above which the income
- *  question is required. Below this a stray FX fee shouldn't nag the client.
- *  A single tunable knob — change here, both the gate and the UI follow. */
-export const FOREIGN_ACTIVITY_FLOOR = 1000
-
-export type IncomeAnswer = "earn_spend" | "parked_only"
 
 export type CompletenessCode =
   | "reconciliation_gap"        // gate 1 fail — a statement doesn't add up
@@ -52,21 +47,10 @@ export interface CompletenessItem {
   detail?: string
 }
 
-export interface IncomeQuestionState {
-  /** True when foreign/conversion movement ≥ FOREIGN_ACTIVITY_FLOOR. */
-  required: boolean
-  /** The absolute foreign/conversion total (USD) that drove `required`. */
-  foreign_total: number
-  /** The client's recorded answer, or null if not answered yet. */
-  answer: IncomeAnswer | null
-}
-
 export interface CompletenessSummary {
   items: CompletenessItem[]
-  income_question: IncomeQuestionState
-  /** Accept-as-is is allowed when no BLOCKING gate fails AND the income
-   *  question (if required) has been answered. Non-substantive gaps are
-   *  soft-warns and never block. Coverage questions are enforced separately
+  /** Accept-as-is is allowed when no BLOCKING gate fails. Non-substantive gaps
+   *  are soft-warns and never block. Coverage questions are enforced separately
    *  by the caller (orchestration/route), as before. */
   can_accept_as_is: boolean
 }
@@ -74,19 +58,14 @@ export interface CompletenessSummary {
 export interface CompletenessInput {
   gates: GateResult[]
   draft: FinancialDraft
-  /** Σ |amount| over conversion rows + non-USD rows (USD), computed by the
-   *  caller from the year's transactions. */
-  foreignActivityTotal: number
   /** Currencies present with no IRS rate on file (from the engine), if any. */
   missingFxCurrencies?: string[]
-  /** The client's recorded income answer (financials_meta.income_attestation). */
-  incomeAnswer: IncomeAnswer | null
 }
 
 const gate = (gates: GateResult[], id: number) => gates.find(g => g.id === id)
 
 export function buildCompletenessSummary(input: CompletenessInput): CompletenessSummary {
-  const { gates, draft, foreignActivityTotal, missingFxCurrencies, incomeAnswer } = input
+  const { gates, draft, missingFxCurrencies } = input
   const items: CompletenessItem[] = []
 
   // Gate 1 — a statement doesn't reconcile (missing months / filtered export).
@@ -131,19 +110,7 @@ export function buildCompletenessSummary(input: CompletenessInput): Completeness
     items.push({ code: "missing_fx_rate", severity: "warn", detail: missingFxCurrencies.join(", ") })
   }
 
-  const incomeRequired = foreignActivityTotal >= FOREIGN_ACTIVITY_FLOOR
-  const income_question: IncomeQuestionState = {
-    required: incomeRequired,
-    foreign_total: foreignActivityTotal,
-    answer: incomeAnswer,
-  }
-
   const noBlockingGate = gates.every(g => !(g.blocking && g.status === "fail"))
-  const incomeSatisfied = !incomeRequired || incomeAnswer !== null
 
-  return {
-    items,
-    income_question,
-    can_accept_as_is: noBlockingGate && incomeSatisfied,
-  }
+  return { items, can_accept_as_is: noBlockingGate }
 }

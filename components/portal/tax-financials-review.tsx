@@ -17,10 +17,8 @@ interface FileCard { source_file_id: string; bank_name: string; count: number; f
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
 
-type IncomeAnswer = 'earn_spend' | 'parked_only'
 interface CompletenessItem { code: string; severity: 'warn' | 'info'; amount?: number; detail?: string }
-interface IncomeQuestionState { required: boolean; foreign_total: number; answer: IncomeAnswer | null }
-interface CompletenessSummary { items: CompletenessItem[]; income_question: IncomeQuestionState; can_accept_as_is: boolean }
+interface CompletenessSummary { items: CompletenessItem[]; can_accept_as_is: boolean }
 
 interface View {
   coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
@@ -242,26 +240,6 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, tax_year: taxYear, question_key: q.key, answer: value }),
-      })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
-      }
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const answerIncome = async (value: IncomeAnswer) => {
-    setBusy('income')
-    try {
-      const res = await fetch('/api/portal/tax-financials/income-answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, answer: value }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -704,11 +682,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             </section>
           )}
 
-          {/* Completeness summary + income question (dev_task 95127bb2) —
-              translate the checks that didn't fully pass into plain language,
-              and (when there's foreign/cross-account movement) require the
-              income question before accept-as-is. */}
-          {!attested && (view.completeness.items.length > 0 || view.completeness.income_question.required) && (
+          {/* Completeness summary (dev_task 95127bb2) — translate the checks
+              that didn't fully pass into plain language so the client can
+              provide more or accept as-is. */}
+          {!attested && view.completeness.items.length > 0 && (
             <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-zinc-900">{it ? 'Cosa abbiamo trovato' : 'What we found'}</h2>
@@ -732,57 +709,6 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                 </ul>
               )}
 
-              {view.completeness.income_question.required && (
-                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 sm:p-4">
-                  <div className="text-sm font-medium text-zinc-800">
-                    {it
-                      ? 'Vediamo denaro convertito da un\'altra valuta o spostato da un altro conto. Guadagni o spendi anche direttamente in quell\'altro conto, oppure lo converti soltanto e lo sposti qui?'
-                      : 'We can see money converted from another currency or moved from another account. Do you also earn or spend money directly in that other account, or do you only convert it and move it here?'}
-                  </div>
-                  {view.completeness.income_question.answer === null ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        disabled={busy !== null}
-                        onClick={() => void answerIncome('parked_only')}
-                        className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                      >
-                        {it ? 'Lo converto soltanto e lo sposto qui' : 'I only convert it and move it here'}
-                      </button>
-                      <button
-                        disabled={busy !== null}
-                        onClick={() => void answerIncome('earn_spend')}
-                        className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                      >
-                        {it ? 'Guadagno o spendo anche direttamente lì' : 'I also earn or spend directly there'}
-                      </button>
-                    </div>
-                  ) : view.completeness.income_question.answer === 'earn_spend' ? (
-                    <div className="mt-2 text-xs text-amber-800">
-                      {it
-                        ? 'Ricevuto. Poiché ci sono incassi o spese in un conto che non vediamo, quegli importi vanno nelle dichiarazioni dei soci nel loro Paese. Puoi comunque confermare con ciò che hai — ti ricontattiamo.'
-                        : 'Got it. Because there\'s income or spending in an account we don\'t see, those amounts belong on your partners\' home-country returns. You can still confirm with what you have — we\'ll follow up.'}
-                      <button
-                        disabled={busy !== null}
-                        onClick={() => void answerIncome('parked_only')}
-                        className="ml-2 underline text-zinc-500 hover:text-zinc-800"
-                      >
-                        {it ? 'Cambia risposta' : 'Change answer'}
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-xs text-emerald-700">
-                      {it ? '✓ Grazie — registrato.' : '✓ Thanks — recorded.'}
-                      <button
-                        disabled={busy !== null}
-                        onClick={() => void answerIncome('earn_spend')}
-                        className="ml-2 underline text-zinc-500 hover:text-zinc-800"
-                      >
-                        {it ? 'Cambia risposta' : 'Change answer'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
             </section>
           )}
 
@@ -824,11 +750,6 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                     </li>
                     <li>
                       {it
-                        ? 'Se hai una società estera con soci all\'estero, i redditi guadagnati o spesi su conti che non vediamo possono comunque andare dichiarati nel Paese dei soci.'
-                        : 'If you are a foreign-owned company, income earned or spent in accounts we don\'t see may still need to be reported on the owners\' home-country returns.'}
-                    </li>
-                    <li>
-                      {it
                         ? 'Non sei ancora pronto? Puoi modificare le tue informazioni o caricare altri estratti conto qui sopra, invece di confermare.'
                         : 'Not ready yet? You can edit your information or upload more statements above instead of confirming.'}
                     </li>
@@ -853,9 +774,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                   <p className="text-xs text-amber-700">
                     {view.coverage.incomplete > 0
                       ? (it ? 'Hai indicato che un export è incompleto — sostituisci il file, poi potrai confermare.' : 'You marked an export as incomplete — replace the file, then you can confirm.')
-                      : (view.completeness.income_question.required && view.completeness.income_question.answer === null)
-                        ? (it ? 'Rispondi prima alla domanda sull\'attività in valuta/altri conti qui sopra — poi potrai confermare.' : 'Answer the question about your foreign / other-account activity above first — then you can confirm.')
-                        : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
+                      : (it ? 'Rispondi prima alle domande rimaste qui sopra — poi potrai confermare.' : 'Answer the remaining questions above first — then you can confirm.')}
                   </p>
                 )}
               </div>
