@@ -1758,11 +1758,24 @@ export interface WorkerImageBlock {
 }
 
 /**
+ * A native document block (PDF). Used for a SCANNED/image-only PDF that has no
+ * extractable text layer — the model reads it natively via vision. Text PDFs are
+ * cheaper to send as decoded text, so the Slack file reader only emits this for
+ * the no-text case. media_type is always "application/pdf".
+ */
+export interface WorkerDocumentBlock {
+  type: "document"
+  source: { type: "base64"; media_type: string; data: string }
+}
+
+/**
  * The user turn handed to the model: either a plain string (text-only — the
  * Hermes/Telegram path and every legacy caller) or an array of content blocks
- * (text + images — the Slack screenshot path).
+ * (text + images + document PDFs — the Slack attachment path).
  */
-type WorkerUserContent = string | Array<{ type: "text"; text: string } | WorkerImageBlock>
+type WorkerUserContent =
+  | string
+  | Array<{ type: "text"; text: string } | WorkerImageBlock | WorkerDocumentBlock>
 
 // Default max tool-use iterations. Configurable via AGENT_MAX_TOOL_LOOPS env var
 // (shared with the in-dashboard provider in providers.ts); callWorker callers may
@@ -1817,6 +1830,13 @@ export interface CallWorkerOptions {
    * Absent/empty → text-only, identical to every prior caller.
    */
   images?: WorkerImageBlock[]
+  /**
+   * Optional native PDF document blocks to attach to the user turn (Slack file
+   * reader — a scanned/no-text-layer PDF). Sent alongside any images in the same
+   * multimodal content array. Absent/empty → unchanged. Never set on the
+   * Hermes/Telegram path.
+   */
+  documents?: WorkerDocumentBlock[]
   /**
    * Expose the Slack-only start_code_task tool for this call. Set by the Slack
    * worker (processSlackEvent). When true, START_CODE_TASK_TOOL is appended to
@@ -2316,8 +2336,11 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // [{text}, ...images]; otherwise the plain string — identical to every prior
   // caller. deriveThreadTitle / thread context above still use the string body.
   const images = Array.isArray(opts.images) ? opts.images : []
+  const documents = Array.isArray(opts.documents) ? opts.documents : []
   const userContent: WorkerUserContent =
-    images.length > 0 ? [{ type: "text", text: userBody }, ...images] : userBody
+    images.length > 0 || documents.length > 0
+      ? [{ type: "text", text: userBody }, ...images, ...documents]
+      : userBody
 
   // Auto-recall (Decision Memory): surface relevant past lessons up-front so the
   // worker applies them without having to choose to call memory_recall — the gap

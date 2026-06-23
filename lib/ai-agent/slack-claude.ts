@@ -16,7 +16,14 @@
 
 import { randomUUID, createHmac, timingSafeEqual } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { callWorker, type CallWorkerOptions, type WorkerImageBlock } from "@/lib/ai-agent/worker-tools"
+import { callWorker, type CallWorkerOptions, type WorkerImageBlock, type WorkerDocumentBlock } from "@/lib/ai-agent/worker-tools"
+import {
+  classifySlackFile,
+  extractTextFromBuffer,
+  capText,
+  SLACK_FILE_TEXT_CHAR_CAP,
+  type SlackFileKind,
+} from "@/lib/ai-agent/slack-file-reader"
 import {
   isSixDigitCode,
   isAuthorizedApprover,
@@ -50,6 +57,32 @@ export const SLACK_SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
 // the API payload, so skip anything over this both at the Slack-event filter
 // (file.size) and after download (buffer length).
 export const SLACK_MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
+
+// Non-image file handling (Slack multi-format reader). The worker downloads any
+// shared file (txt/csv/json/pdf/xlsx/docx/zip/…) with the bot token and routes it
+// through slack-file-reader to plain text (or a native PDF document block for a
+// scanned PDF). Caps protect the model's input budget — every block is re-sent on
+// each tool-loop step.
+export const SLACK_MAX_FILE_BYTES = 20 * 1024 * 1024 // 20 MB — download ceiling per file
+export const SLACK_MAX_FILES = 5 // process at most N attachments per message
+export const SLACK_MAX_PDF_DOCUMENT_BLOCKS = 2 // scanned PDFs sent as native document blocks
+// A pdf-parse text layer shorter than this means the PDF is effectively scanned
+// (image-only) — fall back to a native document block so the model can still read it.
+export const SLACK_PDF_TEXT_LAYER_MIN_CHARS = 80
+
+/** A non-image file shared in Slack, captured by the webhook for the worker to read. */
+export interface SlackFileRef {
+  url: string // Slack url_private — fetched by the worker with the bot token
+  name?: string
+  mimetype: string
+  size?: number
+}
+
+/** Result of reading the shared non-image files: text snippets + scanned-PDF document blocks. */
+export interface SlackFileReadResult {
+  textBlocks: string[] // labeled extracted text, ready to inject into the worker body
+  documentBlocks: WorkerDocumentBlock[] // scanned PDFs the model reads natively
+}
 
 // action_id of the "⏹ Stop" button attached to the "On it 👍" acknowledgment.
 // The slack-interactions webhook listens for this to cancel an in-flight message
@@ -91,6 +124,7 @@ ENGINEERING DISCIPLINE (ALWAYS — every gear, every answer):
 - Act like a careful engineer: separate what you VERIFIED from what you are guessing, and clearly flag anything you could not confirm.
 - When Antonio pushes back or corrects you (e.g. "are you sure?", "I counted X"), NEVER just re-run the same query and repeat the same answer. Assume YOU may be wrong: re-check with a DIFFERENT tool or the dedicated data source, and recount. Only restate your number after verifying it a second way — and if you still differ, show exactly what you queried so the gap is visible.
 - Before stating a count, recount against the list you actually pulled — the number must match the rows you have, not an estimate.
+- ATTACHMENTS: if the message shows an [ATTACHED FILE(S)…] block or an attached image/PDF, the user shared a file — its content is right there, so read it and use it. You CAN read shared files (text, CSV, JSON, Excel, Word, PDF, zip, images); never tell the user you can't open an attachment.
 
 TOOLS: Match tool use to the gear (see TWO GEARS). Quick gear = one targeted lookup, report
 back. Dig-in gear = chain as many read-only lookups as the question needs — including
@@ -1637,6 +1671,125 @@ export async function prepareSlackImages(images: SlackImageRef[]): Promise<Worke
   return blocks
 }
 
+/**
+ * Download non-image files shared in Slack (with the bot token) and turn them into
+ * readable content: decoded text for txt/csv/json/pdf(text)/xlsx/docx/zip, or a
+ * native document block for a scanned (no-text-layer) PDF. Best-effort and resilient
+ * — a missing token, a 401/network failure, an oversize file, an unreadable type, or
+ * a parser error skips THAT file (a short note is added so the worker can tell the
+ * user it couldn't read it) and never throws. Mirrors prepareSlackImages.
+ *
+ * Caps: at most SLACK_MAX_FILES files, SLACK_MAX_FILE_BYTES per download,
+ * SLACK_FILE_TEXT_CHAR_CAP chars of extracted text per file, and
+ * SLACK_MAX_PDF_DOCUMENT_BLOCKS scanned-PDF document blocks total.
+ */
+export async function readSlackFiles(files: SlackFileRef[]): Promise<SlackFileReadResult> {
+  const textBlocks: string[] = []
+  const documentBlocks: WorkerDocumentBlock[] = []
+  if (!files.length) return { textBlocks, documentBlocks }
+
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) {
+    console.warn("[slack-claude] SLACK_BOT_TOKEN_CLAUDE not set — skipping file attachments")
+    return { textBlocks, documentBlocks }
+  }
+
+  const slice = files.slice(0, SLACK_MAX_FILES)
+  for (const file of slice) {
+    const label = file.name ?? "unnamed file"
+    const kind: SlackFileKind = classifySlackFile(file.mimetype, file.name)
+    if (kind === "image") continue // images go through prepareSlackImages
+    if (kind === "unsupported") {
+      textBlocks.push(`[Attached file "${label}" (${file.mimetype || "unknown type"}) — I can't read this file type.]`)
+      continue
+    }
+    if (typeof file.size === "number" && file.size > SLACK_MAX_FILE_BYTES) {
+      textBlocks.push(`[Attached file "${label}" is too large to read (${Math.round(file.size / 1024 / 1024)} MB, max ${SLACK_MAX_FILE_BYTES / 1024 / 1024} MB).]`)
+      continue
+    }
+    try {
+      const res = await fetch(file.url, { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) {
+        console.warn(`[slack-claude] file download failed (${res.status}) for ${label}`)
+        textBlocks.push(`[Attached file "${label}" — I couldn't download it (Slack returned ${res.status}).]`)
+        continue
+      }
+      const buffer = Buffer.from(await res.arrayBuffer())
+      if (buffer.length > SLACK_MAX_FILE_BYTES) {
+        textBlocks.push(`[Attached file "${label}" is too large to read (${Math.round(buffer.length / 1024 / 1024)} MB).]`)
+        continue
+      }
+
+      // PDFs: try the text layer first (cheap tokens). A scanned/image-only PDF has
+      // no text layer, and a PDF pdf-parse can't parse throws — in BOTH cases fall
+      // back to a native document block so the model reads it via vision directly.
+      if (kind === "pdf") {
+        let pdfText = ""
+        try {
+          pdfText = await extractTextFromBuffer(buffer, "pdf")
+        } catch (e) {
+          console.warn(`[slack-claude] pdf-parse failed for ${label}, falling back to document block:`, e)
+        }
+        if (pdfText.trim().length >= SLACK_PDF_TEXT_LAYER_MIN_CHARS) {
+          textBlocks.push(`[Attached file "${label}"]\n${capText(pdfText, SLACK_FILE_TEXT_CHAR_CAP).trim()}`)
+        } else if (documentBlocks.length < SLACK_MAX_PDF_DOCUMENT_BLOCKS) {
+          documentBlocks.push({
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") },
+          })
+          textBlocks.push(`[Attached PDF "${label}" has no readable text layer (scanned) — attached for you to read directly.]`)
+        } else {
+          textBlocks.push(`[Attached PDF "${label}" is scanned, but the scanned-PDF limit (${SLACK_MAX_PDF_DOCUMENT_BLOCKS}) was reached — skipped.]`)
+        }
+        continue
+      }
+
+      const text = await extractTextFromBuffer(buffer, kind)
+      const capped = capText(text, SLACK_FILE_TEXT_CHAR_CAP).trim()
+      textBlocks.push(`[Attached file "${label}"]\n${capped || "(empty file)"}`)
+    } catch (e) {
+      console.warn(`[slack-claude] failed to read file ${label}:`, e)
+      textBlocks.push(`[Attached file "${label}" — I couldn't read it (${e instanceof Error ? e.message : "unknown error"}).]`)
+    }
+  }
+
+  return { textBlocks, documentBlocks }
+}
+
+/**
+ * Thread-history fallback for non-image files: when the current message carries no
+ * file but it's a thread reply, harvest non-image files from recent thread history
+ * (mirrors fetchThreadImages). Best-effort: any failure → []. Requires
+ * channels:history / groups:history scope (same as the image/text history fetches).
+ */
+export async function fetchThreadFiles(channelId: string, threadTs: string): Promise<SlackFileRef[]> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) return []
+  try {
+    const res = await fetch(
+      `https://slack.com/api/conversations.replies?channel=${channelId}&ts=${threadTs}&limit=20`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean
+      messages?: Array<{ files?: Array<{ url_private?: string; name?: string; mimetype?: string; size?: number }> }>
+    }
+    if (!data.ok || !Array.isArray(data.messages)) return []
+    const refs: SlackFileRef[] = []
+    for (const msg of data.messages) {
+      for (const file of msg.files ?? []) {
+        if (typeof file.mimetype !== "string" || typeof file.url_private !== "string") continue
+        if (SLACK_SUPPORTED_IMAGE_TYPES.has(file.mimetype)) continue // images via fetchThreadImages
+        refs.push({ url: file.url_private, name: file.name, mimetype: file.mimetype, size: file.size })
+      }
+    }
+    return refs
+  } catch (err) {
+    console.warn("[slack-claude] fetchThreadFiles failed:", err)
+    return []
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Scope → thread_id mapping
 // ---------------------------------------------------------------------------
@@ -1790,6 +1943,17 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
 
   const imageBlocks = imageRefs.length > 0 ? await prepareSlackImages(imageRefs) : []
 
+  // Non-image files (txt/csv/json/pdf/xlsx/docx/zip/…) shared in Slack. Read them
+  // to text (or a native document block for a scanned PDF). Same thread-history
+  // fallback as images: if the current message has none but it's a thread reply,
+  // pull files posted earlier in the thread. Best-effort throughout.
+  let fileRefs = (Array.isArray(ctx.slack_files) ? ctx.slack_files : []) as SlackFileRef[]
+  if (fileRefs.length === 0) {
+    const threadTs = ctx.slack_thread_ts as string | undefined
+    if (threadTs) fileRefs = await fetchThreadFiles(channelId, threadTs)
+  }
+  const fileResult = fileRefs.length > 0 ? await readSlackFiles(fileRefs) : { textBlocks: [], documentBlocks: [] }
+
   // Ground the reply in approved CRM templates when the message matches one.
   // Keyword-matched against the templates / email_templates libraries; best-effort
   // (returns "" on no match), so the system prompt is unchanged when nothing fits.
@@ -1854,6 +2018,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     maxIterations: 20,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
+  if (fileResult.documentBlocks.length > 0) workerOpts.documents = fileResult.documentBlocks
 
   // Expose this event's Slack scope to the start_code_task worker tool so a
   // queued code task knows which channel/thread to report back to.
@@ -1898,6 +2063,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     if (refContext) {
       contextBlocks.unshift(`[REFERENCED SLACK THREAD(S) — shared into this conversation; read this, it's what's being asked about]\n${refContext}`)
     }
+  }
+
+  // Attached-file content (current message's shared files, read to text above).
+  // Appended last so it sits closest to the current message it belongs to.
+  if (fileResult.textBlocks.length > 0) {
+    contextBlocks.push(`[ATTACHED FILE(S) — shared in this message; read this]\n${fileResult.textBlocks.join("\n\n")}`)
   }
 
   const enrichedBody =
@@ -1961,9 +2132,10 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
         ;({ reply } = await callWorker(enrichedBody, workerOpts))
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        const isImageError = imageBlocks.length > 0 && /\b400\b/.test(msg) && /image/i.test(msg)
-        if (!isImageError) throw err
-        console.warn(`[slack-claude] image-related API error, retrying text-only: ${msg}`)
+        const hasMedia = imageBlocks.length > 0 || fileResult.documentBlocks.length > 0
+        const isMediaError = hasMedia && /\b400\b/.test(msg) && /image|document|pdf/i.test(msg)
+        if (!isMediaError) throw err
+        console.warn(`[slack-claude] media-related API error, retrying without attachments: ${msg}`)
         const textOnlyOpts: CallWorkerOptions = {
           threadId: row.thread_id,
           messageId: row.id,

@@ -52,6 +52,8 @@ import {
   collectSlackReferences,
   fetchReferencedThreads,
   MAX_SLACK_REFERENCES,
+  readSlackFiles,
+  fetchThreadFiles,
 } from "@/lib/ai-agent/slack-claude"
 import { createHmac } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -853,6 +855,119 @@ describe("prepareSlackImages", () => {
       { url: "https://files.slack.com/x.png", name: "x.png", mimetype: "image/png" },
     ])
     expect(blocks).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+// -------------------------------------------------------------------------
+// readSlackFiles (multi-format file reader)
+// -------------------------------------------------------------------------
+
+describe("readSlackFiles", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("downloads a text file and returns its content as a labeled text block", async () => {
+    const csv = Buffer.from("name,amount\nAcme,1000", "utf-8")
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(csv.buffer.slice(csv.byteOffset, csv.byteOffset + csv.byteLength)),
+    })
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/x.csv", name: "x.csv", mimetype: "text/csv" },
+    ])
+    expect(documentBlocks).toEqual([])
+    expect(textBlocks).toHaveLength(1)
+    expect(textBlocks[0]).toContain('"x.csv"')
+    expect(textBlocks[0]).toContain("name,amount")
+    expect(textBlocks[0]).toContain("Acme,1000")
+  })
+
+  it("notes an unsupported type without downloading it", async () => {
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/v.mp3", name: "v.mp3", mimetype: "audio/mpeg" },
+    ])
+    expect(documentBlocks).toEqual([])
+    expect(textBlocks[0]).toMatch(/can't read this file type/)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("notes an oversize file (by declared size) without downloading it", async () => {
+    const { textBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/huge.csv", name: "huge.csv", mimetype: "text/csv", size: 50 * 1024 * 1024 },
+    ])
+    expect(textBlocks[0]).toMatch(/too large/)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("emits a native document block for a scanned PDF (no text layer)", async () => {
+    // A minimal PDF whose pdf-parse text layer is empty → falls back to a document block.
+    const JSZip = (await import("jszip")).default // ensure dynamic-import infra is warm
+    void JSZip
+    const pdfBytes = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF", "utf-8")
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength)),
+    })
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/scan.pdf", name: "scan.pdf", mimetype: "application/pdf" },
+    ])
+    expect(documentBlocks).toHaveLength(1)
+    expect(documentBlocks[0]).toEqual({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: pdfBytes.toString("base64") },
+    })
+    expect(textBlocks.some((b) => /scanned/.test(b))).toBe(true)
+  })
+
+  it("adds a note (no crash) when the download responds non-ok", async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 403 })
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/x.csv", name: "x.csv", mimetype: "text/csv" },
+    ])
+    expect(documentBlocks).toEqual([])
+    expect(textBlocks[0]).toMatch(/couldn't download/)
+  })
+
+  it("returns empty (and does not fetch) when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/x.csv", name: "x.csv", mimetype: "text/csv" },
+    ])
+    expect(textBlocks).toEqual([])
+    expect(documentBlocks).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe("fetchThreadFiles", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("harvests non-image files from thread history, skipping images", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { files: [{ url_private: "https://files.slack.com/a.pdf", name: "a.pdf", mimetype: "application/pdf", size: 1234 }] },
+            { files: [{ url_private: "https://files.slack.com/b.png", name: "b.png", mimetype: "image/png" }] },
+          ],
+        }),
+    })
+    const refs = await fetchThreadFiles("C1", "111.222")
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toEqual({ url: "https://files.slack.com/a.pdf", name: "a.pdf", mimetype: "application/pdf", size: 1234 })
+  })
+
+  it("returns [] when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const refs = await fetchThreadFiles("C1", "111.222")
+    expect(refs).toEqual([])
     expect(mockFetch).not.toHaveBeenCalled()
   })
 })
