@@ -129,7 +129,7 @@ export default async function PortalDashboardPage() {
       const ctx = await getFormationContext(contactId)
       const tracker = await getFormationTracker({ sdId: selectedFormation.sdId })
       const trackerSteps = tracker?.currentStage
-        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
         : null
       return (
         <FormationDashboard
@@ -143,6 +143,7 @@ export default async function PortalDashboardPage() {
           trackerSteps={trackerSteps}
           formationLeadId={selectedFormation.leadId}
           sdStage={tracker?.currentStage ?? null}
+          filedAt={tracker?.filedAt ?? null}
         />
       )
     }
@@ -271,7 +272,7 @@ export default async function PortalDashboardPage() {
         ])
         const tracker = await getFormationTracker({ accountId: formationAccount.id, contactId })
         const trackerSteps = tracker?.currentStage
-          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
           : null
         return (
           <FormationDashboard
@@ -285,6 +286,7 @@ export default async function PortalDashboardPage() {
             closureData={closureSd}
             trackerSteps={trackerSteps}
             sdStage={tracker?.currentStage ?? null}
+            filedAt={tracker?.filedAt ?? null}
           />
         )
       }
@@ -293,7 +295,7 @@ export default async function PortalDashboardPage() {
       const ctx = await getFormationContext(contactId)
       const tracker = await getFormationTracker({ contactId })
       const trackerSteps = tracker?.currentStage
-        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
         : null
       return (
         <FormationDashboard
@@ -307,6 +309,7 @@ export default async function PortalDashboardPage() {
           closureData={closureSd}
           trackerSteps={trackerSteps}
           sdStage={tracker?.currentStage ?? null}
+          filedAt={tracker?.filedAt ?? null}
         />
       )
     }
@@ -423,7 +426,7 @@ export default async function PortalDashboardPage() {
     ])
     const tracker = await getFormationTracker({ accountId: selectedAccountId, contactId })
     const trackerSteps = tracker?.currentStage
-      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale)
+      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
       : null
     return (
       <FormationDashboard
@@ -445,6 +448,7 @@ export default async function PortalDashboardPage() {
         leaseData={leaseRes.data}
         trackerSteps={trackerSteps}
         sdStage={tracker?.currentStage ?? null}
+        filedAt={tracker?.filedAt ?? null}
       />
     )
   }

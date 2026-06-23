@@ -32,7 +32,18 @@ export interface FormationTrackerStep {
   action?: FormationClientAction
   /** True when this is a client-action stage AND it's the current stage. */
   isActionRequired: boolean
+  /**
+   * ISO timestamp of when the formation was filed with the state — set ONLY on
+   * the "Filed with State" step, and only once that step is reached
+   * (status completed or current). The renderer appends "· Filed <date>" to the
+   * label. Null/absent when unknown (legacy SDs with no recorded filing
+   * transition) or for every other step.
+   */
+  filedAt?: string | null
 }
+
+/** The stage whose label carries the "· Filed <date>" suffix. */
+const FILED_STAGE = 'Filed with State'
 
 /** Stage name → the client action required while sitting at that stage. */
 const ACTION_STAGES: Record<string, FormationClientAction> = {
@@ -55,6 +66,7 @@ export function buildFormationTrackerSteps(
   stages: FormationStageRow[],
   currentStage: string | null | undefined,
   locale: 'en' | 'it',
+  filedAt?: string | null,
 ): FormationTrackerStep[] {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order)
   const currentRow = currentStage
@@ -76,6 +88,11 @@ export function buildFormationTrackerSteps(
       status,
       action,
       isActionRequired: status === 'current' && action != null,
+      // Carry the filing date only on the Filed-with-State step, and only once
+      // it's reached (completed/current) — an upcoming step shows no date.
+      ...(s.stage_name === FILED_STAGE && filedAt && status !== 'upcoming'
+        ? { filedAt }
+        : {}),
     }
   })
 }
