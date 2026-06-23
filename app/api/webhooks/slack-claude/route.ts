@@ -236,6 +236,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true })
   }
 
+  // ── 👀 reaction → FOLLOW any thread (any channel) → per-channel Canvas ──────
+  // 👀 added = follow the reacted thread; 👀 removed = unfollow. Works on ANY thread,
+  // not just 🗂️ /client cards. Needs the reaction_added AND reaction_removed bot
+  // event subscriptions. Best-effort; runs inline (idempotent on retry).
+  if (
+    (event.type === "reaction_added" || event.type === "reaction_removed") &&
+    event.reaction === "eyes"
+  ) {
+    if (event.user === CLAUDE_BOT_USER_ID) return NextResponse.json({ ok: true })
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (itemChannel && itemTs && event.user) {
+      try {
+        const { handleThreadFollowReaction } = await import("@/lib/ai-agent/slack-thread-follows")
+        await handleThreadFollowReaction({
+          channelId: itemChannel,
+          messageTs: itemTs,
+          userId: event.user,
+          added: event.type === "reaction_added",
+        })
+      } catch (err) {
+        console.warn("[slack-claude-webhook] 👀 thread-follow failed:", err)
+      }
+    }
+    return NextResponse.json({ ok: true })
+  }
+
   // ── Decision Memory Phase 7: 🧠 reaction → save the message as a memory ──
   // Slack delivers reaction_added as an event_callback. The app must subscribe
   // to the `reaction_added` bot event for these to arrive (admin config — noted
