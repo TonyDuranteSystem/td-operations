@@ -604,13 +604,15 @@ export async function closeClientThread(
     console.warn("[slack-claude] closeClientThread memory feed failed (non-fatal):", err)
   }
 
-  // A closed conversation must drop out of every follower's "📌 Following" DM list.
-  // Best-effort; dynamic import avoids a load-time cycle with client-thread-follows.
+  // A closed conversation must drop out of every follower's "📌 Following" DM list
+  // and the shared followed-conversations Canvas. Best-effort; dynamic import avoids
+  // a load-time cycle with client-thread-follows.
   try {
-    const { refreshFollowersDigests } = await import("./client-thread-follows")
+    const { refreshFollowersDigests, refreshOpenConversationsCanvas } = await import("./client-thread-follows")
     await refreshFollowersDigests(id)
+    await refreshOpenConversationsCanvas()
   } catch (err) {
-    console.warn("[slack-claude] closeClientThread follower-digest refresh failed (non-fatal):", err)
+    console.warn("[slack-claude] closeClientThread follower/canvas refresh failed (non-fatal):", err)
   }
   return { ok: true }
 }
@@ -625,12 +627,13 @@ export async function reopenClientThread(id: string): Promise<{ ok: boolean; err
     .eq("id", id)
   if (error) return { ok: false, error: error.message }
 
-  // Reopened → reappears in followers' "📌 Following" DM lists. Best-effort.
+  // Reopened → reappears in followers' "📌 Following" DM lists and the Canvas. Best-effort.
   try {
-    const { refreshFollowersDigests } = await import("./client-thread-follows")
+    const { refreshFollowersDigests, refreshOpenConversationsCanvas } = await import("./client-thread-follows")
     await refreshFollowersDigests(id)
+    await refreshOpenConversationsCanvas()
   } catch (err) {
-    console.warn("[slack-claude] reopenClientThread follower-digest refresh failed (non-fatal):", err)
+    console.warn("[slack-claude] reopenClientThread follower/canvas refresh failed (non-fatal):", err)
   }
   return { ok: true }
 }

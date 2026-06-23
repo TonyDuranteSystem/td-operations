@@ -51,8 +51,8 @@ describe("renderFollowDigestText", () => {
 describe("renderCanvasMarkdown", () => {
   it("renders an empty-state line when nothing is open", () => {
     const out = renderCanvasMarkdown([])
-    expect(out).toContain("# 🗂️ Open client conversations")
-    expect(out).toContain("No open conversations right now")
+    expect(out).toContain("# 🗂️ Followed client conversations")
+    expect(out).toContain("Nobody is following any open conversations")
   })
 
   it("renders markdown links ([label](url)) that open each thread", () => {
