@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isOfficeOpen } from '@/lib/portal/office-hours'
+import { isOfficeOpen, isOfficeHoliday, getOfficeStatus, usFederalHolidays } from '@/lib/portal/office-hours'
 
 /**
  * All test dates are chosen to have unambiguous ET offsets:
@@ -67,5 +67,63 @@ describe('isOfficeOpen', () => {
   it('Sunday 10:00 AM EDT → closed (weekend)', () => {
     // 2026-05-24 Sun 10:00 EDT = 14:00 UTC
     expect(isOfficeOpen(new Date('2026-05-24T14:00:00Z'))).toBe(false)
+  })
+
+  // --- Holidays (closed even on a weekday during 9–3) ---
+
+  it("New Year's Day (Thu Jan 1 2026) 12:00 EST → closed (holiday)", () => {
+    // 2026-01-01 12:00 EST = 17:00 UTC. A Thursday — only the holiday makes it closed.
+    expect(isOfficeOpen(new Date('2026-01-01T17:00:00Z'))).toBe(false)
+  })
+
+  it('Thanksgiving (Thu Nov 26 2026) 12:00 EST → closed (holiday)', () => {
+    expect(isOfficeOpen(new Date('2026-11-26T17:00:00Z'))).toBe(false)
+  })
+
+  it('Independence Day observed (Fri Jul 3 2026) 12:00 EDT → closed (Jul 4 is a Saturday)', () => {
+    // 2026-07-03 12:00 EDT = 16:00 UTC
+    expect(isOfficeOpen(new Date('2026-07-03T16:00:00Z'))).toBe(false)
+  })
+})
+
+describe('getOfficeStatus — reason', () => {
+  it('Wed 1:00 PM EDT → open', () => {
+    expect(getOfficeStatus(new Date('2026-05-20T17:00:00Z'))).toEqual({ open: true, reason: 'open' })
+  })
+  it('Mon 8:00 AM EDT → before_hours', () => {
+    // 2026-05-18 08:00 EDT = 12:00 UTC
+    expect(getOfficeStatus(new Date('2026-05-18T12:00:00Z'))).toEqual({ open: false, reason: 'before_hours' })
+  })
+  it('Mon 4:00 PM EDT → after_hours', () => {
+    // 2026-05-18 16:00 EDT = 20:00 UTC
+    expect(getOfficeStatus(new Date('2026-05-18T20:00:00Z'))).toEqual({ open: false, reason: 'after_hours' })
+  })
+  it('Sat noon EDT → weekend', () => {
+    expect(getOfficeStatus(new Date('2026-05-23T16:00:00Z'))).toEqual({ open: false, reason: 'weekend' })
+  })
+  it('New Year noon → holiday (takes precedence over hours)', () => {
+    expect(getOfficeStatus(new Date('2026-01-01T17:00:00Z'))).toEqual({ open: false, reason: 'holiday' })
+  })
+})
+
+describe('usFederalHolidays', () => {
+  it('computes the 11 observed federal holidays for 2026', () => {
+    const h = usFederalHolidays(2026)
+    expect(h.has('2026-01-01')).toBe(true) // New Year's
+    expect(h.has('2026-01-19')).toBe(true) // MLK — 3rd Mon Jan
+    expect(h.has('2026-02-16')).toBe(true) // Presidents — 3rd Mon Feb
+    expect(h.has('2026-05-25')).toBe(true) // Memorial — last Mon May
+    expect(h.has('2026-06-19')).toBe(true) // Juneteenth
+    expect(h.has('2026-07-03')).toBe(true) // Independence (observed — Jul 4 is Sat)
+    expect(h.has('2026-09-07')).toBe(true) // Labor — 1st Mon Sep
+    expect(h.has('2026-10-12')).toBe(true) // Columbus — 2nd Mon Oct
+    expect(h.has('2026-11-11')).toBe(true) // Veterans
+    expect(h.has('2026-11-26')).toBe(true) // Thanksgiving — 4th Thu Nov
+    expect(h.has('2026-12-25')).toBe(true) // Christmas
+  })
+
+  it('isOfficeHoliday matches a known holiday and rejects a normal day', () => {
+    expect(isOfficeHoliday(new Date('2026-12-25T17:00:00Z'))).toBe(true)
+    expect(isOfficeHoliday(new Date('2026-05-20T17:00:00Z'))).toBe(false)
   })
 })

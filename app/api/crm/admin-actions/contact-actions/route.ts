@@ -9,8 +9,8 @@
  *   add_llc_name       — Append an admin-typed name candidate to the formation pool (verbatim, no LLC auto-append)
  *   remove_llc_name    — Remove an admin-added name candidate (wizard 3 are not removable)
  *   select_llc_name    — Pick a name (from wizard 3 OR admin-added) as the official LLC name; triggers account create/rename + Drive folder + SD rename + audit
- *   mark_fax_sent      — Mark SS-4 fax as sent to IRS + advance pipeline to EIN Submitted
- *   enter_ein          — Set EIN on account + advance pipeline to Post-Formation
+ *   mark_fax_sent      — Mark SS-4 fax as sent to IRS (SD stays at SS-4 Signed)
+ *   enter_ein          — Set EIN on account + advance pipeline to EIN Received
  *   process_documents  — Re-run Drive folder creation + passport processing for a contact
  *   cancel_service     — Cancel a service delivery (set status to cancelled)
  *   ocr_document       — Run OCR on an existing document (passport→MRZ, ITIN→number extraction)
@@ -20,7 +20,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { writeITINFields } from "@/lib/itin/write-itin-fields"
 import { upgradePortalTier } from "@/lib/portal/auto-create"
-import { createSD } from "@/lib/operations/service-delivery"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 import { buildFormUrl } from "@/lib/forms/smart-url"
@@ -568,7 +567,8 @@ export async function POST(req: NextRequest) {
           .in("status", ["signed", "submitted"])
         einSideEffects.push("SS-4 status → done")
 
-        // 3. Advance Company Formation pipeline to Post-Formation + Banking
+        // 3. Advance Company Formation pipeline to "EIN Received" (final stage of
+        // the 7-stage v2 pipeline; replaced the removed "Post-Formation + Banking").
         const { data: formationSds } = await supabaseAdmin
           .from("service_deliveries")
           .select("id")
@@ -582,50 +582,24 @@ export async function POST(req: NextRequest) {
           const { advanceFormationToStage } = await import("@/lib/pipeline-utils")
           const advResult = await advanceFormationToStage(
             formationSds[0].id,
-            "Post-Formation + Banking",
+            "EIN Received",
             "crm-admin",
             `EIN received: ${einFormatted}`,
           )
           if (advResult.advanced) {
-            einSideEffects.push("Pipeline advanced to Post-Formation + Banking")
+            einSideEffects.push("Pipeline advanced to EIN Received")
             einSideEffects.push(...advResult.sideEffects)
           } else {
             einSideEffects.push(`Pipeline advance: ${advResult.detail}`)
           }
         }
 
-        // 3b. Create Banking Fintech SD (deferred from payment per SOP v7.2 Phase 0)
-        // Guard: skip if one already exists on this account
-        const { data: existingBankingSdCa } = await supabaseAdmin
-          .from("service_deliveries")
-          .select("id")
-          .eq("account_id", accountId)
-          .eq("service_type", "Banking Fintech")
-          .eq("status", "active")
-          .limit(1)
-          .maybeSingle()
-
-        if (!existingBankingSdCa) {
-          try {
-            const { data: acctForBanking } = await supabaseAdmin
-              .from("accounts")
-              .select("company_name")
-              .eq("id", accountId)
-              .single()
-            await createSD({
-              service_type: "Banking Fintech",
-              service_name: `Banking Fintech - ${acctForBanking?.company_name ?? accountId}`,
-              account_id: accountId,
-              contact_id: contact_id || null,
-              notes: `Auto-created on EIN received (${einFormatted})`,
-            })
-            einSideEffects.push("Banking Fintech SD created")
-          } catch (e) {
-            einSideEffects.push(`Banking Fintech SD creation failed: ${e instanceof Error ? e.message : String(e)}`)
-          }
-        } else {
-          einSideEffects.push("Banking Fintech SD already exists — skipped")
-        }
+        // 3b. Banking Fintech SD is intentionally NOT created anymore. Per Antonio
+        // (2026-06-20): formation finishes at the EIN. Banking is self-service —
+        // the client opens an account with their EIN + Articles of Organization at
+        // a fintech of choice (Relay / Mercury / Sokin / Payset / Wise), surfaced
+        // as bank applications in the portal, not tracked as a service delivery.
+        einSideEffects.push("Banking Fintech SD skipped (formation ends at EIN)")
 
         // 3c. Enqueue welcome package job (creates OA, Lease, banking forms, review task)
         try {

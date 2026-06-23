@@ -17,6 +17,7 @@ import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
+import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
 import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
@@ -54,6 +55,7 @@ const TABS = [
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
   { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'One-screen view of every audit check for this contact — diagnostic + chain audit together.' },
   { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
+  { key: 'conversations', label: 'Conversations', icon: MessageSquare, tooltip: 'Slack client conversations tagged to this contact — topic, date, and the full thread.' },
   { key: 'journey', label: 'Journey', icon: GitBranch, tooltip: 'Full client journey — offers, payments, activations, services, wizards, documents, tasks, and portal messages in one feed.' },
   { key: 'backend', label: 'Backend', icon: Activity, tooltip: 'Read-only view of CRM actions, background jobs, webhook events, and session checkpoints that touched this contact.' },
 ]
@@ -487,6 +489,9 @@ export function ContactDetail({
       )}
       {activeTab === 'activity' && (
         <ActivityTab conversations={conversations} />
+      )}
+      {activeTab === 'conversations' && (
+        <ClientConversationsPanel entityType="contact" entityId={contact.id} />
       )}
       {activeTab === 'journey' && (
         <ActivityFeed kind="contact" contactId={contact.id} accountIds={accounts.map((a) => a.id)} />
@@ -1108,14 +1113,16 @@ function deriveJourneySteps({
   )
   const hasActiveServices = serviceDeliveries.some(sd => sd.status === 'active')
 
-  // Formation stage ordering for "beyond Data Collection" check
+  // Formation stage ordering (7-stage v2 pipeline) for the "beyond the initial
+  // data/review phase" check (i.e. the company is actually being filed onward).
   const FORMATION_STAGE_ORDER = [
-    'Data Collection', 'State Filing', 'EIN Application', 'EIN Submitted', 'Post-Formation + Banking', 'Closing',
+    'Payment Confirmed', 'Wizard Submitted', 'Filed with State', 'Articles Received',
+    'SS-4 Prepared', 'SS-4 Signed', 'EIN Received',
   ]
 
   const formationBeyondDataCollection = formationSds.some(sd => {
     const idx = FORMATION_STAGE_ORDER.indexOf(sd.stage ?? '')
-    return idx > 0 // anything after Data Collection
+    return idx > 1 // anything after Wizard Submitted (Filed with State onward)
   })
 
   // 1. Lead step
@@ -1200,12 +1207,12 @@ function deriveJourneySteps({
   let serviceStep: JourneyStep
   if (formationSds.length > 0) {
     const primaryFormation = formationSds[0]
-    if (primaryFormation.stage === 'Closing' || primaryFormation.status === 'completed') {
+    if (primaryFormation.stage === 'EIN Received' || primaryFormation.status === 'completed') {
       serviceStep = { label: 'Service', status: 'done', detail: 'Formation complete' }
     } else if (formationBeyondDataCollection) {
       serviceStep = { label: 'Service', status: 'current', detail: primaryFormation.stage ?? undefined }
-    } else if (primaryFormation.stage === 'Data Collection') {
-      serviceStep = { label: 'Service', status: 'current', detail: 'Data Collection' }
+    } else if (primaryFormation.stage === 'Payment Confirmed') {
+      serviceStep = { label: 'Service', status: 'current', detail: 'Payment Confirmed' }
     } else {
       serviceStep = { label: 'Service', status: 'current', detail: primaryFormation.stage ?? undefined }
     }

@@ -154,7 +154,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // Resolve the flow's account + topic from the SD.
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_type, account_id, due_date, stage_entered_at, created_at')
+      .select('id, service_type, account_id, contact_id, due_date, stage_entered_at, created_at')
       .eq('id', serviceDeliveryId)
       .single()
     if (sdErr || !sd) {
@@ -173,6 +173,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .maybeSingle()
       contactId = link?.contact_id ?? null
     }
+    // Contact-scoped SDs (in-progress formations, account_id NULL) carry the
+    // contact directly — without this the message stamps contact_id=null and
+    // never reaches the client's contact-scoped portal thread (lost message).
+    if (!contactId) contactId = (sd.contact_id as string | null) ?? null
 
     // Topic is auto-set to the flow name (e.g. "Tax Return 2025").
     const topic = buildFlowTopic(sd.service_type, deriveFlowYear(sd)) || null

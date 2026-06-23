@@ -2,7 +2,10 @@
  * formation.confirm_ein_received — formation_progress action.
  *
  * Records the EIN received from IRS on the account, then advances the SD
- * stage from EIN Submitted → Post-Formation + Banking.
+ * stage from SS-4 Signed → EIN Received (the final stage of the 7-stage v2
+ * pipeline). Formation is then closed via the separate "Mark Formation
+ * Complete" action (sd.mark_complete), which spawns the RA Renewal + Annual
+ * Report SDs.
  *
  * Reads admin's typed EIN from ctx.params.ein_number (per the action's
  * requires_input field).
@@ -15,7 +18,7 @@
  *
  * Idempotency: if account.ein_number is already set to the submitted value,
  * the helper skips the update (logs as no-op). SD advance is gated by stage
- * (advanceStage refuses if not at EIN Submitted).
+ * (advanceStage refuses if not at SS-4 Signed).
  */
 
 import { updateAccount } from "@/lib/operations/account"
@@ -26,7 +29,7 @@ import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from 
 /** Re-export the central client-safe schema for the workflow editor. */
 export { formationConfirmEinReceivedParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
 
-const TARGET_STAGE = "Post-Formation + Banking"
+const TARGET_STAGE = "EIN Received"
 
 function normalizeEin(raw: string): string {
   // Strip everything except digits, then re-format as XX-XXXXXXX.
@@ -78,9 +81,9 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
       success: true,
       side_effects: [
         { kind: "account.field_preview", detail: `accounts.ein_number → ${ein}` },
-        { kind: "sd.advance.preview", detail: `EIN Submitted → ${TARGET_STAGE}` },
+        { kind: "sd.advance.preview", detail: `SS-4 Signed → ${TARGET_STAGE}` },
       ],
-      preview: { sd_stage_change: `EIN Submitted → ${TARGET_STAGE}` },
+      preview: { sd_stage_change: `SS-4 Signed → ${TARGET_STAGE}` },
     }
   }
 
@@ -135,7 +138,7 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
     delivery_id: ctx.task.delivery_id,
     target_stage: TARGET_STAGE,
     actor: `workflow:formation.confirm_ein_received:${ctx.actor.id}`,
-    notes: `EIN ${ein} recorded; advancing to Post-Formation + Banking`,
+    notes: `EIN ${ein} recorded; advancing to ${TARGET_STAGE}`,
   })
   if (!advance.success) {
     sideEffects.push({

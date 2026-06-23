@@ -1,7 +1,8 @@
 /**
  * Job Handler: welcome_package_prepare
  *
- * Auto-triggered when Company Formation SD advances to "Post-Formation + Banking".
+ * Auto-triggered when Company Formation SD advances to "Articles Received"
+ * (7-stage v2 pipeline; also re-enqueued idempotently by the EIN-received handlers).
  * Reuses the welcome-package MCP tool logic:
  * - Creates OA (if not exists)
  * - Creates Lease (if not exists)

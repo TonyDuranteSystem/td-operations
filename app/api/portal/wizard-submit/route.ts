@@ -6,8 +6,14 @@
  * 2. Enqueues a background job for the full auto-chain (non-blocking)
  * 3. Returns immediately so client gets fast response
  *
- * The background job (onboarding_setup / formation_setup / tax_form_setup)
- * handles ALL heavy work: Drive, CRM updates, OA, Lease, Banking, notifications.
+ * All wizard types use fire-and-forget execution:
+ * - banking_payset / banking_relay: inline IIFE, early return (step 4b)
+ * - tax_form_setup: inline IIFE, then return (step 6)
+ * - all others (onboarding_setup, formation_setup, itin_review, etc.): cron at
+ *   /api/cron/process-jobs picks up the enqueued job
+ *
+ * The background handlers handle ALL heavy work: Drive, CRM updates, OA, Lease,
+ * Banking, notifications. Data is always saved before the response is sent.
  */
 
 export const dynamic = 'force-dynamic'
@@ -19,6 +25,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
+import { buildSubmissionRecord } from '@/lib/portal/submission-record'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
@@ -214,53 +221,22 @@ export async function POST(req: NextRequest) {
         taxYear = tr?.tax_year ?? null
       }
 
-      // TEMP RESUBMIT-DEBUG (remove after capture) — dev_task b2115fd3.
-      if (allow_resubmit) {
-        console.warn('[RESUBMIT-DEBUG] tax_year resolution', JSON.stringify({
-          wizard_type,
-          submissionTable,
-          resolved_tax_year: taxYear,
-          note: taxYear === null ? 'no tax_returns row with data_received=false — tax_year omitted from upsert' : 'ok',
-        }))
-      }
-
-      const submissionRecord: Record<string, unknown> = {
+      // The submission tables do NOT share one column set (formation has no
+      // account_id, tax_return has no lead_id, itin/closure have no entity_type,
+      // only tax_return has tax_year). buildSubmissionRecord centralizes those
+      // per-table rules; tests/unit/submission-record.test.ts cross-checks the
+      // columns it can emit against the generated DB types, so a future drift
+      // fails CI loudly instead of as a 500 / false "submission failed" toast.
+      const submissionRecord = buildSubmissionRecord(submissionTable, {
         token: submissionToken,
         contact_id: contact_id || null,
         account_id: account_id || null,
-        language: 'en',
-        prefilled_data: {},
+        lead_id: lead_id || null,
+        entity_type: entity_type || null,
         submitted_data: data,
-        changed_fields: {},
         upload_paths: uploadPaths,
-        status: 'completed',
-      }
-
-      // entity_type only exists on formation/onboarding/tax_return/company_info
-      // submission tables. itin_submissions and closure_submissions don't have
-      // that column — including it caused the upsert to fail silently and the
-      // ITIN auto-chain to never run for Valerio Di Santo, Antony Fioravanti,
-      // and Luca Gallacci (2026-04-22 → 2026-05-13). Verified against
-      // information_schema 2026-05-13.
-      const TABLES_WITH_ENTITY_TYPE = new Set([
-        'formation_submissions',
-        'onboarding_submissions',
-        'tax_return_submissions',
-        'company_info_submissions',
-      ])
-      if (TABLES_WITH_ENTITY_TYPE.has(submissionTable)) {
-        submissionRecord.entity_type = entity_type || 'SMLLC'
-      }
-
-      // Only include lead_id for tables that have it (tax_return_submissions does not).
-      // Formation-for-a-new-company submissions carry the lead so materialization
-      // can build the right company even when the contact already owns others.
-      if (submissionTable !== 'tax_return_submissions') {
-        submissionRecord.lead_id = lead_id || null
-      }
-
-      // Only include tax_year if we resolved it (avoids NOT NULL constraint violation)
-      if (taxYear !== null) submissionRecord.tax_year = taxYear
+        tax_year: taxYear,
+      })
 
       const { data: sub, error: subErr } = await supabaseAdmin
         .from(submissionTable as never)
@@ -587,17 +563,47 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 6. RETURN IMMEDIATELY — the job runs in the worker, never inline ───
-    // Tax jobs used to claim + execute the handler INLINE here, holding the
-    // browser's submit response hostage for 15-45s+. On Vercel those long-held
-    // responses died ("No response is returned from route handler") and the
-    // client saw "Submission failed" even though every server-side step had
-    // succeeded — so they resubmitted, duplicating review tasks (2026-06-12,
-    // Antonio's report; verified: both "failed" submits had fully completed
-    // jobs). enqueueJob already fire-and-forgets the /api/jobs/process
-    // trigger (~1s pickup) and /api/cron/process-jobs sweeps every 5 min —
-    // the same path formation/onboarding jobs have always used. The success
-    // screen's "we are preparing your P&L" copy covers the async window.
+    // ─── 6. FIRE-AND-FORGET EXECUTION (for tax jobs) ───
+    // Data is already saved (step 2 + step 4). Return success immediately so the
+    // client gets a clean confirmation screen regardless of how long the handler
+    // takes. The handler runs in the background; the client gets a portal message
+    // when it completes (step 10 of handleTaxFormSetup). Cron at
+    // /api/cron/process-jobs acts as safety net if the background task fails.
+    if (jobType === 'tax_form_setup' && jobId) {
+      const capturedJobId = jobId
+
+      ;(async () => {
+        const claimNow = new Date().toISOString()
+        const { data: claimedJob } = await supabaseAdmin
+          .from('job_queue')
+          .update({ status: 'processing', started_at: claimNow, attempts: 1 })
+          .eq('id', capturedJobId)
+          .eq('status', 'pending')
+          .select('*')
+          .single()
+
+        if (!claimedJob) {
+          console.warn(`[wizard-submit] Tax job ${capturedJobId} already claimed by worker — skipping background execution`)
+          return
+        }
+
+        try {
+          const { handleTaxFormSetup } = await import('@/lib/jobs/handlers/tax-form-setup')
+          const result = await handleTaxFormSetup(claimedJob as unknown as Job)
+          if (result.ok === false) {
+            await failJob(capturedJobId, result.summary || 'Handler reported failure', result)
+            console.warn(`[wizard-submit] Tax job ${capturedJobId} background-completed as failed: ${result.summary}`)
+          } else {
+            await completeJob(capturedJobId, result)
+            console.warn(`[wizard-submit] Tax job ${capturedJobId} completed in background: ${result.summary}`)
+          }
+        } catch (handlerErr) {
+          const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
+          await failJob(capturedJobId, errMsg)
+          console.error(`[wizard-submit] Tax job ${capturedJobId} failed in background:`, errMsg)
+        }
+      })().catch(err => console.error('[wizard-submit] Tax background task error:', err))
+    }
 
     return NextResponse.json({
       success: true,

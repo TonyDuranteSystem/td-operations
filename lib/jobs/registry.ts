@@ -11,6 +11,7 @@ import { handleTaxReturnIntake } from "./handlers/tax-return-intake"
 import { handleWelcomePackagePrepare } from "./handlers/welcome-package-setup"
 import { handleItinWizardSetup } from "./handlers/itin-wizard-setup"
 import { handleDocumentReprocess } from "./handlers/document-reprocess"
+import { handleInvoiceReminder } from "./handlers/invoice-reminder"
 
 type JobHandler = (job: Job) => Promise<JobResult>
 
@@ -24,6 +25,8 @@ const handlers: Record<string, JobHandler> = {
   itin_wizard_setup: handleItinWizardSetup,
   // Added 2026-06-11 — OCR self-heal for docs shared while processing failed.
   document_reprocess: handleDocumentReprocess,
+  // Added 2026-06-22 — batched overdue-invoice reminder sending (dunning).
+  invoice_reminder: handleInvoiceReminder,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

@@ -57,20 +57,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    // 1. Resolve the SD → account + current stage (fallback for flow_stage).
+    // 1. Resolve the SD → account/contact + current stage (fallback for flow_stage).
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, account_id, stage')
+      .select('id, account_id, contact_id, stage')
       .eq('id', serviceDeliveryId)
       .single()
 
-    if (sdErr || !sd || !sd.account_id) {
+    if (sdErr || !sd) {
       return NextResponse.json(
         { success: false, detail: 'Flow (service delivery) not found' },
         { status: 404 },
       )
     }
-    const accountId = sd.account_id as string
+    // Contact-scoped flows have account_id = NULL — e.g. an in-flight Company
+    // Formation before the company is materialized (the account is created at
+    // "Articles Received"). That is VALID, not "not found"; we just have no Drive
+    // folder to target, so the storage fallback below handles it.
+    const accountId = (sd.account_id as string | null) ?? null
+    const contactId = (sd.contact_id as string | null) ?? null
     const flowStage = flowStageInput ?? (sd.stage as string | null) ?? null
 
     // 2. Download from Storage.
@@ -95,7 +100,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //    (onboarding-uploads) and reference it directly — no Drive round-trip and
     //    no Drive-folder requirement. The documents row + stage advance happen
     //    identically, so the flow works end-to-end in sandbox.
-    const useStorageFallback = process.env.SANDBOX_MODE === '1'
+    // Storage fallback when there's no Drive target: sandbox (mocked Drive) OR a
+    // contact-scoped SD with no account yet (in-flight formation — no Drive folder).
+    const useStorageFallback = process.env.SANDBOX_MODE === '1' || !accountId
 
     let docFileId: string
     let docLink: string
@@ -156,6 +163,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         file_size: buffer.length,
         status: 'classified',
         account_id: accountId,
+        contact_id: contactId,
         service_delivery_id: serviceDeliveryId,
         flow_stage: flowStage,
         portal_visible: false,
@@ -168,7 +176,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       action_type: 'upload_flow_document',
       table_name: 'documents',
       record_id: docFileId,
-      account_id: accountId,
+      account_id: accountId ?? undefined,
       service_delivery_id: serviceDeliveryId,
       summary: `Flow document uploaded: ${fileName}`,
       details: { file_name: fileName, service_delivery_id: serviceDeliveryId, flow_stage: flowStage },

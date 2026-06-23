@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await supabase
     .from('contacts')
     .select('id, full_name, email, phone')
-    .or(`full_name.ilike.${pattern},email.ilike.${pattern}`)
+    .or(`full_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern}`)
     .order('full_name')
     .limit(15)
 

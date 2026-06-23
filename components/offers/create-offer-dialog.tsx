@@ -305,6 +305,10 @@ export function CreateOfferDialog({
           services: serviceNames,
           notes_context: noteParts.join('\n\n'),
           contract_type: catalog.find(c => selected.some(s => s.id === c.id))?.contract_type || 'formation',
+          // Let the server pull the client's full call transcript (notes + every
+          // turn) from call_summaries for a richer, personalized narrative.
+          lead_id: leadId || null,
+          account_id: accountId || null,
         }),
       })
 

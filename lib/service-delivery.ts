@@ -16,8 +16,8 @@
  *   5. Tax Return sync (SD stage → tax_returns status + date fields)
  *   6. RA Renewal date +1 year on completion
  *   7. Annual Report deadline +1 year on completion
- *   8. Company Formation renewal date initialization
- *   9. Welcome package enqueue on Post-Formation
+ *   8. Company Formation renewal date initialization (on Articles Received)
+ *   9. Welcome package enqueue (on Articles Received)
  *   10. Company Closure cascade (cancel SDs, deactivate account/portal, closure tasks)
  *   11. Action log entry
  */
@@ -26,6 +26,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
+import { filedName, type NameCheck } from "@/lib/flows/name-checks"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -178,6 +179,52 @@ export async function advanceServiceDelivery(
     "service_deliveries.update"
   )
 
+  const autoTriggers: string[] = []
+
+  // 6b. Sync the formation_progress workflow task's task_meta with the new SD
+  // stage. The workspace advances the SD through THIS function, a different path
+  // from the workflow engine's chain.advance_sd_stage handler (which already
+  // patches task_meta) — so without this the task card showed a stale stage.
+  // The formation_progress card is now a read-only pointer to the workspace, so
+  // this only keeps its displayed stage honest. Best-effort: never fail the
+  // advance. Scoped to Company Formation (the only service_type with a
+  // formation_progress workflow).
+  if (delivery.service_type === "Company Formation") {
+    try {
+      const { mergeSdStageIntoTaskMeta } = await import("@/lib/tasks/sd-stage-sync")
+      const { data: wfTasks } = await supabaseAdmin
+        .from("tasks")
+        .select("id, task_meta")
+        .eq("workflow_slug", "formation_progress")
+        .or(`delivery_id.eq.${delivery_id},task_meta->>service_delivery_id.eq.${delivery_id}`)
+      for (const t of wfTasks ?? []) {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+          supabaseAdmin
+            .from("tasks")
+            .update({
+              task_meta: mergeSdStageIntoTaskMeta(
+                t.task_meta as Record<string, unknown> | null,
+                targetStage.stage_name,
+              ) as never,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", t.id),
+          "tasks.update",
+        )
+      }
+      if (wfTasks?.length) {
+        autoTriggers.push(
+          `Synced ${wfTasks.length} formation_progress task(s) → sd_stage="${targetStage.stage_name}"`,
+        )
+      }
+    } catch (syncErr) {
+      autoTriggers.push(
+        `Workflow task stage sync failed: ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`,
+      )
+    }
+  }
+
   // 7. Create auto-tasks (unless skipped)
   const createdTasks: string[] = []
   const failedTasks: { title: string; error: string }[] = []
@@ -211,8 +258,6 @@ export async function advanceServiceDelivery(
       }
     }
   }
-
-  const autoTriggers: string[] = []
 
   // 8. Portal notification for client. Accept either account-scoped SDs or
   // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
@@ -453,10 +498,82 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 12. Company Formation — set initial renewal dates on closing stages
+  // 11b. Company Formation — MATERIALIZE the CRM account when advancing into
+  // "Articles Received" for an in-flight (contact-scoped, account_id NULL)
+  // formation. All the heavy lifting — account insert, owner/member links, Drive
+  // folder, SD account_id link, portal-tier sync — lives in
+  // materializeFormationCompany (the single account-creation path, shared with
+  // the Upload Articles admin action + articles-detector cron). We DON'T
+  // duplicate it; we just call it with the right params, bridging two v2 gaps:
+  //   • the confirmed name lives in service_deliveries.name_checks (status
+  //     'filed'), not wizard_progress.chosen_name_final → pass it as chosen_name;
+  //   • materialize needs a state CODE → resolve from wizard data, default NM.
+  // Resilient: a failure is logged to auto_triggers but never fails the advance
+  // (the stage move already committed above). On success we reflect the new
+  // account on the in-memory record so sections 12 & 13 below fire this run.
   if (
     delivery.service_type === "Company Formation" &&
-    (targetStage.stage_name === "Post-Formation + Banking" || targetStage.stage_name === "Closing") &&
+    targetStage.stage_name === "Articles Received" &&
+    !delivery.account_id &&
+    delivery.contact_id
+  ) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
+      const { data: ncRow } = await (supabaseAdmin as any)
+        .from("service_deliveries")
+        .select("name_checks")
+        .eq("id", delivery_id)
+        .maybeSingle()
+      const confirmedName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
+
+      if (!confirmedName) {
+        autoTriggers.push("Account not materialized: no filed company name in name_checks yet")
+      } else {
+        // Resolve the formation state CODE (wizard data → default NM). The
+        // formation wizard rarely captures the formation state, so NM (the
+        // primary filing state) is the documented default.
+        const { data: wp } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("data")
+          .eq("contact_id", delivery.contact_id)
+          .eq("wizard_type", "formation")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        const wd = (wp?.data ?? {}) as Record<string, unknown>
+        const rawState = String(wd.formation_state || wd.state_of_formation || wd.state_of_incorporation || "").toUpperCase().trim()
+        const stateCode: "NM" | "WY" | "FL" | "DE" =
+          rawState === "WY" || rawState.includes("WYOMING") ? "WY" :
+          rawState === "FL" || rawState.includes("FLORIDA") ? "FL" :
+          rawState === "DE" || rawState.includes("DELAWARE") ? "DE" : "NM"
+
+        const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
+        const mat = await materializeFormationCompany({
+          contact_id: delivery.contact_id,
+          chosen_name: confirmedName,
+          formation_state: stateCode,
+          actor: `flow-advance:${actor}`,
+        })
+        if (mat.success && mat.account_id) {
+          delivery.account_id = mat.account_id
+          autoTriggers.push(`Account materialized: ${confirmedName} (${stateCode}) → ${mat.account_id} [${mat.outcome}]`)
+        } else {
+          autoTriggers.push(`Account materialization failed (${mat.outcome}): ${mat.error ?? "unknown"}`)
+        }
+      }
+    } catch (matErr) {
+      autoTriggers.push(`Account materialization error: ${matErr instanceof Error ? matErr.message : String(matErr)}`)
+    }
+  }
+
+  // 12. Company Formation — set initial renewal dates when the company becomes
+  // real. Fires on advance into "Articles Received" (the milestone where the
+  // state-approved company exists and the CRM account is materialized) — moved
+  // here from the old "Post-Formation + Banking"/"Closing" stages in the 7-stage
+  // v2 pipeline (migration 20260617-formation-workspace-v2.sql).
+  if (
+    delivery.service_type === "Company Formation" &&
+    targetStage.stage_name === "Articles Received" &&
     delivery.account_id
   ) {
     try {
@@ -503,10 +620,14 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 13. Welcome Package on "Post-Formation + Banking"
+  // 13. Welcome Package — enqueued when the company becomes real. Fires on
+  // advance into "Articles Received" (moved from "Post-Formation + Banking" in
+  // the 7-stage v2 pipeline). Idempotent: the handler dedupes via
+  // accounts.welcome_package_status, and the EIN-received handlers re-enqueue it
+  // (also idempotent) as a safety net.
   if (
     delivery.service_type === "Company Formation" &&
-    targetStage.stage_name === "Post-Formation + Banking" &&
+    targetStage.stage_name === "Articles Received" &&
     delivery.account_id
   ) {
     try {
@@ -529,6 +650,32 @@ export async function advanceServiceDelivery(
       }
     } catch (wpErr) {
       autoTriggers.push(`Welcome package auto-trigger failed: ${wpErr instanceof Error ? wpErr.message : String(wpErr)}`)
+    }
+  }
+
+  // 13b. Company Formation — best-effort SS-4 auto-generation when advancing into
+  // "SS-4 Prepared". Reuses the shared createSS4 core. It often can't complete
+  // yet (e.g. no Registered Agent set on the freshly materialized account, which
+  // Line 6 requires) — that's expected and NOT an error: it's logged to
+  // auto_triggers and staff click "Generate SS-4" in the workspace after setting
+  // the RA. Never fails the advance (the stage move already committed above).
+  if (
+    delivery.service_type === "Company Formation" &&
+    targetStage.stage_name === "SS-4 Prepared" &&
+    delivery.account_id
+  ) {
+    try {
+      const { createSS4 } = await import("@/lib/operations/ss4")
+      const r = await createSS4({ account_id: delivery.account_id })
+      if (r.ok) {
+        autoTriggers.push(`SS-4 generated (${r.ss4?.status ?? "draft"})`)
+      } else if (r.outcome === "already_exists") {
+        autoTriggers.push("SS-4 already exists — left as-is")
+      } else {
+        autoTriggers.push(`SS-4 not auto-generated (${r.outcome}): ${r.message ?? ""}`.trim())
+      }
+    } catch (ssErr) {
+      autoTriggers.push(`SS-4 auto-generation error: ${ssErr instanceof Error ? ssErr.message : String(ssErr)}`)
     }
   }
 

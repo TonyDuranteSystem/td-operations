@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   FileText, Send, Plus, CheckCircle2, Clock, AlertCircle,
-  Loader2, ExternalLink, Package, RefreshCw,
+  Loader2, ExternalLink, RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -63,9 +63,6 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
   const [statuses, setStatuses] = useState<DocumentStatuses | null>(null)
   const [loading, setLoading] = useState(true)
   const [sendingDoc, setSendingDoc] = useState<string | null>(null)
-  const [generatingWP, setGeneratingWP] = useState(false)
-  const [wpSuiteNumber, setWpSuiteNumber] = useState('')
-  const [showWpDialog, setShowWpDialog] = useState(false)
 
   const fetchStatuses = useCallback(async () => {
     try {
@@ -114,38 +111,6 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
       toast.error(err instanceof Error ? err.message : 'Error sending document')
     } finally {
       setSendingDoc(null)
-    }
-  }
-
-  const handleGenerateWelcomePackage = async () => {
-    if (!wpSuiteNumber.trim()) {
-      toast.error('Suite number is required for the lease')
-      return
-    }
-    setGeneratingWP(true)
-    setShowWpDialog(false)
-    try {
-      const res = await fetch('/api/crm/admin-actions/generate-document', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'generate_welcome_package',
-          account_id: accountId,
-          suite_number: wpSuiteNumber.trim(),
-        }),
-      })
-      const data = await res.json()
-      if (data.errors?.length) {
-        toast.error(`Welcome package: ${data.errors.join(', ')}`)
-      } else {
-        toast.success('Welcome package generated')
-      }
-      fetchStatuses()
-      router.refresh()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Error generating welcome package')
-    } finally {
-      setGeneratingWP(false)
     }
   }
 
@@ -348,47 +313,6 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
             </div>
           )
         })}
-      </div>
-
-      {/* Generate Welcome Package */}
-      <div className="px-4 py-3 border-t bg-zinc-50/50">
-        {showWpDialog ? (
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={wpSuiteNumber}
-              onChange={e => setWpSuiteNumber(e.target.value)}
-              placeholder="Suite # (e.g., 3D-107)"
-              className="flex-1 text-sm px-2.5 py-1.5 rounded border focus:outline-none focus:ring-2 focus:ring-blue-500"
-              autoFocus
-              onKeyDown={e => e.key === 'Enter' && handleGenerateWelcomePackage()}
-            />
-            <button
-              onClick={handleGenerateWelcomePackage}
-              disabled={generatingWP || !wpSuiteNumber.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
-            >
-              {generatingWP ? <Loader2 className="h-3 w-3 animate-spin" /> : <Package className="h-3 w-3" />}
-              Generate
-            </button>
-            <button
-              onClick={() => setShowWpDialog(false)}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setShowWpDialog(true)}
-            disabled={generatingWP}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"
-          >
-            {generatingWP ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
-            Generate Welcome Package
-            <span className="text-xs text-muted-foreground font-normal">(creates all missing documents)</span>
-          </button>
-        )}
       </div>
     </div>
   )

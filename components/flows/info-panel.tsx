@@ -1,4 +1,4 @@
-import { Building2, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink } from 'lucide-react'
+import { Building2, Contact, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink, MapPin, Hash, Landmark, Home } from 'lucide-react'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from './types'
 import { daysSince, formatUploadDate } from '@/lib/flows/workspace-format'
 
@@ -64,6 +64,27 @@ export function InfoPanel({ serviceDelivery: sd, account, secondInstallment }: I
       <h3 className="text-sm font-semibold text-zinc-900 mb-1">Overview</h3>
       <div className="divide-y divide-zinc-100">
         <Row icon={<Building2 className="h-4 w-4" />} label="Company" value={account.company_name ?? '—'} />
+        {/* Contact-scoped SDs (in-flight Company Formation, ITIN) have no account/
+            company yet — surface the client name so the workspace is identifiable. */}
+        {sd.contact_name && (
+          <Row icon={<Contact className="h-4 w-4" />} label="Contact" value={sd.contact_name} />
+        )}
+        {/* Company context — shown whenever the data exists. For Company Formation
+            these populate once the company is materialized (EIN at "EIN Received",
+            RA/mailing once set on the account); state resolves earlier from the
+            formation wizard for in-flight (contact-scoped) formations. */}
+        {account.state_of_formation && (
+          <Row icon={<MapPin className="h-4 w-4" />} label="State of formation" value={account.state_of_formation} />
+        )}
+        {account.ein_number && (
+          <Row icon={<Hash className="h-4 w-4" />} label="EIN" value={account.ein_number} />
+        )}
+        {account.registered_agent_address && (
+          <Row icon={<Landmark className="h-4 w-4" />} label="Registered Agent" value={account.registered_agent_address} />
+        )}
+        {account.mailing_address && (
+          <Row icon={<Home className="h-4 w-4" />} label="Mailing address" value={account.mailing_address} />
+        )}
         <Row
           icon={<Flag className="h-4 w-4" />}
           label="Current stage"

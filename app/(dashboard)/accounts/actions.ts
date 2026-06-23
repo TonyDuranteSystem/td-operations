@@ -29,13 +29,15 @@ export async function updateAccountField(
     'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id',
     // Path 2 verified flags
     'legal_link_verified', 'mailing_link_verified', 'ra_link_verified',
+    // Dunning / payment-reminder config (Phase 4)
+    'dunning_reminder_1_days', 'dunning_reminder_2_days', 'dunning_pause',
   ]
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
   }
 
-  const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified'])
-  const integerFields = new Set(['member_count'])
+  const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified', 'dunning_pause'])
+  const integerFields = new Set(['member_count', 'dunning_reminder_1_days', 'dunning_reminder_2_days'])
 
   // EIN inputs are normalized to canonical XX-XXXXXXX. A non-empty input that
   // fails normalization is rejected — matches the dedicated record-ein-received
@@ -47,6 +49,13 @@ export async function updateAccountField(
     coercedValue = value.trim() === '' ? null : parseInt(value, 10)
     if (coercedValue !== null && isNaN(coercedValue as number)) {
       return { success: false, error: `${field} must be a whole number` }
+    }
+    // Reminder-day fields must be a sane positive number of days.
+    if (
+      (field === 'dunning_reminder_1_days' || field === 'dunning_reminder_2_days') &&
+      coercedValue !== null && (Number(coercedValue) < 1 || Number(coercedValue) > 365)
+    ) {
+      return { success: false, error: 'Reminder days must be between 1 and 365' }
     }
   } else if (field === 'ein_number' && value && value.trim()) {
     const normalized = normalizeEIN(value)

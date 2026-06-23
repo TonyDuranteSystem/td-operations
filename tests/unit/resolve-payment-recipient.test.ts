@@ -35,7 +35,7 @@ describe("resolvePaymentRecipient", () => {
             select: vi.fn().mockReturnThis(),
             eq: vi.fn().mockReturnThis(),
             single: vi.fn().mockResolvedValue({
-              data: { email: "alex@example.com", full_name: "Alex V" },
+              data: { email: "alex@example.com", full_name: "Alex V", language: "it" },
               error: null,
             }),
           }
@@ -49,7 +49,7 @@ describe("resolvePaymentRecipient", () => {
       { contact_id: "c1", account_id: "a1" },
       supabase,
     )
-    expect(result).toEqual({ email: "alex@example.com", name: "Alex V" })
+    expect(result).toEqual({ email: "alex@example.com", name: "Alex V", language: "it" })
   })
 
   it("resolves via account_contacts when contact_id is null — any role", async () => {
@@ -70,7 +70,7 @@ describe("resolvePaymentRecipient", () => {
             select: vi.fn().mockReturnThis(),
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({
-              data: [{ contacts: { email: "alex@example.com", full_name: "Alex V" } }],
+              data: [{ role: "Member", contacts: { email: "alex@example.com", full_name: "Alex V", language: "en" } }],
               error: null,
             }),
           }
@@ -83,7 +83,116 @@ describe("resolvePaymentRecipient", () => {
       { contact_id: null, account_id: "a1" },
       supabase,
     )
-    expect(result).toEqual({ email: "alex@example.com", name: "NDB LLC" })
+    // Name now carries the contact's full name (used as the email greeting /
+    // checkout clientName), falling back to the company name only when the
+    // contact has none.
+    expect(result).toEqual({ email: "alex@example.com", name: "Alex V", language: "en" })
+  })
+
+  it("resolves a LOWERCASE 'owner' link (the ADWise incident) — case-insensitive", async () => {
+    const supabase = {
+      from: vi.fn((table: string) => {
+        if (table === "accounts") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: { company_name: "ADWise LLC", communication_email: null },
+              error: null,
+            }),
+          }
+        }
+        if (table === "account_contacts") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockResolvedValue({
+              data: [{ role: "owner", contacts: { email: "lw.adwise@gmail.com", full_name: "Lin Wang Chen", language: "en" } }],
+              error: null,
+            }),
+          }
+        }
+        return { select: vi.fn().mockReturnThis() }
+      }),
+    } as unknown as SupabaseClient<Database>
+
+    const result = await resolvePaymentRecipient(
+      { contact_id: null, account_id: "a1" },
+      supabase,
+    )
+    expect(result).toEqual({ email: "lw.adwise@gmail.com", name: "Lin Wang Chen", language: "en" })
+  })
+
+  it("prefers the owner-role contact over a non-owner, regardless of order/casing", async () => {
+    const supabase = {
+      from: vi.fn((table: string) => {
+        if (table === "accounts") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: { company_name: "Multi LLC", communication_email: null },
+              error: null,
+            }),
+          }
+        }
+        if (table === "account_contacts") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockResolvedValue({
+              data: [
+                { role: "Member", contacts: { email: "member@example.com", full_name: "Member One", language: "en" } },
+                { role: "OWNER", contacts: { email: "owner@example.com", full_name: "Owner Two", language: "it" } },
+              ],
+              error: null,
+            }),
+          }
+        }
+        return { select: vi.fn().mockReturnThis() }
+      }),
+    } as unknown as SupabaseClient<Database>
+
+    const result = await resolvePaymentRecipient(
+      { contact_id: null, account_id: "a1" },
+      supabase,
+    )
+    // Takes the OWNER's identity AND language, not the member's.
+    expect(result).toEqual({ email: "owner@example.com", name: "Owner Two", language: "it" })
+  })
+
+  it("falls back to any contact with an email when no owner role exists", async () => {
+    const supabase = {
+      from: vi.fn((table: string) => {
+        if (table === "accounts") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: { company_name: "NoOwner LLC", communication_email: null },
+              error: null,
+            }),
+          }
+        }
+        if (table === "account_contacts") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockResolvedValue({
+              data: [{ role: "Member", contacts: { email: "only@example.com", full_name: "Only Member", language: "it" } }],
+              error: null,
+            }),
+          }
+        }
+        return { select: vi.fn().mockReturnThis() }
+      }),
+    } as unknown as SupabaseClient<Database>
+
+    const result = await resolvePaymentRecipient(
+      { contact_id: null, account_id: "a1" },
+      supabase,
+    )
+    expect(result).toEqual({ email: "only@example.com", name: "Only Member", language: "it" })
   })
 
   it("falls back to communication_email when no contacts have email", async () => {
@@ -117,7 +226,8 @@ describe("resolvePaymentRecipient", () => {
       { contact_id: null, account_id: "a1" },
       supabase,
     )
-    expect(result).toEqual({ email: "billing@ndb.com", name: "NDB LLC" })
+    // Resolved via account communication_email — no contact, so language is null.
+    expect(result).toEqual({ email: "billing@ndb.com", name: "NDB LLC", language: null })
   })
 
   it("returns null when account has no contacts and no communication_email", async () => {

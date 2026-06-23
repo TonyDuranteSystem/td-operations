@@ -130,7 +130,7 @@ export function FinanceDashboard({
             </div>
             <div className="flex-1 overflow-hidden">
               {clientsView === 'all' ? (
-                <AllInvoicesTab invoices={allInvoicesFlat} />
+                <AllInvoicesTab invoices={allInvoicesFlat} isAdmin={isAdmin} />
               ) : (
                 <ClientsInvoicesTab
                   clientList={clientList}

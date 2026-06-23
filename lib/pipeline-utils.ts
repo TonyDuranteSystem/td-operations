@@ -4,135 +4,23 @@
  * markFaxAsSent() consolidates the fax confirmation logic used by:
  * - /api/cron/faxage-ss4-confirm (automated FaxAge email parsing)
  * - /api/crm/admin-actions/contact-actions (manual CRM "Mark Fax as Sent" button)
+ *
+ * NOTE (2026-06-17, formation workspace v2): the SS-4 fax NO LONGER auto-advances
+ * the Company Formation SD. In the 7-stage pipeline the SD is already AT
+ * "SS-4 Signed" when the fax is sent, and it must STAY there until the EIN
+ * actually arrives — staff advance to "EIN Received" manually. The old
+ * advanceToEinSubmitted helper (advanced to the removed "EIN Submitted" stage)
+ * has been deleted.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-interface DeliveryRecord {
-  id: string
-  service_name: string
-  service_type: string
-  stage: string
-  stage_order: number
-  stage_history: unknown
-  deal_id: string | null
-  account_id: string
-}
-
 interface MarkFaxResult {
   success: boolean
   detail: string
   side_effects: string[]
-}
-
-// ─── advanceToEinSubmitted ─────────────────────────────────────────────────
-
-export async function advanceToEinSubmitted(
-  delivery: DeliveryRecord,
-  actor: string = 'system',
-  notes?: string,
-): Promise<{ advanced: boolean; detail: string }> {
-  const { data: stages } = await supabaseAdmin
-    .from('pipeline_stages')
-    .select('*')
-    .eq('service_type', 'Company Formation')
-    .order('stage_order')
-
-  if (!stages?.length) {
-    return { advanced: false, detail: 'No pipeline stages found for Company Formation' }
-  }
-
-  const targetStage = stages.find(
-    (s: { stage_name: string }) => s.stage_name.toLowerCase() === 'ein submitted',
-  )
-  if (!targetStage) {
-    return { advanced: false, detail: 'Stage "EIN Submitted" not found in pipeline' }
-  }
-
-  // Don't advance backwards
-  if ((delivery.stage_order || 0) >= targetStage.stage_order) {
-    return {
-      advanced: false,
-      detail: `Already at "${delivery.stage}" (order ${delivery.stage_order}), skipping`,
-    }
-  }
-
-  const historyEntry = {
-    from_stage: delivery.stage || 'New',
-    from_order: delivery.stage_order || 0,
-    to_stage: targetStage.stage_name,
-    to_order: targetStage.stage_order,
-    advanced_at: new Date().toISOString(),
-    notes: notes || `Advanced by ${actor}`,
-  }
-  const stageHistory = Array.isArray(delivery.stage_history)
-    ? [...delivery.stage_history, historyEntry]
-    : [historyEntry]
-
-  // eslint-disable-next-line no-restricted-syntax
-  await supabaseAdmin
-    .from('service_deliveries')
-    .update({
-      stage: targetStage.stage_name,
-      stage_order: targetStage.stage_order,
-      stage_entered_at: new Date().toISOString(),
-      stage_history: stageHistory,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', delivery.id)
-
-  // Create auto-tasks for EIN Submitted stage (deduplication: skip if open task with same title exists)
-  if (targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
-    for (const taskDef of targetStage.auto_tasks as Array<{
-      title: string
-      assigned_to?: string
-      category?: string
-      priority?: string
-      description?: string
-    }>) {
-      const fullTitle = `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`
-      const { data: existing } = await supabaseAdmin
-        .from('tasks')
-        .select('id')
-        .eq('delivery_id', delivery.id)
-        .eq('task_title', fullTitle)
-        .in('status', ['To Do', 'In Progress', 'Waiting'])
-        .limit(1)
-      if (existing && existing.length > 0) continue
-      // eslint-disable-next-line no-restricted-syntax
-      await supabaseAdmin.from('tasks').insert({
-        task_title: fullTitle,
-        assigned_to: taskDef.assigned_to || 'Luca',
-        category: (taskDef.category || 'Internal') as never,
-        priority: (taskDef.priority || 'Normal') as never,
-        description: taskDef.description || `Auto-created: Pipeline advanced to EIN Submitted by ${actor}.`,
-        status: 'To Do',
-        account_id: delivery.account_id,
-        deal_id: delivery.deal_id,
-        delivery_id: delivery.id,
-        stage_order: targetStage.stage_order,
-      })
-    }
-  }
-
-  // Log the advance
-  await supabaseAdmin.from('action_log').insert({
-    actor,
-    action_type: 'advance',
-    table_name: 'service_deliveries',
-    record_id: delivery.id,
-    account_id: delivery.account_id,
-    summary: `Pipeline advanced: ${delivery.stage || 'New'} -> EIN Submitted (by ${actor})`,
-    details: {
-      from_stage: delivery.stage,
-      to_stage: targetStage.stage_name,
-      to_order: targetStage.stage_order,
-    },
-  })
-
-  return { advanced: true, detail: `Advanced to EIN Submitted` }
 }
 
 // ─── markFaxAsSent ─────────────────────────────────────────────────────────
@@ -165,29 +53,11 @@ export async function markFaxAsSent(
     .eq('id', ss4.id)
   side_effects.push(`SS-4 status → submitted`)
 
-  // 2. Find active Company Formation SD for this account
+  // 2. The SD intentionally does NOT advance on fax (formation workspace v2).
+  // It stays at "SS-4 Signed" until the EIN arrives; staff advance manually.
+  side_effects.push('SD not advanced (stays at SS-4 Signed until EIN arrives)')
+
   if (ss4.account_id) {
-    const { data: deliveries } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('id, service_name, service_type, stage, stage_order, stage_history, deal_id, account_id')
-      .eq('account_id', ss4.account_id)
-      .eq('service_type', 'Company Formation')
-      .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (deliveries && deliveries.length > 0) {
-      const result = await advanceToEinSubmitted(deliveries[0], actor, notes)
-      if (result.advanced) {
-        side_effects.push(`Pipeline advanced to EIN Submitted`)
-        side_effects.push(`Auto-tasks created for EIN Submitted stage`)
-      } else {
-        side_effects.push(`Pipeline not advanced: ${result.detail}`)
-      }
-    } else {
-      side_effects.push('No active Company Formation delivery found')
-    }
-
     // 3. Close open fax tasks
     const { updateTasksBulk } = await import('@/lib/operations/task')
     const closeResult = await updateTasksBulk({
@@ -217,7 +87,7 @@ export async function markFaxAsSent(
 
   return {
     success: true,
-    detail: `Fax marked as sent for ${ss4.company_name}. Pipeline advanced to EIN Submitted.`,
+    detail: `Fax marked as sent for ${ss4.company_name}. SD stays at SS-4 Signed until the EIN arrives.`,
     side_effects,
   }
 }

@@ -46,6 +46,12 @@ import {
   verifySlackSignature,
   parseSlackInteraction,
   STOP_THINKING_ACTION_ID,
+  pTimestampToTs,
+  parseSlackArchiveLinks,
+  parseSlackShareAttachments,
+  collectSlackReferences,
+  fetchReferencedThreads,
+  MAX_SLACK_REFERENCES,
 } from "@/lib/ai-agent/slack-claude"
 import { createHmac } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -138,14 +144,44 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // dig-in investigation discipline: verify-before-asserting, trace-the-code,
     // confirmed/unconfirmed hand-off format, run_sql_query + sensitive-data guidance)
     // → 6200 (2026-06-15, EMAIL block: send_email from support@/antonio@ with
-    // same-thread replies + show-draft-then-explicit-"send it" guardrail).
+    // same-thread replies + show-draft-then-explicit-"send it" guardrail)
+    // → 7200 (2026-06-17, CALLS block: read Circleback calls in full via
+    // list_calls/get_call/search_calls).
+    // → 8000 (2026-06-18, ENGINEERING DISCIPLINE block: never assume/invent,
+    // check before claiming a tool doesn't exist, challenge first answer).
+    // → 8800 (2026-06-18, don't-double-down-when-corrected + recount-against-the-
+    // list-you-pulled rules, after the offers-vs-leads miscount).
+    // → 9600 (2026-06-18, SOURCES block: search_sysdocs/read_sysdoc/search_sops/
+    // read_drive_file — read every source the dev system can, after the worker hit
+    // "the KB has nothing" while the installment rule lived in a sysdoc).
     // Keep this as a sanity cap.
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(6200)
+    // → 10200 (2026-06-21, SELF-SERVE BEFORE ASKING discipline: look up facts in
+    // the system — CRM record, run_sql_query, KB/SOPs — instead of asking Antonio;
+    // added after the worker asked "which language?" when the contact's language
+    // was already in the CRM (Gritti/Evolue)).
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(10200)
   })
 
-  it("instructs awareness of Hermes's messages in shared threads", () => {
-    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SHARED THREADS/)
-    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/Hermes/)
+  it("instructs SELF-SERVE: look facts up in the system before asking Antonio", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SELF-SERVE/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/look it up|look up|Look it up/i)
+    // The specific case that prompted it — don't ask which language when it's in the CRM.
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/which language/i)
+  })
+
+  it("instructs human-tone, asterisk-free client DRAFTS (emails + portal messages)", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/DRAFTS/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/asterisk/i)
+    // Must scope it to the client draft, NOT the worker's own Slack formatting.
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/client-facing draft/i)
+  })
+
+  it("does not present Hermes as a teammate (dismissed) and instructs careful attribution", () => {
+    // Hermes is dismissed — the prompt must not frame it as an active participant,
+    // which is what led the worker to attribute Luca's invoice to "Hermes".
+    expect(SLACK_WORKER_SYSTEM_PROMPT).not.toMatch(/Hermes/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/ATTRIBUTION/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/Luca/)
   })
 })
 
@@ -313,7 +349,18 @@ describe("processSlackEvent", () => {
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+    ;(supabaseAdmin as any).from = vi.fn((t: string) => {
+      // This thread is NOT a form-started client conversation → the client_threads
+      // lookup must return null, else the generic mock fakes a tag and adds the
+      // "THIS CLIENT CONVERSATION" prompt block (changing systemPromptOverride).
+      if (t === "client_threads") {
+        const c = makeProcessChain()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(c as any).maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }))
+        return c
+      }
+      return makeProcessChain()
+    })
 
     const row = {
       id: "row-id-001",
@@ -337,7 +384,18 @@ describe("processSlackEvent", () => {
       enableSlackSend: true,
       enableDbRead: true,
       enableEmailSend: true,
-      maxIterations: 12,
+      enableCallReads: true,
+      enableDocReads: true,
+      enableCalendly: true,
+      // Client Threads: read available everywhere; tag OFF here (channel is #td-dev,
+      // not the SLACK_SUPPORT_CHANNEL_ID-gated #td-support).
+      enableClientThreadRead: true,
+      enableClientThreadTag: false,
+      // Phase 3: no client scope here (thread isn't a tagged client conversation).
+      clientKey: null,
+      clientName: null,
+      enableFullToolReach: false,
+      maxIterations: 20,
     })
 
     // Should have called Slack chat.postMessage
@@ -880,20 +938,20 @@ describe("fetchThreadHistory", () => {
     process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
   })
 
-  it("formats who-said-what, labels Antonio/Hermes, and skips Claude's own messages", async () => {
+  it("formats who-said-what, labels Antonio/Luca, and skips Claude's own messages", async () => {
     mockFetch.mockResolvedValue({
       json: () =>
         Promise.resolve({
           ok: true,
           messages: [
             { user: "U0BAALR4Y4Q", text: "look at this invoice" }, // Antonio
-            { user: "U0B9D3MAD9B", text: "I found the duplicate" }, // Hermes
+            { user: "U0B9ZUE2Q75", text: "I made the invoice" }, // Luca
             { user: "U0B9S675WTT", text: "On it 👍" }, // Claude — must be skipped
           ],
         }),
     })
     const out = await fetchThreadHistory("C123", "100.000")
-    expect(out).toBe("Antonio: look at this invoice\nHermes: I found the duplicate")
+    expect(out).toBe("Antonio: look at this invoice\nLuca: I made the invoice")
     // queries conversations.replies with channel + thread root ts + limit
     const url = String(mockFetch.mock.calls[0][0])
     expect(url).toContain("conversations.replies")
@@ -907,12 +965,27 @@ describe("fetchThreadHistory", () => {
         Promise.resolve({
           ok: true,
           messages: [
-            { user: "U0BAALR4Y4Q", text: "<@U0B9S675WTT> and <@U0B9D3MAD9B> please check" },
+            { user: "U0BAALR4Y4Q", text: "<@U0B9S675WTT> and <@U0B9ZUE2Q75> please check" },
           ],
         }),
     })
     const out = await fetchThreadHistory("C123", "100.000")
-    expect(out).toBe("Antonio: @Claude and @Hermes please check")
+    expect(out).toBe("Antonio: @Claude and @Luca please check")
+  })
+
+  it("no longer treats the dismissed Hermes id specially — it falls back to 'Someone' (2026-06-18 fix)", async () => {
+    // Regression guard for the bug where Luca's messages were labeled "Someone"
+    // and the worker then guessed they were Hermes. Hermes is dismissed; its id
+    // must NOT get a special label, and its mention token must NOT rewrite to @Hermes.
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [{ user: "U0B9D3MAD9B", text: "ghost <@U0B9D3MAD9B> note" }],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out).toBe("Someone: ghost <@U0B9D3MAD9B> note")
   })
 
   it("includes a file note for messages that carry files but no text", async () => {
@@ -993,7 +1066,7 @@ describe("processSlackEvent shared-thread context", () => {
               ok: true,
               messages: [
                 { user: "U0BAALR4Y4Q", text: "check this" },
-                { user: "U0B9D3MAD9B", text: "Hermes found the answer" },
+                { user: "U0B9ZUE2Q75", text: "Luca found the answer" },
               ],
             }),
         })
@@ -1007,7 +1080,7 @@ describe("processSlackEvent shared-thread context", () => {
 
     const row = {
       id: "row-shared-1",
-      body: "do what Hermes said",
+      body: "do what Luca said",
       thread_id: "thread-x",
       context_json: {
         slack_channel_id: "C0BAB08DSDN",
@@ -1021,9 +1094,9 @@ describe("processSlackEvent shared-thread context", () => {
 
     const sentBody = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(sentBody).toContain("[SLACK THREAD CONTEXT")
-    expect(sentBody).toContain("Hermes: Hermes found the answer")
+    expect(sentBody).toContain("Luca: Luca found the answer")
     expect(sentBody).toContain("[YOUR CURRENT MESSAGE]")
-    expect(sentBody).toContain("do what Hermes said")
+    expect(sentBody).toContain("do what Luca said")
   })
 
   it("uses the raw body (no context block) when the message is not in a thread", async () => {
@@ -1205,5 +1278,186 @@ describe("parseSlackInteraction", () => {
 
   it("returns null when there are no actions", () => {
     expect(parseSlackInteraction(encode({ type: "block_actions", actions: [] }))).toBeNull()
+  })
+})
+
+// -------------------------------------------------------------------------
+// Referenced-message resolution (shared messages + pasted archive links)
+// -------------------------------------------------------------------------
+
+describe("pTimestampToTs", () => {
+  it("inserts the decimal 6 digits from the end", () => {
+    expect(pTimestampToTs("1781880779057309")).toBe("1781880779.057309")
+  })
+  it("returns null for non-numeric / too-short input", () => {
+    expect(pTimestampToTs("abc")).toBeNull()
+    expect(pTimestampToTs("123")).toBeNull()
+    expect(pTimestampToTs("")).toBeNull()
+  })
+})
+
+describe("parseSlackArchiveLinks", () => {
+  it("parses a thread-reply archive link, recovering thread_ts from the query", () => {
+    const text =
+      "look at https://tdoperationsworkspace.slack.com/archives/C0BCNMQG1PA/p1781880779057309?thread_ts=1781880779.057309&cid=C0BCNMQG1PA please"
+    expect(parseSlackArchiveLinks(text)).toEqual([
+      { channel: "C0BCNMQG1PA", ts: "1781880779.057309", thread_ts: "1781880779.057309" },
+    ])
+  })
+
+  it("falls back to ts as thread_ts when no thread_ts query is present", () => {
+    const text = "https://x.slack.com/archives/C123ABC/p1700000000123456"
+    expect(parseSlackArchiveLinks(text)).toEqual([
+      { channel: "C123ABC", ts: "1700000000.123456", thread_ts: "1700000000.123456" },
+    ])
+  })
+
+  it("handles private (G) and DM (D) channel ids and multiple links", () => {
+    const text =
+      "a https://x.slack.com/archives/G999/p1700000000000001 b https://x.slack.com/archives/D888/p1700000000000002"
+    const out = parseSlackArchiveLinks(text)
+    expect(out.map((r) => r.channel)).toEqual(["G999", "D888"])
+  })
+
+  it("returns [] for text with no links", () => {
+    expect(parseSlackArchiveLinks("just a normal message")).toEqual([])
+    expect(parseSlackArchiveLinks("")).toEqual([])
+  })
+})
+
+describe("parseSlackShareAttachments", () => {
+  it("extracts channel + ts + thread_ts from a share attachment", () => {
+    const attachments = [
+      {
+        is_share: true,
+        channel_id: "C0BCNMQG1PA",
+        ts: "1781880779.057309",
+        from_url:
+          "https://x.slack.com/archives/C0BCNMQG1PA/p1781880779057309?thread_ts=1781880779.057309&cid=C0BCNMQG1PA",
+        text: "Luca's request…",
+      },
+    ]
+    expect(parseSlackShareAttachments(attachments)).toEqual([
+      { channel: "C0BCNMQG1PA", ts: "1781880779.057309", thread_ts: "1781880779.057309" },
+    ])
+  })
+
+  it("uses ts as thread_ts when from_url has no thread_ts", () => {
+    const attachments = [{ channel_id: "C1", ts: "100.001", from_url: "https://x/archives/C1/p100000001" }]
+    expect(parseSlackShareAttachments(attachments)[0].thread_ts).toBe("100.001")
+  })
+
+  it("skips attachments without channel + ts, and non-arrays", () => {
+    expect(parseSlackShareAttachments([{ text: "no ids" }])).toEqual([])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(parseSlackShareAttachments(undefined as any)).toEqual([])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(parseSlackShareAttachments("nope" as any)).toEqual([])
+  })
+})
+
+describe("collectSlackReferences", () => {
+  it("merges attachments + text links, dedupes by channel:thread_ts", () => {
+    const out = collectSlackReferences({
+      text: "https://x.slack.com/archives/C1/p1700000000000001?thread_ts=1700000000.000001",
+      attachments: [{ channel_id: "C1", ts: "1700000000.000001", from_url: "https://x/archives/C1/p1700000000000001?thread_ts=1700000000.000001" }],
+    })
+    expect(out).toHaveLength(1) // same channel:thread_ts → deduped
+    expect(out[0]).toEqual({ channel: "C1", ts: "1700000000.000001", thread_ts: "1700000000.000001" })
+  })
+
+  it("caps the number of references at MAX_SLACK_REFERENCES", () => {
+    const text = Array.from({ length: 6 }, (_, i) => `https://x.slack.com/archives/C${i}/p170000000000000${i}`).join(" ")
+    expect(collectSlackReferences({ text }).length).toBe(MAX_SLACK_REFERENCES)
+  })
+
+  it("returns [] when there are no references", () => {
+    expect(collectSlackReferences({ text: "hi", attachments: [] })).toEqual([])
+    expect(collectSlackReferences({})).toEqual([])
+  })
+})
+
+describe("fetchReferencedThreads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("fetches each ref's source thread and labels nothing about the current thread", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [{ user: "U0B9ZUE2Q75", text: "Luca's P&L idea", ts: "100.001" }],
+        }),
+    })
+    const out = await fetchReferencedThreads(
+      [{ channel: "C1", ts: "100.001", thread_ts: "100.001" }],
+      null,
+    )
+    expect(out).toContain("Luca: Luca's P&L idea")
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("conversations.replies"),
+      expect.any(Object),
+    )
+  })
+
+  it("skips a ref that points at the current thread (no double-injection)", async () => {
+    const out = await fetchReferencedThreads(
+      [{ channel: "C1", ts: "555.000", thread_ts: "555.000" }],
+      "555.000",
+    )
+    expect(out).toBe("")
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("returns '' for an empty ref list", async () => {
+    expect(await fetchReferencedThreads([], null)).toBe("")
+  })
+})
+
+describe("processSlackEvent — referenced-thread injection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("injects the referenced thread's content into the worker body", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({ reply: "ok", toolsUsed: [] })
+
+    // conversations.replies (referenced thread) returns Luca's message; the
+    // chat.postMessage / other Slack calls also return ok. fetchThreadHistory for
+    // the (absent) current thread returns "" because there's no slack_thread_ts.
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes("conversations.replies")) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, messages: [{ user: "U0B9ZUE2Q75", text: "the P&L request", ts: "100.001" }] }),
+        })
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, ts: "9.9" }) })
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn(() => makeProcessChain())
+
+    const row = {
+      id: "row-ref-001",
+      body: "do you Luca's request?",
+      thread_id: "t-ref",
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_event_ts: "200.000",
+        // no slack_thread_ts → no current-thread context, isolates the ref injection
+        slack_referenced: [{ channel: "C0BCNMQG1PA", ts: "100.001", thread_ts: "100.001" }],
+      },
+    }
+
+    await processSlackEvent(row)
+
+    const [body] = (callWorker as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(body).toContain("[REFERENCED SLACK THREAD(S)")
+    expect(body).toContain("the P&L request")
+    expect(body).toContain("[YOUR CURRENT MESSAGE]")
+    expect(body).toContain("do you Luca's request?")
   })
 })

@@ -7,9 +7,9 @@
  *
  * Contract verified here:
  *   - Returns success=false when no active Company Formation SD exists
- *   - Skips Banking Fintech SD creation when one already exists (idempotent)
- *   - Creates Banking Fintech SD when none exists, advances Formation SD,
- *     syncs tier to active, enqueues welcome_package_prepare job
+ *   - NEVER creates a Banking Fintech SD (removed 2026-06-20 — formation ends at
+ *     the EIN; banking is self-service). banking_sd_id is always null.
+ *   - Advances Formation SD, syncs tier to active, enqueues welcome_package_prepare
  *   - Always writes an action_log entry
  */
 
@@ -93,12 +93,12 @@ beforeEach(() => {
   advanceStageCalls.length = 0
   syncTierCalls.length = 0
   nextAccount = { id: 'acct-1', company_name: 'Test LLC', portal_tier: 'formation' }
-  nextFormationSDs = [{ id: 'fsd-1', stage: 'EIN Application', contact_id: 'cont-1' }]
+  nextFormationSDs = [{ id: 'fsd-1', stage: 'SS-4 Signed', contact_id: 'cont-1' }]
   nextExistingBankingSD = null
 })
 
 describe('triggerEINReceivedWorkflow — happy path', () => {
-  it('creates Banking SD, advances Formation SD, syncs tier, enqueues welcome job, logs', async () => {
+  it('advances Formation SD, syncs tier, enqueues welcome job, logs — and NEVER creates a Banking SD', async () => {
     const result = await triggerEINReceivedWorkflow({
       accountId: 'acct-1',
       einNumber: '30-1482516',
@@ -107,17 +107,15 @@ describe('triggerEINReceivedWorkflow — happy path', () => {
 
     expect(result.success).toBe(true)
     expect(result.formation_sd_id).toBe('fsd-1')
-    expect(result.banking_sd_id).toBe('banking-sd-new')
+    // Banking Fintech SD is no longer created (formation ends at the EIN).
+    expect(result.banking_sd_id).toBeNull()
+    expect(createSDCalls).toHaveLength(0)
+    expect(result.side_effects).toContain('banking_sd_skipped')
     expect(result.welcome_package_job_id).toBe('job-1')
-
-    expect(createSDCalls).toHaveLength(1)
-    expect(createSDCalls[0].service_type).toBe('Banking Fintech')
-    expect(createSDCalls[0].account_id).toBe('acct-1')
-    expect(createSDCalls[0].contact_id).toBe('cont-1')
 
     expect(advanceStageCalls).toHaveLength(1)
     expect(advanceStageCalls[0].delivery_id).toBe('fsd-1')
-    expect(advanceStageCalls[0].target_stage).toBe('Post-Formation + Banking')
+    expect(advanceStageCalls[0].target_stage).toBe('EIN Received')
 
     expect(syncTierCalls).toHaveLength(1)
     expect(syncTierCalls[0].accountId).toBe('acct-1')
@@ -132,8 +130,8 @@ describe('triggerEINReceivedWorkflow — happy path', () => {
   })
 })
 
-describe('triggerEINReceivedWorkflow — idempotency', () => {
-  it('skips Banking SD creation when one already exists', async () => {
+describe('triggerEINReceivedWorkflow — no banking SD', () => {
+  it('never creates a Banking SD even if one already exists on the account', async () => {
     nextExistingBankingSD = { id: 'banking-sd-existing' }
     const result = await triggerEINReceivedWorkflow({
       accountId: 'acct-1',
@@ -141,9 +139,9 @@ describe('triggerEINReceivedWorkflow — idempotency', () => {
     })
 
     expect(result.success).toBe(true)
-    expect(result.banking_sd_id).toBe('banking-sd-existing')
+    expect(result.banking_sd_id).toBeNull()
     expect(createSDCalls).toHaveLength(0)
-    expect(result.side_effects).toContain('banking_sd_exists')
+    expect(result.side_effects).toContain('banking_sd_skipped')
   })
 })
 

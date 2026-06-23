@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { ClipboardList, Loader2 } from 'lucide-react'
 import { groupSubmittedData, type DataGroup } from '@/lib/flows/submitted-data'
+import { FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
 import { formatUploadDate } from '@/lib/flows/workspace-format'
 
 interface Submission {
@@ -29,6 +30,7 @@ interface DataViewerProps {
  */
 export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
   const [submission, setSubmission] = useState<Submission | null>(null)
+  const [source, setSource] = useState<'formation' | 'tax'>('tax')
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -36,13 +38,14 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/flows/${serviceDeliveryId}/submission`)
+        const res = await fetch(`/api/flows/${serviceDeliveryId}/submission`, { cache: 'no-store' })
         const data = await res.json().catch(() => ({}))
         if (!res.ok || !data.success) {
           throw new Error(data.error || 'Could not load the submitted data.')
         }
         if (!cancelled) {
           setSubmission((data.submission as Submission) ?? null)
+          setSource(data.source === 'formation' ? 'formation' : 'tax')
           setLoaded(true)
         }
       } catch (err) {
@@ -57,14 +60,26 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
     }
   }, [serviceDeliveryId])
 
-  const groups: DataGroup[] = submission ? groupSubmittedData(submission.submitted_data) : []
+  const isFormation = source === 'formation'
+  // For formation, drop the name keys (incl. any chosen_name*) from the grouped
+  // view — the candidate LLC names are owned by the formation_names command
+  // center (components/flows/formation-names.tsx), not shown here.
+  const dataForGroups = isFormation && submission?.submitted_data
+    ? Object.fromEntries(
+        Object.entries(submission.submitted_data).filter(
+          ([k]) => !(FORMATION_NAME_KEYS as readonly string[]).includes(k),
+        ),
+      )
+    : submission?.submitted_data
+  const groups: DataGroup[] = submission ? groupSubmittedData(dataForGroups) : []
+  const heading = label || (isFormation ? 'Formation Wizard Submission' : 'Submitted Tax Data')
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <ClipboardList className="h-4 w-4 text-zinc-400" />
-          <h3 className="text-sm font-semibold text-zinc-900">{label || 'Submitted Tax Data'}</h3>
+          <h3 className="text-sm font-semibold text-zinc-900">{heading}</h3>
         </div>
         {submission && (
           <div className="text-[11px] text-zinc-400">
@@ -93,24 +108,45 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
       )}
 
       {!error && groups.length > 0 && (
-        <div className="space-y-4">
-          {groups.map((group) => (
-            <div key={group.title}>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
-                {group.title}
-              </div>
-              <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                {group.fields.map((f) => (
-                  <div key={f.label} className="flex flex-col">
-                    <dt className="text-[11px] text-zinc-400">{f.label}</dt>
-                    <dd className="text-sm text-zinc-800 break-words">{f.value}</dd>
-                  </div>
-                ))}
-              </dl>
+        isFormation ? (
+          // Secondary client details — collapsed by default; the name choices
+          // above are the primary content at this stage.
+          <details className="group rounded-lg border border-zinc-200 bg-zinc-50/60">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-zinc-600 hover:text-zinc-900">
+              Client details (owner, address, business purpose…)
+            </summary>
+            <div className="space-y-4 px-3 pb-3 pt-1">
+              {groups.map((group) => (
+                <DataGroupBlock key={group.title} group={group} />
+              ))}
             </div>
-          ))}
-        </div>
+          </details>
+        ) : (
+          <div className="space-y-4">
+            {groups.map((group) => (
+              <DataGroupBlock key={group.title} group={group} />
+            ))}
+          </div>
+        )
       )}
+    </div>
+  )
+}
+
+function DataGroupBlock({ group }: { group: DataGroup }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+        {group.title}
+      </div>
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
+        {group.fields.map((f) => (
+          <div key={f.label} className="flex flex-col">
+            <dt className="text-[11px] text-zinc-400">{f.label}</dt>
+            <dd className="text-sm text-zinc-800 break-words">{f.value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   )
 }

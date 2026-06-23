@@ -35,7 +35,7 @@ export function FlowChat({ serviceDeliveryId, label }: FlowChatProps) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/chat`)
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/chat`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data.success === false) {
         throw new Error(data.error || 'Could not load messages.')

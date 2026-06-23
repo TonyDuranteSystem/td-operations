@@ -1,5 +1,5 @@
-import { ExternalLink as ExternalLinkIcon } from 'lucide-react'
-import { resolveSecretaryOfStateLink } from '@/lib/flows/state-links'
+import { ExternalLink as ExternalLinkIcon, CheckCircle2 } from 'lucide-react'
+import { resolveSecretaryOfStateLink, resolveFormationFilingLink } from '@/lib/flows/state-links'
 
 interface ExternalLinkCardProps {
   /** Button label from stage_layout, e.g. "File on Secretary of State Portal". */
@@ -13,22 +13,59 @@ interface ExternalLinkCardProps {
   url?: string
   /** Account state_of_formation, used for dynamic SoS resolution. */
   stateOfFormation?: string | null
+  /** SD service_type — Company Formation uses the formation-filing portal map. */
+  serviceType?: string
+  /** Company Formation only — the name already filed with the SOS (name_checks
+   *  status 'filed'). When set, the file button collapses to a "filed"
+   *  confirmation: the filing is done, so the "go file" CTA no longer applies. */
+  filedName?: string | null
 }
 
 /**
- * Prominent external link button. Two modes:
+ * Prominent external link button. Modes:
  *  - literal `url` present → open it directly (Harbor Compliance case).
- *  - no `url` → resolve the Secretary of State portal from the account's state.
- *    New Mexico has no annual report (shows a note instead of a dead link);
- *    unrecognized/unmapped states show a muted "not available" note.
+ *  - Company Formation, no `url` → the formation-filing / name-search portal,
+ *    resolved from state and ALWAYS available (defaults to New Mexico).
+ *  - otherwise, no `url` → the annual-report Secretary of State portal from the
+ *    account's state (NM has no annual report; unmapped states show a note).
  */
-export function ExternalLinkCard({ label, url, stateOfFormation }: ExternalLinkCardProps) {
+export function ExternalLinkCard({ label, url, stateOfFormation, serviceType, filedName }: ExternalLinkCardProps) {
+  // Company Formation — once a name is filed on the SOS, the "go file" CTA is
+  // done. Collapse to a confirmation so staff aren't prompted to file again.
+  // (Checked before the literal-url branch so it also covers a layout that
+  // hardcodes the SOS url.)
+  if (serviceType === 'Company Formation' && filedName) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <CheckCircle2 className="h-4 w-4 shrink-0" />
+        <span>
+          <span className="font-semibold">{filedName}</span> filed with the Secretary of State.
+        </span>
+      </div>
+    )
+  }
+
   // Mode 1 — explicit URL from the layout.
   if (url) {
     return <LinkButton href={url} label={label || 'Open link'} />
   }
 
-  // Mode 2 — resolve the Secretary of State portal from the account's state.
+  // Mode 2 — Company Formation: the formation-filing portal (always resolves).
+  if (serviceType === 'Company Formation') {
+    const f = resolveFormationFilingLink(stateOfFormation)
+    return (
+      <div>
+        <LinkButton href={f.url} label={label || 'Open the Secretary of State site'} />
+        {f.defaulted && (
+          <p className="mt-1.5 text-[11px] text-zinc-400">
+            Defaulted to New Mexico — set the account&apos;s state of formation for the exact state portal.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // Mode 3 — resolve the annual-report Secretary of State portal from the state.
   const resolved = resolveSecretaryOfStateLink(stateOfFormation)
 
   if (resolved.url) {

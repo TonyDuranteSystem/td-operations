@@ -11,7 +11,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
-import { formatCountyAndState } from "@/lib/addresses"
+import { createSS4 } from "@/lib/operations/ss4"
 
 export function registerSs4Tools(server: McpServer) {
 
@@ -47,289 +47,37 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
     },
     async (params) => {
       try {
-        // ─── 1. FETCH ACCOUNT ───
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: account, error: accErr } = await (supabaseAdmin as any)
-          .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_id")
-          .eq("id", params.account_id)
-          .single()
-
-        if (accErr || !account) {
-          return { content: [{ type: "text" as const, text: `Error: Account not found: ${accErr?.message || "no data"}` }] }
-        }
-
-        if (!account.state_of_formation) {
-          return { content: [{ type: "text" as const, text: `Error: Account "${account.company_name}" missing state_of_formation.` }] }
-        }
-
-        // Check if SS-4 already exists for this account
-        const { data: existing } = await supabaseAdmin
-          .from("ss4_applications")
-          .select("id, token, status")
-          .eq("account_id", params.account_id)
-          .maybeSingle()
-
-        if (existing) {
-          return { content: [{ type: "text" as const, text: `SS-4 already exists for ${account.company_name} (token: ${existing.token}, status: ${existing.status}). Use ss4_get to view it.` }] }
-        }
-
-        // ─── 2. DETECT ENTITY TYPE ───
-        const ENTITY_MAP: Record<string, string> = {
-          "SINGLE MEMBER LLC": "SMLLC", "SMLLC": "SMLLC",
-          "MULTI-MEMBER LLC": "MMLLC", "MULTI MEMBER LLC": "MMLLC", "MMLLC": "MMLLC",
-          "CORPORATION": "Corporation", "CORP": "Corporation", "C-CORP": "Corporation",
-        }
-        const rawEntity = params.entity_type || (account.entity_type || "").toUpperCase().trim()
-        const entityType = ENTITY_MAP[rawEntity] || "SMLLC"
-
-        // ─── 3. NORMALIZE STATE ───
-        const STATE_MAP: Record<string, string> = {
-          "NEW MEXICO": "NM", "NM": "NM",
-          "WYOMING": "WY", "WY": "WY",
-          "FLORIDA": "FL", "FL": "FL",
-          "DELAWARE": "DE", "DE": "DE",
-        }
-        const state = STATE_MAP[(account.state_of_formation || "").toUpperCase().trim()] || account.state_of_formation
-
-        // ─── 4. FETCH CONTACT (responsible party) ───
-        // Primary source: members table. Fallback: account_contacts (legacy accounts with 0 members rows).
-        let contactId = params.contact_id
-        if (!contactId) {
-          const { data: membersRows } = await supabaseAdmin
-            .from("members")
-            .select("id, member_type, full_name, company_name, email, representative_name, representative_email, contact_id, is_primary, is_signer")
-            .eq("account_id", params.account_id)
-            .order("is_signer", { ascending: false })
-            .order("is_primary", { ascending: false })
-
-          if (membersRows && membersRows.length > 0) {
-            // For MMLLC with multiple members: auto-select if exactly one is_signer=true,
-            // otherwise require explicit contact_id selection.
-            if (entityType === "MMLLC" && membersRows.length > 1) {
-              const signers = membersRows.filter(m => m.is_signer)
-              if (signers.length !== 1) {
-                const memberList = await Promise.all(membersRows.map(async (m, i) => {
-                  if (m.member_type === "company") {
-                    let repContactId = m.contact_id
-                    if (!repContactId && m.representative_email) {
-                      const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
-                      repContactId = repC?.id ?? null
-                    }
-                    const repInfo = m.representative_name ? ` (rep: ${m.representative_name})` : ""
-                    const signerFlag = m.is_signer ? " ✓ signer" : ""
-                    return `  ${i + 1}. [Company] ${m.company_name || "Unknown"}${repInfo}${signerFlag} — contact_id: ${repContactId || "no contact"}`
-                  }
-                  const signerFlag = m.is_signer ? " ✓ signer" : ""
-                  return `  ${i + 1}. ${m.full_name || "Unknown"}${signerFlag} — contact_id: ${m.contact_id || "no contact"}`
-                }))
-
-                const hint = signers.length === 0
-                  ? `Tip: set is_signer=true on the intended responsible party via the CRM Members card, then re-run to auto-select.`
-                  : `Warning: ${signers.length} members have is_signer=true. Set exactly one as the signer, then re-run.`
-
-                return { content: [{ type: "text" as const, text: [
-                  `This is a Multi-Member LLC with ${membersRows.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
-                  ``,
-                  `Members:`,
-                  ...memberList,
-                  ``,
-                  hint,
-                  `Or re-run ss4_create with the contact_id of the chosen member.`,
-                ].join("\n") }] }
-              }
-
-              // Exactly one is_signer=true — auto-select
-              const signer = signers[0]
-              if (signer.member_type === "company") {
-                if (!signer.contact_id && signer.representative_email) {
-                  const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", signer.representative_email).maybeSingle()
-                  contactId = repC?.id ?? signer.contact_id
-                } else {
-                  contactId = signer.contact_id
-                }
-              } else {
-                contactId = signer.contact_id
-              }
-            } else {
-              // Single member or SMLLC: use first row
-              const m = membersRows[0]
-              if (m.member_type === "company" && m.representative_email) {
-                const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
-                contactId = repC?.id ?? m.contact_id
-              } else {
-                contactId = m.contact_id
-              }
-            }
-          } else {
-            // Legacy fallback: account_contacts
-            const { data: links } = await supabaseAdmin
-              .from("account_contacts")
-              .select("contact_id, role, contacts(id, full_name, email)")
-              .eq("account_id", params.account_id)
-
-            if (!links?.length) {
-              return { content: [{ type: "text" as const, text: `Error: No contacts linked to account "${account.company_name}". Link a contact first.` }] }
-            }
-
-            if (entityType === "MMLLC" && links.length > 1) {
-              const memberList = links.map((l, i) => {
-                const c = l.contacts as unknown as { id: string; full_name: string; email: string } | null
-                return `  ${i + 1}. ${c?.full_name || "Unknown"} (${(l as unknown as { role: string }).role || "Member"}) — contact_id: ${l.contact_id}`
-              }).join("\n")
-
-              return { content: [{ type: "text" as const, text: [
-                `This is a Multi-Member LLC with ${links.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
-                ``,
-                `Members:`,
-                memberList,
-                ``,
-                `Re-run ss4_create with the contact_id of the chosen member.`,
-              ].join("\n") }] }
-            }
-
-            contactId = links[0].contact_id
-          }
-        }
-
-        if (!contactId) {
-          return { content: [{ type: "text" as const, text: `Error: Could not resolve responsible party contact for "${account.company_name}". Link a contact or specify contact_id.` }] }
-        }
-
-        const { data: contact, error: ctErr } = await supabaseAdmin
-          .from("contacts")
-          .select("id, full_name, itin_number, phone, language")
-          .eq("id", contactId)
-          .single()
-
-        if (ctErr || !contact) {
-          return { content: [{ type: "text" as const, text: `Error: Contact not found: ${ctErr?.message || "no data"}` }] }
-        }
-
-        // ─── 5. DETERMINE MEMBER COUNT ───
-        // Primary source: members table. Fallback: account_contacts (legacy).
-        // Non-SMLLC floor is 2: a multi-member LLC has ≥2 members by
-        // definition, even when only the owner is linked in the CRM so far
-        // (2026-06-11 LUMA case: entity corrected to MMLLC before the second
-        // member was linked, and the count would have come out as 1).
-        let memberCount = params.member_count
-        if (!memberCount) {
-          if (entityType === "SMLLC") {
-            memberCount = 1
-          } else {
-            const { count: membersCount } = await supabaseAdmin
-              .from("members")
-              .select("*", { count: "exact", head: true })
-              .eq("account_id", params.account_id)
-            let base = membersCount ?? 0
-            if (base === 0) {
-              const { count: acCount } = await supabaseAdmin
-                .from("account_contacts")
-                .select("*", { count: "exact", head: true })
-                .eq("account_id", params.account_id)
-              base = acCount ?? 0
-            }
-            memberCount = Math.max(base, 2)
-          }
-        }
-
-        // ─── 6. RESOLVE LINE 6 (county_and_state) FROM REGISTERED AGENT REGISTRY ───
-        // IRS instruction: "Enter the entity's primary physical location."
-        // TD operating rule (Antonio, 2026-04-30): for foreign-owned LLC EIN filings,
-        // the registered agent / registered office address is the source for Line 6.
-        // Path 2: read county directly from the addresses registry via FK join.
-        // No fallback — if registered_agent_id is unset or county is blank, block.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const raId = (account as any).registered_agent_id as string | null
-        if (!raId) {
-          return { content: [{ type: "text" as const, text: `Error: No Registered Agent set for ${account.company_name}. Link a Registered Agent in the addresses registry before creating an SS-4.` }] }
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: raAddress } = await (supabaseAdmin as any)
-          .from("addresses")
-          .select("county, state")
-          .eq("id", raId)
-          .single()
-        if (!raAddress?.county) {
-          return { content: [{ type: "text" as const, text: `Error: Registered Agent address for ${account.company_name} is missing county. Set the county in the addresses registry, then retry.` }] }
-        }
-        const resolvedCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
-
-        // ─── 7. BUILD TOKEN ───
-        const slug = account.company_name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/(^-|-$)/g, "")
-        const token = `ss4-${slug}-${new Date().getFullYear()}`
-
-        // ─── 8. INSERT RECORD ───
-        const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
-
-        const { data: ss4, error: insertErr } = await supabaseAdmin
-          .from("ss4_applications")
-          .insert({
-            token,
-            account_id: params.account_id,
-            contact_id: contactId,
-            company_name: account.company_name,
-            entity_type: entityType,
-            state_of_formation: state,
-            formation_date: account.formation_date || null,
-            member_count: memberCount,
-            responsible_party_name: contact.full_name,
-            responsible_party_itin: contact.itin_number || null,
-            responsible_party_phone: contact.phone || null,
-            responsible_party_title: title,
-            language: "en", // SS-4 is always English (IRS form)
-            county_and_state: resolvedCountyAndState, // null if RA address unknown — caller must fix RA + ss4_update before signing
-            status: params.ready_to_sign ? "awaiting_signature" : "draft",
-          })
-          .select("id, token, access_code, status")
-          .single()
-
-        if (insertErr || !ss4) {
-          return { content: [{ type: "text" as const, text: `Error creating SS-4: ${insertErr?.message || "insert failed"}` }] }
-        }
-
-        // ─── 9. LOG ACTION ───
-        await logAction({
-          action_type: "create",
-          table_name: "ss4_applications",
-          record_id: ss4.id,
+        // Delegates to the shared core (lib/operations/ss4.ts) so the flow
+        // Workspace + advance hook reuse the exact same logic. This handler only
+        // formats the structured result back into MCP text.
+        const result = await createSS4({
           account_id: params.account_id,
-          summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
+          contact_id: params.contact_id,
+          entity_type: params.entity_type,
+          member_count: params.member_count,
+          ready_to_sign: params.ready_to_sign,
         })
 
-        // ─── 9b. SYNC member_count TO ACCOUNTS ───
-        // Only backfill if accounts.member_count is not already set — the SS-4
-        // is the authoritative source; don't overwrite a manually corrected value.
-        // Cast needed: member_count not yet in generated types (migration pending production).
-        if (memberCount && entityType === "MMLLC") {
-          // eslint-disable-next-line no-restricted-syntax
-          await supabaseAdmin
-            .from("accounts")
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .update({ member_count: memberCount } as any)
-            .eq("id", params.account_id)
-            .is("member_count", null)
+        if (!result.ok || !result.ss4) {
+          // already_exists / needs_signer_selection / missing prerequisites all
+          // carry a ready-to-show message (verbatim from the original tool).
+          return { content: [{ type: "text" as const, text: result.message ?? `Error (${result.outcome})` }] }
         }
 
-        // ─── 10. RETURN RESULT ───
-        const previewUrl = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`
-
+        const s = result.ss4
         return {
           content: [{
             type: "text" as const,
             text: [
-              `SS-4 created for ${account.company_name}`,
+              `SS-4 created for ${s.company_name}`,
               ``,
-              `Token: ${ss4.token}`,
-              `Status: ${ss4.status}`,
-              `Entity: ${entityType} (${memberCount} member${memberCount > 1 ? "s" : ""})`,
-              `State: ${state}`,
-              `Responsible Party: ${contact.full_name}`,
+              `Token: ${s.token}`,
+              `Status: ${s.status}`,
+              `Entity: ${s.entity_type} (${s.member_count} member${s.member_count > 1 ? "s" : ""})`,
+              `State: ${s.state}`,
+              `Responsible Party: ${s.responsible_party_name}`,
               ``,
-              `Admin Preview: ${previewUrl}`,
+              `Admin Preview: ${result.previewUrl}`,
               ``,
               `The client will see this in their portal Sign Documents page.`,
             ].join("\n"),

@@ -8,6 +8,7 @@ import { StageStepper, type StepperStage } from '@/components/flows/stage-steppe
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
+import { filedName, type NameCheck } from '@/lib/flows/name-checks'
 import { APP_BASE_URL } from '@/lib/config'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
 
@@ -37,9 +38,33 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     .eq('id', params.id)
     .maybeSingle()
 
+  // Company Formation — the confirmed LLC name (the candidate filed with the
+  // SOS, status 'filed' in the SD's name_checks JSONB). Used for two things:
+  //  - companyCreatedName: the "Company Created" milestone banner at "Articles Received".
+  //  - formationFiledName: collapses the SOS external_link to an "already filed"
+  //    confirmation on "Filed with State" once a name is filed.
+  let companyCreatedName: string | null = null
+  let formationFiledName: string | null = null
+  if (sd.service_type === 'Company Formation') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
+    const { data: ncRow } = await (supabaseAdmin as any)
+      .from('service_deliveries')
+      .select('name_checks')
+      .eq('id', params.id)
+      .maybeSingle()
+    formationFiledName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
+    if (sd.stage === 'Articles Received') companyCreatedName = formationFiledName
+  }
+
   const [{ data: accountRow }, { data: stageRows }] = await Promise.all([
     sd.account_id
-      ? supabaseAdmin.from('accounts').select('id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date').eq('id', sd.account_id).single()
+      ? supabaseAdmin
+          .from('accounts')
+          .select(
+            'id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date, ein_number, registered_agent_address, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)',
+          )
+          .eq('id', sd.account_id)
+          .single()
       : Promise.resolve({ data: null }),
     supabaseAdmin
       .from('pipeline_stages')
@@ -72,12 +97,59 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
         .sort((a, b) => b.stage_order - a.stage_order)[0] ?? null
     : null
 
+  // In-flight Company Formations are contact-scoped (no account yet), so the
+  // state of formation lives on the formation wizard, not the account. Surface
+  // it so the SoS external_link resolves the right state (defaults to NM).
+  let formationState: string | null = null
+  if (sd.service_type === 'Company Formation' && !sd.account_id && sd.contact_id) {
+    const { data: wp } = await supabaseAdmin
+      .from('wizard_progress')
+      .select('data')
+      .eq('contact_id', sd.contact_id)
+      .eq('wizard_type', 'formation')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const wpData = (wp?.data ?? null) as Record<string, unknown> | null
+    const s = wpData?.state_of_formation ?? wpData?.state_of_incorporation
+    formationState = typeof s === 'string' && s.trim() ? s.trim() : null
+  }
+
+  // Load the client's name for ANY contact-linked SD to surface as a separate
+  // "Contact" row in the Overview (COMPANY is left untouched — it's the company,
+  // not the contact). Contact-scoped flows (in-flight Company Formation, ITIN)
+  // have no account/company_name; account-scoped SDs that also carry a contact_id
+  // now show both rows. The info panel renders the row only when contact_name is set.
+  let contactName: string | null = null
+  if (sd.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name')
+      .eq('id', sd.contact_id)
+      .maybeSingle()
+    contactName = (contact?.full_name as string | null) ?? null
+  }
+
+  // Resolve a single mailing-address string: prefer the structured addresses FK
+  // (business_mailing_address_id), fall back to the account's free-text
+  // physical_address. Mirrors resolveMailingAddress in lib/portal/queries.ts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- addresses join + new columns not in generated types
+  const acctAny = accountRow as any
+  const ma = acctAny?.mailing_address ?? null
+  const structuredMailing = ma
+    ? [ma.address_line1, ma.address_line2, ma.city, ma.state, ma.zip].filter(Boolean).join(', ')
+    : ''
+  const mailingAddress = structuredMailing || (acctAny?.physical_address as string | null) || null
+
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
     company_name: (accountRow?.company_name as string | null) ?? null,
-    state_of_formation: (accountRow?.state_of_formation as string | null) ?? null,
+    state_of_formation: (accountRow?.state_of_formation as string | null) ?? formationState,
     annual_report_due_date: (accountRow?.annual_report_due_date as string | null) ?? null,
     ra_renewal_date: (accountRow?.ra_renewal_date as string | null) ?? null,
+    ein_number: (acctAny?.ein_number as string | null) ?? null,
+    registered_agent_address: (acctAny?.registered_agent_address as string | null) ?? null,
+    mailing_address: mailingAddress,
   }
 
   const serviceDelivery: WorkspaceServiceDelivery = {
@@ -90,7 +162,9 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     due_date: sd.due_date ?? null,
     stage_entered_at: sd.stage_entered_at ?? null,
     account_id: sd.account_id ?? '',
+    contact_name: contactName,
     current_client_label: currentStageRow?.client_label ?? null,
+    formation_filed_name: formationFiledName,
     shipping_courier: (shipRow?.shipping_courier as string | null) ?? null,
     shipping_tracking_number: (shipRow?.shipping_tracking_number as string | null) ?? null,
     shipping_submitted_at: (shipRow?.shipping_submitted_at as string | null) ?? null,
@@ -216,6 +290,14 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
 
       {/* Purchase Origin — ITIN only, above the stepper */}
       {itinOrigin && <ItinOriginCard origin={itinOrigin} contractUrl={itinContractUrl} />}
+
+      {/* Company Created milestone — Company Formation at "Articles Received" */}
+      {companyCreatedName && (
+        <div className="mb-6 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <span className="text-lg leading-none">✅</span>
+          <span className="text-sm font-semibold text-emerald-800">Company Created — {companyCreatedName}</span>
+        </div>
+      )}
 
       {/* Stage stepper */}
       <div className="mb-6 overflow-x-auto pb-1">

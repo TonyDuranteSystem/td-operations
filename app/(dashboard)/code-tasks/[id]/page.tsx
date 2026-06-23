@@ -81,6 +81,8 @@ export default function CodeTaskViewerPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [actionBusy, setActionBusy] = useState(false)
+  const [actionMsg, setActionMsg] = useState<string | null>(null)
   const lastSeqRef = useRef(-1)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -151,6 +153,40 @@ export default function CodeTaskViewerPage() {
     [id, poll],
   )
 
+  const runAction = useCallback(
+    async (action: "promote" | "retry" | "cancel" | "dismiss", confirmMsg?: string) => {
+      if (actionBusy) return
+      if (confirmMsg && !confirm(confirmMsg)) return
+      setActionBusy(true)
+      setError(null)
+      setActionMsg(null)
+      try {
+        const res = await fetch(`/api/code-tasks/${id}/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action }),
+        })
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(d.error || "Action failed.")
+        setActionMsg(
+          action === "promote"
+            ? "🚀 Shipping to production — the worker is promoting the branch now."
+            : action === "retry"
+              ? "↻ Re-queued — the worker will pick it up shortly."
+              : action === "cancel"
+                ? "Cancelled."
+                : "Dismissed.",
+        )
+        poll()
+      } catch (err) {
+        setError(err instanceof Error && err.message ? err.message : "Action failed.")
+      } finally {
+        setActionBusy(false)
+      }
+    },
+    [id, actionBusy, poll],
+  )
+
   return (
     <div className="mx-auto flex h-[calc(100vh-120px)] max-w-3xl flex-col">
       <div className="flex items-center justify-between border-b pb-3">
@@ -169,14 +205,54 @@ export default function CodeTaskViewerPage() {
         {task && task.status !== "processing" && (
           <div className="mt-4 rounded-lg border border-gray-200 bg-white p-3 text-sm">
             <p className="font-medium text-gray-700">
-              Session {task.status === "done" ? "finished" : "ended"}.
+              Session {task.status === "done" ? "finished" : task.status === "cancelled" ? "cancelled" : task.status === "failed" ? "failed" : "ended"}.
             </p>
             {task.code_branch && (
               <p className="mt-1 text-xs text-gray-600">
-                Review branch: <span className="font-mono">{task.code_branch}</span> — reply “ship it” in Slack to deploy.
+                Review branch: <span className="font-mono">{task.code_branch}</span>
               </p>
             )}
             {task.error_text && <p className="mt-1 whitespace-pre-wrap text-xs text-red-600">{task.error_text}</p>}
+            {actionMsg && <p className="mt-2 rounded bg-green-50 px-2 py-1 text-xs text-green-700">{actionMsg}</p>}
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {task.status === "done" && task.code_branch && (
+                <button
+                  className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  disabled={actionBusy}
+                  onClick={() => runAction("promote", `Ship branch ${task.code_branch} to PRODUCTION? It runs the full build + test gate before deploying.`)}
+                >
+                  🚀 Ship it (deploy)
+                </button>
+              )}
+              {(task.status === "failed" || task.status === "cancelled") && (
+                <button
+                  className="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                  disabled={actionBusy}
+                  onClick={() => runAction("retry", "Re-queue this task for the worker to run again?")}
+                >
+                  ↻ Retry
+                </button>
+              )}
+              {task.status === "pending" && (
+                <button
+                  className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  disabled={actionBusy}
+                  onClick={() => runAction("cancel", "Cancel this queued task before the worker starts it?")}
+                >
+                  Cancel
+                </button>
+              )}
+              {(task.status === "done" || task.status === "failed" || task.status === "cancelled") && (
+                <button
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                  disabled={actionBusy}
+                  onClick={() => runAction("dismiss")}
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

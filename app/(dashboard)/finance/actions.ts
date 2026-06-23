@@ -367,10 +367,10 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
  * Send a newly created invoice to the client via email.
  *
  * Thin wrapper around sendTDInvoice() (lib/invoice-auto-send.ts) — the single
- * source of truth for sending TD invoices with PDF + HTML. Owns the
- * dashboard-specific contact resolution (flexible: contact_id first, then
- * any account_contacts row — no role filter, unlike the cron path), plus the
- * client_expenses mirror sync and the revalidatePath() calls.
+ * source of truth for sending TD invoices with PDF + HTML. Recipient
+ * resolution goes through the shared resolvePaymentRecipient() (contact_id →
+ * owner-role contact case-insensitive → any linked contact → communication
+ * email), plus the client_expenses mirror sync and the revalidatePath() calls.
  *
  * The actual PDF generation, HTML rendering, multipart/mixed MIME, bank
  * details resolution (from payments.bank_preference), and payments row
@@ -387,35 +387,20 @@ export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
       .single()
     if (!payment) throw new Error('Payment not found')
 
-    // Dashboard-specific flexible contact resolution:
-    //  1. Try payment.contact_id directly (if set)
-    //  2. Fall back to ANY account_contacts row (no role filter)
-    // This differs from sendTDInvoice's default lookup which uses role='Owner'.
-    // Dashboard sends often target a specific contact, so we pre-resolve and
-    // pass recipientEmail as an override.
-    let clientEmail = ''
-    let clientName = ''
-    if (payment.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from('contacts')
-        .select('full_name, email')
-        .eq('id', payment.contact_id)
-        .single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || '' }
-    }
-    if (!clientEmail && payment.account_id) {
-      const { data: link } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contacts(full_name, email)')
-        .eq('account_id', payment.account_id)
-        .limit(1)
-        .maybeSingle()
-      if (link) {
-        const c = link.contacts as unknown as { full_name: string; email: string }
-        clientName = c.full_name; clientEmail = c.email || ''
-      }
-    }
-    if (!clientEmail) throw new Error('No client email found — check contact record')
+    // Recipient resolution via the single shared resolver: contact_id →
+    // owner-role contact (case-insensitive) → any linked contact with an
+    // email → account communication_email. Same path as every other
+    // invoice-send surface — never hand-roll a role lookup (ADWise incident,
+    // 2026-06-18). We pre-resolve and pass recipientEmail as an override so
+    // sendTDInvoice uses exactly this recipient.
+    const { resolvePaymentRecipient } = await import('@/lib/portal/resolve-payment-recipient')
+    const recipient = await resolvePaymentRecipient(
+      { contact_id: payment.contact_id, account_id: payment.account_id },
+      supabaseAdmin,
+    )
+    if (!recipient) throw new Error('No client email found — check contact record')
+    const clientEmail = recipient.email
+    const clientName = recipient.name
 
     // Delegate to the shared helper. It generates the PDF, builds the HTML
     // body, sends via Gmail with multipart/mixed, and updates payments.
@@ -450,77 +435,86 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
   if (preCheck?.invoice_status === 'Draft') return sendNewInvoice(paymentId)
 
   return safeAction(async () => {
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
-
-    // Get payment + resolve client email from contact/account
-    const { data: payment } = await supabaseAdmin
-      .from('payments')
-      .select('id, invoice_number, total, amount_due, amount_currency, invoice_status, due_date, account_id, contact_id, reminder_count')
-      .eq('id', paymentId)
-      .single()
-    if (!payment) throw new Error('Payment not found')
-
-    // Resolve client email from contact (primary) or account
-    let clientEmail = ''
-    let clientName = ''
-    if (payment.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from('contacts')
-        .select('full_name, email')
-        .eq('id', payment.contact_id)
-        .single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || '' }
-    }
-    if (!clientEmail && payment.account_id) {
-      const { data: link } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contacts(full_name, email)')
-        .eq('account_id', payment.account_id)
-        .limit(1)
-        .maybeSingle()
-      if (link) {
-        const c = link.contacts as unknown as { full_name: string; email: string }
-        clientName = c.full_name; clientEmail = c.email || ''
-      }
-    }
-    if (!clientEmail) throw new Error('No client email found')
-
-    const currency = payment.amount_currency ?? 'USD'
-    const csym = currency === 'EUR' ? '€' : '$'
-    const amount = Number(payment.amount_due ?? payment.total)
-    const status = payment.invoice_status ?? 'Sent'
-
-    // Send reminder email via Gmail API
-    const { gmailPost } = await import('@/lib/gmail')
-    const subject = `Payment Reminder: Invoice ${payment.invoice_number} — ${csym}${amount.toLocaleString()}`
-    const body = `Dear ${clientName},\n\nThis is a friendly reminder that invoice ${payment.invoice_number} for ${csym}${amount.toLocaleString()} is ${status === 'Overdue' ? 'overdue' : 'due'}${payment.due_date ? ` (due date: ${payment.due_date})` : ''}.\n\nPlease arrange payment at your earliest convenience.\n\nBest regards,\nTony Durante LLC`
-
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-    const raw = Buffer.from(
-      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${encodedSubject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
-    ).toString('base64url')
-
-    await gmailPost('/messages/send', { raw })
-
-    // Update reminder count
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: reminderErr } = await supabaseAdmin.from('payments').update({
-      reminder_count: (payment.reminder_count ?? 0) + 1,
-      last_reminder_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', paymentId)
-    if (reminderErr) throw new Error(`Failed to update reminder count: ${reminderErr.message}`)
-
-    // Note: Draft invoices are handled by the pre-check at the top of this
-    // function (delegated to sendNewInvoice for the real PDF+HTML path).
-    // By the time we reach here, invoice_status is Sent/Overdue/Partial.
-
+    // Delegate to the SINGLE shared reminder function (bilingual EN/IT email,
+    // shared recipient resolution, reminder_count bump) — same path the dunning
+    // cron and the /remind route use. No duplicate plain-text template here.
+    const { sendInvoiceReminder: sendReminderEmail } = await import('@/lib/billing/invoice-reminder')
+    const result = await sendReminderEmail(paymentId, { source: 'manual' })
+    if (!result.ok) throw new Error(result.error ?? 'Failed to send reminder')
     revalidatePath('/finance')
   }, {
     action_type: 'update',
     table_name: 'payments',
     record_id: paymentId,
     summary: `Invoice reminder sent`,
+  })
+}
+
+export interface BulkReminderOutcome {
+  id: string
+  invoice_number: string
+  status: 'sent' | 'skipped' | 'failed'
+  reason?: string
+  recipient?: string
+}
+
+/**
+ * Send payment reminders to many invoices in one shot (the Overdue-list bulk
+ * button). Cap/pause-aware: skips paused accounts and invoices already at the
+ * 2-reminder limit unless `overrideCap` is set. Runs sequentially (Gmail
+ * pacing) and reports a per-invoice outcome — never collapses to one toast.
+ */
+export async function sendBulkReminders(
+  paymentIds: string[],
+  opts: { overrideCap?: boolean } = {},
+): Promise<ActionResult<{ outcomes: BulkReminderOutcome[]; sent: number; skipped: number; failed: number }>> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { sendInvoiceReminder: sendReminderEmail } = await import('@/lib/billing/invoice-reminder')
+
+    // Dedupe + hard cap the batch size as a safety rail.
+    const ids = Array.from(new Set(paymentIds)).slice(0, 200)
+    const outcomes: BulkReminderOutcome[] = []
+
+    for (const id of ids) {
+      const { data: p } = await supabaseAdmin
+        .from('payments')
+        .select('id, invoice_number, invoice_status, reminder_count, account_id')
+        .eq('id', id)
+        .single()
+      const invNo = p?.invoice_number ?? id
+      if (!p) { outcomes.push({ id, invoice_number: invNo, status: 'failed', reason: 'Invoice not found' }); continue }
+
+      // Per-account dunning pause gate.
+      if (p.account_id) {
+        const { data: acc } = await supabaseAdmin.from('accounts').select('dunning_pause').eq('id', p.account_id).single()
+        if ((acc as { dunning_pause?: boolean } | null)?.dunning_pause) {
+          outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Account reminders paused' })
+          continue
+        }
+      }
+
+      // 2-reminder cap gate (override = explicit staff force-send).
+      if (!opts.overrideCap && Number(p.reminder_count ?? 0) >= 2) {
+        outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Already at 2-reminder limit' })
+        continue
+      }
+
+      const r = await sendReminderEmail(id, { source: 'manual' })
+      if (r.ok && r.sent) outcomes.push({ id, invoice_number: invNo, status: 'sent', recipient: r.recipient })
+      else if (r.alreadySent) outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Already sent recently' })
+      else outcomes.push({ id, invoice_number: invNo, status: 'failed', reason: r.error ?? 'Send failed' })
+    }
+
+    revalidatePath('/finance')
+    const sent = outcomes.filter(o => o.status === 'sent').length
+    const skipped = outcomes.filter(o => o.status === 'skipped').length
+    const failed = outcomes.filter(o => o.status === 'failed').length
+    return { outcomes, sent, skipped, failed }
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    summary: `Bulk invoice reminders — ${paymentIds.length} selected`,
   })
 }
 

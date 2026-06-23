@@ -327,12 +327,11 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
 // ─── TAX SMLLC documents (all optional — different from MMLLC/Corp) ──
 
 const TAX_SMLLC_DOCUMENTS: FieldConfig[] = [
-  // Bank Statements + Financial Statements uploads removed for SMLLC (2026-06-17,
-  // Antonio): a single-member LLC enters its figures as numbers in the Financial
-  // step, so neither upload is needed — they only added confusion and were never
-  // ingested (only the MMLLC per-bank CSV repeater feeds the engine). Prior-year
-  // return is KEPT: we use last year's filed 5472/1120 to start this year's books
-  // from the right numbers.
+  // "Bank Statements" + "Financial Statements" uploads REMOVED (2026-06-17, Antonio):
+  // a single-member LLC enters its figures as numbers in the "Financial Information"
+  // step above — neither upload was needed, both were optional, never ingested by
+  // anything, and only added confusion. Prior-year return is KEPT (last year's filed
+  // 5472/1120 starts this year's books from the right numbers).
   { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false, hint: 'Optional. Upload last year\'s filed tax return (Form 5472 or 1120) if available.', hintIt: 'Facoltativo. Carica la dichiarazione dell\'anno scorso (Modulo 5472 o 1120) se disponibile.' },
   { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
 ]

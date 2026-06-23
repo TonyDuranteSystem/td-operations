@@ -3,10 +3,24 @@
  * Handles tool-use loops for both providers.
  */
 import { SYSTEM_PROMPT } from './system-prompt'
+import { buildAutoRecallSuffix } from './worker-tools'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
+}
+
+/**
+ * The latest user message text — the request to auto-recall relevant past
+ * lessons for. Walks from the end so a trailing tool/assistant turn is skipped.
+ */
+function lastUserText(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user' && typeof messages[i]?.content === 'string') {
+      return messages[i].content
+    }
+  }
+  return ''
 }
 
 export interface Attachment {
@@ -103,9 +117,13 @@ async function callClaude(messages: Message[], attachment?: Attachment, maxItera
 
   const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await getTools()
 
-  // Load persistent memories and append to system prompt
+  // Load persistent memories and append to system prompt. Plus auto-recall the
+  // relevant decision-memory lessons for this request (same path the worker uses)
+  // so the dashboard assistant applies past corrections without having to choose
+  // to call memory_recall. Best-effort — never blocks the reply.
   const memorySuffix = await loadGlobalMemories().catch(() => '')
-  const systemPrompt = SYSTEM_PROMPT + memorySuffix
+  const recallSuffix = await buildAutoRecallSuffix(lastUserText(messages))
+  const systemPrompt = SYSTEM_PROMPT + memorySuffix + recallSuffix
 
   // Convert tools to Claude format
   const claudeTools = AGENT_TOOLS.map(t => ({
@@ -216,9 +234,13 @@ async function callOpenAI(messages: Message[], attachment?: Attachment, maxItera
 
   const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await getTools()
 
-  // Load persistent memories and append to system prompt
+  // Load persistent memories and append to system prompt. Plus auto-recall the
+  // relevant decision-memory lessons for this request (same path the worker uses)
+  // so the dashboard assistant applies past corrections without having to choose
+  // to call memory_recall. Best-effort — never blocks the reply.
   const memorySuffix = await loadGlobalMemories().catch(() => '')
-  const systemPrompt = SYSTEM_PROMPT + memorySuffix
+  const recallSuffix = await buildAutoRecallSuffix(lastUserText(messages))
+  const systemPrompt = SYSTEM_PROMPT + memorySuffix + recallSuffix
 
   // Convert tools to OpenAI format
   const openaiTools = AGENT_TOOLS.map(t => ({

@@ -69,6 +69,14 @@ export interface MaterializeFormationParams {
    * resolution (contract → form → wizard) cannot determine the type.
    */
   entity_type?: "SMLLC" | "MMLLC"
+  /**
+   * Explicit chosen company name. Highest-priority name source — overrides the
+   * `wizard_progress.data.chosen_name_final` lookup. Used by the flow-advance
+   * auto-materialize (advance to "Articles Received"), where the confirmed name
+   * lives in `service_deliveries.name_checks` (status 'filed'), not in
+   * chosen_name_final. Existing callers omit this and keep the wizard lookup.
+   */
+  chosen_name?: string
   actor?: string
 }
 
@@ -188,7 +196,7 @@ export async function materializeFormationCompany(
       })
     }
 
-    const chosenName = String(wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
+    const chosenName = String(params.chosen_name || wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
     if (!chosenName) {
       return {
         success: false,
@@ -702,12 +710,87 @@ export async function materializeFormationCompany(
       .eq("contact_id", params.contact_id)
       .eq("service_type", "Company Formation")
       .eq("status", "active")
-      .select("id")
+      .select("id, source_offer_token")
     steps.push({
       step: "sd_link",
       status: "ok",
       detail: `${updatedSds?.length ?? 0} SD(s) linked to account`,
     })
+
+    // 10d. Link the formation OFFER to the new account. The portal "Set up your
+    // new company" banner (app/portal/page.tsx) shows for COMPLETED formation
+    // offers with account_id IS NULL — once the company is real, that offer must
+    // carry the account_id or the banner persists forever. Match by the SD's
+    // source_offer_token (canonical link), falling back to the formation lead.
+    // Best-effort — never fail materialization over a banner link.
+    try {
+      const offerTokens = (updatedSds ?? [])
+        .map((s) => (s as { source_offer_token?: string | null }).source_offer_token)
+        .filter((tok): tok is string => !!tok)
+      let linkedOffers = 0
+      if (offerTokens.length > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
+        const { data: upd } = await supabaseAdmin
+          .from("offers")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .in("token", offerTokens)
+          .is("account_id", null)
+          .select("token")
+        linkedOffers = upd?.length ?? 0
+      } else if (wp?.lead_id) {
+        // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
+        const { data: upd } = await supabaseAdmin
+          .from("offers")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .eq("lead_id", wp.lead_id)
+          .eq("contract_type", "formation")
+          .is("account_id", null)
+          .select("token")
+        linkedOffers = upd?.length ?? 0
+      }
+      steps.push({
+        step: "offer_account_link",
+        status: "ok",
+        detail: `${linkedOffers} formation offer(s) linked to account ${offerTokens.length ? "(by token)" : wp?.lead_id ? "(by lead)" : "(no link available)"}`,
+      })
+    } catch (offerErr) {
+      steps.push({
+        step: "offer_account_link",
+        status: "error",
+        detail: offerErr instanceof Error ? offerErr.message : String(offerErr),
+      })
+    }
+
+    // 10a. Backfill account_id on flow-stamped documents. The workspace "Filed
+    // with State" stage uploads the Articles of Organization BEFORE the company
+    // is materialized, so the documents row is stamped with the formation SD but
+    // account_id=NULL (the SD had no account yet). Once the account exists, link
+    // every such doc to it so it surfaces on the portal Documents page (which is
+    // account-scoped). Unlike step 10c below, this matches by service_delivery_id
+    // — flow uploads don't set document_type_name='Articles of Organization'.
+    const linkedSdIds = (updatedSds ?? []).map(s => s.id as string)
+    if (linkedSdIds.length > 0) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
+        const { data: backfilled } = await (supabaseAdmin as any)
+          .from("documents")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .in("service_delivery_id", linkedSdIds)
+          .is("account_id", null)
+          .select("id")
+        steps.push({
+          step: "flow_docs_account_backfill",
+          status: "ok",
+          detail: `${backfilled?.length ?? 0} flow document(s) linked to account`,
+        })
+      } catch (backfillErr) {
+        steps.push({
+          step: "flow_docs_account_backfill",
+          status: "error",
+          detail: backfillErr instanceof Error ? backfillErr.message : String(backfillErr),
+        })
+      }
+    }
 
     // 10b. Self-heal: if we got here via wizard_progress fallback (no
     // formation_submissions row existed), write the canonical row now so

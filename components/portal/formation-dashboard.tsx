@@ -2,6 +2,8 @@
 
 import { CheckCircle, Clock, AlertCircle, ArrowRight, Building2, MapPin, Calendar, Shield, MessageCircle, PenSquare, FileText } from 'lucide-react'
 import Link from 'next/link'
+import { FormationProgressTracker } from '@/components/portal/formation-progress-tracker'
+import type { FormationTrackerStep } from '@/lib/portal/formation-progress'
 
 interface FormationAccount {
   id: string
@@ -27,12 +29,26 @@ interface FormationDashboardProps {
    * NEW LLC being formed AND an external LLC being wound down). Patrick
    * Covelli is the canonical case. */
   closureData?: { id: string } | null
+  /**
+   * Client-facing progress tracker steps, built from the formation SD's current
+   * pipeline stage + Company Formation pipeline_stages (client_label /
+   * client_label_it). When present, the SD-driven tracker replaces the legacy
+   * signal-derived milestone list. Absent → the legacy milestones still render
+   * (e.g. when no formation SD/stages resolve).
+   */
+  trackerSteps?: FormationTrackerStep[] | null
   /** Lead the in-progress formation is anchored on. When set, the "Complete
    * Your Formation Details" CTA links to /portal/wizard?lead=<leadId>. Required
    * for returning clients who already own an account — without it the wizard
    * page falls through to that account's context and opens the wrong wizard
    * (tax/onboarding) instead of this new company's formation. */
   formationLeadId?: string | null
+  /** Current formation SD stage name (from getFormationTracker). Authoritative
+   * signal that the wizard is already submitted: once the SD is past "Payment
+   * Confirmed", the "Complete Formation Details" CTA must hide even when the
+   * wizard_progress row is keyed on contact_id (account_id NULL) and the
+   * account-scoped wizard lookup returned nothing. */
+  sdStage?: string | null
 }
 
 export function FormationDashboard({
@@ -44,7 +60,9 @@ export function FormationDashboard({
   oaData,
   leaseData,
   closureData,
+  trackerSteps,
   formationLeadId,
+  sdStage,
 }: FormationDashboardProps) {
   const tr = locale === 'it' ? IT : EN
   // New-company formations are lead-anchored: the wizard page only enters the
@@ -55,8 +73,13 @@ export function FormationDashboard({
     ? `/portal/wizard?lead=${formationLeadId}`
     : '/portal/wizard'
 
-  // Derive milestone completion
-  const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed'
+  // Derive milestone completion. The SD stage is authoritative: once the
+  // formation SD is past "Payment Confirmed" the wizard HAS been submitted, even
+  // if the account-scoped wizard_progress lookup missed a contact-keyed row
+  // (account_id NULL) — which otherwise left the "Complete Formation Details"
+  // CTA stuck on the dashboard after the company was materialized.
+  const sdPastWizard = !!sdStage && sdStage !== 'Payment Confirmed'
+  const wizardSubmitted = wizardData?.status === 'submitted' || wizardData?.status === 'completed' || sdPastWizard
   const stateConfirmed = !!account?.filing_id || !!account?.formation_date
   const ss4Ready = !!ss4Data
   const ss4AwaitingSignature = ss4Data?.status === 'awaiting_signature'
@@ -76,8 +99,15 @@ export function FormationDashboard({
   // formation's stage.
   const needsClosure = !!closureData
 
-  // Status message for waiting states
-  const waitingForState = wizardSubmitted && !stateConfirmed
+  // Status message for waiting states. "Your LLC is being filed / we submitted
+  // your Articles" only applies once we've ACTUALLY filed with the state — the
+  // "Filed with State" SD stage. The old (wizardSubmitted && !stateConfirmed)
+  // check fired it prematurely at "Wizard Submitted", where we're still reviewing
+  // the LLC name (no Articles filed yet). Gate on the SD stage when known; fall
+  // back to the legacy heuristic only when no stage signal is available.
+  const waitingForState = sdStage
+    ? sdStage === 'Filed with State' && !stateConfirmed
+    : wizardSubmitted && !stateConfirmed
   const waitingForEIN = ss4Faxed && !einReceived
 
   function formatDate(d: string | null): string {
@@ -202,7 +232,16 @@ export function FormationDashboard({
         </div>
       )}
 
-      {/* Progress tracker */}
+      {/* Progress tracker — SD-stage-driven (preferred) or legacy milestones. */}
+      {trackerSteps && trackerSteps.length > 0 ? (
+        <FormationProgressTracker
+          steps={trackerSteps}
+          locale={locale}
+          wizardHref={wizardHref}
+          signHref="/portal/sign"
+          title={tr.progressTitle}
+        />
+      ) : (
       <div className="bg-white rounded-xl border shadow-sm p-6">
         <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-5">{tr.progressTitle}</h2>
         <div className="space-y-1">
@@ -262,6 +301,7 @@ export function FormationDashboard({
           />
         </div>
       </div>
+      )}
 
       {/* Company info */}
       {account && (

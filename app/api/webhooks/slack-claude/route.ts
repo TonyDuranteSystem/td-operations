@@ -37,7 +37,9 @@ import {
   postSlackMessage,
   buildThinkingBlocks,
   findOrCreateConversationThread,
+  fetchSlackMessageText,
   slackScopeKey,
+  collectSlackReferences,
   SLACK_SUPPORTED_IMAGE_TYPES,
   SLACK_MAX_IMAGE_BYTES,
 } from "@/lib/ai-agent/slack-claude"
@@ -113,6 +115,28 @@ async function parentMessageMentionsClaude(channelId: string, threadTs: string):
   }
 }
 
+/**
+ * Is this thread an OPEN /client conversation (a client_threads row)? If so, plain
+ * replies are processed by the worker WITHOUT requiring @Claude — these threads are
+ * dedicated worker conversations. Only OPEN ones (closed = done). Best-effort: any
+ * failure → false (falls back to the strict @-mention gate). dev_task 54f89912.
+ */
+async function isOpenClientConversationThread(channelId: string, threadTs: string): Promise<boolean> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabaseAdmin as any)
+      .from("client_threads")
+      .select("id")
+      .eq("source", "slack")
+      .eq("source_ref", `${channelId}:${threadTs}`)
+      .eq("status", "open")
+      .maybeSingle()
+    return !!data
+  } catch {
+    return false
+  }
+}
+
 async function fireWorkerTrigger(messageId: string): Promise<void> {
   const url = `${getInternalBaseUrl()}/api/cron/slack-claude-worker?message_id=${encodeURIComponent(messageId)}`
   const cronSecret = process.env.CRON_SECRET ?? ""
@@ -163,6 +187,82 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const event = payload.event ?? {}
   const eventId: string = payload.event_id ?? ""
 
+  // ── Client Threads: ✅ reaction on a conversation's STARTING message → close it ──
+  // Only the labeled root message has `${channel}:${ts}` as a client_threads.source_ref
+  // (thread replies have different ts), so this is deliberate — react ✅ on the start
+  // message to close. Snapshots the transcript (frozen record). Needs the same
+  // reaction_added subscription as the 🧠 handler below.
+  if (event.type === "reaction_added" && event.reaction === "white_check_mark") {
+    if (event.user === CLAUDE_BOT_USER_ID) return NextResponse.json({ ok: true })
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (itemChannel && itemTs) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: ct } = await (supabaseAdmin as any)
+        .from("client_threads")
+        .select("id, status")
+        .eq("source", "slack")
+        .eq("source_ref", `${itemChannel}:${itemTs}`)
+        .maybeSingle()
+      if (ct && ct.status !== "closed") {
+        try {
+          const { closeClientThread } = await import("@/lib/ai-agent/slack-claude")
+          await closeClientThread(ct.id, null)
+          return NextResponse.json({ ok: true, closed: ct.id })
+        } catch (err) {
+          console.warn("[slack-claude-webhook] ✅ close failed:", err)
+        }
+      }
+    }
+    return NextResponse.json({ ok: true })
+  }
+
+  // ── Client Threads: 🗑️ reaction on the STARTING message → remove the card ──
+  // Hard-removes a mistaken/duplicate conversation: deletes the Slack folder message
+  // AND the client_threads row (CASCADE removes its follows), then refreshes followers'
+  // DM lists. Like ✅, keyed on the root message's source_ref; ignores non-card messages.
+  if (event.type === "reaction_added" && event.reaction === "wastebasket") {
+    if (event.user === CLAUDE_BOT_USER_ID) return NextResponse.json({ ok: true })
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (itemChannel && itemTs) {
+      try {
+        const { removeClientThreadCard } = await import("@/lib/ai-agent/client-thread-follows")
+        await removeClientThreadCard({ channelId: itemChannel, messageTs: itemTs, reactedBy: event.user ?? null })
+      } catch (err) {
+        console.warn("[slack-claude-webhook] 🗑️ remove failed:", err)
+      }
+    }
+    return NextResponse.json({ ok: true })
+  }
+
+  // ── 👀 reaction → FOLLOW any thread (any channel) → per-channel Canvas ──────
+  // 👀 added = follow the reacted thread; 👀 removed = unfollow. Works on ANY thread,
+  // not just 🗂️ /client cards. Needs the reaction_added AND reaction_removed bot
+  // event subscriptions. Best-effort; runs inline (idempotent on retry).
+  if (
+    (event.type === "reaction_added" || event.type === "reaction_removed") &&
+    event.reaction === "eyes"
+  ) {
+    if (event.user === CLAUDE_BOT_USER_ID) return NextResponse.json({ ok: true })
+    const itemChannel: string = event.item?.channel ?? ""
+    const itemTs: string = event.item?.ts ?? ""
+    if (itemChannel && itemTs && event.user) {
+      try {
+        const { handleThreadFollowReaction } = await import("@/lib/ai-agent/slack-thread-follows")
+        await handleThreadFollowReaction({
+          channelId: itemChannel,
+          messageTs: itemTs,
+          userId: event.user,
+          added: event.type === "reaction_added",
+        })
+      } catch (err) {
+        console.warn("[slack-claude-webhook] 👀 thread-follow failed:", err)
+      }
+    }
+    return NextResponse.json({ ok: true })
+  }
+
   // ── Decision Memory Phase 7: 🧠 reaction → save the message as a memory ──
   // Slack delivers reaction_added as an event_callback. The app must subscribe
   // to the `reaction_added` bot event for these to arrive (admin config — noted
@@ -194,16 +294,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true, dedup: "already_saved" })
     }
 
-    // Fetch the reacted message text (single message at item.ts).
-    const msgRes = await fetch(
-      `https://slack.com/api/conversations.history?channel=${itemChannel}&latest=${itemTs}&inclusive=true&limit=1`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    )
-    const msgData = (await msgRes.json().catch(() => ({}))) as {
-      ok?: boolean
-      messages?: Array<{ text?: string }>
-    }
-    const msgText = msgData.messages?.[0]?.text?.trim()
+    // Fetch the reacted message text — robust to thread replies. Using
+    // conversations.history alone returned the parent (wrong) message when the
+    // reaction was on a thread reply; fetchSlackMessageText verifies the exact ts
+    // and falls back to conversations.replies. (Bug found 2026-06-18 during the
+    // first live 🧠 test — a reply was saved as its parent question.)
+    const msgText = await fetchSlackMessageText(itemChannel, itemTs)
     if (!msgText) {
       return NextResponse.json({ ok: true, skipped: "no_text" })
     }
@@ -345,8 +441,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Case 2 — aimed at another user/bot, not Claude.
         return NextResponse.json({ ok: true, skipped: "directed_at_other" })
       }
-      // Case 3 — no @mention: only continue a thread Claude was invited into.
-      if (!threadTs || !(await parentMessageMentionsClaude(channelId, threadTs))) {
+      // Case 3 — no @mention: continue a thread Claude was invited into, OR an
+      // OPEN /client conversation thread (a dedicated worker conversation, where
+      // every reply is for the worker — no @Claude needed). dev_task 54f89912.
+      if (
+        !threadTs ||
+        (!(await parentMessageMentionsClaude(channelId, threadTs)) &&
+          !(await isOpenClientConversationThread(channelId, threadTs)))
+      ) {
         return NextResponse.json({ ok: true, skipped: "not_invited" })
       }
     }
@@ -411,6 +513,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // the model knows to look at the attached image(s).
   const body = cleanText || text || (slackImages.length > 0 ? "(image attached — no caption)" : "")
 
+  // Referenced messages: a SHARED message (Slack "Share message" → attachment
+  // carrying source channel + ts) or a pasted archive link in the text. Pure
+  // extraction, no Slack API call — safe inside the 3s ACK window. The worker
+  // resolves these into the source thread's content (so "@Claude read this" with
+  // a shared message actually works). [] when none.
+  const slackReferenced = collectSlackReferences({ text, attachments: event.attachments })
+
+  // TEMPORARY DIAGNOSTIC (2026-06-19): confirm the share-attachment shape on the
+  // first real "Share message" → @Claude. Logs only attachment KEYS (not text)
+  // plus how many references we extracted. Remove once the share path is verified.
+  if (Array.isArray(event.attachments) && event.attachments.length > 0) {
+    console.warn(
+      "[slack-claude-webhook] attachment shape:",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      JSON.stringify(event.attachments.map((a: any) => Object.keys(a ?? {}))),
+      "→ refs extracted:",
+      slackReferenced.length,
+    )
+  }
+
   // INSERT agent_messages row
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: inserted, error: insertError } = await (supabaseAdmin as any)
@@ -432,6 +554,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         slack_user_id: userId,
         slack_ack_ts: ackTs, // null if the ack post failed → worker posts fresh
         slack_images: slackImages, // [] when no usable images
+        slack_referenced: slackReferenced, // [] when no shared/linked messages
       },
     })
     .select("id")

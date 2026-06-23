@@ -35,6 +35,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   contact_updated: 'Contact',
   offer_signed: 'Contract',
   workflow_spawned: 'Workflow',
+  decision_responded: 'Decision',
   formation_progress: 'Formation',
   onboarding_progress: 'Onboarding',
   closure_progress: 'Closure',
@@ -249,11 +250,25 @@ export function ThreadWhatsNewPanel({
                   })()}
                 </div>
 
-                {/* Workflow note → render the workflow task's own stage actions + SLA inline. */}
+                {/* Workflow note. Company Formation drives its lifecycle from the
+                    full /flows/[sd] Workspace, so link there instead of showing
+                    the inline stage-advance buttons. Other workflows keep their
+                    inline action card. */}
                 {wfTask && (
-                  <div className="mt-2 rounded-md bg-zinc-50 border p-1.5">
-                    <WorkflowTaskCard task={wfTask} today={today} role="admin" />
-                  </div>
+                  note.event_key === 'formation_progress' && wfTask.delivery_id ? (
+                    <a
+                      href={`/flows/${wfTask.delivery_id}`}
+                      className="mt-2 flex items-center justify-between gap-2 rounded-md border border-blue-200 bg-blue-50/60 px-3 py-2 text-[12px] font-medium text-blue-800 hover:bg-blue-100 transition-colors"
+                      title="Open the Company Formation workspace"
+                    >
+                      <span>Open the Company Formation workspace</span>
+                      <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                    </a>
+                  ) : (
+                    <div className="mt-2 rounded-md bg-zinc-50 border p-1.5">
+                      <WorkflowTaskCard task={wfTask} today={today} role="admin" />
+                    </div>
+                  )
                 )}
                 <div className="mt-1.5 flex items-center justify-between">
                   <button

@@ -116,6 +116,18 @@ describe("resolveInvoiceStatusAfterPayment", () => {
     expect(result.newStatus).toBe("Paid")
     expect(result.newAmountDue).toBe(0)
   })
+
+  it("caps amount_paid at the invoice total — never over-credits (overpaid installment)", () => {
+    const result = resolveInvoiceStatusAfterPayment(1000, 900, 200)
+    expect(result.newAmountPaid).toBe(1000) // not 1100
+  })
+
+  it("caps amount_paid when a single wire exceeds the full balance ($650 onto a $500 invoice)", () => {
+    const result = resolveInvoiceStatusAfterPayment(500, 0, 650)
+    expect(result.newStatus).toBe("Paid")
+    expect(result.newAmountPaid).toBe(500) // not 650 — surplus stays on the feed, not the invoice
+    expect(result.newAmountDue).toBe(0)
+  })
 })
 
 describe("partitionInvoicesForMultiMatch", () => {

@@ -10,6 +10,10 @@ import { SignatureSend } from './signature-send'
 import { SignatureStatus } from './signature-status'
 import { WaitingNotice } from './waiting-notice'
 import { FaxIrs } from './fax-irs'
+import { ActivateRa } from './activate-ra'
+import { Ss4Panel } from './ss4-panel'
+import { EinEntry } from './ein-entry'
+import { FormationNames } from './formation-names'
 import { FlowChat } from './flow-chat'
 import { ShippingInfo } from './shipping-info'
 
@@ -60,6 +64,8 @@ function renderComponent(
           label={component.label}
           url={component.url}
           stateOfFormation={account.state_of_formation}
+          serviceType={serviceDelivery.service_type}
+          filedName={serviceDelivery.formation_filed_name}
         />
       )
     case 'document_viewer':
@@ -73,7 +79,22 @@ function renderComponent(
     case 'waiting_notice':
       return <WaitingNotice key={key} label={component.label} />
     case 'fax_irs':
-      return <FaxIrs key={key} account={account} />
+      return <FaxIrs key={key} account={account} serviceType={serviceDelivery.service_type} />
+    case 'activate_ra':
+      return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
+    case 'ss4_panel':
+      return <Ss4Panel key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
+    case 'ein_entry':
+      return <EinEntry key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
+    case 'formation_names':
+      return (
+        <FormationNames
+          key={key}
+          serviceDeliveryId={serviceDelivery.id}
+          stateOfFormation={account.state_of_formation}
+          stage={serviceDelivery.stage}
+        />
+      )
     case 'shipping_info':
       return <ShippingInfo key={key} serviceDelivery={serviceDelivery} />
     case 'chat':

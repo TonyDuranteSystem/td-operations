@@ -115,7 +115,7 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border bg-white">
+    <div className="overflow-hidden rounded-xl border bg-white">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
@@ -124,7 +124,6 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
             <th className="px-4 py-3 font-medium">Document</th>
             <th className="px-4 py-3 font-medium">Reason</th>
             <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 font-medium">Job ID</th>
             <th className="px-4 py-3 font-medium text-right">Receipt</th>
           </tr>
         </thead>
@@ -148,18 +147,18 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                       className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 hover:underline"
                     >
                       <FileText className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate max-w-[220px]">{row.fileName}</span>
+                      <span className="truncate max-w-[160px]">{row.fileName}</span>
                       <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
                     </a>
                   ) : (
                     <span className="inline-flex items-center gap-1.5 text-zinc-700" title="Uploaded file — not stored, nothing to view">
                       <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                      <span className="truncate max-w-[220px]">{row.fileName}</span>
+                      <span className="truncate max-w-[160px]">{row.fileName}</span>
                     </span>
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  <span className="block max-w-[220px] truncate text-zinc-700" title={row.reason || undefined}>
+                  <span className="block max-w-[160px] truncate text-zinc-700" title={row.reason || undefined}>
                     {row.reason || <span className="text-zinc-400">—</span>}
                   </span>
                 </td>
@@ -210,7 +209,6 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                     )
                   })()}
                 </td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{row.jobId || '—'}</td>
                 <td className="px-4 py-3 text-right">
                   {row.jobId ? (
                     <a

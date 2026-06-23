@@ -16,6 +16,7 @@ import { LeadNotesEditor } from './components/lead-notes-editor'
 import { CallSummaryCard } from './components/call-summary-card'
 import { EditableField } from './components/editable-field'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
+import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
 import { deriveLeadDisplayStatus } from '@/lib/leads/display-status'
 
@@ -578,6 +579,15 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
 
         {/* Notes (editable) */}
         <LeadNotesEditor leadId={lead.id} notes={lead.notes ?? ''} />
+
+        {/* Slack client conversations tagged to this lead */}
+        <div className="bg-white rounded-lg border p-5 md:col-span-2">
+          <h2 className="text-sm font-semibold text-zinc-900 mb-4 flex items-center gap-2">
+            <MessageSquare className="h-4 w-4" />
+            Conversations
+          </h2>
+          <ClientConversationsPanel entityType="lead" entityId={lead.id} />
+        </div>
       </div>
     </div>
   )

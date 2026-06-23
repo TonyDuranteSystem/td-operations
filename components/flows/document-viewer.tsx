@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { FileText, ExternalLink as ExternalLinkIcon, Loader2 } from 'lucide-react'
 import { formatBytes, formatUploadDate } from '@/lib/flows/workspace-format'
+import { FLOW_DOC_UPLOADED_EVENT, type FlowDocUploadedDetail } from './document-upload'
 
 interface FlowDocument {
   id: string
@@ -31,27 +32,39 @@ export function DocumentViewer({ serviceDeliveryId, label }: DocumentViewerProps
   const [documents, setDocuments] = useState<FlowDocument[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const res = await fetch(`/api/flows/${serviceDeliveryId}/documents`)
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Could not load documents.')
-        }
-        if (!cancelled) setDocuments(data.documents as FlowDocument[])
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error && err.message ? err.message : 'Could not load documents.')
-        }
+  const load = useCallback(async () => {
+    try {
+      // cache:'no-store' is REQUIRED — the browser otherwise serves a stale
+      // cached response, so newly-uploaded/relinked documents never appear (and
+      // old ones linger). This was the "documents not showing" bug.
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/documents`, { cache: 'no-store' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not load documents.')
       }
-    }
-    load()
-    return () => {
-      cancelled = true
+      setDocuments(data.documents as FlowDocument[])
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not load documents.')
     }
   }, [serviceDeliveryId])
+
+  // Initial load.
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Live refresh: DocumentUpload is a sibling client component, so router.refresh()
+  // after an upload does NOT re-run this component's effect. It dispatches a
+  // window event instead; re-fetch when it fires for THIS service delivery.
+  useEffect(() => {
+    function onUploaded(e: Event) {
+      const detail = (e as CustomEvent<FlowDocUploadedDetail>).detail
+      if (!detail || detail.serviceDeliveryId === serviceDeliveryId) load()
+    }
+    window.addEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
+    return () => window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
+  }, [serviceDeliveryId, load])
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">

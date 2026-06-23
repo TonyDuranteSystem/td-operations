@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { FileText, CheckCircle2, Clock, AlertTriangle, Loader2, Send, Hash } from 'lucide-react'
+import Link from 'next/link'
+import { FileText, CheckCircle2, Clock, AlertTriangle, Loader2, Send, Hash, ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface SS4ApplicationRecord {
@@ -69,13 +70,19 @@ export function SS4PipelineCard({
   const account = accounts.find(a => a.id === ss4.account_id)
   const hasEin = !!account?.ein
   const stepStates = getStepStates(ss4.status, hasEin)
-  const badge = STATUS_BADGES[ss4.status] || STATUS_BADGES.draft
+  // Once the EIN is in, the whole application is complete — the header badge must
+  // read "EIN Received" regardless of the raw ss4 status (which can linger at
+  // 'signed' when the EIN was entered directly without marking the fax sent).
+  const badge = hasEin ? STATUS_BADGES.done : (STATUS_BADGES[ss4.status] || STATUS_BADGES.draft)
 
   const formationSd = serviceDeliveries.find(
     sd => sd.account_id === ss4.account_id && sd.service_type === 'Company Formation' && sd.status === 'active',
   )
 
-  const showMarkFaxButton = ss4.status === 'signed' || ss4.status === 'fax_failed'
+  // Never offer "Mark Fax as Sent" once the EIN exists — the formation is done.
+  // Without this guard a completed formation (EIN received, SD completed) still
+  // showed the amber fax button alongside the green "EIN Received" box.
+  const showMarkFaxButton = (ss4.status === 'signed' || ss4.status === 'fax_failed') && !hasEin
   const showEnterEinButton = (ss4.status === 'submitted' || ss4.status === 'done') && !hasEin
 
   const handleAction = async (action: string, actionParams: Record<string, unknown>) => {
@@ -131,6 +138,19 @@ export function SS4PipelineCard({
           </span>
         )}
       </div>
+
+      {/* Connect this account-level EIN tracker to the Company Formation
+          workspace — the single source of truth for the formation flow (this
+          card was previously disconnected from it). */}
+      {formationSd && (
+        <Link
+          href={`/flows/${formationSd.id}`}
+          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+        >
+          Open in Formation Workspace
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+      )}
 
       {/* Mini timeline */}
       <div className="flex items-center gap-1">
@@ -258,9 +278,8 @@ export function SS4PipelineCard({
               <p className="font-medium mb-1">What happens:</p>
               <ul className="list-disc list-inside space-y-0.5 text-xs">
                 <li>SS-4 status set to &quot;submitted&quot;</li>
-                <li>Pipeline advances to &quot;EIN Submitted&quot;</li>
+                <li>Pipeline stays at &quot;SS-4 Signed&quot; until the EIN arrives</li>
                 <li>Open fax tasks marked as Done</li>
-                <li>New tasks created for EIN follow-up</li>
               </ul>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">
@@ -293,9 +312,8 @@ export function SS4PipelineCard({
               <ul className="list-disc list-inside space-y-0.5 text-xs">
                 <li>EIN saved to account record</li>
                 <li>SS-4 application marked as done</li>
-                <li>Pipeline advances to Post-Formation + Banking</li>
-                <li>Welcome package auto-generated (OA, Lease, Banking)</li>
-                <li>Client notified via portal</li>
+                <li>Pipeline advances to EIN Received (final stage)</li>
+                <li>Client tier set to active; client notified via portal</li>
               </ul>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">

@@ -6,6 +6,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
+import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 interface DocumentRecord {
@@ -439,6 +440,13 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   // date-derived scheduled placeholders for RA/AR). Read-only; additive.
   const flows = await resolveFlows(params.id)
 
+  // Active Company Formation SD → prominent workspace banner near the top.
+  // (resolveFlows is account-scoped to the 4 recurring types and excludes
+  // Company Formation, so derive it from the loaded SD list directly.)
+  const formationSd = (servicesResult.data ?? []).find(
+    (sd) => sd.service_type === 'Company Formation' && sd.status === 'active',
+  )
+
   // "View as client" (admin + staff): resolve the account's primary contact (Owner,
   // else first linked contact). Read-only portal view.
   const canViewAs = admin
@@ -451,6 +459,13 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         <div className="mb-4 flex justify-end">
           <ViewAsClientButton contactId={primaryContact.id} />
         </div>
+      )}
+      {formationSd && (
+        <FormationWorkspaceBanner
+          serviceDeliveryId={formationSd.id}
+          stage={formationSd.stage}
+          companyName={(account as Account).company_name}
+        />
       )}
       <AccountDetail
         flows={flows}

@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useMemo, useTransition } from 'react'
+import { useState, useMemo, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3, X, Plus,
-  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw, Bell,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment } from './actions'
+import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment, sendBulkReminders } from './actions'
 import { regenerateInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -41,6 +41,10 @@ export interface InvoiceRecord {
   description: string | null
   account_id: string | null
   contact_id: string | null
+  reminder_count?: number
+  last_reminder_at?: string | null
+  reminders_auto?: number
+  reminders_manual?: number
   accounts: { company_name: string } | null
   contacts: { full_name: string } | null
 }
@@ -66,7 +70,20 @@ function getClientName(inv: InvoiceRecord): string {
   return inv.accounts?.company_name ?? inv.contacts?.full_name ?? '—'
 }
 
-export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
+/** Hover detail for the reminder badge: auto vs manual breakdown + last sent. */
+function reminderTooltip(inv: InvoiceRecord): string {
+  const auto = inv.reminders_auto ?? 0
+  const manual = inv.reminders_manual ?? 0
+  const parts: string[] = []
+  if (auto || manual) parts.push(`${auto} automatic, ${manual} manual`)
+  if (inv.last_reminder_at) parts.push(`last sent ${formatDate(inv.last_reminder_at)}`)
+  return parts.length ? `Reminders — ${parts.join(' · ')}` : 'Reminders sent'
+}
+
+/** Statuses for which a reminder can be sent (and thus bulk-selected). */
+const REMINDABLE_STATUSES = new Set(['Sent', 'Overdue', 'Partial'])
+
+export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: InvoiceRecord[]; isAdmin?: boolean }) {
   const [search, setSearch] = useState('')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
   const [dialogMode, setDialogMode] = useState<'invoice' | 'credit'>('invoice')
@@ -74,6 +91,120 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
   const [statusFilter, setStatusFilter] = useState<string>('All')
   const [sortField, setSortField] = useState<SortField>('issue_date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  // ── Bulk reminder selection (Phase 3) ──
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [overrideCap, setOverrideCap] = useState(false)
+  const [bulkSending, setBulkSending] = useState(false)
+
+  function toggleSelected(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function handleBulkRemind() {
+    const ids = Array.from(selected)
+    if (ids.length === 0) return
+    if (!window.confirm(
+      `Send a payment reminder to ${ids.length} invoice${ids.length > 1 ? 's' : ''}?` +
+      (overrideCap ? '\n\nIncluding invoices already at the 2-reminder limit.' : '')
+    )) return
+    setBulkSending(true)
+    try {
+      const res = await sendBulkReminders(ids, { overrideCap })
+      if (!res.success || !res.data) { toast.error(res.error ?? 'Bulk reminder failed'); return }
+      const { sent, skipped, failed, outcomes } = res.data
+      toast.success(`Reminders — ${sent} sent · ${skipped} skipped · ${failed} failed`)
+      // Surface each non-sent outcome individually (R099: never hide the cause).
+      outcomes.filter(o => o.status !== 'sent').slice(0, 10).forEach(o =>
+        toast(`${o.invoice_number}: ${o.status} — ${o.reason ?? ''}`, { duration: 7000 }))
+      setSelected(new Set())
+      newInvRouter.refresh()
+    } finally {
+      setBulkSending(false)
+    }
+  }
+
+  // ── Automatic-reminder (dunning) controls — admin only ──
+  const [autoSend, setAutoSend] = useState<boolean | null>(null)
+  const [cap, setCap] = useState<number>(40)
+  const [capDraft, setCapDraft] = useState<string>('40')
+  const [autoSaving, setAutoSaving] = useState(false)
+  const [dunningRunning, setDunningRunning] = useState(false)
+
+  const CAP_MAX = 1000
+  function normalizeCap(n: unknown): number {
+    const v = Math.floor(Number(n))
+    if (!Number.isFinite(v) || v < 1) return 40
+    return Math.min(v, CAP_MAX)
+  }
+
+  useEffect(() => {
+    if (!isAdmin) return
+    fetch('/api/app-settings?key=dunning_autosend')
+      .then(r => r.json())
+      .then(d => {
+        setAutoSend(d?.value?.enabled === true)
+        const c = d?.value?.cap == null ? 40 : normalizeCap(d.value.cap)
+        setCap(c); setCapDraft(String(c))
+      })
+      .catch(() => { setAutoSend(false); setCap(40); setCapDraft('40') })
+  }, [isAdmin])
+
+  // Write the full dunning_autosend value (enabled + cap) so neither control
+  // clobbers the other.
+  async function saveDunning(next: { enabled: boolean; cap: number }) {
+    const res = await fetch('/api/app-settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'dunning_autosend', value: next }),
+    })
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ?? 'Failed to update') }
+  }
+
+  async function toggleAutoSend() {
+    const next = !(autoSend ?? false)
+    if (next && !window.confirm(`Turn ON automatic reminders?\n\nThe daily job (9:00) will start emailing overdue clients — 1st reminder at 7 days overdue, 2nd at 14 — up to ${cap} per run.`)) return
+    setAutoSaving(true)
+    setAutoSend(next)
+    try {
+      await saveDunning({ enabled: next, cap })
+      toast.success(next ? 'Automatic reminders turned ON' : 'Automatic reminders turned OFF')
+    } catch (err) {
+      setAutoSend(!next)
+      toast.error(err instanceof Error ? err.message : 'Failed to update')
+    } finally { setAutoSaving(false) }
+  }
+
+  async function saveCap() {
+    const newCap = normalizeCap(capDraft)
+    if (newCap === cap) { setCapDraft(String(cap)); return }
+    setAutoSaving(true)
+    const prev = cap
+    setCap(newCap); setCapDraft(String(newCap))
+    try {
+      await saveDunning({ enabled: autoSend ?? false, cap: newCap })
+      toast.success(`Per-run limit set to ${newCap}`)
+    } catch (err) {
+      setCap(prev); setCapDraft(String(prev))
+      toast.error(err instanceof Error ? err.message : 'Failed to update')
+    } finally { setAutoSaving(false) }
+  }
+
+  async function runDunningNow() {
+    if (!window.confirm(`Run reminders now?\n\nQueues a reminder for every due overdue invoice (up to ${cap} this pass), respecting each client's timing, pause, and the 2-reminder limit. They send gradually in the background over the next several minutes.`)) return
+    setDunningRunning(true)
+    try {
+      const res = await fetch('/api/invoices/run-dunning', { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(d.error ?? 'Failed to run reminders'); return }
+      toast.success(`Queued ${d.reminders_queued ?? 0} reminder${(d.reminders_queued ?? 0) === 1 ? '' : 's'} · ${d.skipped ?? 0} already queued · ${d.marked_overdue ?? 0} newly overdue${d.capped ? ` · ${cap}-cap hit, run again for the rest` : ''}. They send gradually in the background.`)
+      newInvRouter.refresh()
+    } finally { setDunningRunning(false) }
+  }
 
   // Counts per status
   const statusCounts = useMemo(() => {
@@ -146,6 +277,10 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
           break
         }
       }
+      // Stable tiebreak by id so equal sort keys (e.g. same issue_date) keep a
+      // fixed order across refreshes — fixes "the list reorders and I lose my
+      // place" when chasing overdue invoices (dev_task d2af38a1).
+      if (cmp === 0) cmp = (a.id ?? '').localeCompare(b.id ?? '')
       return sortDir === 'asc' ? cmp : -cmp
     })
 
@@ -170,6 +305,46 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
 
   return (
     <div className="p-6 space-y-4">
+      {/* Automatic-reminder (dunning) controls — admin only */}
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-4 py-2.5 text-sm">
+          <Bell className="w-4 h-4 text-amber-600" />
+          <span className="font-medium text-foreground">Automatic reminders</span>
+          <button
+            onClick={toggleAutoSend}
+            disabled={autoSend === null || autoSaving}
+            className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${
+              autoSend ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-zinc-200 text-zinc-600 hover:bg-zinc-300'
+            }`}
+            title="Turn the daily automatic reminder schedule on or off"
+          >
+            {autoSend === null ? '…' : autoSend ? 'ON' : 'OFF'}
+          </button>
+          <span className="text-xs text-muted-foreground">Daily 9:00 · 1st at 7d overdue, 2nd at 14d · sends gradually in the background</span>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={`Max reminders queued per pass (1–${CAP_MAX}). The rest roll to the next pass; all send gradually in the background.`}>
+            Max per run
+            <input
+              type="number" min={1} max={CAP_MAX}
+              value={capDraft}
+              onChange={e => setCapDraft(e.target.value)}
+              onBlur={saveCap}
+              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+              disabled={autoSaving}
+              className="w-16 px-2 py-1 border rounded-md text-xs text-foreground disabled:opacity-50"
+            />
+          </label>
+          <button
+            onClick={runDunningNow}
+            disabled={dunningRunning}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
+            title={`Run the reminder job right now (sends all that are due, up to ${cap})`}
+          >
+            {dunningRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Run reminders now
+          </button>
+        </div>
+      )}
+
       {/* Summary bar */}
       <div className="flex items-center gap-6 text-sm text-muted-foreground bg-muted/50 rounded-lg px-4 py-3">
         <span>Total: <strong className="text-foreground">{summaryStats.total}</strong> invoices</span>
@@ -224,11 +399,52 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
         </div>
       </div>
 
+      {/* Bulk reminder toolbar — appears when invoices are selected */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm">
+          <span className="font-medium text-amber-800">{selected.size} selected</span>
+          <label className="flex items-center gap-1.5 text-amber-800 cursor-pointer">
+            <input type="checkbox" checked={overrideCap} onChange={e => setOverrideCap(e.target.checked)} />
+            Send even if already at the 2-reminder limit
+          </label>
+          <button
+            onClick={handleBulkRemind}
+            disabled={bulkSending}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
+          >
+            {bulkSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            Send Reminders ({selected.size})
+          </button>
+          <button onClick={() => setSelected(new Set())} className="text-amber-700 hover:text-amber-900 text-xs">Clear</button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="border rounded-lg overflow-auto max-h-[calc(100vh-320px)]">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 sticky top-0">
             <tr>
+              <th className="w-8 px-3 py-3">
+                {(() => {
+                  const selectable = filtered.filter(i => REMINDABLE_STATUSES.has(i.status))
+                  const allSel = selectable.length > 0 && selectable.every(i => selected.has(i.id))
+                  return (
+                    <input
+                      type="checkbox"
+                      aria-label="Select all remindable invoices"
+                      checked={allSel}
+                      onChange={e => {
+                        setSelected(prev => {
+                          const next = new Set(prev)
+                          if (e.target.checked) selectable.forEach(i => next.add(i.id))
+                          else selectable.forEach(i => next.delete(i.id))
+                          return next
+                        })
+                      }}
+                    />
+                  )
+                })()}
+              </th>
               <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('invoice_number')}>
                 Invoice # <SortIcon field="invoice_number" />
               </th>
@@ -254,7 +470,7 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
           <tbody className="divide-y">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center py-12 text-muted-foreground">
+                <td colSpan={9} className="text-center py-12 text-muted-foreground">
                   <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
                   No invoices found
                 </td>
@@ -270,6 +486,16 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                   key={inv.id}
                   className={`hover:bg-muted/30 transition-colors ${isOverdue ? 'bg-red-50/50' : ''}`}
                 >
+                  <td className="w-8 px-3 py-3">
+                    {REMINDABLE_STATUSES.has(inv.status) && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select invoice ${inv.invoice_number}`}
+                        checked={selected.has(inv.id)}
+                        onChange={() => toggleSelected(inv.id)}
+                      />
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <a
                       href={`/api/invoices/${inv.id}/pdf`}
@@ -307,6 +533,15 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                       {inv.status}
                     </span>
+                    {(inv.reminder_count ?? 0) > 0 && (
+                      <div
+                        className="mt-1 text-[11px] text-amber-600 whitespace-nowrap cursor-default"
+                        title={reminderTooltip(inv)}
+                      >
+                        🔔 {inv.reminder_count} {inv.reminder_count === 1 ? 'reminder' : 'reminders'}
+                        {inv.last_reminder_at ? ` · ${formatDate(inv.last_reminder_at)}` : ''}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground tabular-nums">
                     {formatDate(inv.issue_date)}
