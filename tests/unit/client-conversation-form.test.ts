@@ -143,15 +143,26 @@ describe("buildClientConversationModalView", () => {
 })
 
 describe("buildClientThreadRootBlocks", () => {
-  it("renders the text section + a 👀 Follow button carrying the follow action_id", () => {
+  it("renders just the 👀 Follow button when no Open URL is given", () => {
     const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing — started by @x")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const section = blocks.find((b: any) => b.type === "section") as any
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const actions = blocks.find((b: any) => b.type === "actions") as any
     expect(section.text.text).toContain("ACME")
+    expect(actions.elements).toHaveLength(1)
     expect(actions.elements[0].action_id).toBe(FOLLOW_CLIENT_THREAD_ACTION_ID)
-    expect(actions.elements[0].text.text).toContain("Follow")
+  })
+
+  it("renders 💬 Open (url) + 👀 Follow on one card when an Open URL is given", () => {
+    const url = "https://tdoperationsworkspace.slack.com/archives/C/p1?thread_ts=1&cid=C"
+    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing", url)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const actions = blocks.find((b: any) => b.type === "actions") as any
+    expect(actions.elements).toHaveLength(2)
+    expect(actions.elements[0].url).toBe(url)
+    expect(actions.elements[0].text.text).toContain("Open")
+    expect(actions.elements[1].action_id).toBe(FOLLOW_CLIENT_THREAD_ACTION_ID)
   })
 })
 
@@ -208,7 +219,7 @@ describe("buildSlackThreadDeepLink", () => {
   it("builds a thread-opening deep link (thread_ts + cid open the thread view)", () => {
     const link = buildSlackThreadDeepLink("C0BA802S9LH", "1782141518.486979")
     expect(link).toBe(
-      "https://slack.com/archives/C0BA802S9LH/p1782141518486979?thread_ts=1782141518.486979&cid=C0BA802S9LH",
+      "https://tdoperationsworkspace.slack.com/archives/C0BA802S9LH/p1782141518486979?thread_ts=1782141518.486979&cid=C0BA802S9LH",
     )
   })
   it("strips only the dot from the ts in the /p segment but keeps it in thread_ts", () => {

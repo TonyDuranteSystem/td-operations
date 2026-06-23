@@ -804,20 +804,31 @@ export async function searchClientsForSlackOptions(
  * Clicking Follow toggles a per-user follow (handler resolves the thread from the
  * clicked message's channel:ts = source_ref, so no button value is needed).
  */
-export function buildClientThreadRootBlocks(text: string): Array<Record<string, unknown>> {
+export function buildClientThreadRootBlocks(
+  text: string,
+  openUrl?: string,
+): Array<Record<string, unknown>> {
+  const elements: Array<Record<string, unknown>> = []
+  // 💬 Open — a url button that opens this thread (set after the message has a ts).
+  if (openUrl) {
+    elements.push({
+      type: "button",
+      text: { type: "plain_text", text: "💬 Open", emoji: true },
+      url: openUrl,
+      action_id: OPEN_CLIENT_THREAD_LINK_ACTION_ID,
+      style: "primary",
+    })
+  }
+  // 👀 Follow — toggles a per-user follow (handler resolves the thread from this message).
+  elements.push({
+    type: "button",
+    text: { type: "plain_text", text: "👀 Follow", emoji: true },
+    action_id: FOLLOW_CLIENT_THREAD_ACTION_ID,
+    value: "follow",
+  })
   return [
     { type: "section", text: { type: "mrkdwn", text } },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "👀 Follow", emoji: true },
-          action_id: FOLLOW_CLIENT_THREAD_ACTION_ID,
-          value: "follow",
-        },
-      ],
-    },
+    { type: "actions", elements },
   ]
 }
 
@@ -853,6 +864,17 @@ export async function createClientConversationFromModal(args: {
   const threadTs = await postSlackMessage(args.channelId, text, null, buildClientThreadRootBlocks(text))
   if (!threadTs) return { ok: false, error: "could not post the conversation message" }
 
+  // Now that the message has a ts, add the 💬 Open button (a deep link to THIS thread)
+  // next to Follow — both buttons live ON the card: one message, no extra ephemerals.
+  // Deterministic workspace-domain deep link, so no API call that can fail.
+  const openUrl = buildSlackThreadDeepLink(args.channelId, threadTs)
+  await updateSlackMessage(args.channelId, threadTs, text, buildClientThreadRootBlocks(text, openUrl)).catch(
+    (err) => {
+      console.error("[slack-claude] add Open button (chat.update) failed:", err)
+      return false
+    },
+  )
+
   const row: Record<string, unknown> = {
     account_id: kind === "account" ? id : null,
     contact_id: kind === "contact" ? id : null,
@@ -869,45 +891,6 @@ export async function createClientConversationFromModal(args: {
     console.error("[slack-claude] client_threads insert failed:", ins.error)
   }
 
-  // One-click jump into the thread. Slack gives apps no way to auto-open a panel in
-  // a user's client, so we post an ephemeral (only the creator sees it) message at
-  // their composer with a deep link that opens this thread directly. The url button
-  // sends a harmless block_actions interaction the interactions route already ACKs.
-  if (args.userId) {
-    const deepLink =
-      (await getSlackPermalink(args.channelId, threadTs)) ??
-      buildSlackThreadDeepLink(args.channelId, threadTs)
-    await slackApiCall("chat.postEphemeral", {
-      channel: args.channelId,
-      user: args.userId,
-      text: `✅ Conversation started for ${name} · ${args.topicSlug} — open it to start chatting.`,
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `✅ Conversation started for *${name}* · *${args.topicSlug}*. Open it and reply in the thread to chat — everything is saved to the CRM.`,
-          },
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: { type: "plain_text", text: "💬 Open conversation", emoji: true },
-              url: deepLink,
-              action_id: OPEN_CLIENT_THREAD_LINK_ACTION_ID,
-              style: "primary",
-            },
-          ],
-        },
-      ],
-    }).catch((err: unknown) => {
-      console.error("[slack-claude] postEphemeral (open conversation) failed:", err)
-      return { ok: false }
-    })
-  }
-
   return { ok: true, threadTs }
 }
 
@@ -918,7 +901,12 @@ export async function createClientConversationFromModal(args: {
  */
 export function buildSlackThreadDeepLink(channelId: string, threadTs: string): string {
   const tsNoDot = threadTs.replace(".", "")
-  return `https://slack.com/archives/${channelId}/p${tsNoDot}?thread_ts=${threadTs}&cid=${channelId}`
+  // Must use the WORKSPACE subdomain (e.g. tdoperationsworkspace.slack.com), not the
+  // generic slack.com — a generic-domain archive link gives "You don't have access to
+  // this message". This matches Slack's own "Copy link to message" format, so it opens
+  // reliably with no API call. Override via SLACK_WORKSPACE_DOMAIN if the domain changes.
+  const domain = process.env.SLACK_WORKSPACE_DOMAIN || "tdoperationsworkspace.slack.com"
+  return `https://${domain}/archives/${channelId}/p${tsNoDot}?thread_ts=${threadTs}&cid=${channelId}`
 }
 
 /**
@@ -974,7 +962,7 @@ export async function findOpenConversationForEntityTopic(
     const [ch, ts] = data.source_ref.split(":")
     if (ch && ts) {
       // Canonical permalink (opens reliably); fall back to the constructed deep link.
-      slackLink = (await getSlackPermalink(ch, ts)) ?? buildSlackThreadDeepLink(ch, ts)
+      slackLink = buildSlackThreadDeepLink(ch, ts)
     }
   }
   let clientName = "this client"

@@ -12,7 +12,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { getSlackPermalink, slackApiCall, slackApiGet } from "./slack-claude"
+import { buildSlackThreadDeepLink, slackApiCall, slackApiGet } from "./slack-claude"
 
 const DIGEST_CAP = 50
 
@@ -157,7 +157,7 @@ export async function refreshUserFollowDigest(slackUserId: string): Promise<void
       let permalink: string | null = null
       if (typeof t.source_ref === "string" && t.source_ref.includes(":")) {
         const [ch, ts] = t.source_ref.split(":")
-        if (ch && ts) permalink = await getSlackPermalink(ch, ts)
+        if (ch && ts) permalink = buildSlackThreadDeepLink(ch, ts)
       }
       rows.push({ clientName, topic: t.topic_slug ?? "general", openedAt: t.created_at ?? null, permalink })
     }
@@ -269,7 +269,7 @@ export async function refreshOpenConversationsCanvas(): Promise<{ ok: boolean; e
       let permalink: string | null = null
       if (typeof t.source_ref === "string" && t.source_ref.includes(":")) {
         const [ch, ts] = t.source_ref.split(":")
-        if (ch && ts) permalink = await getSlackPermalink(ch, ts)
+        if (ch && ts) permalink = buildSlackThreadDeepLink(ch, ts)
       }
       rows.push({ clientName, topic: t.topic_slug ?? "general", openedAt: t.created_at ?? null, permalink })
     }
