@@ -21,7 +21,7 @@ import { toUsd, type FxRates } from "./fx"
 import { evaluateGates, canConfirm, type GateResult } from "./verification-gates"
 import { buildCompletenessSummary, type CompletenessSummary, type IncomeAnswer } from "./completeness"
 import { resolveOwnership, type OwnershipResolution, type OwnershipSource } from "./ownership-resolution"
-import type { PriorReturnCaseRecord } from "./prior-return-case"
+import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 
 export interface FinancialsView {
   draft: FinancialDraft
@@ -132,10 +132,11 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
     }))
     .filter(c => c.name.length > 0)
 
-  const priorK1s: OwnershipSource[] =
-    priorReturn?.case === "filed_elsewhere" && priorReturn.status === "validated"
-      ? priorReturn.extracted.k1s.map(k => ({ name: k.partner_name, pct: k.ownership_pct }))
-      : []
+  // Prior-year K-1 ownership %s — from a client upload OR our own filed return.
+  const priorExtraction = validatedExtraction(priorReturn)
+  const priorK1s: OwnershipSource[] = priorExtraction
+    ? priorExtraction.k1s.map(k => ({ name: k.partner_name, pct: k.ownership_pct }))
+    : []
 
   const wizardMembers = extractWizardMembers(submittedData)
   // The owner_* keys only seed the roster when there is NO member list at all

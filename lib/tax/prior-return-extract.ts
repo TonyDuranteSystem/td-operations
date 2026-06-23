@@ -348,6 +348,115 @@ export async function detectPriorReturnOnFile(accountId: string, priorYear: numb
   return { onFile: !!data, taxReturnId: data?.id ?? null }
 }
 
+/** A filed-return document candidate from the `documents` table. */
+export interface FiledReturnDoc {
+  drive_file_id: string
+  file_name: string | null
+  document_type_name: string | null
+  created_at: string | null
+}
+
+/** Document types in `documents` that represent a filed business return whose
+ *  Schedule L / K-1s the extractor can read. (5472/7004/8879 are not balance
+ *  sheets and are intentionally excluded.) */
+export const FILED_RETURN_DOC_TYPES = ["Form 1065", "Form 1120", "Form 1120-F", "Tax Return"] as const
+
+/**
+ * Rank filed-return docs for extraction (best first). PURE — exported for tests.
+ * `documents.tax_year` is NULL in practice, so the year is read from the file
+ * name (filed returns are named "Form 1120 2024 - …"); the extractor then
+ * re-checks the year from inside the PDF, so a wrong filename can never feed
+ * the wrong year. 1065 ranks above 1120 (richer: Schedule L + K-1s); newest
+ * wins ties. Deduped by drive_file_id. */
+export function rankFiledReturnCandidates(docs: FiledReturnDoc[], priorYear: number): FiledReturnDoc[] {
+  const seen = new Set<string>()
+  const unique = docs.filter(d => {
+    if (!d.drive_file_id || seen.has(d.drive_file_id)) return false
+    seen.add(d.drive_file_id)
+    return true
+  })
+  const typeRank = (t: string | null) =>
+    t === "Form 1065" ? 3 : t === "Form 1120" || t === "Form 1120-F" ? 2 : t === "Tax Return" ? 1 : 0
+  const score = (d: FiledReturnDoc) =>
+    ((d.file_name ?? "").includes(String(priorYear)) ? 100 : 0) + typeRank(d.document_type_name)
+  return unique.sort((a, b) => {
+    const s = score(b) - score(a)
+    if (s !== 0) return s
+    return (b.created_at ?? "").localeCompare(a.created_at ?? "")
+  })
+}
+
+export interface LocateFiledReturnOptions extends ExtractPriorReturnOptions {
+  /** How many candidate PDFs to try before giving up (cost bound). Default 3. */
+  maxCandidates?: number
+  /** Injectable for tests — defaults to google-drive downloadFileBinary. */
+  downloadImpl?: (fileId: string) => Promise<{ buffer: Buffer }>
+  /** Injectable for tests — defaults to a `documents` query. */
+  fetchCandidates?: (accountId: string) => Promise<FiledReturnDoc[]>
+  /** Injectable for tests — defaults to extractPriorReturn. */
+  extractImpl?: typeof extractPriorReturn
+}
+
+/**
+ * Auto-carry-forward source for the `we_filed` case: locate OUR filed prior-year
+ * return in the documents table, download it, and run it through the same
+ * validated extractor used for client-uploaded returns. Returns the validated
+ * record (beginning balances feed the current year), a quarantined record (for
+ * staff), or null when nothing is found / readable — in which case the caller
+ * keeps today's "staff tie out" behavior. NEVER throws (best-effort).
+ */
+export async function locateAndExtractOurFiledReturn(
+  accountId: string,
+  priorYear: number,
+  ein: string | null,
+  opts?: LocateFiledReturnOptions,
+): Promise<PriorReturnRecord | null> {
+  const maxCandidates = opts?.maxCandidates ?? 3
+  let candidates: FiledReturnDoc[]
+  try {
+    candidates = opts?.fetchCandidates
+      ? await opts.fetchCandidates(accountId)
+      : await defaultFetchFiledReturnDocs(accountId)
+  } catch (e) {
+    console.error("[prior-return] could not list filed-return documents:", e)
+    return null
+  }
+  const ranked = rankFiledReturnCandidates(candidates, priorYear).slice(0, maxCandidates)
+  if (ranked.length === 0) return null
+
+  const download = opts?.downloadImpl ?? (async (id: string) => {
+    const { downloadFileBinary } = await import("@/lib/google-drive")
+    return downloadFileBinary(id)
+  })
+
+  const extract = opts?.extractImpl ?? extractPriorReturn
+  let firstQuarantined: PriorReturnRecord | null = null
+  for (const doc of ranked) {
+    try {
+      const { buffer } = await download(doc.drive_file_id)
+      const result = await extract(buffer, `drive:${doc.drive_file_id}`, { priorYear, ein }, opts)
+      if ("status" in result && result.status === "failed") continue
+      const record = result as PriorReturnRecord
+      if (record.status === "validated") return record
+      if (!firstQuarantined) firstQuarantined = record // keep the best non-validated for staff
+    } catch (e) {
+      console.error(`[prior-return] extraction of filed return ${doc.drive_file_id} failed:`, e)
+    }
+  }
+  return firstQuarantined
+}
+
+async function defaultFetchFiledReturnDocs(accountId: string): Promise<FiledReturnDoc[]> {
+  const { data, error } = await supabaseAdmin
+    .from("documents")
+    .select("drive_file_id, file_name, document_type_name, created_at")
+    .eq("account_id", accountId)
+    .eq("mime_type", "application/pdf")
+    .in("document_type_name", FILED_RETURN_DOC_TYPES as unknown as string[])
+  if (error) throw new Error(error.message)
+  return (data ?? []) as FiledReturnDoc[]
+}
+
 /** Persist the extraction record on the submission row (W4 column). */
 export async function storePriorReturnExtraction(submissionId: string, record: PriorReturnRecord): Promise<void> {
   // prior_return_extracted is new (migration 20260611-1400) and not yet in the

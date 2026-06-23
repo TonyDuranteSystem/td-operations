@@ -24,17 +24,41 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
-import { detectPriorReturnOnFile, extractPriorReturn, type PriorReturnRecord } from "./prior-return-extract"
+import {
+  detectPriorReturnOnFile,
+  extractPriorReturn,
+  locateAndExtractOurFiledReturn,
+  type PriorReturnRecord,
+  type PriorReturnExtraction,
+  type PriorReturnValidationIssue,
+} from "./prior-return-extract"
 
 const UPLOAD_BUCKET = "onboarding-uploads" // same bucket as all portal wizard uploads
 
-/** Discriminated union stored in tax_return_submissions.prior_return_extracted. */
+/** Discriminated union stored in tax_return_submissions.prior_return_extracted.
+ *  we_filed gains `validated` / `quarantined` (auto-carry-forward): when WE
+ *  filed the prior return, the system reads its Schedule L / K-1s from our own
+ *  filed PDF and feeds the current year's beginning balances — see
+ *  locateAndExtractOurFiledReturn. `on_file` = we have the record but couldn't
+ *  auto-read it (staff tie out, the original behavior). */
 export type PriorReturnCaseRecord =
   | (PriorReturnRecord & { case: "filed_elsewhere" })
   | { case: "we_filed"; status: "on_file" | "claim_mismatch"; tax_return_id: string | null; note: string; recorded_at: string }
+  | { case: "we_filed"; status: "validated" | "quarantined"; tax_return_id: string | null; note: string; recorded_at: string; extracted: PriorReturnExtraction; issues: PriorReturnValidationIssue[]; source: string }
   | { case: "first_year"; status: "first_year" | "claim_mismatch"; formation_date: string | null; note: string; recorded_at: string }
   | { case: "never_filed"; status: "never_filed"; cleanup_interest: "Yes" | "No"; declaration_accepted: boolean; recorded_at: string }
   | { case: string; status: "failed"; error: string; recorded_at: string }
+
+/** The validated prior-return extraction, from EITHER source (a client upload
+ *  in the filed_elsewhere case, or OUR own filed return in the we_filed case).
+ *  Single accessor so the engine + gates read both sources identically. PURE. */
+export function validatedExtraction(prior: PriorReturnCaseRecord | null): PriorReturnExtraction | null {
+  if (!prior || prior.status !== "validated") return null
+  if (prior.case === "filed_elsewhere" || prior.case === "we_filed") {
+    return (prior as { extracted?: PriorReturnExtraction }).extracted ?? null
+  }
+  return null
+}
 
 export interface ProcessPriorReturnInput {
   submissionId: string
@@ -63,9 +87,23 @@ export async function processPriorReturnCase(input: ProcessPriorReturnInput): Pr
     switch (caseAnswer) {
       case "we_filed": {
         const { onFile, taxReturnId } = await detectPriorReturnOnFile(accountId, priorYear)
-        record = onFile
-          ? { case: "we_filed", status: "on_file", tax_return_id: taxReturnId, note: `${priorYear} return on file (TR Filed).`, recorded_at: now }
-          : { case: "we_filed", status: "claim_mismatch", tax_return_id: null, note: `Client says we filed the ${priorYear} return, but no 'TR Filed' record exists — staff must verify.`, recorded_at: now }
+        if (!onFile) {
+          record = { case: "we_filed", status: "claim_mismatch", tax_return_id: null, note: `Client says we filed the ${priorYear} return, but no 'TR Filed' record exists — staff must verify.`, recorded_at: now }
+          break
+        }
+        // Auto-carry-forward: read OUR filed prior-year return (Schedule L / K-1s)
+        // and feed this year's beginning balances. Best-effort — if the PDF
+        // isn't found / readable / validated, fall back to staff tie-out
+        // (status 'on_file', the original behavior). NEVER throws.
+        const { data: acct } = await supabaseAdmin.from("accounts").select("ein_number").eq("id", accountId).single()
+        const extracted = await locateAndExtractOurFiledReturn(accountId, priorYear, acct?.ein_number ?? null)
+        if (extracted?.status === "validated") {
+          record = { case: "we_filed", status: "validated", tax_return_id: taxReturnId, note: `${priorYear} return on file (TR Filed) — beginning balances read from our filed return.`, recorded_at: now, extracted: extracted.extracted, issues: extracted.issues, source: extracted.source }
+        } else if (extracted?.status === "quarantined") {
+          record = { case: "we_filed", status: "quarantined", tax_return_id: taxReturnId, note: `${priorYear} return on file, but auto-reading it did not pass verification — staff tie out the beginning balances.`, recorded_at: now, extracted: extracted.extracted, issues: extracted.issues, source: extracted.source }
+        } else {
+          record = { case: "we_filed", status: "on_file", tax_return_id: taxReturnId, note: `${priorYear} return on file (TR Filed) — could not auto-read the filed PDF; staff tie out the beginning balances.`, recorded_at: now }
+        }
         break
       }
       case "filed_elsewhere": {

@@ -61,12 +61,12 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
       results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "No prior-return answer on file yet — complete the prior-return step." })
     } else if (priorReturn.case === "first_year" || priorReturn.case === "never_filed") {
       results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: priorReturn.case === "first_year" ? "First year — beginning balances start at zero." : "No prior return exists (declared) — beginning balances start at zero." })
-    } else if (priorReturn.case === "we_filed") {
-      results.push(priorReturn.status === "on_file"
-        ? { id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "Prior return is on file with us — staff tie out the beginning balances during review." }
-        : { id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: "You said we filed last year's return but we found no record — staff will verify before review can finish." })
-    } else if (priorReturn.case === "filed_elsewhere" && priorReturn.status === "quarantined") {
-      results.push({ id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: "The uploaded prior return did not pass verification — staff are reviewing it." })
+    } else if (priorReturn.case === "we_filed" && priorReturn.status === "claim_mismatch") {
+      results.push({ id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: "You said we filed last year's return but we found no record — staff will verify before review can finish." })
+    } else if (priorReturn.case === "we_filed" && priorReturn.status === "on_file") {
+      results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "Prior return is on file with us — staff tie out the beginning balances during review." })
+    } else if ((priorReturn.case === "filed_elsewhere" || priorReturn.case === "we_filed") && priorReturn.status === "quarantined") {
+      results.push({ id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: "The prior return did not pass verification — staff are reviewing it." })
     } else if (draft.beginning_cash === null) {
       results.push({ id: 2, title: "Prior-year tie-out", status: "na", blocking: false, detail: "The prior return has no readable cash balance — staff tie out manually." })
     } else {

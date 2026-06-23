@@ -84,6 +84,59 @@ describe("buildFinancialDraft + evaluateGates — coherent year", () => {
   })
 })
 
+describe("we_filed auto-carry-forward reads identically to a client upload", () => {
+  // Same numbers as PRIOR, but sourced from OUR own filed return (we_filed/validated).
+  const WE_FILED: PriorReturnCaseRecord = {
+    case: "we_filed", status: "validated", tax_return_id: "tr-1",
+    note: "read from our filed return", recorded_at: "2026-01-01T00:00:00Z",
+    extracted: PRIOR.case === "filed_elsewhere" ? PRIOR.extracted : (undefined as never),
+    issues: [], source: "drive:abc",
+  }
+  const transactions: DraftTransaction[] = [
+    tx({ amount: 50_000, category: "income", subcategory: "revenue", balance_after: 60_000 }),
+    tx({ amount: -20_000, category: "expense", balance_after: 40_000, transaction_date: "2025-07-01" }),
+    tx({ amount: 5_000, category: "contribution", counterparty: "Sofia Marinoni", balance_after: 45_000, transaction_date: "2025-08-01" }),
+    tx({ amount: -8_000, category: "distribution", counterparty: "Marco Bianchi", balance_after: 37_000, transaction_date: "2025-09-01" }),
+  ]
+  const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: WE_FILED })
+  const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: WE_FILED })
+
+  it("feeds beginning cash + per-member beginning capital from our filed return", () => {
+    expect(priorEndingCash(WE_FILED)).toBe(10_000)
+    expect(draft.beginning_cash).toBe(10_000)
+    expect(draft.beginning_cash_source).toBe("prior_return")
+    expect(draft.members.find(m => m.name === "Sofia Marinoni")!.beginning_capital).toBe(6_000)
+  })
+
+  it("gate 2 ties out (not 'staff tie out') and all gates pass", () => {
+    expect(gates.find(g => g.id === 2)!.status).toBe("pass")
+    expect(canConfirm(gates)).toBe(true)
+  })
+})
+
+describe("we_filed non-validated statuses keep staff tie-out / mismatch wording", () => {
+  const transactions = [tx({ amount: 100, category: "income", balance_after: 100 })]
+  const make = (status: "on_file" | "claim_mismatch") =>
+    ({ case: "we_filed", status, tax_return_id: status === "on_file" ? "t" : null, note: "", recorded_at: "" }) as PriorReturnCaseRecord
+
+  it("on_file → NA, staff tie out (no auto numbers)", () => {
+    const prior = make("on_file")
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: prior })
+    expect(priorEndingCash(prior)).toBeNull()
+    expect(draft.beginning_cash_source).not.toBe("prior_return")
+    const g2 = evaluateGates({ draft, ownership: MEMBERS, priorReturn: prior }).find(g => g.id === 2)!
+    expect(g2.status).toBe("na")
+    expect(g2.detail).toContain("staff tie out")
+  })
+
+  it("claim_mismatch → fail (we have no record)", () => {
+    const prior = make("claim_mismatch")
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: prior })
+    const g2 = evaluateGates({ draft, ownership: MEMBERS, priorReturn: prior }).find(g => g.id === 2)!
+    expect(g2.status).toBe("fail")
+  })
+})
+
 describe("gate failure modes", () => {
   it("gate 6 fails HARD on uncategorized; confirm blocked", () => {
     const transactions = [tx({ amount: -100, category: "uncategorized" })]

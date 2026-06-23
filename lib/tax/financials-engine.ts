@@ -23,7 +23,7 @@
 
 import { computePnlTotals } from "@/lib/pnl-generator"
 import { sameName, type ResolvedMember } from "./ownership-resolution"
-import type { PriorReturnCaseRecord } from "./prior-return-case"
+import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 import { toUsd, type FxRates } from "./fx"
 
 export interface DraftTransaction {
@@ -110,19 +110,20 @@ export function attributeToMember(text: string | null, members: ResolvedMember[]
   return null
 }
 
-/** Beginning cash from a validated prior return; null when there is none. */
+/** Beginning cash from a validated prior return — from a client upload
+ *  (filed_elsewhere) OR our own filed return (we_filed). Null when there is
+ *  none; first_year / never_filed start at 0; quarantined / on_file are handled
+ *  by the orchestration + gate 2 (staff tie out). */
 export function priorEndingCash(prior: PriorReturnCaseRecord | null): number | null {
-  if (!prior) return null
-  if (prior.case === "filed_elsewhere" && prior.status === "validated") {
-    return prior.extracted.schedule_l?.ending.cash ?? null
-  }
-  return null // first_year / never_filed start at 0 by design; quarantined/on_file handled by orchestration
+  return validatedExtraction(prior)?.schedule_l?.ending.cash ?? null
 }
 
-/** Prior per-member beginning capital from validated K-1s (matched by name). */
+/** Prior per-member beginning capital from validated K-1s (matched by name),
+ *  from either prior-return source. */
 function priorBeginningCapital(prior: PriorReturnCaseRecord | null, memberName: string): number {
-  if (prior && prior.case === "filed_elsewhere" && prior.status === "validated") {
-    const k1 = prior.extracted.k1s.find(k => sameName(k.partner_name, memberName))
+  const extracted = validatedExtraction(prior)
+  if (extracted) {
+    const k1 = extracted.k1s.find(k => sameName(k.partner_name, memberName))
     if (k1?.ending_capital !== null && k1?.ending_capital !== undefined) return k1.ending_capital
   }
   return 0
