@@ -29,7 +29,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import * as fs from 'fs'
 import * as path from 'path'
 import { SignJWT, importPKCS8 } from 'jose'
-import { parseExport, digitsOnly, phonesMatch, personName } from './whatsapp-parse'
+import { parseExport, digitsOnly, phonesMatch, personName, type ParsedMessage } from './whatsapp-parse'
 
 // ─── Load .env.local ─────────────────────────────────────
 function loadEnv() {
