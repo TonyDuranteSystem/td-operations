@@ -242,6 +242,11 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
                   {c.status === 'sent_to_client' && c.updated_at && (
                     <span className="text-[10px] text-zinc-400">Sent {new Date(c.updated_at).toLocaleDateString()}</span>
                   )}
+                  {c.status === 'filed' && c.updated_at && (
+                    <span className="text-[10px] text-blue-600">
+                      · {new Date(c.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  )}
                   {busyIndex === i && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">{rowActions(c, i)}</div>
