@@ -49,6 +49,11 @@ interface FormationDashboardProps {
    * wizard_progress row is keyed on contact_id (account_id NULL) and the
    * account-scoped wizard lookup returned nothing. */
   sdStage?: string | null
+  /** ISO timestamp the LLC was filed with the state (from getFormationTracker —
+   * the "Filed with State" stage transition, or stage_entered_at while at that
+   * stage). Drives the date in the "filed with the state" waiting banner. Null
+   * when unknown. */
+  filedAt?: string | null
 }
 
 export function FormationDashboard({
@@ -63,6 +68,7 @@ export function FormationDashboard({
   trackerSteps,
   formationLeadId,
   sdStage,
+  filedAt,
 }: FormationDashboardProps) {
   const tr = locale === 'it' ? IT : EN
   // New-company formations are lead-anchored: the wizard page only enters the
@@ -211,12 +217,16 @@ export function FormationDashboard({
         </Link>
       )}
 
-      {/* Waiting state banners */}
+      {/* Waiting state banner — only at "Filed with State". The LLC has ALREADY
+          been filed (we're waiting on the state to confirm), so the copy is past
+          tense + carries the filing date when known. */}
       {waitingForState && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 flex items-start gap-3">
           <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold text-blue-900">{tr.waitingStateTitle}</p>
+            <p className="font-semibold text-blue-900">
+              {filedAt ? tr.waitingStateTitleDated.replace('{date}', formatDate(filedAt)) : tr.waitingStateTitle}
+            </p>
             <p className="text-sm text-blue-700 mt-1">{tr.waitingStateBody}</p>
           </div>
         </div>
@@ -435,8 +445,9 @@ const EN = {
   ctaLeaseDesc: 'Your registered address lease is ready for your signature',
   ctaClosureTitle: 'Complete Your Company Closure Details',
   ctaClosureDesc: 'We need details about the company you\'re closing — name, EIN, and Articles of Organization',
-  waitingStateTitle: 'Your LLC is being filed',
-  waitingStateBody: 'We\'ve submitted your Articles of Organization to the Secretary of State. Processing time varies by state — typically 1–4 weeks. We\'ll update you as soon as we hear back.',
+  waitingStateTitle: 'Your LLC has been filed with the Secretary of State',
+  waitingStateTitleDated: 'Your LLC has been filed with the Secretary of State on {date}',
+  waitingStateBody: 'Processing time varies by state — typically 1–4 weeks. We\'ll update you as soon as the state confirms.',
   waitingEINTitle: 'EIN Application Submitted to the IRS',
   waitingEINBody: 'Your SS-4 form has been faxed to the IRS. EIN numbers typically arrive within 4–6 weeks. We\'ll notify you as soon as it\'s received.',
   allDoneTitle: 'Your formation is complete!',
@@ -482,8 +493,9 @@ const IT = {
   ctaLeaseDesc: 'Il contratto per il tuo indirizzo registrato è pronto per la firma',
   ctaClosureTitle: 'Completa i Dati per la Chiusura della Società',
   ctaClosureDesc: 'Ci servono i dettagli della società che stai chiudendo — nome, EIN e Atto Costitutivo',
-  waitingStateTitle: 'La tua LLC è in fase di registrazione',
-  waitingStateBody: 'Abbiamo depositato i tuoi Articles of Organization presso il Segretario di Stato. I tempi di elaborazione variano per Stato — di solito 1–4 settimane. Ti aggiorneremo non appena riceveremo risposta.',
+  waitingStateTitle: 'La tua LLC è stata depositata presso il Segretario di Stato',
+  waitingStateTitleDated: 'La tua LLC è stata depositata presso il Segretario di Stato il {date}',
+  waitingStateBody: 'I tempi di elaborazione variano per Stato — di solito 1–4 settimane. Ti aggiorneremo non appena lo Stato confermerà.',
   waitingEINTitle: 'Richiesta EIN Inviata all\'IRS',
   waitingEINBody: 'Il tuo modulo SS-4 è stato inviato via fax all\'IRS. I numeri EIN arrivano tipicamente entro 4–6 settimane. Ti notificheremo non appena lo riceveremo.',
   allDoneTitle: 'La tua costituzione è completata!',

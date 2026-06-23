@@ -3,6 +3,7 @@ import { resolveMailingAddress } from '@/lib/addresses'
 import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
+import { normalizeStageHistory } from '@/lib/stage-history-helpers'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -143,35 +144,38 @@ export async function getFormationTracker(opts: {
   sdId?: string | null
   contactId?: string | null
   accountId?: string | null
-}): Promise<{ currentStage: string | null; stages: FormationStageRow[] } | null> {
+}): Promise<{ currentStage: string | null; stages: FormationStageRow[]; filedAt: string | null } | null> {
   // Resolve the formation SD's current stage, cascading through the locators in
   // priority order and stopping at the first hit (an account-scoped lookup falls
-  // back to the contact-scoped SD for not-yet-materialized formations).
-  let currentStage: string | null = null
+  // back to the contact-scoped SD for not-yet-materialized formations). We also
+  // capture stage_entered_at + stage_history off the matched SD so we can derive
+  // the filing date (see filedAt below).
+  const SD_COLS = 'stage, stage_entered_at, stage_history'
+  let sdRow: { stage: string | null; stage_entered_at: string | null; stage_history: unknown } | null = null
   if (opts.sdId) {
     const { data } = await supabaseAdmin
       .from('service_deliveries')
-      .select('stage')
+      .select(SD_COLS)
       .eq('id', opts.sdId)
       .maybeSingle()
-    currentStage = (data?.stage as string | null) ?? null
+    sdRow = (data as typeof sdRow) ?? null
   }
-  if (currentStage == null && opts.accountId) {
+  if (sdRow == null && opts.accountId) {
     const { data } = await supabaseAdmin
       .from('service_deliveries')
-      .select('stage')
+      .select(SD_COLS)
       .eq('account_id', opts.accountId)
       .eq('service_type', 'Company Formation')
       .eq('status', 'active')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    currentStage = (data?.stage as string | null) ?? null
+    sdRow = (data as typeof sdRow) ?? null
   }
-  if (currentStage == null && opts.contactId) {
+  if (sdRow == null && opts.contactId) {
     const { data } = await supabaseAdmin
       .from('service_deliveries')
-      .select('stage')
+      .select(SD_COLS)
       .eq('contact_id', opts.contactId)
       .is('account_id', null)
       .eq('service_type', 'Company Formation')
@@ -179,8 +183,19 @@ export async function getFormationTracker(opts: {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    currentStage = (data?.stage as string | null) ?? null
+    sdRow = (data as typeof sdRow) ?? null
   }
+
+  const currentStage = (sdRow?.stage as string | null) ?? null
+
+  // Filing date for the "Filed with State" step + the waiting banner. Prefer the
+  // durable stage_history transition into "Filed with State" (survives advancing
+  // past the stage); fall back to stage_entered_at only while the SD still sits
+  // AT that stage; otherwise unknown (legacy SD with no recorded transition).
+  const filedFromHistory =
+    normalizeStageHistory(sdRow?.stage_history).find((e) => e.to_stage === 'Filed with State')?.advanced_at ?? null
+  const filedAt =
+    filedFromHistory ?? (currentStage === 'Filed with State' ? (sdRow?.stage_entered_at ?? null) : null)
 
   const { data: stageRows } = await supabaseAdmin
     .from('pipeline_stages')
@@ -189,7 +204,7 @@ export async function getFormationTracker(opts: {
     .order('stage_order', { ascending: true })
 
   if (!stageRows || stageRows.length === 0) return null
-  return { currentStage, stages: stageRows as unknown as FormationStageRow[] }
+  return { currentStage, stages: stageRows as unknown as FormationStageRow[], filedAt }
 }
 
 export interface InProgressFormation {

@@ -20,6 +20,22 @@ const ACTION_LABEL: Record<'en' | 'it', string> = {
   it: 'Azione richiesta',
 }
 
+const FILED_LABEL: Record<'en' | 'it', string> = {
+  en: 'Filed',
+  it: 'Depositata',
+}
+
+/** Compact, locale-aware filing date, e.g. "Jun 18, 2026" / "18 giu 2026". */
+function formatFiledDate(iso: string, locale: 'en' | 'it'): string | null {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleDateString(locale === 'it' ? 'it-IT' : 'en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
 /**
  * Client-facing Company Formation progress tracker. Driven entirely by the
  * formation SD's pipeline stages (client_label / client_label_it). Client-action
@@ -34,6 +50,7 @@ export function FormationProgressTracker({ steps, locale, wizardHref, signHref, 
         {steps.map((step, i) => {
           const href = step.action === 'wizard' ? wizardHref : step.action === 'sign' ? signHref : null
           const clickable = step.isActionRequired && href
+          const filedDate = step.filedAt ? formatFiledDate(step.filedAt, locale) : null
           const body = (
             <div
               className={cn(
@@ -67,6 +84,9 @@ export function FormationProgressTracker({ steps, locale, wizardHref, signHref, 
                   )}
                 >
                   {step.label}
+                  {filedDate && (
+                    <span className="text-zinc-500 font-normal"> · {FILED_LABEL[locale]} {filedDate}</span>
+                  )}
                 </p>
                 {step.isActionRequired && (
                   <p className="text-xs font-medium text-amber-700">{ACTION_LABEL[locale]}</p>
