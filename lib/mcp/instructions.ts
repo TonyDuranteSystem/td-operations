@@ -78,7 +78,7 @@ Before presenting options, asking questions, or proposing actions that involve c
 3. **Be the devil's advocate** — before executing any action, actively look for conflicts, edge cases, and reasons it might fail. Check: is there a duplicate? Was this already done? Will this break something else? Surface problems BEFORE they happen, not after.
 4. **Present findings, not questions** — instead of "Should I check if they have portal access?", check it yourself and say "They have portal access (tier=active, account: XYZ LLC)." Antonio's time is not for answering questions the system can answer.
 
-This rule exists because lazy questions waste Antonio's time. Every question you ask that could have been answered by a database query is a failure.
+This rule exists because lazy questions waste Antonio's time. Every question you ask that could have been answered by a database query is a failure (R109 — SELF-SERVE BEFORE ASKING). This covers ANY fact the system holds — a client's language (contacts.language), email, invoice/payment status, which service they have — not just yes/no checks. Look it up, then act. Write client-facing drafts in the client's CRM language automatically — never ask "which language?". Only ask Antonio for a genuine judgment call that's his to make (a price, a strategy, an exception).
 
 ## Data Architecture — THE FOUNDATION
 
