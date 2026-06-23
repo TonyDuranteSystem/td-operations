@@ -57,6 +57,7 @@ import {
 } from "./thread-routing"
 import { buildThreadContext } from "./thread-context"
 import { createThreadSummary, getThreadSummary, resolveThread } from "./thread-summaries"
+import { buildRelatedThreadsSuffix, embedThreadSummary } from "./thread-recall"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -753,6 +754,22 @@ export function snippetAround(text: string, q: string, radius = 220): string {
   const start = Math.max(0, idx - radius)
   const end = Math.min(text.length, idx + q.length + radius)
   return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`
+}
+
+export const RECALL_THREAD_TOOL: ToolDef = {
+  name: "recall_thread",
+  description: [
+    "Recall THIS conversation's own history from the permanent record — use it whenever you're unsure what was said, decided, or done earlier in this thread, including weeks or months ago. You always see a short recap of recent turns automatically; call this to read the FULL verbatim detail or to find a specific earlier point you don't have in front of you.",
+    "With a `query`: returns only the earlier turns mentioning that keyword/topic (e.g. a client name, a decision, 'second installment', a branch name). Without a query: returns the whole conversation transcript.",
+    "Use it before saying you don't remember or don't know what was discussed — the answer is almost certainly here. The conversation is identified for you; you don't pass an id.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Optional keyword/topic to find within this conversation (e.g. a client name, 'invoice', a decision). Omit to read the entire thread." },
+    },
+    required: [],
+  },
 }
 
 export const SEARCH_SYSDOCS_TOOL: ToolDef = {
@@ -1510,6 +1527,7 @@ export async function executeWorkerTool(
   params: Record<string, unknown>,
   availableNames?: Set<string>,
   sourceMessageId?: string | null,
+  currentThreadId?: string | null,
 ): Promise<string> {
   if (name === "start_code_task") {
     const { _currentSlackCtx } = await import("./slack-claude")
@@ -1659,6 +1677,30 @@ export async function executeWorkerTool(
     if (name === "read_sysdoc") return readSysdocForWorker(params)
     if (name === "search_sops") return searchSopsForWorker(params)
     return readDriveFileForWorker(params)
+  }
+  // recall_thread — on-demand FULL/searched recall of THIS conversation's permanent
+  // transcript (Slack-only, gated via enableThreadRecall). The thread_id is injected
+  // server-side (currentThreadId) — the model can't address another conversation.
+  // Executor-gate too (defense-in-depth, R108): never let the Hermes research worker
+  // read a thread transcript even if the name leaks. Read-only.
+  if (name === "recall_thread") {
+    if (!availableNames?.has("recall_thread")) {
+      return `❌ Tool "recall_thread" is not permitted in this worker call (thread recall not enabled).`
+    }
+    if (!currentThreadId) {
+      return "❌ No conversation thread is attached to this message, so there's nothing to recall."
+    }
+    const { recallThreadHistory } = await import("./thread-context")
+    const query = typeof params.query === "string" && params.query.trim() ? params.query.trim() : null
+    const res = await recallThreadHistory(currentThreadId, query)
+    if (res.totalTurns === 0) return "This conversation has no earlier turns recorded yet."
+    if (query && res.matchedTurns === 0) {
+      return `No earlier turns in this conversation mention "${query}". (The thread has ${res.totalTurns} turn(s) total — try a different keyword, or omit the query to read the whole thread.)`
+    }
+    const header = query
+      ? `Found ${res.matchedTurns} turn(s) mentioning "${query}" (of ${res.totalTurns} total in this conversation):`
+      : `Full conversation transcript — ${res.totalTurns} turn(s):`
+    return `${header}\n\n${res.text}`
   }
   // find_tool / use_tool — the flexible action surface (Slack-only, gated via
   // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
@@ -1861,6 +1903,14 @@ export interface CallWorkerOptions {
    */
   enableDbRead?: boolean
   /**
+   * Expose the Slack-only recall_thread tool for this call (persistent memory). When
+   * true, RECALL_THREAD_TOOL is appended so the worker can read THIS conversation's
+   * full permanent transcript on demand (verbatim detail / keyword search), even
+   * months later. The thread is identified server-side from opts.threadId. The
+   * Hermes/Telegram path never sets this (R108).
+   */
+  enableThreadRecall?: boolean
+  /**
    * Expose the Slack-only send_email tool for this call. Set by the Slack worker
    * (processSlackEvent). When true, SEND_EMAIL_TOOL is appended to the resolved tool
    * list. The Hermes/Telegram path never sets this, so its worker can never send email
@@ -1954,6 +2004,7 @@ export async function runWorkerLoop(
   systemPrompt: string,
   maxIterations?: number,
   sourceMessageId?: string | null,
+  currentThreadId?: string | null,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
@@ -2038,7 +2089,7 @@ export async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
-      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId)
+      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId, currentThreadId)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -2274,6 +2325,13 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     tools = [...tools, RUN_SQL_QUERY_TOOL]
   }
 
+  // Slack-only: append the on-demand thread-recall tool (persistent memory). Gated on
+  // enableThreadRecall so it NEVER reaches the Hermes research worker (R108) and never
+  // double-adds. The thread is identified server-side (opts.threadId), not by the model.
+  if (opts.enableThreadRecall && opts.threadId && !tools.some((t) => t.name === RECALL_THREAD_TOOL.name)) {
+    tools = [...tools, RECALL_THREAD_TOOL]
+  }
+
   // Slack-only: append the direct email-send tool. Gated on enableEmailSend so it
   // NEVER reaches the Hermes research worker (R108) and never double-adds. Sending
   // still requires Antonio's explicit "send it" — enforced by the prompt.
@@ -2355,7 +2413,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     systemPrompt = `${systemPrompt}${await buildClientRecallSuffix(userBody, opts.clientKey, opts.clientName)}`
   }
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null)
+  // Persistent memory — cross-thread recall ("connect the dots"): surface RELATED
+  // PAST conversations (other threads, even months old) by semantic similarity, so
+  // the worker links this message to prior history instead of treating it as new.
+  // Slack-only (enableThreadRecall) so the Hermes research worker never triggers it
+  // (R108). Best-effort: "" on missing key / un-applied migration / any error.
+  if (opts.enableThreadRecall) {
+    systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId)}`
+  }
+
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId)
 
   if (threadId) {
     try {
@@ -2367,6 +2434,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
           ? "action_proposed"
           : "investigation_complete"
       await resolveThread(threadId, outcome, oneParagraphSummary(result.reply))
+      // Persistent memory: re-embed this thread's fresh summary so it's recallable by
+      // FUTURE conversations (cross-thread "connect the dots"). Slack-only (the gate),
+      // best-effort — never block the reply over a memory write.
+      if (opts.enableThreadRecall) {
+        await embedThreadSummary(threadId).catch(() => {})
+      }
     } catch (err) {
       console.warn(
         `[callWorker] resolveThread failed for ${threadId} (reply still returned):`,
