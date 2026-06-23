@@ -69,4 +69,40 @@ describe('buildFormationTrackerSteps', () => {
     expect(steps.every((s) => s.status === 'upcoming')).toBe(true)
     expect(steps.every((s) => !s.isActionRequired)).toBe(true)
   })
+
+  describe('filedAt (filing date on the Filed-with-State step)', () => {
+    const FILED_AT = '2026-06-18T15:00:00.000Z'
+
+    it('attaches filedAt to the Filed-with-State step while AT that stage', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'Filed with State', 'en', FILED_AT)
+      const filed = steps.find((s) => s.stageName === 'Filed with State')!
+      expect(filed.status).toBe('current')
+      expect(filed.filedAt).toBe(FILED_AT)
+    })
+
+    it('keeps filedAt once the SD has advanced PAST Filed with State', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'EIN Received', 'en', FILED_AT)
+      const filed = steps.find((s) => s.stageName === 'Filed with State')!
+      expect(filed.status).toBe('completed')
+      expect(filed.filedAt).toBe(FILED_AT)
+    })
+
+    it('does NOT attach filedAt while Filed with State is still upcoming', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'Payment Confirmed', 'en', FILED_AT)
+      const filed = steps.find((s) => s.stageName === 'Filed with State')!
+      expect(filed.status).toBe('upcoming')
+      expect(filed.filedAt).toBeUndefined()
+    })
+
+    it('attaches filedAt to NO other step', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'EIN Received', 'en', FILED_AT)
+      const withDate = steps.filter((s) => s.filedAt)
+      expect(withDate.map((s) => s.stageName)).toEqual(['Filed with State'])
+    })
+
+    it('omits filedAt entirely when no date is provided', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'Filed with State', 'en')
+      expect(steps.every((s) => s.filedAt == null)).toBe(true)
+    })
+  })
 })
