@@ -29,7 +29,6 @@ import { ProfileCompletionBanner } from '@/components/portal/profile-completion-
 import { RenewalBanner } from '@/components/portal/renewal-banner'
 import { MemberInfoBanner } from '@/components/portal/member-info-banner'
 import { OfferBanner } from '@/components/portal/offer-banner'
-import { FormationInProgressBanner } from '@/components/portal/formation-in-progress-banner'
 import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
@@ -615,27 +614,6 @@ export default async function PortalDashboardPage() {
         .then(r => r.data ?? null)
     : null
 
-  // Formation-in-progress: an existing active client who has signed+paid a
-  // formation offer for a BRAND NEW company that has no account yet. The active
-  // dashboard would otherwise give them no path to that company's wizard
-  // (the OfferBanner above only fires for sent/viewed offers, not completed
-  // ones). lead_id anchors the wizard to the new company — never an existing
-  // account. See dev_task 358e8cbe.
-  const formationInProgress = user.email
-    ? await supabaseAdmin
-        .from('offers')
-        .select('lead_id')
-        .eq('client_email', user.email)
-        .eq('contract_type', 'formation')
-        .eq('status', 'completed')
-        .is('account_id', null)
-        .not('lead_id', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-        .then(r => (r.data?.lead_id as string | null) ?? null)
-    : null
-
   // Partner-bank referrals — separate await because the generated Supabase
   // types don't yet cover bank_referrals/bank_referral_clicks. The helper
   // in lib/bank-referrals.ts swallows errors so a missing schema in any
@@ -720,11 +698,13 @@ export default async function PortalDashboardPage() {
         />
       )}
 
-      {/* Formation-in-progress — entry point to the NEW company's wizard for an
-          existing active client forming a second company. */}
-      {formationInProgress && (
-        <FormationInProgressBanner leadId={formationInProgress} locale={locale} />
-      )}
+      {/* Formation-in-progress banner removed (dev_task bb54680b): it was
+          queried by email (not the selected company) and on a formation offer
+          left at account_id NULL, so it leaked onto every active company's
+          dashboard and lingered after the company was formed. The in-progress
+          formation is now a first-class switchable entity — the company switcher
+          lists it and selecting it renders the FormationDashboard (with the
+          Continue-Setup CTA), which is the correct per-entity path. */}
 
       {/* Member info banner — urgent, shown for MMLLC clients with a pending member info request */}
       {pendingMemberInfoRequest && (
