@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     const { data: channels } = await supabaseAdmin
       .from('messaging_channels')
       .select('id')
-      .eq('channel_type', 'whatsapp')
+      .eq('platform', 'whatsapp')
       .limit(1)
 
     const channelId = channels?.[0]?.id
@@ -78,26 +78,12 @@ export async function POST(req: NextRequest) {
       group = newGroup
     }
 
-    // Send message via Edge Function
-    const efUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-message`
+    // Send message via provider routing (reads provider from messaging_channels)
+    const { dispatchWhatsAppMessage } = await import('@/lib/messaging/send-dispatcher')
+    const sendResult = await dispatchWhatsAppMessage(chatId, message, channelId)
 
-    const sendRes = await fetch(efUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message,
-        channel_id: channelId,
-      }),
-    })
-
-    const sendResult = await sendRes.json()
-
-    if (!sendRes.ok) {
-      return NextResponse.json({ error: 'Failed to send WhatsApp message', details: sendResult }, { status: 500 })
+    if (!sendResult.ok) {
+      return NextResponse.json({ error: sendResult.error || 'Failed to send WhatsApp message' }, { status: 500 })
     }
 
     // Return conversation object for the UI to select
