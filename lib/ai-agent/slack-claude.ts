@@ -368,6 +368,10 @@ export const OPEN_CLIENT_THREAD_LINK_ACTION_ID = "open_client_thread_link"
 // resolves the thread from the clicked message (channel:message_ts = source_ref), so the
 // button needs no value. See lib/ai-agent/client-thread-follows.ts.
 export const FOLLOW_CLIENT_THREAD_ACTION_ID = "follow_client_thread"
+// Lifecycle buttons on the 🗂️ card so every action is one click (no hidden reactions).
+export const CLOSE_CLIENT_THREAD_ACTION_ID = "close_client_thread"
+export const REOPEN_CLIENT_THREAD_ACTION_ID = "reopen_client_thread"
+export const REMOVE_CLIENT_THREAD_ACTION_ID = "remove_client_thread"
 
 /** Slugify free text into a catalog-safe topic slug (lowercase, underscores). */
 export function slugifyTopic(text: string): string {
@@ -600,14 +604,13 @@ export async function closeClientThread(
     console.warn("[slack-claude] closeClientThread memory feed failed (non-fatal):", err)
   }
 
-  // A closed conversation must drop out of every follower's "📌 Following" DM list
-  // and the shared Canvas. Best-effort; dynamic import avoids a load-time cycle.
+  // A closed conversation must drop out of every follower's "📌 Following" DM list.
+  // Best-effort; dynamic import avoids a load-time cycle with client-thread-follows.
   try {
-    const { refreshFollowersDigests, refreshOpenConversationsCanvas } = await import("./client-thread-follows")
+    const { refreshFollowersDigests } = await import("./client-thread-follows")
     await refreshFollowersDigests(id)
-    await refreshOpenConversationsCanvas()
   } catch (err) {
-    console.warn("[slack-claude] closeClientThread follower/canvas refresh failed (non-fatal):", err)
+    console.warn("[slack-claude] closeClientThread follower-digest refresh failed (non-fatal):", err)
   }
   return { ok: true }
 }
@@ -622,13 +625,12 @@ export async function reopenClientThread(id: string): Promise<{ ok: boolean; err
     .eq("id", id)
   if (error) return { ok: false, error: error.message }
 
-  // Reopened → reappears in followers' "📌 Following" DM lists and the Canvas. Best-effort.
+  // Reopened → reappears in followers' "📌 Following" DM lists. Best-effort.
   try {
-    const { refreshFollowersDigests, refreshOpenConversationsCanvas } = await import("./client-thread-follows")
+    const { refreshFollowersDigests } = await import("./client-thread-follows")
     await refreshFollowersDigests(id)
-    await refreshOpenConversationsCanvas()
   } catch (err) {
-    console.warn("[slack-claude] reopenClientThread follower/canvas refresh failed (non-fatal):", err)
+    console.warn("[slack-claude] reopenClientThread follower-digest refresh failed (non-fatal):", err)
   }
   return { ok: true }
 }
@@ -806,25 +808,50 @@ export async function searchClientsForSlackOptions(
  */
 export function buildClientThreadRootBlocks(
   text: string,
-  openUrl?: string,
+  opts?: { openUrl?: string; status?: "open" | "closed" },
 ): Array<Record<string, unknown>> {
+  const status = opts?.status ?? "open"
   const elements: Array<Record<string, unknown>> = []
-  // 💬 Open — a url button that opens this thread (set after the message has a ts).
-  if (openUrl) {
+  // 💬 Open — url button that jumps into this thread (needs the message ts).
+  if (opts?.openUrl) {
     elements.push({
       type: "button",
       text: { type: "plain_text", text: "💬 Open", emoji: true },
-      url: openUrl,
+      url: opts.openUrl,
       action_id: OPEN_CLIENT_THREAD_LINK_ACTION_ID,
       style: "primary",
     })
   }
-  // 👀 Follow — toggles a per-user follow (handler resolves the thread from this message).
+  if (status === "open") {
+    // 👀 Follow · ✅ Close · 🗑️ Remove
+    elements.push({
+      type: "button",
+      text: { type: "plain_text", text: "👀 Follow", emoji: true },
+      action_id: FOLLOW_CLIENT_THREAD_ACTION_ID,
+      value: "follow",
+    })
+    elements.push({
+      type: "button",
+      text: { type: "plain_text", text: "✅ Close", emoji: true },
+      action_id: CLOSE_CLIENT_THREAD_ACTION_ID,
+      value: "close",
+    })
+  } else {
+    // closed → ↩️ Reopen
+    elements.push({
+      type: "button",
+      text: { type: "plain_text", text: "↩️ Reopen", emoji: true },
+      action_id: REOPEN_CLIENT_THREAD_ACTION_ID,
+      value: "reopen",
+    })
+  }
+  // 🗑️ Remove — always available (deletes the card + CRM record).
   elements.push({
     type: "button",
-    text: { type: "plain_text", text: "👀 Follow", emoji: true },
-    action_id: FOLLOW_CLIENT_THREAD_ACTION_ID,
-    value: "follow",
+    text: { type: "plain_text", text: "🗑️ Remove", emoji: true },
+    action_id: REMOVE_CLIENT_THREAD_ACTION_ID,
+    value: "remove",
+    style: "danger",
   })
   return [
     { type: "section", text: { type: "mrkdwn", text } },
@@ -861,19 +888,27 @@ export async function createClientConversationFromModal(args: {
 
   const by = args.userId ? `<@${args.userId}>` : "the team"
   const text = `🗂️ *${name}* · *${args.topicSlug}* — conversation started by ${by}.\n💬 Reply *inside this thread* to continue (open it and type in the thread's reply box — not the main channel box). No need to @ me; everything is saved to the CRM.`
-  const threadTs = await postSlackMessage(args.channelId, text, null, buildClientThreadRootBlocks(text))
+  const threadTs = await postSlackMessage(
+    args.channelId,
+    text,
+    null,
+    buildClientThreadRootBlocks(text, { status: "open" }),
+  )
   if (!threadTs) return { ok: false, error: "could not post the conversation message" }
 
   // Now that the message has a ts, add the 💬 Open button (a deep link to THIS thread)
-  // next to Follow — both buttons live ON the card: one message, no extra ephemerals.
+  // alongside Follow · Close · Remove — every action lives ON the card, one message.
   // Deterministic workspace-domain deep link, so no API call that can fail.
   const openUrl = buildSlackThreadDeepLink(args.channelId, threadTs)
-  await updateSlackMessage(args.channelId, threadTs, text, buildClientThreadRootBlocks(text, openUrl)).catch(
-    (err) => {
-      console.error("[slack-claude] add Open button (chat.update) failed:", err)
-      return false
-    },
-  )
+  await updateSlackMessage(
+    args.channelId,
+    threadTs,
+    text,
+    buildClientThreadRootBlocks(text, { openUrl, status: "open" }),
+  ).catch((err) => {
+    console.error("[slack-claude] add card buttons (chat.update) failed:", err)
+    return false
+  })
 
   const row: Record<string, unknown> = {
     account_id: kind === "account" ? id : null,

@@ -29,6 +29,10 @@ import {
   CHANNEL_SELECT_BLOCK_ID,
   CHANNEL_SELECT_ACTION_ID,
   FOLLOW_CLIENT_THREAD_ACTION_ID,
+  CLOSE_CLIENT_THREAD_ACTION_ID,
+  REOPEN_CLIENT_THREAD_ACTION_ID,
+  REMOVE_CLIENT_THREAD_ACTION_ID,
+  OPEN_CLIENT_THREAD_LINK_ACTION_ID,
 } from "@/lib/ai-agent/slack-claude"
 
 function body(payload: unknown): string {
@@ -143,26 +147,43 @@ describe("buildClientConversationModalView", () => {
 })
 
 describe("buildClientThreadRootBlocks", () => {
-  it("renders just the 👀 Follow button when no Open URL is given", () => {
-    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing — started by @x")
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ids = (blocks: any[]) => {
+    const actions = blocks.find((b) => b.type === "actions")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const section = blocks.find((b: any) => b.type === "section") as any
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const actions = blocks.find((b: any) => b.type === "actions") as any
-    expect(section.text.text).toContain("ACME")
-    expect(actions.elements).toHaveLength(1)
-    expect(actions.elements[0].action_id).toBe(FOLLOW_CLIENT_THREAD_ACTION_ID)
+    return actions.elements.map((e: any) => e.action_id)
+  }
+  const url = "https://tdoperationsworkspace.slack.com/archives/C/p1?thread_ts=1&cid=C"
+
+  it("open state: Follow + Close + Remove (no Open button without a url)", () => {
+    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing", { status: "open" })
+    expect(ids(blocks)).toEqual([
+      FOLLOW_CLIENT_THREAD_ACTION_ID,
+      CLOSE_CLIENT_THREAD_ACTION_ID,
+      REMOVE_CLIENT_THREAD_ACTION_ID,
+    ])
   })
 
-  it("renders 💬 Open (url) + 👀 Follow on one card when an Open URL is given", () => {
-    const url = "https://tdoperationsworkspace.slack.com/archives/C/p1?thread_ts=1&cid=C"
-    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing", url)
+  it("open state with url: Open + Follow + Close + Remove, all on one card", () => {
+    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing", { openUrl: url, status: "open" })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const actions = blocks.find((b: any) => b.type === "actions") as any
-    expect(actions.elements).toHaveLength(2)
     expect(actions.elements[0].url).toBe(url)
-    expect(actions.elements[0].text.text).toContain("Open")
-    expect(actions.elements[1].action_id).toBe(FOLLOW_CLIENT_THREAD_ACTION_ID)
+    expect(ids(blocks)).toEqual([
+      OPEN_CLIENT_THREAD_LINK_ACTION_ID,
+      FOLLOW_CLIENT_THREAD_ACTION_ID,
+      CLOSE_CLIENT_THREAD_ACTION_ID,
+      REMOVE_CLIENT_THREAD_ACTION_ID,
+    ])
+  })
+
+  it("closed state: Open + Reopen + Remove (no Follow/Close)", () => {
+    const blocks = buildClientThreadRootBlocks("🗂️ ACME · billing — ✅ Closed", { openUrl: url, status: "closed" })
+    expect(ids(blocks)).toEqual([
+      OPEN_CLIENT_THREAD_LINK_ACTION_ID,
+      REOPEN_CLIENT_THREAD_ACTION_ID,
+      REMOVE_CLIENT_THREAD_ACTION_ID,
+    ])
   })
 })
 

@@ -37,6 +37,9 @@ import {
   ensureTopicSlugFromText,
   STOP_THINKING_ACTION_ID,
   FOLLOW_CLIENT_THREAD_ACTION_ID,
+  CLOSE_CLIENT_THREAD_ACTION_ID,
+  REOPEN_CLIENT_THREAD_ACTION_ID,
+  REMOVE_CLIENT_THREAD_ACTION_ID,
   OPEN_CLIENT_CONVERSATION_ACTION_ID,
   CLIENT_CONVERSATION_SHORTCUT_CALLBACK,
   CLIENT_CONVERSATION_MODAL_CALLBACK,
@@ -85,6 +88,16 @@ async function fireFollowToggle(args: {
   userId: string
 }): Promise<void> {
   await fireBackground("/api/cron/client-thread-follow", args)
+}
+
+/** Fire-and-forget a card lifecycle action (close/reopen/remove) to its endpoint. */
+async function fireCardAction(args: {
+  action: "close" | "reopen" | "remove"
+  channelId: string
+  messageTs: string
+  userId: string
+}): Promise<void> {
+  await fireBackground("/api/cron/client-thread-action", args)
 }
 
 /** Shared fire-and-forget POST to an internal /api/cron endpoint (1.5s dispatch cap). */
@@ -232,6 +245,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await fireFollowToggle({ channelId: it.channelId, messageTs: it.messageTs, userId: it.userId })
     }
     return NextResponse.json({ ok: true })
+  }
+
+  // ── 🗂️ card lifecycle buttons: ✅ Close · ↩️ Reopen · 🗑️ Remove (background) ────
+  {
+    const cardAction =
+      it.actionId === CLOSE_CLIENT_THREAD_ACTION_ID
+        ? "close"
+        : it.actionId === REOPEN_CLIENT_THREAD_ACTION_ID
+          ? "reopen"
+          : it.actionId === REMOVE_CLIENT_THREAD_ACTION_ID
+            ? "remove"
+            : null
+    if (it.type === "block_actions" && cardAction) {
+      if (it.channelId && it.messageTs && it.userId) {
+        await fireCardAction({
+          action: cardAction,
+          channelId: it.channelId,
+          messageTs: it.messageTs,
+          userId: it.userId,
+        })
+      }
+      return NextResponse.json({ ok: true })
+    }
   }
 
   // ── "⏹ Stop" button (unchanged) ────────────────────────────────────────────

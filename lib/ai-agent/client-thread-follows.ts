@@ -12,7 +12,15 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { buildSlackThreadDeepLink, slackApiCall, slackApiGet } from "./slack-claude"
+import {
+  buildSlackThreadDeepLink,
+  buildClientThreadRootBlocks,
+  updateSlackMessage,
+  closeClientThread,
+  reopenClientThread,
+  slackApiCall,
+  slackApiGet,
+} from "./slack-claude"
 
 const DIGEST_CAP = 50
 
@@ -332,8 +340,6 @@ export async function removeClientThreadCard(args: {
   for (const u of followers) {
     await refreshUserFollowDigest(u)
   }
-  // Drop it from the shared Canvas too.
-  await refreshOpenConversationsCanvas()
 
   if (args.reactedBy) {
     await slackApiCall("chat.postEphemeral", {
@@ -383,4 +389,77 @@ export async function handleFollowToggle(args: {
   await slackApiCall("chat.postEphemeral", { channel: args.channelId, user: args.userId, text })
 
   await refreshUserFollowDigest(args.userId)
+}
+
+/** Build the 🗂️ card text for a given state (used when redrawing on close/reopen). */
+export function buildCardText(name: string, topic: string, closed: boolean): string {
+  const head = `🗂️ *${name}* · *${topic}*`
+  if (closed) {
+    return `${head} — ✅ *Closed*. The full conversation is saved to the CRM. Reopen if you need to continue.`
+  }
+  return `${head} — conversation.\n💬 Reply *inside this thread* to continue (open it and type in the thread's reply box — not the main channel box). No need to @ me; everything is saved to the CRM.`
+}
+
+/**
+ * Handle a lifecycle button on the 🗂️ card: Close, Reopen, or Remove. Resolves the
+ * thread from the clicked message, performs the action, and REDRAWS the card so its
+ * buttons reflect the new state (closed → Reopen; open → Follow/Close). Best-effort.
+ */
+export async function handleCardAction(args: {
+  action: "close" | "reopen" | "remove"
+  channelId: string
+  messageTs: string
+  userId: string | null
+}): Promise<void> {
+  if (args.action === "remove") {
+    await removeClientThreadCard({ channelId: args.channelId, messageTs: args.messageTs, reactedBy: args.userId })
+    return
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const sourceRef = `${args.channelId}:${args.messageTs}`
+  const { data: row } = await db
+    .from("client_threads")
+    .select("id, account_id, contact_id, lead_id, topic_slug")
+    .eq("source", "slack")
+    .eq("source_ref", sourceRef)
+    .maybeSingle()
+  if (!row) {
+    if (args.userId) {
+      await slackApiCall("chat.postEphemeral", {
+        channel: args.channelId,
+        user: args.userId,
+        text: "Couldn't find this conversation to update — try again from the 🗂️ message.",
+      })
+    }
+    return
+  }
+
+  if (args.action === "close") {
+    await closeClientThread(row.id, args.userId)
+  } else {
+    await reopenClientThread(row.id)
+  }
+
+  // Redraw the card with the new state's buttons.
+  const name = await resolveEntityName(db, row)
+  const topic = row.topic_slug ?? "general"
+  const status: "open" | "closed" = args.action === "close" ? "closed" : "open"
+  const text = buildCardText(name, topic, status === "closed")
+  const openUrl = buildSlackThreadDeepLink(args.channelId, args.messageTs)
+  await updateSlackMessage(
+    args.channelId,
+    args.messageTs,
+    text,
+    buildClientThreadRootBlocks(text, { openUrl, status }),
+  ).catch(() => false)
+
+  if (args.userId) {
+    await slackApiCall("chat.postEphemeral", {
+      channel: args.channelId,
+      user: args.userId,
+      text: args.action === "close" ? `✅ Closed *${name} · ${topic}*.` : `↩️ Reopened *${name} · ${topic}*.`,
+    })
+  }
 }
