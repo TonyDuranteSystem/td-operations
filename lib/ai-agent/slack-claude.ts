@@ -187,6 +187,23 @@ export async function slackApiCall(
 }
 
 /**
+ * GET-style Slack Web API call (query params). Slack's READ methods —
+ * chat.getPermalink, conversations.info — are GET endpoints; calling them as a
+ * POST with a JSON body can drop the params and return ok:false. Use this for reads.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function slackApiGet(method: string, params: Record<string, string>): Promise<any> {
+  const token = process.env.SLACK_BOT_TOKEN_CLAUDE
+  if (!token) throw new Error("SLACK_BOT_TOKEN_CLAUDE not configured")
+  const qs = new URLSearchParams(params).toString()
+  const res = await fetch(`https://slack.com/api/${method}?${qs}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return res.json()
+}
+
+/**
  * Post a message to Slack. threadTs makes it a reply in that thread. Optional
  * `blocks` post a Block Kit message (text stays as the notification/fallback);
  * used to attach the "⏹ Stop" button to the "On it 👍" acknowledgment.
@@ -914,10 +931,10 @@ export function buildSlackThreadDeepLink(channelId: string, threadTs: string): s
  */
 export async function getSlackPermalink(channelId: string, messageTs: string): Promise<string | null> {
   try {
-    const r = (await slackApiCall("chat.getPermalink", {
+    const r = (await slackApiGet("chat.getPermalink", {
       channel: channelId,
       message_ts: messageTs,
-    })) as unknown as { ok: boolean; permalink?: string; error?: string }
+    })) as { ok: boolean; permalink?: string; error?: string }
     if (r.ok && r.permalink) return r.permalink
     console.error("[slack-claude] chat.getPermalink not ok:", r.error)
   } catch (err) {

@@ -70,7 +70,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     return NextResponse.json({ ok: false, error: res.error }, { status: 200 })
   }
-  // New open conversation → reflect it on the shared Canvas (best-effort).
-  await refreshOpenConversationsCanvas()
+  // New open conversation → reflect it on the shared Canvas. If it fails (e.g. the
+  // canvases:write scope isn't active after reinstall), surface the exact Slack error
+  // to the creator instead of failing silently — the conversation itself is fine.
+  const canvas = await refreshOpenConversationsCanvas()
+  if (!canvas.ok && body.userId) {
+    await slackApiCall("chat.postEphemeral", {
+      channel: body.notifyChannel || channelId,
+      user: body.userId,
+      text: `(Note: the shared Canvas didn't update — Slack said: \`${canvas.error}\`. The conversation was created fine; this only affects the Canvas board.)`,
+    }).catch(() => {})
+  }
   return NextResponse.json({ ok: true, threadTs: res.threadTs })
 }
