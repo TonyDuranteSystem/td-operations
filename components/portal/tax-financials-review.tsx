@@ -801,6 +801,39 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Rich explanation — make sure the client understands what
+                    "confirm" means and what they're responsible for before they
+                    tick the box (Antonio, 2026-06-23). Plain language, no jargon. */}
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700 space-y-2">
+                  <p className="font-semibold text-zinc-900">{it ? 'Prima di confermare' : 'Before you confirm'}</p>
+                  <ul className="space-y-1.5 list-disc pl-5">
+                    <li>
+                      {it
+                        ? 'Questi sono il Conto Economico e lo Stato Patrimoniale che abbiamo preparato noi a partire dagli estratti conto che ci hai fornito.'
+                        : 'These are the Profit & Loss and Balance Sheet we prepared for you from the bank statements you gave us.'}
+                    </li>
+                    <li>
+                      {it
+                        ? 'Confermando, ci dici che questi numeri sono corretti e che possiamo procedere a preparare la tua dichiarazione su questa base.'
+                        : 'By confirming, you tell us these numbers are correct and that we can go ahead and prepare your tax return on this basis.'}
+                    </li>
+                    <li>
+                      {it
+                        ? 'Abbiamo lavorato solo con ciò che ci hai dato: se esistono altri conti o redditi che non abbiamo visto, vanno aggiunti — altrimenti la dichiarazione sarà incompleta. Quella scelta, e la sua responsabilità, sono tue.'
+                        : 'We worked only with what you gave us: if there are other accounts or income we didn\'t see, they need to be added — otherwise the return is incomplete. That choice, and the responsibility for it, is yours.'}
+                    </li>
+                    <li>
+                      {it
+                        ? 'Se hai una società estera con soci all\'estero, i redditi guadagnati o spesi su conti che non vediamo possono comunque andare dichiarati nel Paese dei soci.'
+                        : 'If you are a foreign-owned company, income earned or spent in accounts we don\'t see may still need to be reported on the owners\' home-country returns.'}
+                    </li>
+                    <li>
+                      {it
+                        ? 'Non sei ancora pronto? Puoi modificare le tue informazioni o caricare altri estratti conto qui sopra, invece di confermare.'
+                        : 'Not ready yet? You can edit your information or upload more statements above instead of confirming.'}
+                    </li>
+                  </ul>
+                </div>
                 <label className="flex items-start gap-2 text-sm text-zinc-700">
                   <input type="checkbox" checked={attestChecked} onChange={e => setAttestChecked(e.target.checked)} className="mt-0.5" />
                   <span>

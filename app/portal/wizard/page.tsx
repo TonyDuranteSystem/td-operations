@@ -21,6 +21,7 @@ import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
+import { firstYearCoherent } from '@/lib/tax/prior-return-case'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 
@@ -484,7 +485,15 @@ export default async function WizardPage({
           .eq('status', 'TR Filed')
           .limit(1)
           .maybeSingle()
-        if (priorFiled) prefillData.prior_return_case = 'we_filed'
+        if (priorFiled) {
+          prefillData.prior_return_case = 'we_filed'
+        } else if (account.formation_date && firstYearCoherent(account.formation_date, pendingTr.tax_year) === true) {
+          // First-year preselect: a company formed within (or after) the filing
+          // year has no prior return — preselect "first year" so the client
+          // doesn't answer a question with one possible answer. The submit route
+          // re-cross-checks formation_date regardless (firstYearCoherent).
+          prefillData.prior_return_case = 'first_year'
+        }
       }
     } catch (e) {
       console.error('[wizard] Prior-return Case A prefill failed (non-blocking):', e)
