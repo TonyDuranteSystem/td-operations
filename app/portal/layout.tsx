@@ -10,6 +10,7 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
+import { OfficeClock } from '@/components/portal/office-clock'
 import { getUnopenedDocsCount } from '@/lib/portal/document-alerts'
 import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
@@ -105,6 +106,9 @@ export default async function PortalLayout({
             />
             <main className="flex-1 overflow-y-auto overscroll-y-contain">
               <div className="h-14 lg:hidden" />
+              <div className="px-4 pt-3 sm:px-6 lg:px-8">
+                <OfficeClock />
+              </div>
               {tmSuspended && tmAccount ? (
                 <SuspendedGuard companyName={tmAccount.company_name}>{children}</SuspendedGuard>
               ) : children}
@@ -230,6 +234,11 @@ export default async function PortalLayout({
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
           <div className="h-14 lg:hidden" />
+          {/* International office clock — shows US (ET) office time + Open/Closed
+              status + the client's own local time, on every page. */}
+          <div className="px-4 pt-3 sm:px-6 lg:px-8">
+            <OfficeClock />
+          </div>
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
           {contactId && (
             <div className="hidden lg:flex items-center justify-end gap-3 px-8 pt-4">
