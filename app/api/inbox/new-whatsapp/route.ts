@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { dispatchWhatsAppMessage } from '@/lib/messaging/send-dispatcher'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +28,6 @@ export async function POST(req: NextRequest) {
     const chatId = `${digits}@c.us`
 
     // Find the WhatsApp Lead channel (default channel for outbound)
-    // @ts-expect-error Type instantiation is excessively deep
     const { data: channels } = await supabaseAdmin
       .from('messaging_channels')
       .select('id')
@@ -79,11 +79,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Send message via provider routing (reads provider from messaging_channels)
-    const { dispatchWhatsAppMessage } = await import('@/lib/messaging/send-dispatcher')
     const sendResult = await dispatchWhatsAppMessage(chatId, message, channelId)
 
     if (!sendResult.ok) {
-      return NextResponse.json({ error: sendResult.error || 'Failed to send WhatsApp message' }, { status: 500 })
+      const errMsg = 'error' in sendResult ? sendResult.error : 'Failed to send WhatsApp message'
+      return NextResponse.json({ error: errMsg || 'Failed to send WhatsApp message' }, { status: 500 })
     }
 
     // Return conversation object for the UI to select

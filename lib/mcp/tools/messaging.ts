@@ -171,7 +171,6 @@ export function registerMessagingTools(server: McpServer) {
         // Resolve channel_id when not supplied — use first active WhatsApp channel
         let resolvedChannelId = channel_id
         if (!resolvedChannelId) {
-          // @ts-expect-error Type instantiation is excessively deep
           const { data: channels } = await supabaseAdmin
             .from("messaging_channels")
             .select("id")
@@ -189,8 +188,9 @@ export function registerMessagingTools(server: McpServer) {
         const result = await dispatchWhatsAppMessage(chat_id, message, resolvedChannelId)
 
         if (!result.ok) {
+          const errMsg = 'error' in result ? result.error : 'unknown error'
           return {
-            content: [{ type: "text" as const, text: `❌ Send failed: ${result.error}` }],
+            content: [{ type: "text" as const, text: `❌ Send failed: ${errMsg}` }],
           }
         }
 
