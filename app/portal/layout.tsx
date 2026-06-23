@@ -106,7 +106,7 @@ export default async function PortalLayout({
             />
             <main className="flex-1 overflow-y-auto overscroll-y-contain">
               <div className="h-14 lg:hidden" />
-              <div className="px-4 pt-3 sm:px-6 lg:px-8">
+              <div className="px-4 pt-4 sm:px-6 lg:px-8">
                 <OfficeClock />
               </div>
               {tmSuspended && tmAccount ? (
@@ -236,7 +236,7 @@ export default async function PortalLayout({
           <div className="h-14 lg:hidden" />
           {/* International office clock — shows US (ET) office time + Open/Closed
               status + the client's own local time, on every page. */}
-          <div className="px-4 pt-3 sm:px-6 lg:px-8">
+          <div className="px-4 pt-4 sm:px-6 lg:px-8">
             <OfficeClock />
           </div>
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
