@@ -9,6 +9,7 @@ import { InboxHeader } from './inbox-header'
 import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
 import { MessageThread } from './message-thread'
+import { WhatsappThread } from './whatsapp-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
@@ -17,11 +18,13 @@ import type { InboxConversation, InboxChannel } from '@/lib/types'
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
   portal: MessagesSquare,
+  whatsapp: MessageSquare,
 }
 
 const channelLabels: Record<InboxChannel, string> = {
   gmail: 'Gmail',
   portal: 'Portal',
+  whatsapp: 'WhatsApp',
 }
 
 interface GmailLabel {
@@ -44,18 +47,13 @@ export function InboxShell() {
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
-  // Track unread overrides — key: conversation ID, value: unread count to show
-  // This prevents Gmail's slow index from reverting optimistic read/unread changes
   const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
-  // Persist deleted IDs in localStorage — Gmail's index takes 30-60s to update
-  // after label changes, so we need to filter client-side across page refreshes
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
     try {
       const stored = localStorage.getItem('inbox-deleted-ids')
       if (!stored) return new Set()
       const parsed = JSON.parse(stored) as { ids: string[]; ts: number }
-      // Expire after 5 minutes — Gmail index should be updated by then
       if (Date.now() - parsed.ts > 5 * 60 * 1000) {
         localStorage.removeItem('inbox-deleted-ids')
         return new Set()
@@ -65,10 +63,12 @@ export function InboxShell() {
   })
   const queryClient = useQueryClient()
 
+  const isWhatsApp = activeChannel === 'whatsapp'
+  const isGmail = selected?.channel === 'gmail'
+
   const handleEmailDeleted = useCallback((id: string) => {
     setDeletedIds(prev => {
       const next = new Set(prev).add(id)
-      // Persist to localStorage so it survives page refresh
       try {
         localStorage.setItem('inbox-deleted-ids', JSON.stringify({
           ids: Array.from(next),
@@ -77,17 +77,16 @@ export function InboxShell() {
       } catch { /* ignore */ }
       return next
     })
-    // If the deleted email was selected, deselect it
     setSelected(prev => prev?.id === id ? null : prev)
   }, [])
 
   const bulkMode = selectedIds.size > 0
 
-  // Fetch labels for Move To dropdown
   const { data: labelsData } = useQuery<{ labels: GmailLabel[] }>({
     queryKey: ['gmail-labels'],
     queryFn: () => fetch('/api/inbox/labels').then(r => r.json()),
     refetchInterval: 60_000,
+    enabled: !isWhatsApp,
   })
   const userLabels = (labelsData?.labels || []).filter(l => l.type === 'user')
 
@@ -105,14 +104,12 @@ export function InboxShell() {
     setMoveToOpen(false)
   }, [])
 
-  // When switching to a Gmail label view, set channel to gmail
   const handleLabelChange = (labelId: string | null) => {
     setActiveLabel(labelId)
     if (labelId) setActiveChannel('gmail')
     setSelected(null)
   }
 
-  // Single email action
   const emailActionMutation = useMutation({
     mutationFn: async ({ action, forwardTo }: { action: string; forwardTo?: string }) => {
       if (!selected) return
@@ -139,13 +136,11 @@ export function InboxShell() {
       }
       if (variables.action === 'mark_unread') {
         if (selected) {
-          // Override to unread=1 — persists across refetches until Gmail catches up
           setUnreadOverrides(prev => new Map(prev).set(selected.id, 1))
         }
         setSelected(null)
         toast.success('Marked as unread')
       }
-      // Delay refetch for trash/archive to let Gmail process
       if (variables.action === 'trash' || variables.action === 'archive') {
         setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
@@ -160,7 +155,6 @@ export function InboxShell() {
     },
   })
 
-  // Bulk email action
   const bulkActionMutation = useMutation({
     mutationFn: async ({ action, labelId }: { action: string; labelId?: string }) => {
       const threadIds = Array.from(selectedIds).map(id => id.replace('gmail:', ''))
@@ -202,7 +196,6 @@ export function InboxShell() {
 
   const handleSelect = (conversation: InboxConversation) => {
     setSelected(conversation)
-    // Override unread to 0 — opening an email marks it as read
     if (conversation.unread > 0) {
       setUnreadOverrides(prev => new Map(prev).set(conversation.id, 0))
     }
@@ -215,20 +208,16 @@ export function InboxShell() {
   const handleForward = async () => {
     if (!selected) return
     try {
-      // Fetch the full thread to get the last message body
       const params = activeMailbox ? `?mailbox=${activeMailbox}` : ''
       const res = await fetch(`/api/inbox/messages/${encodeURIComponent(selected.id)}${params}`)
       const data = await res.json()
       const messages = data?.messages || []
       const lastMsg = messages[messages.length - 1]
 
-      // Strip HTML to plain text: remove style/script tags, decode entities, collapse whitespace
       const htmlContent = lastMsg?.content || ''
       const tempDiv = document.createElement('div')
-      // Remove style and script tags before extracting text
       tempDiv.innerHTML = htmlContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       const rawText = tempDiv.textContent || tempDiv.innerText || ''
-      // Collapse multiple blank lines into max 2, trim each line
       const plainText = rawText
         .split('\n')
         .map(line => line.trim())
@@ -246,7 +235,6 @@ export function InboxShell() {
       })
       setComposeOpen(true)
     } catch {
-      // Fallback: open compose with just subject
       setForwardData({ subject: selected.subject || '', body: '', from: selected.name })
       setComposeOpen(true)
     }
@@ -257,7 +245,6 @@ export function InboxShell() {
     setSearchActive(true)
     setActiveChannel('gmail')
     setActiveLabel(null)
-    // The ConversationList will refetch with the search query
     queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
   }
 
@@ -282,7 +269,6 @@ export function InboxShell() {
   }
 
   const handleReply = () => {
-    // Scroll to and focus the compose reply textarea
     const textarea = document.querySelector('.compose-reply-textarea') as HTMLTextAreaElement
     if (textarea) {
       textarea.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -290,7 +276,10 @@ export function InboxShell() {
     }
   }
 
-  const isGmail = selected?.channel === 'gmail'
+  // Derive group ID from whatsapp conversation ID (format: "whatsapp:{uuid}")
+  const whatsappGroupId = selected?.channel === 'whatsapp'
+    ? selected.id.replace('whatsapp:', '')
+    : null
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -303,6 +292,7 @@ export function InboxShell() {
             setActiveLabel(null)
             setSearchActive(false)
             setSearchQuery('')
+            setSelected(null)
           }}
         />
         <div className="pr-4 relative">
@@ -334,61 +324,65 @@ export function InboxShell() {
         </div>
       </div>
 
-      {/* Mailbox selector — shows both mailboxes */}
-      <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
-        <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
-        {(['support', 'antonio'] as const).map(mb => (
-          <button
-            key={mb}
-            onClick={() => { setActiveMailbox(mb); setSelected(null) }}
-            className={cn(
-              'px-2.5 py-1 rounded text-xs font-medium transition-colors',
-              activeMailbox === mb
-                ? 'bg-blue-100 text-blue-700'
-                : 'text-zinc-500 hover:bg-zinc-100'
-            )}
-          >
-            {mb === 'support' ? 'support@' : 'antonio@'}
-          </button>
-        ))}
-      </div>
-
-      {/* Search bar + Read/Unread filter */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b bg-zinc-50">
-        <Search className="h-4 w-4 text-zinc-400 shrink-0" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') handleSearch() }}
-          placeholder="Search emails... (from:, subject:, has:attachment)"
-          className="flex-1 text-sm bg-transparent outline-none placeholder:text-zinc-400"
-        />
-        {searchActive && (
-          <button onClick={clearSearch} className="p-0.5 rounded hover:bg-zinc-200 text-zinc-400">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-        <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
-          {(['all', 'unread', 'read'] as const).map(f => (
+      {/* Mailbox selector — Gmail only */}
+      {!isWhatsApp && (
+        <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
+          <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
+          {(['support', 'antonio'] as const).map(mb => (
             <button
-              key={f}
-              onClick={() => setUnreadFilter(f)}
+              key={mb}
+              onClick={() => { setActiveMailbox(mb); setSelected(null) }}
               className={cn(
-                'px-2 py-1 rounded text-xs font-medium transition-colors',
-                unreadFilter === f
-                  ? f === 'unread' ? 'bg-blue-100 text-blue-700' : f === 'read' ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-600'
-                  : 'text-zinc-400 hover:bg-zinc-100'
+                'px-2.5 py-1 rounded text-xs font-medium transition-colors',
+                activeMailbox === mb
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-zinc-500 hover:bg-zinc-100'
               )}
             >
-              {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
+              {mb === 'support' ? 'support@' : 'antonio@'}
             </button>
           ))}
         </div>
-      </div>
+      )}
 
-      {/* Bulk Action Bar */}
-      {bulkMode && (
+      {/* Search bar + Read/Unread filter — Gmail only */}
+      {!isWhatsApp && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+          <Search className="h-4 w-4 text-zinc-400 shrink-0" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleSearch() }}
+            placeholder="Search emails... (from:, subject:, has:attachment)"
+            className="flex-1 text-sm bg-transparent outline-none placeholder:text-zinc-400"
+          />
+          {searchActive && (
+            <button onClick={clearSearch} className="p-0.5 rounded hover:bg-zinc-200 text-zinc-400">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
+            {(['all', 'unread', 'read'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setUnreadFilter(f)}
+                className={cn(
+                  'px-2 py-1 rounded text-xs font-medium transition-colors',
+                  unreadFilter === f
+                    ? f === 'unread' ? 'bg-blue-100 text-blue-700' : f === 'read' ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-600'
+                    : 'text-zinc-400 hover:bg-zinc-100'
+                )}
+              >
+                {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Action Bar — Gmail only */}
+      {bulkMode && !isWhatsApp && (
         <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
           <CheckSquare className="h-4 w-4 text-blue-500" />
           <span className="text-sm font-medium text-blue-700">
@@ -419,7 +413,6 @@ export function InboxShell() {
               <MailOpen className="h-3.5 w-3.5" />
               Mark Read
             </button>
-            {/* Move to folder */}
             <div className="relative">
               <button
                 onClick={() => setMoveToOpen(!moveToOpen)}
@@ -514,7 +507,8 @@ export function InboxShell() {
 
                 {(() => {
                   const Icon = channelIcons[selected.channel]
-                  return <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
+                  const iconClass = selected.channel === 'whatsapp' ? 'text-green-500' : 'text-zinc-400'
+                  return <Icon className={`h-4 w-4 shrink-0 ${iconClass}`} />
                 })()}
 
                 <div className="min-w-0 flex-1">
@@ -523,113 +517,120 @@ export function InboxShell() {
                   </p>
                   <p className="text-xs text-zinc-500">
                     {channelLabels[selected.channel]}
-                    {selected.subject && ` \u2014 ${selected.subject}`}
+                    {selected.subject && ` — ${selected.subject}`}
                   </p>
                 </div>
 
-                {/* Action buttons */}
-                <div className="flex items-center gap-1 shrink-0">
-                  {/* Create from email */}
-                  <button
-                    onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
-                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
-                    title="Create Task"
-                  >
-                    <ClipboardList className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
-                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
-                    title="Create Service"
-                  >
-                    <Cog className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
-                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
-                    title="Create Invoice"
-                  >
-                    <Receipt className="h-4 w-4" />
-                  </button>
+                {/* Action buttons — not shown for WhatsApp (read-only) */}
+                {!isWhatsApp && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
+                      title="Create Task"
+                    >
+                      <ClipboardList className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
+                      title="Create Service"
+                    >
+                      <Cog className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                      title="Create Invoice"
+                    >
+                      <Receipt className="h-4 w-4" />
+                    </button>
 
-                  <div className="w-px h-4 bg-zinc-200 mx-0.5" />
+                    <div className="w-px h-4 bg-zinc-200 mx-0.5" />
 
-                  {/* Reply button — always visible */}
-                  <button
-                    onClick={handleReply}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
-                    title="Reply"
-                  >
-                    <Reply className="h-3.5 w-3.5" />
-                    Reply
-                  </button>
-                  {/* AI Assist — opens AI panel with email context */}
-                  <button
-                    onClick={handleAiAssist}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
-                    title="AI Assist — analyze email and suggest reply"
-                  >
-                    <Bot className="h-3.5 w-3.5" />
-                    AI Assist
-                  </button>
+                    <button
+                      onClick={handleReply}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
+                      title="Reply"
+                    >
+                      <Reply className="h-3.5 w-3.5" />
+                      Reply
+                    </button>
+                    <button
+                      onClick={handleAiAssist}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
+                      title="AI Assist — analyze email and suggest reply"
+                    >
+                      <Bot className="h-3.5 w-3.5" />
+                      AI Assist
+                    </button>
 
-                  {/* Gmail actions */}
-                  {isGmail && (
-                    <>
-                      <button
-                        onClick={() => emailActionMutation.mutate({ action: 'archive' })}
-                        disabled={emailActionMutation.isPending}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                        title="Archive"
-                      >
-                        <Archive className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => emailActionMutation.mutate({ action: 'star' })}
-                        disabled={emailActionMutation.isPending}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
-                        title="Star"
-                      >
-                        <Star className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
-                        disabled={emailActionMutation.isPending}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
-                        title="Mark Unread"
-                      >
-                        <MailOpen className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={handleForward}
-                        disabled={emailActionMutation.isPending}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                        title="Forward"
-                      >
-                        <Forward className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => emailActionMutation.mutate({ action: 'trash' })}
-                        disabled={emailActionMutation.isPending}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
-                      </button>
-                    </>
-                  )}
-                </div>
+                    {isGmail && (
+                      <>
+                        <button
+                          onClick={() => emailActionMutation.mutate({ action: 'archive' })}
+                          disabled={emailActionMutation.isPending}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                          title="Archive"
+                        >
+                          <Archive className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => emailActionMutation.mutate({ action: 'star' })}
+                          disabled={emailActionMutation.isPending}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
+                          title="Star"
+                        >
+                          <Star className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
+                          disabled={emailActionMutation.isPending}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                          title="Mark Unread"
+                        >
+                          <MailOpen className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={handleForward}
+                          disabled={emailActionMutation.isPending}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                          title="Forward"
+                        >
+                          <Forward className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => emailActionMutation.mutate({ action: 'trash' })}
+                          disabled={emailActionMutation.isPending}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
-              <MessageThread conversation={selected} mailbox={activeMailbox} />
-              <ComposeReply conversation={selected} />
+              {/* Thread body */}
+              {selected.channel === 'whatsapp' && whatsappGroupId ? (
+                <WhatsappThread groupId={whatsappGroupId} />
+              ) : (
+                <>
+                  <MessageThread conversation={selected} mailbox={activeMailbox} />
+                  <ComposeReply conversation={selected} />
+                </>
+              )}
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
               <MessageSquare className="h-12 w-12 mb-3 stroke-1" />
               <p className="text-sm font-medium">Select a conversation</p>
-              <p className="text-xs mt-1">Choose an email from the inbox</p>
+              <p className="text-xs mt-1">
+                {isWhatsApp ? 'Choose a WhatsApp conversation' : 'Choose an email from the inbox'}
+              </p>
             </div>
           )}
         </div>
@@ -641,7 +642,6 @@ export function InboxShell() {
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
         prefillBody={forwardData?.body || ''}
       />
-
 
       {createDialog && (
         <CreateFromEmailDialog
