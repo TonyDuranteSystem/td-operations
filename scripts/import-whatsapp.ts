@@ -29,6 +29,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import * as fs from 'fs'
 import * as path from 'path'
 import { SignJWT, importPKCS8 } from 'jose'
+import { parseExport, digitsOnly, phonesMatch, personName } from './whatsapp-parse'
 
 // ─── Load .env.local ─────────────────────────────────────
 function loadEnv() {
@@ -67,16 +68,8 @@ if (supabaseUrl.includes(PROD_REF)) {
 
 const supabase: SupabaseClient = createClient(supabaseUrl, supabaseKey)
 
-// ─── Antonio's number (the firm) ─────────────────────────
-const ANTONIO_PHONE_DIGITS = '17274521093'
-
-// ─── Message line regex ──────────────────────────────────
-// Format: 2025/01/15, 14:23:45 - 393332903858: text
-const MSG_REGEX = /^(\d{4}\/\d{2}\/\d{2}, \d{2}:\d{2}:\d{2}) - (\d+): (.+)$/
-// Timestamp prefix (to detect system lines vs continuation)
-const TS_PREFIX_REGEX = /^\d{4}\/\d{2}\/\d{2}, \d{2}:\d{2}:\d{2} - /
-// Media content patterns
-const MEDIA_REGEX = /‎?(image|video|audio|sticker|document|GIF|contact card) omitted$/i
+// The firm's own number is derived at runtime from the active WhatsApp channel's
+// phone_number (messaging_channels) — never hardcoded.
 
 // ─── Google Drive Auth ───────────────────────────────────
 interface SACredentials {
@@ -124,7 +117,9 @@ async function getDriveToken(): Promise<string> {
 }
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
-const SHARED_DRIVE_ID = process.env.GOOGLE_SHARED_DRIVE_ID ?? '0AOLZHXSfKUMHUk9PVA'
+// Use `||` (not `??`) so an empty-string env var falls back to the known
+// shared-drive root rather than sending an empty driveId to the Drive API.
+const SHARED_DRIVE_ID = process.env.GOOGLE_SHARED_DRIVE_ID || '0AOLZHXSfKUMHUk9PVA'
 
 async function driveGet(endpoint: string, params: Record<string, string> = {}): Promise<unknown> {
   const token = await getDriveToken()
@@ -145,76 +140,6 @@ async function driveDownloadText(fileId: string): Promise<string> {
   const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) throw new Error(`Drive download ${res.status}: ${await res.text()}`)
   return res.text()
-}
-
-// ─── Parse WhatsApp export ────────────────────────────────
-interface ParsedMessage {
-  timestamp: Date
-  senderPhone: string
-  content: string
-  direction: 'inbound' | 'outbound'
-  contentType: 'text' | 'media'
-}
-
-function parseExport(text: string, _filePhone: string): ParsedMessage[] {
-  const lines = text.split('\n')
-  const messages: ParsedMessage[] = []
-  let current: ParsedMessage | null = null
-
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd()
-
-    const match = MSG_REGEX.exec(line)
-    if (match) {
-      // Flush previous message
-      if (current) messages.push(current)
-
-      const [, tsStr, senderDigits, content] = match
-      // Parse timestamp: "2025/01/15, 14:23:45"
-      const [datePart, timePart] = tsStr.split(', ')
-      const [year, month, day] = datePart.split('/')
-      const [hour, minute, second] = timePart.split(':')
-      const ts = new Date(
-        parseInt(year), parseInt(month) - 1, parseInt(day),
-        parseInt(hour), parseInt(minute), parseInt(second)
-      )
-
-      const isMedia = MEDIA_REGEX.test(content)
-      current = {
-        timestamp: ts,
-        senderPhone: senderDigits,
-        content,
-        direction: senderDigits === ANTONIO_PHONE_DIGITS ? 'outbound' : 'inbound',
-        contentType: isMedia ? 'media' : 'text',
-      }
-    } else if (TS_PREFIX_REGEX.test(line)) {
-      // Has timestamp but no digit sender → system line, skip
-      if (current) messages.push(current)
-      current = null
-    } else if (line.trim() && current) {
-      // Continuation of previous message
-      current.content += '\n' + line
-    }
-  }
-  if (current) messages.push(current)
-  return messages
-}
-
-// ─── Phone matching ───────────────────────────────────────
-function digitsOnly(s: string): string {
-  return s.replace(/\D/g, '')
-}
-
-// Strip to digits, try matching with and without leading country code
-function phonesMatch(dbPhone: string | null, fileDigits: string): boolean {
-  if (!dbPhone) return false
-  const dbDigits = digitsOnly(dbPhone)
-  if (!dbDigits) return false
-  // Exact match
-  if (dbDigits === fileDigits) return true
-  // One is a suffix of the other (e.g. 3932903858 vs 393332903858 — unlikely, but handle)
-  if (fileDigits.endsWith(dbDigits) || dbDigits.endsWith(fileDigits)) return true
-  return false
 }
 
 // ─── Report types ─────────────────────────────────────────
@@ -269,27 +194,46 @@ async function main() {
     process.exit(0)
   }
 
-  // Load WhatsApp channel ID
+  // Pick the active WhatsApp channel (the firm's live number). Provider-agnostic:
+  // we don't care which provider is configured, only which number is ours.
   const { data: channels } = await supabase
     .from('messaging_channels')
-    .select('id')
+    .select('id, phone_number, is_active, channel_name')
     .eq('platform', 'whatsapp')
-    .limit(1)
+    .order('is_active', { ascending: false })
+    .order('created_at', { ascending: true })
 
-  const channelId: string | null = channels?.[0]?.id ?? null
-  if (!channelId) {
+  const channel = channels?.[0] ?? null
+  if (!channel) {
     console.error('❌ No WhatsApp channel found in messaging_channels (platform = whatsapp)')
     process.exit(1)
   }
-  console.log(`📡 Using WhatsApp channel: ${channelId}`)
+  const channelId: string = channel.id
+  const firmDigits = digitsOnly(channel.phone_number ?? '')
+  if (!firmDigits) {
+    console.error(`❌ WhatsApp channel "${channel.channel_name}" has no phone_number — cannot determine message direction`)
+    process.exit(1)
+  }
+  console.log(`📡 Using WhatsApp channel: ${channel.channel_name} (${channel.phone_number}) → ${channelId}`)
 
   // Load CRM contacts and leads for matching
-  const { data: contactRows } = await supabase
+  // Contacts: account link is primary_company_id (not account_id); match on both
+  // phone and phone_2. Fail loudly on query error so a column drift can never
+  // silently turn every conversation into "unmatched" again.
+  const { data: contactRows, error: contactErr } = await supabase
     .from('contacts')
-    .select('id, first_name, last_name, phone, account_id')
-  const { data: leadRows } = await supabase
+    .select('id, first_name, last_name, full_name, phone, phone_2, primary_company_id')
+  if (contactErr) {
+    console.error(`❌ Failed to load contacts for matching: ${contactErr.message}`)
+    process.exit(1)
+  }
+  const { data: leadRows, error: leadErr } = await supabase
     .from('leads')
-    .select('id, first_name, last_name, phone, company')
+    .select('id, first_name, last_name, full_name, phone')
+  if (leadErr) {
+    console.error(`❌ Failed to load leads for matching: ${leadErr.message}`)
+    process.exit(1)
+  }
 
   const contacts = contactRows ?? []
   const leads = leadRows ?? []
@@ -324,7 +268,7 @@ async function main() {
 
     let messages: ParsedMessage[]
     try {
-      messages = parseExport(fileText, fileDigits)
+      messages = parseExport(fileText, fileDigits, firmDigits)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`  ❌ Parse failed: ${msg}`)
@@ -336,7 +280,9 @@ async function main() {
     console.log(`  📩 Parsed ${messages.length} messages`)
 
     // Match to contact or lead
-    const matchedContact = contacts.find(c => phonesMatch(c.phone, fileDigits))
+    const matchedContact = contacts.find(
+      c => phonesMatch(c.phone, fileDigits) || phonesMatch(c.phone_2, fileDigits)
+    )
     const matchedLead = !matchedContact
       ? leads.find(l => phonesMatch(l.phone, fileDigits))
       : null
@@ -348,12 +294,12 @@ async function main() {
 
     if (matchedContact) {
       contactId = matchedContact.id
-      accountId = matchedContact.account_id ?? null
-      groupName = [matchedContact.first_name, matchedContact.last_name].filter(Boolean).join(' ') || rawPhone
+      accountId = matchedContact.primary_company_id ?? null
+      groupName = personName(matchedContact) || rawPhone
       console.log(`  ✅ Matched contact: ${groupName}`)
     } else if (matchedLead) {
       leadId = matchedLead.id
-      groupName = [matchedLead.first_name, matchedLead.last_name].filter(Boolean).join(' ') || matchedLead.company || rawPhone
+      groupName = personName(matchedLead) || rawPhone
       console.log(`  ✅ Matched lead: ${groupName}`)
     } else {
       console.log(`  ⚠️  No CRM match found`)
@@ -377,7 +323,7 @@ async function main() {
           last_message_at: lastMessage?.timestamp.toISOString() ?? null,
           unread_count: 0,
         },
-        { onConflict: 'external_group_id' }
+        { onConflict: 'channel_id,external_group_id' }
       )
       .select('id')
       .single()
@@ -410,9 +356,9 @@ async function main() {
         const senderName = msg.direction === 'outbound'
           ? 'Antonio'
           : (matchedContact
-              ? [matchedContact.first_name, matchedContact.last_name].filter(Boolean).join(' ')
+              ? personName(matchedContact) || msg.senderPhone
               : matchedLead
-                ? [matchedLead.first_name, matchedLead.last_name].filter(Boolean).join(' ') || matchedLead.company
+                ? personName(matchedLead) || msg.senderPhone
                 : msg.senderPhone)
         return {
           group_id: groupId,
