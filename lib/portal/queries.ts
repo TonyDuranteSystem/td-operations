@@ -535,17 +535,31 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
         .order('updated_at', { ascending: false })).data
     : null
 
-  // Contact-scoped flows (ITIN) — these SDs have account_id NULL + a contact_id,
-  // so the account query never matches them. Only when a contactId is known, and
-  // filtered by CONTACT_FLOW_TYPES (FLOW_TYPES is account-only by design).
+  // Contact-scoped flows (ITIN, Company Formation) — these SDs have account_id
+  // NULL + a contact_id, so the account query never matches them. Only when a
+  // contactId is known, filtered by CONTACT_FLOW_TYPES (FLOW_TYPES is account-
+  // only by design).
+  //
+  // Per-company scoping (dev_task bb54680b): a Company Formation is a separate
+  // SELECTABLE entity (company switcher → FormationDashboard), not a service of
+  // an existing company. When a real account is selected, exclude contact-scoped
+  // Company Formation so a NEW company's formation does not leak into THIS
+  // company's Service Status (the "formation shows under Scaledge/Whalecot"
+  // class). ITIN is also contact-scoped but legitimately rides along on an
+  // active client, so it stays. No-account / ITIN-only callers (accountId === '')
+  // are unaffected — and no-account formation clients render FormationDashboard
+  // before this widget anyway.
   let contactSds: typeof accountSds = []
   if (contactId) {
+    const contactFlowTypes = (CONTACT_FLOW_TYPES as readonly string[]).filter(
+      t => !(accountId && t === 'Company Formation'),
+    )
     const { data } = await supabaseAdmin
       .from('service_deliveries')
       .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
       .eq('contact_id', contactId)
       .is('account_id', null)
-      .in('service_type', CONTACT_FLOW_TYPES as unknown as string[])
+      .in('service_type', contactFlowTypes)
       .eq('status', 'active')
       .order('updated_at', { ascending: false })
     contactSds = data ?? []
