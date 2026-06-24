@@ -388,6 +388,11 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       .update({
         status: "reviewed",
         reviewed_at: now,
+        // Portal wizard-submit (buildSubmissionRecord) writes status:"completed"
+        // but never stamps completed_at, so the column stays NULL. Stamp it here
+        // alongside the review flip. Same `now` as reviewed_at — the auto-chain
+        // runs seconds after submission, so this ≈ submission time.
+        completed_at: now,
         reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
       })
       .eq("id", p.submission_id)
