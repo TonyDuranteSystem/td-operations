@@ -211,7 +211,7 @@ async function scenarioFormationStage1(): Promise<TestScenarioResult> {
   const sdId = await createSD({
     contactId,
     serviceType: 'Company Formation',
-    stage: 'Data Collection',
+    stage: 'Payment Confirmed',
     stageOrder: 1,
   })
   const paymentId = await createPayment({ contactId, amount: 3250, description: 'TEST - Formation fee' })
@@ -227,7 +227,7 @@ async function scenarioFormationStage1(): Promise<TestScenarioResult> {
     summary: [
       'Lead: Converted',
       'Contact: TEST - Mario Rossi (portal_tier: onboarding)',
-      'SD: Company Formation - stage 1 (Data Collection)',
+      'SD: Company Formation - stage 1 (Payment Confirmed)',
       'Payment: EUR 3,250 (Paid)',
     ],
   }

@@ -2,8 +2,8 @@
  * Pipeline stages — read/write helpers for the Service Catalog editor.
  *
  * `pipeline_stages` rows define the lifecycle a Service Delivery moves through
- * for a given service_type (e.g. Company Formation → Data Collection → State
- * Filing → EIN Application → ... → Closing). Before this helper, the only way
+ * for a given service_type (e.g. Company Formation → Payment Confirmed →
+ * Wizard Submitted → Filed with State → ... → EIN Received). Before this helper, the only way
  * to manage these rows was raw SQL migrations.
  *
  * The Service Catalog Add/Edit page uses these to let Antonio define stages

@@ -243,7 +243,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // For SMLLC: nothing to defer — only the owner exists. The owner's contact
   // updates + passport + members row (if any) are handled at materialization.
 
-  // ─── 2c. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
+  // ─── 2c. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Payment Confirmed) ───
   try {
     const sdContactId = p.contact_id
     if (sdContactId) {
@@ -274,11 +274,13 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             // Antonio's model: SD attaches to the buyer (contact) until/unless the company materializes.
             contact_id: sdContactId,
             account_id: null,
-            target_stage: "Data Collection",
+            // v2 Company Formation pipeline stage_order=1 (migration 20260617);
+            // the old "Data Collection" stage no longer exists for this service.
+            target_stage: "Payment Confirmed",
             target_stage_order: 1,
             start_date: now.slice(0, 10),
           })
-          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection, contact-scoped)`))
+          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Payment Confirmed, contact-scoped)`))
         } catch (e) {
           result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
         }

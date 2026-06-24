@@ -553,7 +553,10 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             service_type: "Company Formation",
             contact_id: contactId,
             account_id: null,
-            target_stage: "Data Collection",
+            // v2 Company Formation pipeline stage_order=1 (migration 20260617).
+            // The old "Data Collection" name no longer exists for this service
+            // type, so a new SD created with it had an invalid stage.
+            target_stage: "Payment Confirmed",
             target_stage_order: 1,
             notes: `Auto-created from offer ${activation.offer_token}`,
             source_offer_token: activation.offer_token,
