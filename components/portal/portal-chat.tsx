@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { usePortalChat } from '@/lib/hooks/use-portal-chat'
+import { usePortalChat, type ChatScope } from '@/lib/hooks/use-portal-chat'
+import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -94,21 +96,48 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
-export function PortalChat({ accountId, contactId, userId, locale = 'en', accounts = [] }: { accountId?: string; contactId: string; userId: string; locale?: string; accounts?: { id: string; company_name: string }[] }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(accountId || null, contactId)
-  // PR 2 Step 6 — sender_context picker. Defaults to "company" when an
-  // account is currently viewed, else "person". Hidden entirely when the
-  // contact has no accounts (formation-gap clients pre-materialization).
-  // Per Antonio's design decision 2026-05-05: binary picker (Person /
-  // current company), not a list of all the contact's companies.
-  const [tagScope, setTagScope] = useState<'person' | 'company'>(accountId ? 'company' : 'person')
+export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string }) {
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(scope, accountId || null, contactId)
+  const router = useRouter()
+  // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
+  // message is about via a first-send popup; the choice is the SEND TAG and the
+  // VIEW follows it (cookie switch). Single-entity clients are auto-tagged.
+  const isMultiEntity = entities.length > 1
+  const currentEntity = entities.find(e => e.id === selectedEntityId) ?? entities[0] ?? null
+  const [popupOpen, setPopupOpen] = useState(false)
+  // Multi-entity clients must confirm the target on the first send of a session.
+  const [targetConfirmed, setTargetConfirmed] = useState(!isMultiEntity)
   const [activeTopic, setActiveTopic] = useState<string | null>(null)
   const [creatingTopic, setCreatingTopic] = useState(false)
   const [newTopicInput, setNewTopicInput] = useState('')
-  const currentCompanyName = accounts.find(a => a.id === accountId)?.company_name ?? null
-  const accountNameById = new Map(accounts.map(a => [a.id, a.company_name]))
+  // Map a real account_id → company name for the per-message company badge.
+  const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
   const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
-  const draftKey = `chat_draft_${accountId || contactId}`
+
+  // Localized display label + icon per entity (company / formation / personal).
+  const entityLabel = useCallback((e: PortalChatEntity): string => {
+    if (e.kind === 'formation') return `${e.label} ${locale === 'it' ? '(in formazione)' : '(in formation)'}`
+    if (e.kind === 'personal') return locale === 'it' ? 'Personale / Generale' : 'Personal / General'
+    return e.label
+  }, [locale])
+
+  // Switch the active entity (view-follows-choice). Reuses the same cookies the
+  // sidebar CompanySwitcher writes, so chat stays in lock-step with the rest of
+  // the portal (portal_account_id / portal_formation; 'personal' sentinel).
+  const selectEntity = useCallback((e: PortalChatEntity) => {
+    if (e.kind === 'formation') {
+      document.cookie = `portal_formation=${e.id}; path=/portal; max-age=31536000; SameSite=Lax`
+    } else if (e.kind === 'personal') {
+      document.cookie = `portal_account_id=personal; path=/portal; max-age=31536000; SameSite=Lax`
+      document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+    } else {
+      document.cookie = `portal_account_id=${e.accountId}; path=/portal; max-age=31536000; SameSite=Lax`
+      document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+    }
+    router.refresh()
+  }, [router])
+
+  const draftKey = `chat_draft_${selectedEntityId || contactId}`
   const [input, setInput] = useState(() => {
     if (typeof window === 'undefined') return ''
     const draft = localStorage.getItem(draftKey)
@@ -303,11 +332,16 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
     setIsRefreshing(false)
   }
 
-  const handleSend = async () => {
+  // Actual send, tagged to a target entity (defaults to the entity in view).
+  // company → sender_context='company' + that account_id; formation/personal →
+  // sender_context='person' + account_id null.
+  const doSend = async (target: PortalChatEntity | null = currentEntity) => {
     if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
     if (isRecording) stopRecording()
     // Sending implies the user wants to see their message land at the bottom.
     stickToBottomRef.current = true
+    const senderContext: 'person' | 'company' = target?.kind === 'company' ? 'company' : 'person'
+    const tagAccountId = target?.kind === 'company' ? (target.accountId ?? null) : null
     const msg = input
     const replyId = replyTo?.id
     const filesToSend = pendingFiles
@@ -321,14 +355,14 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         setUploading(true)
         try {
           const uploaded = await Promise.all(filesToSend.map((pf) =>
-            uploadChatAttachment(pf.file, { accountId, contactId })
+            uploadChatAttachment(pf.file, { accountId: tagAccountId ?? undefined, contactId })
           ))
-          await sendMessage(msg || '', uploaded, replyId, tagScope, accountId ?? null, activeTopic)
+          await sendMessage(msg || '', uploaded, replyId, senderContext, tagAccountId, activeTopic)
         } finally {
           setUploading(false)
         }
       } else {
-        await sendMessage(msg, undefined, replyId, tagScope, accountId ?? null, activeTopic)
+        await sendMessage(msg, undefined, replyId, senderContext, tagAccountId, activeTopic)
       }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
@@ -336,6 +370,27 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
       setInput(msg)
     }
     inputRef.current?.focus()
+  }
+
+  const handleSend = async () => {
+    if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
+    // First send of the session for a multi-entity client → confirm the target.
+    if (isMultiEntity && !targetConfirmed) {
+      setPopupOpen(true)
+      return
+    }
+    await doSend()
+  }
+
+  // Popup / pill choice: tag the message to the chosen entity AND make the view
+  // follow it (so the just-sent message is visible). Confirms the target for the
+  // rest of the session.
+  const chooseEntity = (entity: PortalChatEntity) => {
+    setTargetConfirmed(true)
+    setPopupOpen(false)
+    if (entity.id !== selectedEntityId) selectEntity(entity)
+    // Send only if there's something drafted (the pill "switch" path may have none).
+    if (input.trim() || pendingFiles.length > 0) doSend(entity)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -901,40 +956,87 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         </div>
       )}
 
-      {/* Sender context picker (PR 2 Step 6) — Person / current Company.
-          Hidden when the contact has no accounts (formation-gap clients
-          pre-materialization always send as Person). */}
-      {accounts.length > 0 && currentCompanyName && (
+      {/* "Chatting about" pill — multi-entity clients only. Shows the active
+          company/personal scope; "switch" re-opens the chooser. Single-entity
+          clients are auto-tagged, so no pill. */}
+      {isMultiEntity && currentEntity && (
         <div className="px-3 sm:px-4 pt-2 pb-1 flex items-center gap-2 border-t bg-zinc-50/40">
-          <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium">
-            {locale === 'it' ? 'Invia come' : 'Send as'}
+          <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium shrink-0">
+            {locale === 'it' ? 'Argomento azienda' : 'Chatting about'}
           </span>
-          <div className="flex gap-1 bg-white border rounded-full p-0.5">
+          <div className="flex items-center gap-1.5 bg-white border rounded-full pl-2 pr-1 py-0.5 min-w-0">
+            {currentEntity.kind === 'formation'
+              ? <Sparkles className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              : currentEntity.kind === 'personal'
+                ? <UserIcon className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                : <Building2 className="h-3.5 w-3.5 text-blue-600 shrink-0" />}
+            <span className="text-[11px] font-medium text-zinc-800 truncate max-w-[180px]" title={entityLabel(currentEntity)}>
+              {entityLabel(currentEntity)}
+            </span>
             <button
               type="button"
-              onClick={() => setTagScope('person')}
-              className={cn(
-                'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
-                tagScope === 'person'
-                  ? 'bg-zinc-900 text-white'
-                  : 'text-zinc-600 hover:bg-zinc-100'
-              )}
+              onClick={() => setPopupOpen(true)}
+              className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1.5 py-0.5 rounded-full hover:bg-blue-50 shrink-0"
             >
-              {personalLabel}
+              {locale === 'it' ? 'Cambia' : 'switch'}
             </button>
-            <button
-              type="button"
-              onClick={() => setTagScope('company')}
-              className={cn(
-                'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[180px] truncate',
-                tagScope === 'company'
-                  ? 'bg-blue-600 text-white'
-                  : 'text-zinc-600 hover:bg-zinc-100'
-              )}
-              title={currentCompanyName}
-            >
-              {currentCompanyName}
-            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Company chooser popup — "Which company is this message about?" */}
+      {popupOpen && (
+        <div
+          className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setPopupOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl border overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b">
+              <h3 className="text-sm font-semibold text-zinc-900">
+                {locale === 'it' ? 'Di quale azienda si tratta?' : 'Which company is this message about?'}
+              </h3>
+              <p className="text-[11px] text-zinc-500 mt-0.5">
+                {locale === 'it'
+                  ? 'Scegli a quale azienda appartiene questa conversazione.'
+                  : 'Pick which company this conversation belongs to.'}
+              </p>
+            </div>
+            <div className="max-h-72 overflow-y-auto py-1">
+              {entities.map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => chooseEntity(e)}
+                  className="w-full flex items-start gap-2.5 px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
+                >
+                  <span className="mt-0.5 shrink-0">
+                    {e.kind === 'formation'
+                      ? <Sparkles className="h-4 w-4 text-amber-500" />
+                      : e.kind === 'personal'
+                        ? <UserIcon className="h-4 w-4 text-zinc-500" />
+                        : e.isShared
+                          ? <Users className="h-4 w-4 text-blue-600" />
+                          : <Building2 className="h-4 w-4 text-blue-600" />}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-sm font-medium text-zinc-900 truncate">{entityLabel(e)}</span>
+                      {e.id === selectedEntityId && <Check className="h-3.5 w-3.5 text-blue-600 shrink-0" />}
+                    </span>
+                    {e.isShared && (
+                      <span className="block text-[10px] text-amber-700 mt-0.5">
+                        {locale === 'it'
+                          ? 'Gli altri membri di questa azienda vedranno questo messaggio.'
+                          : 'Other members of this company will see this message.'}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

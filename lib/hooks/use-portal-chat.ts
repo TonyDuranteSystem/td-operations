@@ -3,18 +3,34 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { PortalMessage, ChatAttachment } from '@/lib/types'
+import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+
+/**
+ * The thread a client is currently viewing. Per-company scoping (2026-06-24):
+ *  - 'company'  → one company's shared thread. includePersonalNull is decided
+ *                 SERVER-SIDE (sole-owned account) and passed here only for the
+ *                 realtime drop-filter; the GET route re-derives it authoritatively.
+ *  - 'personal' → the contact's own untagged thread (formation / personal).
+ *  - 'account'  → teammate (Portal Team Access): account-only, no contact_id.
+ *  - 'unified'  → legacy per-contact thread (fallback / back-compat).
+ */
+export type ChatScope =
+  | { mode: 'company'; accountId: string; contactId: string; includePersonalNull: boolean }
+  | { mode: 'personal'; contactId: string }
+  | { mode: 'account'; accountId: string }
+  | { mode: 'unified'; contactId: string; accountId: string | null }
 
 /**
  * Real-time chat hook using Supabase Realtime.
  *
- * PR 2 Step 6 (2026-05-05): one tagged thread per contact. The hook now
- * always threads by contact_id (regardless of accountId), so switching the
- * company switcher in the sidebar does NOT split the thread. accountId is
- * still accepted because:
- *   - Send-side: callers pass it through to tag a message as "company".
- *   - Mark-as-read: the read endpoint accepts both for back-compat.
+ * History: PR 2 Step 6 (2026-05-05) threaded EVERY client by contact_id so the
+ * company switcher didn't split the thread. That merged all of a multi-company
+ * client's messages into one view AND (for MMLLC members) was the wrong privacy
+ * model. 2026-06-24 reintroduces per-company scoping via ChatScope — see
+ * lib/portal/chat-scope.ts. accountId/contactId are still passed to the send
+ * helpers so a message is tagged to the company currently in view.
  */
-export function usePortalChat(accountId: string | null, contactId: string) {
+export function usePortalChat(scope: ChatScope, accountId: string | null, contactId: string) {
   const [messages, setMessages] = useState<PortalMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -22,17 +38,9 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  // Thread by contact_id for normal clients (unified per-contact thread).
-  // Teammates (Portal Team Access) have NO contact_id — their messages are stored
-  // by account_id with contact_id NULL, so thread by account for them.
-  const threadByAccount = !contactId && !!accountId
-  const threadKey = threadByAccount ? 'account_id' : 'contact_id'
-  const threadId = threadByAccount ? (accountId as string) : contactId
-  const queryParam = `${threadKey}=${threadId}`
-  const filterColumn = threadKey
-  const filterValue = threadId
-  // Mark-as-read body keyed to the same thread dimension.
-  const readBody = threadByAccount ? { account_id: accountId } : { contact_id: contactId }
+  // Resolve the read query param, the mark-as-read body, the realtime
+  // subscription filters, and the drop-filter plan from the active scope.
+  const { queryParam, readBody, realtimeFilters, plan } = resolveScope(scope)
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
@@ -105,9 +113,19 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     }
   }, [queryParam, messages, loadingMore, hasMore])
 
-  // Subscribe to realtime
+  // Subscribe to realtime. Subscriptions are intentionally BROADER than the
+  // view (e.g. company scope listens on account_id; personal listens on
+  // contact_id), and every delivered row is then run through the plan
+  // drop-filter (messageVisibleInPlan) so a message tagged to a DIFFERENT
+  // company of the same contact — or another member's personal NULL — can never
+  // slip into the view. The drop-filter mirrors the server GET query exactly.
+  const realtimeKey = JSON.stringify(realtimeFilters)
+  const planKey = JSON.stringify(plan)
   useEffect(() => {
     const supabase = createClient()
+
+    const belongs = (msg: { account_id: string | null; contact_id: string | null }) =>
+      plan ? messageVisibleInPlan(plan, msg) : true
 
     const handleInsert = (payload: { new: unknown }) => {
       const newMessage = payload.new as PortalMessage
@@ -117,8 +135,9 @@ export function usePortalChat(accountId: string | null, contactId: string) {
       // excludes them on load; this drops any that arrive live. NOT all system
       // messages: the out-of-office auto-reply is system WITHOUT a marker and IS
       // meant for the client. See sysdoc notification-center-workflow-integration-plan.
-      const nm = newMessage as { sender_type?: string; message?: string }
+      const nm = newMessage as { sender_type?: string; message?: string; account_id: string | null; contact_id: string | null }
       if (nm.sender_type === 'system' && /<!--\s*chat-event:/.test(nm.message ?? '')) return
+      if (!belongs(nm)) return // wrong company / someone else's personal — never show
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
@@ -132,23 +151,19 @@ export function usePortalChat(accountId: string | null, contactId: string) {
         setMessages(prev => prev.filter(m => m.id !== updated.id))
         return
       }
+      if (!belongs(updated)) return
       // Content edit: update the message in place so the client sees the corrected text.
       setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
     }
 
-    // Primary subscription: messages tagged with this contact.
-    let channel = supabase
-      .channel(`portal-chat-${filterValue}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `${filterColumn}=eq.${filterValue}` }, handleInsert)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${filterColumn}=eq.${filterValue}` }, handleUpdate)
-
-    // Secondary subscription: admin messages saved with contact_id=NULL but account_id set.
-    // This covers replies from the CRM dashboard and MCP tool that historically omitted contact_id.
-    // ID-based dedup in handleInsert prevents duplicates for messages that match both filters.
-    if (accountId) {
+    // One subscription per scope filter (account_id and/or contact_id). The
+    // drop-filter above keeps overlapping deliveries (and cross-company rows)
+    // out; ID-based dedup in handleInsert prevents duplicates.
+    let channel = supabase.channel(`portal-chat-${realtimeFilters.map(f => `${f.column}:${f.value}`).join('-') || 'none'}`)
+    for (const f of realtimeFilters) {
       channel = channel
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${accountId}` }, handleInsert)
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${accountId}` }, handleUpdate)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `${f.column}=eq.${f.value}` }, handleInsert)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${f.column}=eq.${f.value}` }, handleUpdate)
     }
 
     channel.subscribe()
@@ -157,7 +172,10 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [filterColumn, filterValue, accountId])
+    // realtimeFilters/plan are recomputed each render but fully captured by their
+    // serialized keys; depending on the keys avoids needless re-subscribes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realtimeKey, planKey])
 
   // Send message. Optional senderContext + tagAccountId let the caller
   // override the picker's tag scope (PR 2 Step 6). Default: senderContext
@@ -205,7 +223,12 @@ export function usePortalChat(accountId: string | null, contactId: string) {
       }
 
       const { message: newMsg } = await res.json()
-      if (newMsg) {
+      // Optimistic append, but only if it belongs in the CURRENT view. A message
+      // tagged to a different scope than what's on screen (e.g. sent as Personal
+      // while a non-sole-owned company is shown) must not flash in then vanish on
+      // refresh. The component switches the view to match before sending, so this
+      // is a belt-and-braces guard.
+      if (newMsg && (!plan || messageVisibleInPlan(plan, newMsg))) {
         setMessages(prev => {
           if (prev.some(m => m.id === newMsg.id)) return prev
           return [...prev, newMsg]
@@ -216,6 +239,9 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     } finally {
       setSending(false)
     }
+    // plan is captured fresh each render; planKey in the realtime effect tracks
+    // its identity. Excluded here to avoid recreating the sender every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, contactId, sending])
 
   const topics = Array.from(
@@ -223,4 +249,70 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   ).sort()
 
   return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics }
+}
+
+type RealtimeFilter = { column: 'account_id' | 'contact_id'; value: string }
+
+/**
+ * Translate a ChatScope into the GET query param, the mark-as-read body, the
+ * realtime subscription filters, and the plan used for the realtime drop-filter.
+ * Single source of truth so read, realtime, and the server stay in lock-step.
+ */
+function resolveScope(scope: ChatScope): {
+  queryParam: string
+  readBody: Record<string, unknown>
+  realtimeFilters: RealtimeFilter[]
+  plan: ChatQueryPlan | null
+} {
+  switch (scope.mode) {
+    case 'company': {
+      const plan = buildChatQueryPlan({
+        scope: 'company',
+        accountId: scope.accountId,
+        contactId: scope.contactId,
+        includePersonalNull: scope.includePersonalNull,
+      })
+      const realtimeFilters: RealtimeFilter[] = [{ column: 'account_id', value: scope.accountId }]
+      // Only listen on contact_id when personal NULLs ride along (sole-owned),
+      // so the viewer's own personal sends arrive live. The drop-filter keeps
+      // other-company rows out.
+      if (scope.includePersonalNull) realtimeFilters.push({ column: 'contact_id', value: scope.contactId })
+      return {
+        queryParam: `scope=company&account_id=${scope.accountId}&contact_id=${scope.contactId}`,
+        readBody: { scope: 'company', account_id: scope.accountId, contact_id: scope.contactId },
+        realtimeFilters,
+        plan,
+      }
+    }
+    case 'personal': {
+      return {
+        queryParam: `scope=personal&contact_id=${scope.contactId}`,
+        readBody: { scope: 'personal', contact_id: scope.contactId },
+        realtimeFilters: [{ column: 'contact_id', value: scope.contactId }],
+        plan: buildChatQueryPlan({ scope: 'personal', accountId: null, contactId: scope.contactId, includePersonalNull: false }),
+      }
+    }
+    case 'account': {
+      // Teammate (Portal Team Access): account-only thread, no scope param →
+      // server's existing account_id branch. Never includes personal NULLs.
+      return {
+        queryParam: `account_id=${scope.accountId}`,
+        readBody: { account_id: scope.accountId },
+        realtimeFilters: [{ column: 'account_id', value: scope.accountId }],
+        plan: { mode: 'account', accountId: scope.accountId },
+      }
+    }
+    case 'unified':
+    default: {
+      // Legacy per-contact thread (no scope param → server unified branch).
+      const realtimeFilters: RealtimeFilter[] = [{ column: 'contact_id', value: scope.contactId }]
+      if (scope.accountId) realtimeFilters.push({ column: 'account_id', value: scope.accountId })
+      return {
+        queryParam: `contact_id=${scope.contactId}`,
+        readBody: { contact_id: scope.contactId },
+        realtimeFilters,
+        plan: null, // unified shows the full per-contact set — no drop-filter
+      }
+    }
+  }
 }

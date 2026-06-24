@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -51,6 +52,59 @@ export async function POST(request: NextRequest) {
   const topicFilter: string | null = topicFilterPresent ? (body.topic ?? null) : null
 
   const now = new Date().toISOString()
+
+  // Per-company scoped read (client side, 2026-06-24). scope=company marks the
+  // company thread (+ personal NULLs only when sole-owned); scope=personal marks
+  // the contact's own untagged thread. Mirrors the GET scope logic so the unread
+  // set the client SEES is exactly the set marked read.
+  const scope = typeof body.scope === 'string' ? body.scope : undefined
+  if (scope === 'company' || scope === 'personal') {
+    const authContactId = getClientContactId(user)
+    let marked = 0
+
+    const markPersonalNull = async (contactId: string) => {
+      let q = supabaseAdmin
+        .from('portal_messages')
+        .update({ read_at: now })
+        .is('account_id', null)
+        .eq('contact_id', contactId)
+        .eq('sender_type', senderTypeToMark)
+        .is('read_at', null)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
+      q = (q as any).eq('client_kept_unread', false)
+      const { error, count } = await q
+      if (error) return { error }
+      return { count: count ?? 0 }
+    }
+
+    if (scope === 'company') {
+      if (!account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
+      // Account-tagged messages (shared thread — every member's view marks the same set).
+      let q = supabaseAdmin
+        .from('portal_messages')
+        .update({ read_at: now })
+        .eq('account_id', account_id)
+        .eq('sender_type', senderTypeToMark)
+        .is('read_at', null)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
+      q = (q as any).eq('client_kept_unread', false)
+      const { error, count } = await q
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      marked += count ?? 0
+      // Personal NULLs only when this account is sole-owned by the viewer.
+      if (authContactId && (await resolvePersonalNullInclusion(account_id, authContactId))) {
+        const r = await markPersonalNull(authContactId)
+        if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 })
+        marked += r.count
+      }
+    } else {
+      if (!authContactId) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      const r = await markPersonalNull(authContactId)
+      if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 })
+      marked += r.count
+    }
+    return NextResponse.json({ marked })
+  }
 
   if (account_id) {
     let q = supabaseAdmin

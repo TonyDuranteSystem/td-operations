@@ -9,6 +9,8 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL } from '@/lib/config'
 import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
+import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -35,6 +37,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const accountId = searchParams.get('account_id')
   const contactIdParam = searchParams.get('contact_id')
+  const scope = searchParams.get('scope') // 'company' | 'personal' (client per-company scoping) | absent (legacy/admin)
   const before = searchParams.get('before')
   const limit = Math.min(Number(searchParams.get('limit') ?? '50'), 100)
 
@@ -70,6 +73,36 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Per-company client scoping (2026-06-24). scope=company selects a single
+  // company's thread; scope=personal selects the contact's own untagged thread
+  // (formation / personal). Admin + legacy callers omit scope and are
+  // unaffected (they fall through to the contact_id / account_id branches below).
+  let scopedPlan: ChatQueryPlan | null = null
+  if (scope === 'company' || scope === 'personal') {
+    if (scope === 'company') {
+      if (!accountId) {
+        return NextResponse.json({ error: 'account_id required for scope=company' }, { status: 400 })
+      }
+      // Access for client users (contacts in clientAccountIds, teammates to
+      // their one account) was already enforced in the block above.
+      // Decide personal-NULL inclusion SERVER-SIDE (never trust the client):
+      // include a contact's untagged messages ONLY when this account is
+      // sole-owned by them (exactly one linked contact == the viewer). This is
+      // the privacy boundary — see lib/portal/chat-scope.ts. Teammates
+      // (no authContactId) never get personal NULLs.
+      const includePersonalNull = authContactId
+        ? await resolvePersonalNullInclusion(accountId, authContactId)
+        : false
+      scopedPlan = buildChatQueryPlan({ scope: 'company', accountId, contactId: authContactId, includePersonalNull })
+    } else {
+      // personal / formation — only the viewer's own untagged messages.
+      if (!authContactId) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+      scopedPlan = buildChatQueryPlan({ scope: 'personal', accountId: null, contactId: authContactId, includePersonalNull: false })
+    }
+  }
+
   let query = supabaseAdmin
     .from('portal_messages')
     .select('*, contacts:contact_id(full_name)')
@@ -89,11 +122,24 @@ export async function GET(request: NextRequest) {
     query = query.not('message', 'ilike', '%<!-- chat-event:%')
   }
 
+  // Per-company scoped plan takes precedence (client switched to a company /
+  // personal thread). Mirrors lib/portal/chat-scope.ts::messageVisibleInPlan.
+  if (scopedPlan) {
+    if (scopedPlan.mode === 'account') {
+      query = query.eq('account_id', scopedPlan.accountId)
+    } else if (scopedPlan.mode === 'account_plus_personal') {
+      query = query.or(
+        `account_id.eq.${scopedPlan.accountId},and(account_id.is.null,contact_id.eq.${scopedPlan.contactId})`
+      )
+    } else {
+      query = query.is('account_id', null).eq('contact_id', scopedPlan.contactId)
+    }
+  }
   // Threading: contact_id param returns the unified per-contact thread.
   // We also include messages saved with contact_id=NULL but account_id matching
   // one of the contact's linked accounts — covers replies sent via the CRM
   // dashboard or MCP tool that historically omitted contact_id.
-  if (contactIdParam) {
+  else if (contactIdParam) {
     // For client users, account IDs were already resolved above.
     // For admin users, look them up now from account_contacts.
     let threadAccountIds = clientAccountIds

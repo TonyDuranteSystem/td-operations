@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
+import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
@@ -40,6 +41,82 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
   })
 
   return sorted as PortalAccount[]
+}
+
+/**
+ * A switchable entity in the per-company chat chooser (2026-06-24).
+ *  - 'company'  → a real account (its shared thread).
+ *  - 'formation'→ an in-progress formation (no account yet) → personal-scope view.
+ *  - 'personal' → a synthetic "Personal / General" home for the contact's
+ *                 untagged messages, added ONLY when no sole-owned company can
+ *                 host them and there's no formation already giving a personal view.
+ */
+export interface PortalChatEntity {
+  /** accountId | InProgressFormation.id | 'personal' */
+  id: string
+  kind: 'company' | 'formation' | 'personal'
+  label: string
+  /** Real account id for company entities; null for formation/personal. */
+  accountId: string | null
+  /** True when >1 contact is linked (shared MMLLC) — drives the send-popup warning. */
+  isShared: boolean
+  /** Sole-owned company → its view may include the contact's personal NULLs. */
+  includePersonalNull: boolean
+}
+
+/**
+ * Build the chat entity list for a contact: their companies (with the
+ * sole-owned / shared classification that governs personal-NULL visibility),
+ * in-progress formations, and a Personal home when needed. The privacy
+ * classification uses the SAME leak-proof predicate as the chat API
+ * (mayIncludePersonalNull) — sole linked contact, never the free-text role.
+ */
+export async function getChatEntities(contactId: string): Promise<PortalChatEntity[]> {
+  const accounts = await getPortalAccounts(contactId)
+  const entities: PortalChatEntity[] = []
+  let hasSoleOwned = false
+
+  if (accounts.length > 0) {
+    const ids = accounts.map(a => a.id)
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id, contact_id')
+      .in('account_id', ids)
+    const membersByAccount = new Map<string, string[]>()
+    for (const l of links ?? []) {
+      const arr = membersByAccount.get(l.account_id) ?? []
+      arr.push(l.contact_id)
+      membersByAccount.set(l.account_id, arr)
+    }
+    for (const a of accounts) {
+      const members = membersByAccount.get(a.id) ?? []
+      const includePersonalNull = mayIncludePersonalNull({
+        linkedContactCount: members.length,
+        viewerIsSoleLinkedContact: members.length === 1 && members[0] === contactId,
+      })
+      if (includePersonalNull) hasSoleOwned = true
+      entities.push({
+        id: a.id,
+        kind: 'company',
+        label: a.company_name,
+        accountId: a.id,
+        isShared: members.length > 1,
+        includePersonalNull,
+      })
+    }
+  }
+
+  const formations = await getInProgressFormations(contactId)
+  for (const f of formations) {
+    entities.push({ id: f.id, kind: 'formation', label: f.label, accountId: null, isShared: false, includePersonalNull: false })
+  }
+
+  // Personal home for untagged messages — only when nothing else hosts them.
+  if (!hasSoleOwned && formations.length === 0) {
+    entities.push({ id: 'personal', kind: 'personal', label: 'Personal', accountId: null, isShared: false, includePersonalNull: false })
+  }
+
+  return entities
 }
 
 /**
