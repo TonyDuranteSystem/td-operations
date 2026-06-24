@@ -237,19 +237,21 @@ async function main() {
         .from('messaging_groups')
         .upsert({
           channel_id: channelId, external_group_id: externalGroupId, group_name: groupName,
-          group_type: 'direct', is_active: true, account_id: accountId, contact_id: contactId, lead_id: leadId,
+          group_type: 'lead_chat', is_active: true, account_id: accountId, contact_id: contactId, lead_id: leadId,
           last_message_at: lastMessage?.timestamp.toISOString() ?? null, unread_count: 0,
         }, { onConflict: 'channel_id,external_group_id' })
         .select('id').single()
       if (groupErr || !groupData) { plan.errors.push({ file: file.name, error: `create group: ${groupErr?.message ?? 'no row'}` }); continue }
 
-      const rows = messages.map(m => ({
+      const rows = messages.map((m, mi) => ({
         group_id: groupData.id, channel_id: channelId,
-        external_message_id: `waexport_${fileDigits}_${Math.floor(m.timestamp.getTime() / 1000)}`,
+        // Index suffix keeps the id unique when two messages share a second
+        // (messages.external_message_id has a UNIQUE constraint in production).
+        external_message_id: `waexport_${fileDigits}_${Math.floor(m.timestamp.getTime() / 1000)}_${mi}`,
         direction: m.direction, sender_phone: m.senderPhone,
         sender_name: m.direction === 'outbound' ? 'Antonio' : (matchName || m.senderPhone),
-        content_text: m.content, content_type: m.contentType,
-        created_at: m.timestamp.toISOString(), status: 'received',
+        content_text: m.content, content_type: m.contentType === 'media' ? 'other' : m.contentType,
+        created_at: m.timestamp.toISOString(), status: 'read',
       }))
       for (let i = 0; i < rows.length; i += 200) {
         const { error: insErr } = await supabase.from('messages').insert(rows.slice(i, i + 200))

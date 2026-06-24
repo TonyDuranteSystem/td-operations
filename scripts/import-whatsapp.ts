@@ -315,7 +315,7 @@ async function main() {
           channel_id: channelId,
           external_group_id: rawPhone,
           group_name: groupName,
-          group_type: 'direct',
+          group_type: 'lead_chat',
           is_active: true,
           account_id: accountId,
           contact_id: contactId,
@@ -350,8 +350,10 @@ async function main() {
     let inserted = 0
     const BATCH = 200
     const toInsert = messages
-      .map(msg => {
-        const externalId = `${fileDigits}_${Math.floor(msg.timestamp.getTime() / 1000)}`
+      .map((msg, idx) => {
+        // Index suffix keeps the id unique when two messages share a second
+        // (messages.external_message_id has a UNIQUE constraint in production).
+        const externalId = `${fileDigits}_${Math.floor(msg.timestamp.getTime() / 1000)}_${idx}`
         if (existingIds.has(externalId)) return null
         const senderName = msg.direction === 'outbound'
           ? 'Antonio'
@@ -368,9 +370,9 @@ async function main() {
           sender_phone: msg.senderPhone,
           sender_name: senderName,
           content_text: msg.content,
-          content_type: msg.contentType,
+          content_type: msg.contentType === 'media' ? 'other' : msg.contentType,
           created_at: msg.timestamp.toISOString(),
-          status: 'received',
+          status: 'read',
         }
       })
       .filter((m): m is NonNullable<typeof m> => m !== null)
