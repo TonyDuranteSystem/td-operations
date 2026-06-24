@@ -7,7 +7,8 @@
  * feedback ("✓ Full year detected — 248 transactions, Jan–Dec"). The AI
  * categorization refinement runs in the background after the response.
  *
- * OWNER-ONLY. CSV only (same guard as the wizard upload routes).
+ * OWNER-ONLY. Accepts CSV and PDF statements (PDFs are read by AI extraction,
+ * which can take ~2 min — hence the 300s window).
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -15,9 +16,10 @@ import { isAccountOwner } from '@/lib/portal/owner-access'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+// A PDF statement read via AI extraction can run ~2 min; 300s leaves margin.
+export const maxDuration = 300
 
-const MAX_BYTES = 20 * 1024 * 1024 // 20 MB — a full-year CSV is well under this
+const MAX_BYTES = 20 * 1024 * 1024 // 20 MB — covers a full-year CSV or PDF statement
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,9 +40,9 @@ export async function POST(request: NextRequest) {
     if (!(await isAccountOwner(user, accountId))) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
-    if (!/\.csv$/i.test(file.name)) {
+    if (!/\.(csv|pdf|zip)$/i.test(file.name)) {
       return NextResponse.json(
-        { error: 'Please upload only CSV files. Open your online banking, export this account\'s transactions for the entire year, and choose CSV as the format.' },
+        { error: 'Please upload a CSV or PDF statement. Open your online banking, export this account\'s transactions for the entire year, and upload the CSV or the official PDF statement.' },
         { status: 400 },
       )
     }
@@ -62,9 +64,12 @@ export async function POST(request: NextRequest) {
     if (result.inserted > 0) {
       const { supabaseAdmin } = await import('@/lib/supabase-admin')
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const archiveType = /\.pdf$/i.test(file.name) ? 'application/pdf'
+        : /\.zip$/i.test(file.name) ? 'application/zip'
+        : 'text/csv'
       void supabaseAdmin.storage
         .from('onboarding-uploads')
-        .upload(`tax/${accountId}/financials_${result.sourceFileId.replace('upload:', '')}_${safeName}`, buffer, { contentType: 'text/csv', upsert: true })
+        .upload(`tax/${accountId}/financials_${result.sourceFileId.replace('upload:', '')}_${safeName}`, buffer, { contentType: archiveType, upsert: true })
         .then(({ error }) => { if (error) console.error('[tax-financials] raw CSV archive failed:', error.message) })
     }
 

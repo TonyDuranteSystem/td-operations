@@ -220,9 +220,12 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
 }
 
 /**
- * Fire-and-forget trigger to the worker endpoint.
+ * Fire-and-forget trigger to the worker endpoint. Exported so the worker can
+ * CHAIN — after finishing one job it pings itself to claim the next, draining a
+ * batch of heavy jobs (e.g. per-file statement ingestion) one-by-one without
+ * relying on the cron to loop many multi-minute jobs in a single 300s run.
  */
-async function triggerWorker(): Promise<void> {
+export async function triggerWorker(): Promise<void> {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}`
     : "http://localhost:3000")

@@ -62,7 +62,7 @@ describe("ingestPortalCsv", () => {
     parseMock.mockResolvedValue({ transactions: [], bank_name: "unknown", errors: ["Could not find required columns"] })
     const r = await ingestPortalCsv(INPUT)
     expect(r.ok).toBe(false)
-    expect(r.error).toContain("export the CSV directly from your online banking")
+    expect(r.error).toContain("a CSV or the official PDF statement")
     expect(upsertCalls).toHaveLength(0)
   })
 

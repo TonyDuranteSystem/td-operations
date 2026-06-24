@@ -22,8 +22,12 @@ import { stableRowRef, dedupeRefs } from "./bank-csv-parsers"
 
 // Same model family the in-app AI agent uses (lib/ai-agent/providers.ts).
 const MODEL = "claude-sonnet-4-6"
-// Generous ceiling: a monthly statement rarely exceeds a few hundred rows.
-const MAX_TOKENS = 8192
+// Output ceiling. A busy monthly statement (hundreds of rows) serializes to
+// well over 8k tokens of JSON; at 8192 the model truncated mid-list and the
+// statement came back empty (stop_reason=max_tokens). 32k covers ~300+ rows
+// while staying far under Sonnet's 64k output limit. The reconciliation guard
+// still flags any statement that overflows even this.
+const MAX_TOKENS = 32000
 // Reconciliation tolerance in currency units (rounding / minor fee drift).
 const RECONCILE_TOLERANCE = 1.0
 // Cap embedded CSV/text so we never blow the context window.
@@ -166,7 +170,10 @@ export async function aiExtractBankStatement(
 
   const doFetch = opts?.fetchImpl || fetch
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120_000)
+  // A busy statement at the 32k output ceiling can take ~2 min to generate.
+  // 240s keeps a single statement comfortably inside the 300s job-worker
+  // window (one statement per ingest job — see tax-form-setup handler).
+  const timeout = setTimeout(() => controller.abort(), 240_000)
 
   let data: { content?: Array<{ type: string; name?: string; input?: AiStatement }>; stop_reason?: string }
   try {

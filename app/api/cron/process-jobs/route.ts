@@ -19,8 +19,46 @@ import { NextRequest, NextResponse } from 'next/server'
 import { claimNextJob, completeJob, failJob } from '@/lib/jobs/queue'
 import { getJobHandler } from '@/lib/jobs/registry'
 import { logCron } from '@/lib/cron-log'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 const MAX_JOBS_PER_RUN = 10
+// Stop CLAIMING new jobs once this much of the 300s window is spent. A single
+// heavy job (a PDF statement ingest can run ~250s) must be able to finish
+// inside the remaining budget — otherwise the function is killed mid-job and
+// the job is orphaned in 'processing'. Draining a large batch fast is the
+// on-demand worker's chain job; this cron is only the safety net.
+const CLAIM_BUDGET_MS = 50_000
+// A job still 'processing' past this is presumed dead (worker killed mid-run).
+const STUCK_AFTER_MS = 15 * 60 * 1000
+
+/**
+ * Recover jobs orphaned in 'processing' (worker killed mid-run). claim_next_job
+ * only ever picks 'pending', so without this a killed job hangs forever. Requeue
+ * those with retries left; fail the rest so they surface in the Exception
+ * Center instead of hiding as a stale 'processing' row.
+ */
+async function reapStuckJobs(): Promise<{ requeued: number; failed: number }> {
+  const cutoff = new Date(Date.now() - STUCK_AFTER_MS).toISOString()
+  const { data: stuck } = await supabaseAdmin
+    .from('job_queue')
+    .select('id, attempts, max_attempts')
+    .eq('status', 'processing')
+    .lt('started_at', cutoff)
+  if (!stuck || stuck.length === 0) return { requeued: 0, failed: 0 }
+  const toRetry = stuck.filter(j => (j.attempts ?? 0) < (j.max_attempts ?? 3)).map(j => j.id)
+  const toFail = stuck.filter(j => (j.attempts ?? 0) >= (j.max_attempts ?? 3)).map(j => j.id)
+  if (toRetry.length > 0) {
+    await supabaseAdmin.from('job_queue')
+      .update({ status: 'pending', started_at: null, error: 'Reaped: stuck in processing — requeued' })
+      .in('id', toRetry)
+  }
+  if (toFail.length > 0) {
+    await supabaseAdmin.from('job_queue')
+      .update({ status: 'failed', completed_at: new Date().toISOString(), error: 'Reaped: stuck in processing past max_attempts' })
+      .in('id', toFail)
+  }
+  return { requeued: toRetry.length, failed: toFail.length }
+}
 
 export async function GET(req: NextRequest) {
   // Verify cron secret (Vercel sends this header)
@@ -31,9 +69,12 @@ export async function GET(req: NextRequest) {
   }
 
   const startTime = Date.now()
+  const reaped = await reapStuckJobs()
   const results: Array<{ job_id: string; job_type: string; status: string; summary?: string; error?: string }> = []
 
   for (let i = 0; i < MAX_JOBS_PER_RUN; i++) {
+    // Don't START a job we can't FINISH inside the function window.
+    if (Date.now() - startTime > CLAIM_BUDGET_MS) break
     // Claim next pending job atomically (prevents race conditions)
     let job
     try {
@@ -88,11 +129,12 @@ export async function GET(req: NextRequest) {
     endpoint: '/api/cron/process-jobs',
     status: processed === 0 ? 'success' : results.some(r => r.status === 'failed') ? 'error' : 'success',
     duration_ms: duration,
-    details: { processed, results },
+    details: { processed, results, reaped },
   })
 
   return NextResponse.json({
     processed,
+    reaped,
     duration_ms: duration,
     results,
   })

@@ -10,7 +10,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server"
-import { claimNextJob, completeJob, failJob } from "@/lib/jobs/queue"
+import { claimNextJob, completeJob, failJob, triggerWorker } from "@/lib/jobs/queue"
 import { getJobHandler } from "@/lib/jobs/registry"
 
 export const maxDuration = 300
@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  let claimed = false
   try {
     // Claim next pending job
     const job = await claimNextJob()
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest) {
     if (!job) {
       return NextResponse.json({ status: "idle", message: "No pending jobs" })
     }
+    claimed = true
 
     // Find handler
     const handler = getJobHandler(job.job_type)
@@ -89,6 +91,13 @@ export async function POST(request: NextRequest) {
       { error: e instanceof Error ? e.message : String(e) },
       { status: 500 }
     )
+  } finally {
+    // Chain: if we claimed a job this run, ping the worker to claim the next so
+    // a batch of heavy jobs (e.g. per-file statement ingestion) drains
+    // one-by-one. No-op once the queue is empty (claimNextJob → null → idle, no
+    // further chaining). Atomic claim (FOR UPDATE SKIP LOCKED) prevents any
+    // double-processing if the cron fires concurrently.
+    if (claimed) void triggerWorker().catch(() => {})
   }
 }
 

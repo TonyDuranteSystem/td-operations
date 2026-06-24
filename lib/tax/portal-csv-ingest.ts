@@ -53,13 +53,23 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     ok: false, error, inserted: 0, parsed: 0, months: [], bankDetected: bankLabel, uncategorizedRemaining: 0, sourceFileId,
   })
 
-  // 1. Parse by content signature (unknown layouts go to the AI extractor inside).
-  const parsed = await parseBankStatement(buffer, fileName, "text/csv", { taxYear })
+  // 1. Parse by content signature. Route by the REAL file type so PDFs reach
+  //    the AI extractor and CSVs hit the deterministic parsers — never force a
+  //    single mime (the old hardcoded "text/csv" made every PDF parse as CSV →
+  //    garbage → zero transactions). parseBankStatement also sniffs by file
+  //    extension, but passing the correct mime keeps the routing explicit.
+  const lower = fileName.toLowerCase()
+  const mimeType = lower.endsWith(".pdf")
+    ? "application/pdf"
+    : lower.endsWith(".zip") || lower.endsWith(".x-zip-compressed")
+      ? "application/zip"
+      : "text/csv"
+  const parsed = await parseBankStatement(buffer, fileName, mimeType, { taxYear })
   if (parsed.transactions.length === 0) {
     const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
     return fail(
       `We could not read any transactions from this file${detail}. ` +
-      `Please export the CSV directly from your online banking — open the account, choose Export/Download, set the dates to the entire year, and pick CSV. Do not edit or re-save the file before uploading.`,
+      `Please upload the statement exactly as your bank exports it — a CSV or the official PDF statement for the full period. Do not edit or re-save the file before uploading.`,
     )
   }
 

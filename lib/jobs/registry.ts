@@ -12,6 +12,7 @@ import { handleWelcomePackagePrepare } from "./handlers/welcome-package-setup"
 import { handleItinWizardSetup } from "./handlers/itin-wizard-setup"
 import { handleDocumentReprocess } from "./handlers/document-reprocess"
 import { handleInvoiceReminder } from "./handlers/invoice-reminder"
+import { handleIngestBankStatement } from "./handlers/ingest-bank-statement"
 
 type JobHandler = (job: Job) => Promise<JobResult>
 
@@ -27,6 +28,9 @@ const handlers: Record<string, JobHandler> = {
   document_reprocess: handleDocumentReprocess,
   // Added 2026-06-22 — batched overdue-invoice reminder sending (dunning).
   invoice_reminder: handleInvoiceReminder,
+  // Added 2026-06-24 — per-file bank statement ingestion (CSV/PDF) for the
+  // portal tax wizard; one job per statement keeps each inside the 300s window.
+  ingest_bank_statement: handleIngestBankStatement,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {
