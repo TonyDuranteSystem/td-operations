@@ -2,14 +2,15 @@
  * Messaging Tools — Unified WhatsApp/Telegram inbox via Supabase
  *
  * All messages live in Supabase (source of truth).
- * Periskope = bridge for WhatsApp, Telegram Bot API = bridge for Telegram.
- * These tools let Claude manage the inbox from any device.
+ * WhatsApp send is routed via lib/messaging/send-dispatcher (provider-agnostic).
+ * Telegram Bot API handles Telegram. These tools let Claude manage the inbox.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { dispatchWhatsAppMessage } from "@/lib/messaging/send-dispatcher"
 
 export function registerMessagingTools(server: McpServer) {
 
@@ -167,26 +168,29 @@ export function registerMessagingTools(server: McpServer) {
     },
     async ({ chat_id, message, channel_id }) => {
       try {
-        // Call the send-message Edge Function
-        const efUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-message`
+        // Resolve channel_id when not supplied — use first active WhatsApp channel
+        let resolvedChannelId = channel_id
+        if (!resolvedChannelId) {
+          const { data: channels } = await supabaseAdmin
+            .from("messaging_channels")
+            .select("id")
+            .eq("platform", "whatsapp")
+            .eq("is_active", true)
+            .limit(1)
+          resolvedChannelId = channels?.[0]?.id
+          if (!resolvedChannelId) {
+            return {
+              content: [{ type: "text" as const, text: "❌ No active WhatsApp channel configured" }],
+            }
+          }
+        }
 
-        const response = await fetch(efUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-          },
-          body: JSON.stringify({ chat_id, message, channel_id }),
-        })
+        const result = await dispatchWhatsAppMessage(chat_id, message, resolvedChannelId)
 
-        const result = await response.json()
-
-        if (!response.ok) {
+        if (!result.ok) {
+          const errMsg = 'error' in result ? result.error : 'unknown error'
           return {
-            content: [{
-              type: "text" as const,
-              text: `❌ Send failed (${response.status}): ${JSON.stringify(result)}`,
-            }],
+            content: [{ type: "text" as const, text: `❌ Send failed: ${errMsg}` }],
           }
         }
 
@@ -194,13 +198,13 @@ export function registerMessagingTools(server: McpServer) {
           action_type: "send",
           table_name: "messages",
           summary: `Sent WhatsApp message to ${chat_id}`,
-          details: { chat_id, channel_id },
+          details: { chat_id, channel_id: resolvedChannelId },
         })
 
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Message sent to ${chat_id}\n${JSON.stringify(result, null, 2)}`,
+            text: `✅ Message sent to ${chat_id}\n${JSON.stringify(result.result, null, 2)}`,
           }],
         }
       } catch (err: any) {
@@ -281,15 +285,18 @@ export function registerMessagingTools(server: McpServer) {
 
         if (error) throw error
 
-        // Get group counts per channel
-        const { data: groupCounts } = await supabaseAdmin
-          .rpc("exec_sql", {
-            sql_query: "SELECT channel_id, COUNT(*) as group_count, SUM(unread_count) as total_unread FROM messaging_groups GROUP BY channel_id",
-          })
+        // Get group counts per channel — aggregate in JS (no exec_sql)
+        const { data: groups } = await supabaseAdmin
+          .from("messaging_groups")
+          .select("channel_id, unread_count")
 
-        const countsMap = new Map(
-          (Array.isArray(groupCounts) ? groupCounts : []).map((r: any) => [r.channel_id, r])
-        )
+        const countsMap = new Map<string, { group_count: number; total_unread: number }>()
+        for (const g of groups || []) {
+          const entry = countsMap.get(g.channel_id as string) ?? { group_count: 0, total_unread: 0 }
+          entry.group_count++
+          entry.total_unread += (g.unread_count as number) || 0
+          countsMap.set(g.channel_id as string, entry)
+        }
 
         const enriched = (channels || []).map((ch: any) => ({
           ...ch,

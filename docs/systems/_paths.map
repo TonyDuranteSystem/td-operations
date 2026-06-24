@@ -36,3 +36,4 @@ docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker
 docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,lib/ai-agent/slack-file-reader.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/,app/(dashboard)/code-tasks/,app/api/code-tasks/,lib/code-tasks/,scripts/mac-mini/
 docs/systems/fax.md|app/api/tools/fax/,app/(dashboard)/tools/fax/,components/flows/fax-irs.tsx
 docs/systems/client-threads.md|scripts/migrations/20260621-1500-create-client-threads.sql,scripts/migrations/20260621-1510-backfill-client-threads-from-conversations.sql,app/(dashboard)/conversations/,components/conversations/
+docs/systems/messaging.md|lib/mcp/tools/messaging.ts,lib/messaging/,app/api/inbox/new-whatsapp/,app/api/inbox/
