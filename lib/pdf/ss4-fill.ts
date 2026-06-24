@@ -38,12 +38,6 @@ import { join } from "path"
 import { existsSync } from "fs"
 import { embedUnicodeFonts } from "./unicode-fonts"
 
-// TD LLC Office — mailing address for all client LLCs
-const TD_OFFICE = {
-  street: "10225 Ulmerton Rd 3D",
-  cityStateZip: "Largo FL 33771",
-}
-
 // Applicant phone and fax — always the same
 const APPLICANT_PHONE = "7274234285"
 const APPLICANT_FAX = "7275135584"
@@ -69,6 +63,9 @@ export interface SS4FillData {
   responsiblePartyItin?: string // ITIN or "Foreigner"
   responsiblePartyPhone?: string
   responsiblePartyTitle: string // "Owner" or "Member"
+
+  mailingStreet: string          // Lines 4a — e.g. "11125 Park Blvd, Suite 104-153"
+  mailingCityStateZip: string    // Lines 4b — e.g. "Seminole, FL 33772"
 
   countyAndState?: string
   hasAppliedBefore?: boolean
@@ -132,11 +129,11 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   // === LINE 2: Trade name ===
   if (data.tradeName) text(75, 660, data.tradeName)
 
-  // === LINE 4a: Mailing address (TD office) ===
-  text(75, 637, TD_OFFICE.street)
+  // === LINE 4a: Mailing street ===
+  text(75, 637, data.mailingStreet)
 
   // === LINE 4b: City, state, ZIP ===
-  text(75, 618, TD_OFFICE.cityStateZip)
+  text(75, 618, data.mailingCityStateZip)
 
   // === LINE 6: County and state — entity's primary physical location (IRS SS-4 instruction) ===
   // Must be explicitly set by admin after verifying the address. Never auto-derived.

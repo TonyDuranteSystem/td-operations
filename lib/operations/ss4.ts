@@ -85,7 +85,7 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: account, error: accErr } = await (supabaseAdmin as any)
     .from("accounts")
-    .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_id")
+    .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_id, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
     .eq("id", params.account_id)
     .single()
 
@@ -274,14 +274,39 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   }
   const resolvedCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
 
-  // ─── 7. TOKEN ───
+  // ─── 7. MAILING ADDRESS ───
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ma = (account as any).mailing_address ?? null
+  const TD_FALLBACK_STREET = "11125 Park Blvd, Suite 104-153"
+  const TD_FALLBACK_CITY_STATE_ZIP = "Seminole, FL 33772"
+  let mailingStreet: string
+  let mailingCityStateZip: string
+  if (ma && (ma.address_line1 || ma.city)) {
+    mailingStreet = [ma.address_line1, ma.address_line2].filter(Boolean).join(", ")
+    mailingCityStateZip = [ma.city, ma.state, ma.zip].filter(Boolean).join(", ")
+  } else if ((account as any).physical_address) {
+    const raw = (account as any).physical_address as string
+    const commaIdx = raw.indexOf(",")
+    if (commaIdx > -1) {
+      mailingStreet = raw.slice(0, commaIdx).trim()
+      mailingCityStateZip = raw.slice(commaIdx + 1).trim()
+    } else {
+      mailingStreet = raw
+      mailingCityStateZip = ""
+    }
+  } else {
+    mailingStreet = TD_FALLBACK_STREET
+    mailingCityStateZip = TD_FALLBACK_CITY_STATE_ZIP
+  }
+
+  // ─── 8. TOKEN ───
   const slug = account.company_name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
   const token = `ss4-${slug}-${new Date().getFullYear()}`
 
-  // ─── 8. INSERT ───
+  // ─── 9. INSERT ───
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
 
   const { data: ss4, error: insertErr } = await supabaseAdmin
@@ -301,6 +326,8 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
       responsible_party_title: title,
       language: "en",
       county_and_state: resolvedCountyAndState,
+      mailing_street: mailingStreet,
+      mailing_city_state_zip: mailingCityStateZip,
       // Generate the access code explicitly (8 hex chars, matching the existing
       // format) rather than relying on a DB column default — the default is
       // absent in sandbox (schema drift), which left access_code NULL and broke
@@ -315,7 +342,7 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     return { ok: false, outcome: "error", message: `Error creating SS-4: ${insertErr?.message || "insert failed"}` }
   }
 
-  // ─── 9. LOG ───
+  // ─── 10. LOG ───
   await logAction({
     action_type: "create",
     table_name: "ss4_applications",
@@ -324,7 +351,7 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
   })
 
-  // ─── 9b. SYNC member_count TO ACCOUNTS (MMLLC only, don't overwrite) ───
+  // ─── 10b. SYNC member_count TO ACCOUNTS (MMLLC only, don't overwrite) ───
   if (memberCount && entityType === "MMLLC") {
     // eslint-disable-next-line no-restricted-syntax
     await supabaseAdmin
@@ -335,7 +362,7 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
       .is("member_count", null)
   }
 
-  // ─── 10. REGISTER THE UNSIGNED SS-4 AS A FLOW DOCUMENT ───
+  // ─── 11. REGISTER THE UNSIGNED SS-4 AS A FLOW DOCUMENT ───
   // The unsigned SS-4 PDF is rendered live (GET /api/ss4/[token]/pdf), so there's
   // no stored file — the documents row's drive_link points at that route so the
   // workspace document_viewer + portal Documents "View" both open it. Stamped
