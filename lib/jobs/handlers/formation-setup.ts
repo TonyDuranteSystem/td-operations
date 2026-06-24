@@ -25,6 +25,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { createSD } from "@/lib/operations/service-delivery"
+import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
 import { firstUploadPath } from "@/lib/portal/wizard-uploads"
@@ -250,14 +251,21 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       // Check if SD already exists for this contact
       const { data: existingSd } = await supabaseAdmin
         .from("service_deliveries")
-        .select("id")
+        .select("id, stage")
         .eq("contact_id", sdContactId)
         .eq("service_type", "Company Formation")
         .eq("status", "active")
         .limit(1)
 
+      // Resolve the SD id + current stage from either branch so the
+      // wizard-submit stage advance below runs uniformly.
+      let sdId: string | null = null
+      let sdStage: string | null = null
+
       if (existingSd && existingSd.length > 0) {
-        result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSd[0].id}`))
+        sdId = existingSd[0].id
+        sdStage = existingSd[0].stage
+        result.steps.push(step("service_delivery", "skipped", `Already exists at ${sdStage}: ${sdId}`))
       } else {
         // SD is contact-only at wizard submit per Antonio's model. The first
         // candidate LLC name is appended to the SD name purely for human
@@ -280,9 +288,55 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             target_stage_order: 1,
             start_date: now.slice(0, 10),
           })
+          sdId = sd.id
+          sdStage = "Payment Confirmed"
           result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Payment Confirmed, contact-scoped)`))
         } catch (e) {
           result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
+        }
+      }
+
+      // ─── 2c-bis. ADVANCE Payment Confirmed → Wizard Submitted ───
+      // This handler runs because the formation wizard was submitted, but the
+      // SD is normally pre-created at "Payment Confirmed" by activate-service —
+      // so the "already exists" branch above just skipped, leaving the SD stuck
+      // at "Payment Confirmed" forever (Davide Priori, 2026-06-24). Advance it
+      // now, but ONLY from "Payment Confirmed" and ONLY when the formation
+      // wizard_progress is actually 'submitted'. The stage guard makes this
+      // idempotent: a re-run finds the SD at "Wizard Submitted" (≠ "Payment
+      // Confirmed") and does nothing, and an SD already past this stage is
+      // never regressed.
+      if (sdId && sdStage === "Payment Confirmed") {
+        const { data: submittedWp } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("id")
+          .eq("contact_id", sdContactId)
+          .eq("wizard_type", "formation")
+          .eq("status", "submitted")
+          .limit(1)
+          .maybeSingle()
+
+        if (submittedWp) {
+          try {
+            const adv = await advanceServiceDelivery({
+              delivery_id: sdId,
+              target_stage: "Wizard Submitted",
+              notes: "Formation wizard submitted",
+            })
+            result.steps.push(
+              step(
+                "service_delivery_advance",
+                adv.success ? "ok" : "error",
+                adv.success
+                  ? `SD ${sdId} advanced: Payment Confirmed → Wizard Submitted`
+                  : `Advance failed: ${adv.error}`,
+              ),
+            )
+          } catch (e) {
+            result.steps.push(step("service_delivery_advance", "error", e instanceof Error ? e.message : String(e)))
+          }
+        } else {
+          result.steps.push(step("service_delivery_advance", "skipped", "Formation wizard_progress not 'submitted' yet"))
         }
       }
     } else {
