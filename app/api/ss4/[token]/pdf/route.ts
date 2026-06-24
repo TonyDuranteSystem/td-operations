@@ -34,6 +34,14 @@ export async function GET(
     return NextResponse.json({ error: "Invalid access code" }, { status: 403 })
   }
 
+  // Mailing address — fall back to TD Park Blvd for legacy rows without stored address
+  const TD_FALLBACK_STREET = "11125 Park Blvd, Suite 104-153"
+  const TD_FALLBACK_CITY_STATE_ZIP = "Seminole, FL 33772"
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ss4Any = ss4 as any
+  const mailingStreet: string = ss4Any.mailing_street || TD_FALLBACK_STREET
+  const mailingCityStateZip: string = ss4Any.mailing_city_state_zip || TD_FALLBACK_CITY_STATE_ZIP
+
   // Build fill data from the DB record
   const fillData: SS4FillData = {
     companyName: ss4.company_name,
@@ -46,6 +54,8 @@ export async function GET(
     responsiblePartyItin: ss4.responsible_party_itin || undefined,
     responsiblePartyPhone: ss4.responsible_party_phone || undefined,
     responsiblePartyTitle: ss4.responsible_party_title,
+    mailingStreet,
+    mailingCityStateZip,
     countyAndState: ss4.county_and_state || undefined,
   }
 

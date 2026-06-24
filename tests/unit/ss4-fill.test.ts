@@ -22,6 +22,8 @@ const SMLLC_DATA: SS4FillData = {
   responsiblePartyName: "John Smith",
   responsiblePartyTitle: "Owner",
   responsiblePartyPhone: "+44 7911 123456",
+  mailingStreet: "11125 Park Blvd, Suite 104-153",
+  mailingCityStateZip: "Seminole, FL 33772",
   countyAndState: "Bernalillo County, New Mexico", // explicitly verified primary physical location
 }
 
@@ -35,6 +37,8 @@ const MMLLC_DATA: SS4FillData = {
   responsiblePartyItin: "912-34-5678",
   responsiblePartyTitle: "Member",
   responsiblePartyPhone: "+49 30 12345678",
+  mailingStreet: "11125 Park Blvd, Suite 104-153",
+  mailingCityStateZip: "Seminole, FL 33772",
   countyAndState: "Sheridan County, Wyoming", // explicitly verified primary physical location
 }
 
