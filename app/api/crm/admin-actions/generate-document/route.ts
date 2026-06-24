@@ -17,6 +17,7 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { formatCountyAndState } from "@/lib/addresses"
+import { decideSs4Signer, ss4SignerAlertMessage, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -280,6 +281,14 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   const entityType = ENTITY_MAP[rawEntity] || "SMLLC"
   const state = STATE_MAP[(account.state_of_formation || "").toUpperCase().trim()] || account.state_of_formation
 
+  // Responsible party defaults to the first linked contact (the SMLLC owner). For
+  // a multi-member LLC the responsible party MUST be the member flagged as signer
+  // — and we BLOCK with a staff alert if zero or more than one is flagged. This is
+  // the SAME rule createSS4 enforces (lib/operations/ss4.ts), shared via
+  // decideSs4Signer so the two SS-4 paths can never drift. Without this, the CRM
+  // path silently stamped the first linked contact (the Gaia/Michele bug).
+  let responsibleContact = contact
+
   // Member count: members table first (company members aren't account_contacts),
   // then contact links — and never below 2 for a non-SMLLC: a multi-member LLC
   // has ≥2 members by definition, even when only the owner is linked in the
@@ -287,12 +296,37 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   // member was linked).
   let memberCount = 1
   if (entityType !== "SMLLC") {
-    const { count: membersCount } = await supabaseAdmin
+    const { data: membersRows } = await supabaseAdmin
       .from("members")
-      .select("*", { count: "exact", head: true })
+      .select("id, member_type, full_name, company_name, contact_id, representative_name, representative_email, is_primary, is_signer")
       .eq("account_id", accountId)
-    const base = membersCount && membersCount > 0 ? membersCount : (contactLinks!.length || 0)
+      .order("is_signer", { ascending: false })
+      .order("is_primary", { ascending: false })
+
+    const base = membersRows && membersRows.length > 0 ? membersRows.length : (contactLinks!.length || 0)
     memberCount = Math.max(base, 2)
+
+    const decision = decideSs4Signer(membersRows as Ss4SignerMember[] | null, entityType)
+    if (decision.kind === "needs_signer") {
+      return { error: ss4SignerAlertMessage(membersRows as Ss4SignerMember[], decision.signerCount) }
+    }
+    if (decision.kind === "use_member") {
+      const m = decision.member
+      let signerContactId = m.contact_id ?? null
+      if (!signerContactId && m.member_type === "company" && m.representative_email) {
+        const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+        signerContactId = repC?.id ?? null
+      }
+      if (signerContactId && signerContactId !== contact.id) {
+        const { data: signerC } = await supabaseAdmin
+          .from("contacts")
+          .select("id, full_name, email, phone, residency, language, itin_number")
+          .eq("id", signerContactId)
+          .single()
+        if (signerC) responsibleContact = signerC
+      }
+    }
+    // decision.kind === "no_members" → keep the first linked contact (legacy fallback)
   }
 
   // Resolve Line 6 (county_and_state) from the addresses registry via FK join.
@@ -331,11 +365,12 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
         state_of_formation: state,
         formation_date: account.formation_date || null,
         member_count: memberCount,
-        responsible_party_name: contact.full_name,
-        responsible_party_itin: contact.itin_number || null,
-        responsible_party_phone: contact.phone || null,
+        contact_id: responsibleContact.id,
+        responsible_party_name: responsibleContact.full_name,
+        responsible_party_itin: responsibleContact.itin_number || null,
+        responsible_party_phone: responsibleContact.phone || null,
         responsible_party_title: title,
-        language: contact.language === "Italian" ? "it" : "en",
+        language: responsibleContact.language === "Italian" ? "it" : "en",
         county_and_state: resolvedCountyAndState,
         updated_at: new Date().toISOString(),
       })
@@ -371,17 +406,17 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
     .insert({
       token,
       account_id: accountId,
-      contact_id: contact.id,
+      contact_id: responsibleContact.id,
       company_name: account.company_name,
       entity_type: entityType,
       state_of_formation: state,
       formation_date: account.formation_date || null,
       member_count: memberCount,
-      responsible_party_name: contact.full_name,
-      responsible_party_itin: contact.itin_number || null,
-      responsible_party_phone: contact.phone || null,
+      responsible_party_name: responsibleContact.full_name,
+      responsible_party_itin: responsibleContact.itin_number || null,
+      responsible_party_phone: responsibleContact.phone || null,
       responsible_party_title: title,
-      language: contact.language === "Italian" ? "it" : "en",
+      language: responsibleContact.language === "Italian" ? "it" : "en",
       county_and_state: resolvedCountyAndState, // null if RA address unknown — admin must fix RA + ss4_update before signing
       status: "draft",
     })
