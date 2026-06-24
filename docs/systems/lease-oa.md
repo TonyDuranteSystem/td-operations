@@ -1,5 +1,5 @@
 # Lease & Operating Agreement (OA)
-_Last verified against code: 2026-05-29 — Claude (read lib/mcp/tools/lease.ts, lib/mcp/tools/oa.ts)_
+_Last verified against code: 2026-06-24 — Claude (oa-signed webhook: corrected stale v2 stage name "Post-Formation" → "Articles Received" in the post-formation milestone breadcrumb; prior full read 2026-05-29 of lib/mcp/tools/lease.ts, lib/mcp/tools/oa.ts)_
 
 ## What it is
 Two client documents TD generates, sends, and tracks to signature:
