@@ -535,17 +535,31 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
         .order('updated_at', { ascending: false })).data
     : null
 
-  // Contact-scoped flows (ITIN) — these SDs have account_id NULL + a contact_id,
-  // so the account query never matches them. Only when a contactId is known, and
-  // filtered by CONTACT_FLOW_TYPES (FLOW_TYPES is account-only by design).
+  // Contact-scoped flows (ITIN, Company Formation) — these SDs have account_id
+  // NULL + a contact_id, so the account query never matches them. Only when a
+  // contactId is known, filtered by CONTACT_FLOW_TYPES (FLOW_TYPES is account-
+  // only by design).
+  //
+  // Per-company scoping (dev_task bb54680b): a Company Formation is a separate
+  // SELECTABLE entity (company switcher → FormationDashboard), not a service of
+  // an existing company. When a real account is selected, exclude contact-scoped
+  // Company Formation so a NEW company's formation does not leak into THIS
+  // company's Service Status (the "formation shows under Scaledge/Whalecot"
+  // class). ITIN is also contact-scoped but legitimately rides along on an
+  // active client, so it stays. No-account / ITIN-only callers (accountId === '')
+  // are unaffected — and no-account formation clients render FormationDashboard
+  // before this widget anyway.
   let contactSds: typeof accountSds = []
   if (contactId) {
+    const contactFlowTypes = (CONTACT_FLOW_TYPES as readonly string[]).filter(
+      t => !(accountId && t === 'Company Formation'),
+    )
     const { data } = await supabaseAdmin
       .from('service_deliveries')
       .select('id, service_type, service_name, stage, due_date, stage_entered_at, created_at')
       .eq('contact_id', contactId)
       .is('account_id', null)
-      .in('service_type', CONTACT_FLOW_TYPES as unknown as string[])
+      .in('service_type', contactFlowTypes)
       .eq('status', 'active')
       .order('updated_at', { ascending: false })
     contactSds = data ?? []
@@ -1178,17 +1192,20 @@ export async function getPortalActionItems(
     .single()
 
   const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes, taxRes, sigReqRes] = await Promise.all([
-    // 1. In-progress wizard forms
-    supabaseAdmin
-      .from('wizard_progress')
-      .select('id, wizard_type, created_at, updated_at')
-      .eq('status', 'in_progress')
-      .or(
-        accountId
-          ? `account_id.eq.${accountId}${contactId ? `,contact_id.eq.${contactId}` : ''}`
-          : contactId ? `contact_id.eq.${contactId}` : 'id.is.null'
-      )
-      .limit(10),
+    // 1. In-progress wizard forms — SCOPED TO THE SELECTED ACCOUNT ONLY.
+    // Per-company scoping (dev_task bb54680b): a contact-scoped wizard
+    // (account_id NULL — e.g. a Company Formation for a brand-new company) or a
+    // wizard belonging to another of the client's companies must NOT surface
+    // under this company's action items. The formation / no-account view uses
+    // getPortalActionItemsByContact (contact-scoped) for those instead.
+    accountId
+      ? supabaseAdmin
+          .from('wizard_progress')
+          .select('id, wizard_type, created_at, updated_at')
+          .eq('status', 'in_progress')
+          .eq('account_id', accountId)
+          .limit(10)
+      : Promise.resolve({ data: [] as Array<{ id: string; wizard_type: string; created_at: string; updated_at: string }> }),
 
     // 2. Unpaid invoices (Sent or Overdue)
     supabaseAdmin
@@ -1328,15 +1345,16 @@ export async function getPortalActionItems(
           .eq('status', 'active')
           .in('service_type', FLEXIBLE_SDS_TO_CHECK)
       : Promise.resolve({ data: [] as Array<{ service_type: string; created_at: string }> }),
+    // Submitted wizards — SCOPED TO THE SELECTED ACCOUNT ONLY, mirroring the
+    // in-progress query above. Tax / onboarding / banking submissions are
+    // account-scoped, so this still finds them; scoping by contact_id would
+    // let a submission for another of the client's companies wrongly suppress
+    // (or surface) a "Start ⟨Wizard⟩" card here (per-company scoping, bb54680b).
     supabaseAdmin
       .from('wizard_progress')
       .select('wizard_type')
       .eq('status', 'submitted')
-      .or(
-        contactId
-          ? `account_id.eq.${accountId},contact_id.eq.${contactId}`
-          : `account_id.eq.${accountId}`,
-      ),
+      .eq('account_id', accountId),
   ])
 
   const submittedWizardTypes = new Set((submittedWizardRes.data ?? []).map(w => w.wizard_type))
@@ -1386,9 +1404,30 @@ export async function getPortalActionItems(
     .maybeSingle()
   const taxReturnSdOnHold = trSdForPause?.status === 'on_hold'
 
+  // Tax years for which the client has already SUBMITTED their data for THIS
+  // account. The pending tax cards below are otherwise gated only on
+  // tax_returns.data_received=false, but that flag is flipped by a downstream
+  // job (tax-form-setup) that can lag or fail — leaving a stale "Complete Tax
+  // Information — <year>" card for months after the client actually submitted
+  // (dev_task bb54680b). A tax_return_submissions row is written synchronously
+  // at submit and carries the tax_year, so it's the authoritative, YEAR-ACCURATE
+  // "client did their part" signal. Year-accurate matters for annual clients: a
+  // prior year's submission must NOT suppress the current year's card.
+  const { data: submittedTaxRows } = await supabaseAdmin
+    .from('tax_return_submissions')
+    .select('tax_year')
+    .eq('account_id', accountId)
+  const submittedTaxYears = new Set(
+    (submittedTaxRows ?? [])
+      .map(r => (r as { tax_year: number | null }).tax_year)
+      .filter((y): y is number => y != null),
+  )
+
   for (const tr of (taxRes as { data: Array<{ id: string; tax_year: number; return_type: string; created_at: string }> | null }).data ?? []) {
     // Skip when the SD is on_hold (pause banner covers the communication).
     if (taxReturnSdOnHold) continue
+    // Skip when the client already submitted THIS tax year's data (year-accurate).
+    if (submittedTaxYears.has(tr.tax_year)) continue
     // Check if there's already a wizard_progress for tax (avoids duplicate with wizard item above)
     const alreadyHasWizard = (wizardRes.data ?? []).some(
       w => w.wizard_type === 'tax' || w.wizard_type === 'tax_return'
