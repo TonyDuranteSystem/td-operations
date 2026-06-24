@@ -39,12 +39,14 @@ export default async function PortalInvoicesPage({
   // verify they manage that account via client_partners → accounts.partner_id.
   let partnerAccountId: string | undefined
   if (params.accountId && contactId) {
-    const { data: contact } = await supabaseAdmin
+    const { data: contactRaw } = await supabaseAdmin
       .from('contacts')
-      .select('portal_role')
+      .select('portal_role, portal_roles')
       .eq('id', contactId)
       .single()
-    if (contact?.portal_role === 'partner') {
+    const contact = contactRaw as unknown as { portal_role: string | null; portal_roles: string[] | null } | null
+    const roles = contact?.portal_roles ?? []
+    if (contact?.portal_role === 'partner' || roles.includes('partner')) {
       const { data: partnerRecord } = await supabaseAdmin
         .from('client_partners')
         .select('id')

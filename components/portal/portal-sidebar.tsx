@@ -35,6 +35,7 @@ import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
+import { RoleSwitcher } from './role-switcher'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
 
 interface PortalSidebarProps {
@@ -60,6 +61,8 @@ interface PortalSidebarProps {
   isTeammate?: boolean
   /** The teammate's granted capability flags (only meaningful when isTeammate). */
   teammateCapabilities?: Record<string, boolean>
+  /** When the user has both client and partner roles, which mode are they viewing */
+  activeRoleMode?: 'client' | 'partner'
 }
 
 // Nav items organized into collapsible groups
@@ -172,7 +175,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {}, activeRoleMode = 'client' }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -296,7 +299,9 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
   const loggedInAsLabel = locale === 'it' ? 'Accesso come' : 'Logged in as'
 
-  const isPartner = isPartnerPortal(portalRole)
+  const isDualRole = portalRole === 'client+partner'
+  const isInPartnerMode = isDualRole && activeRoleMode === 'partner'
+  const isPartner = isPartnerPortal(portalRole) || isInPartnerMode
 
   // Standard visibility filter — same logic the previous structure used,
   // just factored so it can run against any item array.
@@ -506,6 +511,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             placeholder={t('nav.search') !== 'nav.search' ? t('nav.search') : 'Search...'}
           />
         </div>
+
+        {/* Role Switcher — only for dual-role (client+partner) users */}
+        {isDualRole && (
+          <div className="px-0 pb-1">
+            <RoleSwitcher currentMode={activeRoleMode} locale={locale} />
+          </div>
+        )}
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
