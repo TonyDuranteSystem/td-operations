@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Mail, CheckSquare, Square, Paperclip, Trash2, MessagesSquare } from 'lucide-react'
+import { Mail, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
@@ -25,11 +25,13 @@ interface ConversationListProps {
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
   portal: MessagesSquare,
+  whatsapp: MessageSquare,
 }
 
 const channelColors: Record<InboxChannel, string> = {
   gmail: 'text-red-500',
   portal: 'text-purple-600',
+  whatsapp: 'text-green-500',
 }
 
 function formatTime(dateStr: string) {
@@ -62,9 +64,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       return conv.id
     },
     onMutate: async (conv) => {
-      // Cancel in-flight fetches so stale data doesn't overwrite our removal
       await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
-      // Tell parent to hide this ID immediately (persists for the session)
       if (onDeleted) onDeleted(conv.id)
     },
     onSuccess: (_data, conv) => {
@@ -89,7 +89,6 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         },
         duration: 8000,
       })
-      // Delay refetch — Gmail needs 10-15s to process the trash
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
@@ -101,9 +100,14 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     },
   })
 
+  const isWhatsApp = activeChannel === 'whatsapp'
+
   const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
     queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
     queryFn: () => {
+      if (isWhatsApp) {
+        return fetch('/api/inbox/whatsapp/conversations').then((r) => r.json())
+      }
       const params = new URLSearchParams()
       if (activeChannel) params.set('channel', activeChannel)
       if (labelFilter) params.set('label', labelFilter)
@@ -152,6 +156,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         const Icon = channelIcons[conv.channel]
         const isSelected = selectedId === conv.id
         const isChecked = selectedIds.has(conv.id)
+        const showCheckbox = !isWhatsApp && (bulkMode || conv.channel === 'gmail')
 
         return (
           <div
@@ -163,8 +168,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               conv.unread > 0 && !isSelected && !isChecked && 'bg-white'
             )}
           >
-            {/* Checkbox (only in bulk mode or Gmail) */}
-            {(bulkMode || conv.channel === 'gmail') && (
+            {/* Checkbox (only in bulk mode or Gmail — never WhatsApp) */}
+            {showCheckbox && (
               <button
                 onClick={(e) => {
                   e.stopPropagation()
