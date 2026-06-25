@@ -30,11 +30,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'file and field_name required' }, { status: 400 })
     }
 
-    // CSV-only guard for the tax per-bank statement sections (master plan
-    // b2115fd3 §2.1) — same rule as wizard-upload-url.
-    if (/^bank_accounts_\d+_statements$/.test(fieldName) && !/\.csv$/i.test(file.name)) {
+    // CSV or PDF guard for the tax per-bank statement sections (master plan
+    // b2115fd3 §2.1; PDF added 2026-06-25 — the AI extractor reads PDFs too).
+    // Same rule as wizard-upload-url.
+    if (/^bank_accounts_\d+_statements$/.test(fieldName) && !/\.(csv|pdf)$/i.test(file.name)) {
       return NextResponse.json(
-        { error: 'Please upload only CSV files. Open your online banking, export this account\'s transactions for the entire year, and choose CSV as the format.' },
+        { error: 'Please upload your bank statement as a CSV export or the official PDF statement, for the entire year. Open your online banking, export the full year, and choose CSV — or download the PDF statements.' },
         { status: 400 },
       )
     }
