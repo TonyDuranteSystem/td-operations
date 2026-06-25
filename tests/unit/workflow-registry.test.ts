@@ -50,9 +50,8 @@ const REGISTERED_HANDLERS = [
   "chain.upload_document",
   "chain.update_contact_field",
   "chain.update_account_field",
-  // Slice 4 + 5.1 — ITIN service-specific
-  "itin.approve_and_send",
-  "itin.recall_and_recorrect",
+  // Slice 5.1 — ITIN service-specific. itin.approve_and_send +
+  // itin.recall_and_recorrect removed 2026-06-25 (workspace-only ITIN flow).
   "itin.confirm_number_received",
   // Slice 8 — banking + tax service-specific
   // One banking handler (not per-provider) — provider variants live in
