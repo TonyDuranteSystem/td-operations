@@ -1911,6 +1911,13 @@ export interface CallWorkerOptions {
    */
   enableThreadRecall?: boolean
   /**
+   * Expose Anthropic's SERVER-SIDE web tools (web_search + web_fetch) for this call,
+   * so the worker can research the open web / read a URL. Slack-only; the Hermes/Telegram
+   * research worker never sets it (R108). Independently gated by the WORKER_WEB_SEARCH_ENABLED
+   * env kill-switch in the caller. web_search is capped at WORKER_WEB_SEARCH_MAX_USES per turn.
+   */
+  enableWebSearch?: boolean
+  /**
    * Expose the Slack-only send_email tool for this call. Set by the Slack worker
    * (processSlackEvent). When true, SEND_EMAIL_TOOL is appended to the resolved tool
    * list. The Hermes/Telegram path never sets this, so its worker can never send email
@@ -1998,6 +2005,23 @@ export function oneParagraphSummary(reply: string): string {
  * for dispatch (the extra allow-list guard). Returns reachedMaxLoops=true only
  * when the loop is exhausted without a final answer.
  */
+/** Per-turn cap on web searches (cost guard). Tunable via env; defaults to 5. */
+export const WORKER_WEB_SEARCH_MAX_USES = Number(process.env.WORKER_WEB_SEARCH_MAX_USES) || 5
+
+/**
+ * Anthropic SERVER-SIDE web tools to attach when web research is enabled: web_search
+ * (capped per turn) + web_fetch (read a specific URL). The `_20260209` versions add
+ * dynamic result-filtering (supported on claude-sonnet-4-6) — Anthropic runs the search
+ * and returns filtered results in the same call; no provider/key/beta header needed.
+ * Pure — exported for tests.
+ */
+export function buildWebServerTools(): Array<Record<string, unknown>> {
+  return [
+    { type: "web_search_20260209", name: "web_search", max_uses: WORKER_WEB_SEARCH_MAX_USES },
+    { type: "web_fetch_20260209", name: "web_fetch" },
+  ]
+}
+
 export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
@@ -2005,18 +2029,25 @@ export async function runWorkerLoop(
   maxIterations?: number,
   sourceMessageId?: string | null,
   currentThreadId?: string | null,
+  serverTools?: Array<Record<string, unknown>>,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
-  // Anthropic tool format
-  const claudeTools = tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: t.parameters,
-  }))
+  // Anthropic tool format. Client tools (executed by executeWorkerTool) carry an
+  // input_schema; ANTHROPIC SERVER tools (web_search / web_fetch — run on Anthropic's
+  // side, returned as server_tool_use + *_tool_result blocks, never as client tool_use)
+  // are passed through verbatim as {type, name, …} and appended after the client tools.
+  const claudeTools: Array<Record<string, unknown>> = [
+    ...tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.parameters,
+    })),
+    ...(serverTools ?? []),
+  ]
 
   // The exact tool names offered to the model this call — used to executor-gate
   // real-send tools (send_email) so they can't fire when they weren't injected.
@@ -2073,6 +2104,17 @@ export async function runWorkerLoop(
     const toolUseBlocks = data.content.filter((b: any) => b.type === "tool_use")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const textBlocks = data.content.filter((b: any) => b.type === "text")
+
+    // Server-side tool (web_search / web_fetch) hit its internal step limit mid-turn
+    // and returned WITHOUT a client tool_use block. The API wants us to re-send the
+    // assistant turn with NO added user message so it resumes the server tool. Without
+    // this guard the next check would treat zero client tools as "done" and stop early.
+    // (A pause_turn that ALSO carries a client tool_use falls through to the normal
+    // execute-and-continue path below, which re-sends and resumes just the same.)
+    if (data.stop_reason === "pause_turn" && toolUseBlocks.length === 0) {
+      currentMessages = [...currentMessages, { role: "assistant", content: data.content }]
+      continue
+    }
 
     if (toolUseBlocks.length === 0 || data.stop_reason === "end_turn") {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2422,7 +2464,14 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId)}`
   }
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId)
+  // Slack-only web research (Anthropic server tools). Gated by the option AND the env
+  // kill-switch so it ships dark and Antonio flips it on after sandbox QA.
+  const serverTools =
+    opts.enableWebSearch && process.env.WORKER_WEB_SEARCH_ENABLED === "true"
+      ? buildWebServerTools()
+      : undefined
+
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools)
 
   if (threadId) {
     try {
