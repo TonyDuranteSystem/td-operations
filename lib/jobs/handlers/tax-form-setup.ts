@@ -48,6 +48,20 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
   return { name, status, detail, timestamp: new Date().toISOString() }
 }
 
+/**
+ * Race a promise against a timeout so a slow/hung dependency can't stall the
+ * whole job. On timeout it REJECTS — the caller's try/catch records the step
+ * and continues. Used for the best-effort Drive archival (copying many uploaded
+ * files to Drive can be slow; the client's P&L is built from bank_transactions,
+ * NOT from Drive, so a Drive stall must never block the job from completing).
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)),
+  ])
+}
+
 // ─── Portal Wizard: Full Post-Submission Workflow ───
 
 async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<JobResult> {
@@ -357,7 +371,11 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
       if (acc?.drive_folder_id) {
         const { saveFormToDrive } = await import("@/lib/form-to-drive")
-        const driveResult = await saveFormToDrive(
+        // Best-effort archival, time-boxed: copying many files to Drive can be
+        // slow (or hang in sandbox where Drive is mocked). If it overruns, the
+        // catch below records it and the job completes anyway — ingestion was
+        // already enqueued above, so the P&L is unaffected.
+        const driveResult = await withTimeout(saveFormToDrive(
           "tax_return",
           sd,
           uploadPaths,
@@ -373,7 +391,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           // form's "tax-form-uploads" default. Without this the copy read the
           // wrong bucket and every statement failed (0 files copied → no P&L).
           { bucket: "onboarding-uploads" },
-        )
+        ), 120_000, "drive_save")
 
         if (driveResult.summaryFileId) {
           result.steps.push(step("drive_save", "ok",
