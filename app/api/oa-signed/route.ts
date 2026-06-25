@@ -123,7 +123,11 @@ export async function POST(req: NextRequest) {
             note: `Operating Agreement ${isMMLC ? "fully " : ""}signed for ${oa.company_name}${isMMLC ? ` (all ${oa.total_signers} members)` : ""}`,
           })
 
-          const postFormationStages = ["Post-Formation", "EIN Received", "Welcome Package", "Client Onboarding"]
+          // v2 Company Formation pipeline: the old "Post-Formation + Banking"
+          // stage was replaced by "Articles Received" (see lib/service-delivery.ts).
+          // "EIN Received" is the current final stage; "Welcome Package" /
+          // "Client Onboarding" are kept defensively for non-v2 / legacy stages.
+          const postFormationStages = ["Articles Received", "EIN Received", "Welcome Package", "Client Onboarding"]
           const isPostFormation = postFormationStages.some(s => sd.stage?.includes(s))
           if (isPostFormation) {
             history.push({
@@ -133,6 +137,7 @@ export async function POST(req: NextRequest) {
             })
           }
 
+          // eslint-disable-next-line no-restricted-syntax -- history-only breadcrumb append (no stage change); no operations helper exists for a raw stage_history append
           await supabaseAdmin
             .from("service_deliveries")
             .update({ stage_history: history, updated_at: new Date().toISOString() })

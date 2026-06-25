@@ -42,6 +42,7 @@ import {
   collectSlackReferences,
   SLACK_SUPPORTED_IMAGE_TYPES,
   SLACK_MAX_IMAGE_BYTES,
+  SLACK_MAX_FILE_BYTES,
 } from "@/lib/ai-agent/slack-claude"
 import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
 
@@ -411,9 +412,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }))
     .filter((f) => typeof f.url === "string" && f.url.length > 0)
 
-  // Proceed if there's text OR at least one usable image — an image-only
-  // message (a screenshot dropped with no caption) must not be dropped here.
-  if (!channelId || !eventTs || (!text && slackImages.length === 0)) {
+  // Non-image files (txt/csv/json/pdf/xlsx/docx/zip/…). Captured for the worker to
+  // download (bot token) and read to text — NOT downloaded here (the 3s ACK window).
+  // Everything that isn't a supported image is a candidate; the worker classifies +
+  // skips unreadable types. Oversize files are dropped at the front door.
+  const slackFiles = ((event.files ?? []) as Array<Record<string, unknown>>)
+    .filter((f) => typeof f?.mimetype === "string" && !SLACK_SUPPORTED_IMAGE_TYPES.has(f.mimetype as string))
+    .filter((f) => typeof f?.size !== "number" || (f.size as number) <= SLACK_MAX_FILE_BYTES)
+    .map((f) => ({
+      url: f.url_private as string,
+      name: f.name as string | undefined,
+      mimetype: f.mimetype as string,
+      size: typeof f.size === "number" ? (f.size as number) : undefined,
+    }))
+    .filter((f) => typeof f.url === "string" && f.url.length > 0)
+
+  // Proceed if there's text OR at least one usable image OR a readable file — a
+  // file-only / screenshot-only message (no caption) must not be dropped here.
+  if (!channelId || !eventTs || (!text && slackImages.length === 0 && slackFiles.length === 0)) {
     return NextResponse.json({ ok: true })
   }
 
@@ -511,7 +527,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const cleanText = text.replace(/<@[A-Z0-9]+>/g, "").trim()
   // Image-only message (no caption): give the worker a non-empty text turn so
   // the model knows to look at the attached image(s).
-  const body = cleanText || text || (slackImages.length > 0 ? "(image attached — no caption)" : "")
+  const body =
+    cleanText ||
+    text ||
+    (slackImages.length > 0
+      ? "(image attached — no caption)"
+      : slackFiles.length > 0
+        ? "(file attached — no caption)"
+        : "")
 
   // Referenced messages: a SHARED message (Slack "Share message" → attachment
   // carrying source channel + ts) or a pasted archive link in the text. Pure
@@ -554,6 +577,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         slack_user_id: userId,
         slack_ack_ts: ackTs, // null if the ack post failed → worker posts fresh
         slack_images: slackImages, // [] when no usable images
+        slack_files: slackFiles, // [] when no non-image files shared
         slack_referenced: slackReferenced, // [] when no shared/linked messages
       },
     })

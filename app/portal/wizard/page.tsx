@@ -118,7 +118,17 @@ export default async function WizardPage({
   // Get account details — SKIPPED when scoped to a formation lead (no account
   // exists yet for the new company).
   let account: Record<string, string> = {}
-  let accountId = cookieAccountId || ''
+  // Only trust the portal_account_id cookie for an account the contact ACTUALLY
+  // owns. Initializing accountId straight from the cookie let a logged-in contact
+  // with NO account_contacts link (an in-progress formation / ITIN-only client)
+  // keep a stale cookie's foreign account, so the wizard then resolved its type
+  // from THAT account's service deliveries — surfacing the wrong wizard (e.g. a
+  // Tax Return SD on an unrelated account → the 4-step tax wizard for a
+  // formation/ITIN client who has no tax return). The account must come from a
+  // verified link; the cookie only selects AMONG owned accounts. For the
+  // (defensive) no-contact case the prior cookie fallback is kept.
+  // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
+  let accountId = contactId ? '' : (cookieAccountId || '')
   if (contactId && !formationLeadId) {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
@@ -126,9 +136,10 @@ export default async function WizardPage({
       .eq('contact_id', contactId)
 
     if (links?.length) {
-      const targetId = cookieAccountId && links.find(l => l.account_id === cookieAccountId)
+      const owned = links.map(l => l.account_id)
+      const targetId = cookieAccountId && owned.includes(cookieAccountId)
         ? cookieAccountId
-        : links[0].account_id
+        : owned[0]
       accountId = targetId
 
       const { data: a } = await supabaseAdmin

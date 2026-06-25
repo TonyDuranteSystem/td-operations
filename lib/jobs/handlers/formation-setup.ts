@@ -25,6 +25,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { createSD } from "@/lib/operations/service-delivery"
+import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
 import { firstUploadPath } from "@/lib/portal/wizard-uploads"
@@ -243,21 +244,28 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // For SMLLC: nothing to defer — only the owner exists. The owner's contact
   // updates + passport + members row (if any) are handled at materialization.
 
-  // ─── 2c. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
+  // ─── 2c. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Payment Confirmed) ───
   try {
     const sdContactId = p.contact_id
     if (sdContactId) {
       // Check if SD already exists for this contact
       const { data: existingSd } = await supabaseAdmin
         .from("service_deliveries")
-        .select("id")
+        .select("id, stage")
         .eq("contact_id", sdContactId)
         .eq("service_type", "Company Formation")
         .eq("status", "active")
         .limit(1)
 
+      // Resolve the SD id + current stage from either branch so the
+      // wizard-submit stage advance below runs uniformly.
+      let sdId: string | null = null
+      let sdStage: string | null = null
+
       if (existingSd && existingSd.length > 0) {
-        result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSd[0].id}`))
+        sdId = existingSd[0].id
+        sdStage = existingSd[0].stage
+        result.steps.push(step("service_delivery", "skipped", `Already exists at ${sdStage}: ${sdId}`))
       } else {
         // SD is contact-only at wizard submit per Antonio's model. The first
         // candidate LLC name is appended to the SD name purely for human
@@ -274,13 +282,61 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             // Antonio's model: SD attaches to the buyer (contact) until/unless the company materializes.
             contact_id: sdContactId,
             account_id: null,
-            target_stage: "Data Collection",
+            // v2 Company Formation pipeline stage_order=1 (migration 20260617);
+            // the old "Data Collection" stage no longer exists for this service.
+            target_stage: "Payment Confirmed",
             target_stage_order: 1,
             start_date: now.slice(0, 10),
           })
-          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection, contact-scoped)`))
+          sdId = sd.id
+          sdStage = "Payment Confirmed"
+          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Payment Confirmed, contact-scoped)`))
         } catch (e) {
           result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
+        }
+      }
+
+      // ─── 2c-bis. ADVANCE Payment Confirmed → Wizard Submitted ───
+      // This handler runs because the formation wizard was submitted, but the
+      // SD is normally pre-created at "Payment Confirmed" by activate-service —
+      // so the "already exists" branch above just skipped, leaving the SD stuck
+      // at "Payment Confirmed" forever (Davide Priori, 2026-06-24). Advance it
+      // now, but ONLY from "Payment Confirmed" and ONLY when the formation
+      // wizard_progress is actually 'submitted'. The stage guard makes this
+      // idempotent: a re-run finds the SD at "Wizard Submitted" (≠ "Payment
+      // Confirmed") and does nothing, and an SD already past this stage is
+      // never regressed.
+      if (sdId && sdStage === "Payment Confirmed") {
+        const { data: submittedWp } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("id")
+          .eq("contact_id", sdContactId)
+          .eq("wizard_type", "formation")
+          .eq("status", "submitted")
+          .limit(1)
+          .maybeSingle()
+
+        if (submittedWp) {
+          try {
+            const adv = await advanceServiceDelivery({
+              delivery_id: sdId,
+              target_stage: "Wizard Submitted",
+              notes: "Formation wizard submitted",
+            })
+            result.steps.push(
+              step(
+                "service_delivery_advance",
+                adv.success ? "ok" : "error",
+                adv.success
+                  ? `SD ${sdId} advanced: Payment Confirmed → Wizard Submitted`
+                  : `Advance failed: ${adv.error}`,
+              ),
+            )
+          } catch (e) {
+            result.steps.push(step("service_delivery_advance", "error", e instanceof Error ? e.message : String(e)))
+          }
+        } else {
+          result.steps.push(step("service_delivery_advance", "skipped", "Formation wizard_progress not 'submitted' yet"))
         }
       }
     } else {
@@ -332,6 +388,11 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       .update({
         status: "reviewed",
         reviewed_at: now,
+        // Portal wizard-submit (buildSubmissionRecord) writes status:"completed"
+        // but never stamps completed_at, so the column stays NULL. Stamp it here
+        // alongside the review flip. Same `now` as reviewed_at — the auto-chain
+        // runs seconds after submission, so this ≈ submission time.
+        completed_at: now,
         reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
       })
       .eq("id", p.submission_id)

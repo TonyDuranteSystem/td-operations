@@ -17,7 +17,8 @@
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "lint:ci": "eslint . --ext .ts,.tsx",
     "lint:staged": "lint-staged",
-    "gen:types": "npx --yes supabase gen types typescript --project-id ydzipybqeebtpcvsbtvs --schema public | sed '/<claude-code-hint/d' > /tmp/td-db-types.ts && [ -s /tmp/td-db-types.ts ] && head -1 /tmp/td-db-types.ts | grep -q 'export type Json' && mv /tmp/td-db-types.ts lib/database.types.ts && npx tsx scripts/gen-check-types.ts"
+    "gen:types": "npx --yes supabase gen types typescript --project-id ydzipybqeebtpcvsbtvs --schema public | sed '/<claude-code-hint/d' > /tmp/td-db-types.ts && [ -s /tmp/td-db-types.ts ] && head -1 /tmp/td-db-types.ts | grep -q 'export type Json' && mv /tmp/td-db-types.ts lib/database.types.ts && npx tsx scripts/gen-check-types.ts",
+    "import-whatsapp": "npx tsx scripts/import-whatsapp.ts"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
@@ -53,7 +54,9 @@
     "fflate": "^0.8.3",
     "html2pdf.js": "^0.14.0",
     "jose": "^6.2.0",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
+    "mammoth": "^1.12.0",
     "mcp-handler": "^1.0.7",
     "next": "14.2.35",
     "pdf-lib": "^1.17.1",

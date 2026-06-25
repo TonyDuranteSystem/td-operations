@@ -3,11 +3,12 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
-import { getPortalAccounts } from '@/lib/portal/queries'
+import { getChatEntities, type PortalChatEntity } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { PortalChat } from '@/components/portal/portal-chat'
+import type { ChatScope } from '@/lib/hooks/use-portal-chat'
 import { LogTab } from '@/components/portal/chat/log-tab'
 import { cn } from '@/lib/utils'
 
@@ -22,14 +23,40 @@ export default async function PortalChatPage({
 
   const contactId = getClientContactId(user)
 
+  let entities: PortalChatEntity[] = []
+  let selectedEntityId = ''
+  let scope: ChatScope
   let selectedAccountId: string | undefined
-  let accounts: { id: string; company_name: string }[] = []
 
   if (contactId) {
-    accounts = await getPortalAccounts(contactId)
-    const cookieStore = cookies()
-    const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-    selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+    entities = await getChatEntities(contactId)
+    const cookieStore = await cookies()
+    const cookieFormationId = cookieStore.get('portal_formation')?.value
+    const cookieAccountId = cookieStore.get('portal_account_id')?.value
+
+    // Resolve the selected entity, mirroring the sidebar switcher's cookie
+    // precedence: a formation selection wins, then portal_account_id (which can
+    // be a real account id OR the 'personal' sentinel), else the first entity.
+    const byId = new Map(entities.map(e => [e.id, e]))
+    const selected =
+      (cookieFormationId ? byId.get(cookieFormationId) : undefined) ??
+      (cookieAccountId ? byId.get(cookieAccountId) : undefined) ??
+      entities[0]
+
+    selectedEntityId = selected?.id ?? 'personal'
+    selectedAccountId = selected?.accountId ?? undefined
+
+    if (selected && selected.kind === 'company' && selected.accountId) {
+      scope = {
+        mode: 'company',
+        accountId: selected.accountId,
+        contactId,
+        includePersonalNull: selected.includePersonalNull,
+      }
+    } else {
+      // formation / personal / no entity → the contact's own untagged thread.
+      scope = { mode: 'personal', contactId }
+    }
   } else {
     // Teammate (Portal Team Access): no contact → scope chat to their ONE company
     // when the 'chat' capability is granted; otherwise send them back to the portal.
@@ -41,7 +68,10 @@ export default async function PortalChatPage({
       .select('id, company_name')
       .eq('id', tmAccountId)
       .single()
-    if (acct) accounts = [{ id: acct.id, company_name: acct.company_name }]
+    const label = acct?.company_name ?? 'Company'
+    entities = [{ id: tmAccountId, kind: 'company', label, accountId: tmAccountId, isShared: false, includePersonalNull: false }]
+    selectedEntityId = tmAccountId
+    scope = { mode: 'account', accountId: tmAccountId }
   }
 
   const locale = getLocale(user)
@@ -87,11 +117,13 @@ export default async function PortalChatPage({
 
       {activeView === 'chat' ? (
         <PortalChat
+          scope={scope}
           accountId={selectedAccountId}
           contactId={contactId ?? ''}
           userId={user.id}
           locale={locale}
-          accounts={accounts.map(a => ({ id: a.id, company_name: a.company_name }))}
+          entities={entities}
+          selectedEntityId={selectedEntityId}
         />
       ) : (
         <div className="flex-1 overflow-y-auto">

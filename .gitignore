@@ -49,3 +49,6 @@ next-env.d.ts
 !.vercel/project.json
 test-results/
 .auth-state.json
+
+# WhatsApp importer output (contains client conversation data — never commit)
+import-report.json

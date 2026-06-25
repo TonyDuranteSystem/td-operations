@@ -113,6 +113,20 @@ describe("Hermes ↔ Claude bridge — executeWorkerTool guard", () => {
     expect(result).toContain("not permitted")
   })
 
+  it("rejects recall_thread for the Hermes worker (not in availableNames — R108)", async () => {
+    // recall_thread is Slack-only (enableThreadRecall). The Hermes/Telegram research
+    // worker must never reach another conversation's transcript even if the name leaks.
+    const result = await executeWorkerTool("recall_thread", {}, new Set<string>())
+    expect(result).toContain("not permitted")
+    expect(result).toContain("recall_thread")
+  })
+
+  it("recall_thread with no attached thread id reports nothing to recall (no DB hit)", async () => {
+    const result = await executeWorkerTool("recall_thread", {}, new Set(["recall_thread"]), null, null)
+    expect(result).not.toContain("not permitted")
+    expect(result).toContain("nothing to recall")
+  })
+
   it("routes codebase_read to the repo reader (NOT rejected)", async () => {
     // package.json exists at the repo root and is not a blocked path.
     const result = await executeWorkerTool("codebase_read", { path: "package.json" })

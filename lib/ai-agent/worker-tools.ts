@@ -57,6 +57,7 @@ import {
 } from "./thread-routing"
 import { buildThreadContext } from "./thread-context"
 import { createThreadSummary, getThreadSummary, resolveThread } from "./thread-summaries"
+import { buildRelatedThreadsSuffix, embedThreadSummary } from "./thread-recall"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -755,6 +756,22 @@ export function snippetAround(text: string, q: string, radius = 220): string {
   return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`
 }
 
+export const RECALL_THREAD_TOOL: ToolDef = {
+  name: "recall_thread",
+  description: [
+    "Recall THIS conversation's own history from the permanent record — use it whenever you're unsure what was said, decided, or done earlier in this thread, including weeks or months ago. You always see a short recap of recent turns automatically; call this to read the FULL verbatim detail or to find a specific earlier point you don't have in front of you.",
+    "With a `query`: returns only the earlier turns mentioning that keyword/topic (e.g. a client name, a decision, 'second installment', a branch name). Without a query: returns the whole conversation transcript.",
+    "Use it before saying you don't remember or don't know what was discussed — the answer is almost certainly here. The conversation is identified for you; you don't pass an id.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Optional keyword/topic to find within this conversation (e.g. a client name, 'invoice', a decision). Omit to read the entire thread." },
+    },
+    required: [],
+  },
+}
+
 export const SEARCH_SYSDOCS_TOOL: ToolDef = {
   name: "search_sysdocs",
   description: [
@@ -811,6 +828,87 @@ export const READ_DRIVE_FILE_TOOL: ToolDef = {
     properties: { file_id: { type: "string", description: "Google Drive file id (from drive_search / drive_list_folder)." } },
     required: ["file_id"],
   },
+}
+
+export const READ_PORTAL_ATTACHMENT_TOOL: ToolDef = {
+  name: "read_portal_attachment",
+  description: [
+    "Read the content of a file (PDF, Word doc, spreadsheet, etc.) that a client attached in the portal chat.",
+    "Pass the URL exactly as shown in the portal_chat_read output (the URL after the 📎 filename).",
+    "Works for PDFs (text layer), DOCX, XLSX, CSV, and plain text files hosted on our Supabase storage.",
+    "Use this whenever portal_chat_read shows 📎 attachments and you need to know what's inside them.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Full URL of the portal chat attachment from portal_chat_read output." },
+    },
+    required: ["url"],
+  },
+}
+
+/** Trusted Supabase storage hostnames. Only URLs from these hosts are downloaded. */
+const TRUSTED_STORAGE_HOSTS = new Set([
+  "ydzipybqeebtpcvsbtvs.supabase.co", // production
+  "xjcxlmlpeywtwkhstjlw.supabase.co", // sandbox
+])
+
+/** read_portal_attachment handler — downloads a portal chat attachment from Supabase Storage and extracts its text. */
+export async function readPortalAttachmentForWorker(params: Record<string, unknown>): Promise<string> {
+  const url = typeof params.url === "string" ? params.url.trim() : ""
+  if (!url) return "url is required."
+
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return "Invalid URL — could not parse."
+  }
+  if (!TRUSTED_STORAGE_HOSTS.has(parsed.hostname)) {
+    return `❌ URL not from a trusted source (${parsed.hostname}). Only portal chat attachments from our Supabase storage can be read here.`
+  }
+
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return `❌ Couldn't download attachment (HTTP ${res.status}).`
+    const buffer = Buffer.from(await res.arrayBuffer())
+
+    const { classifySlackFile, extractTextFromBuffer, capText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
+      "@/lib/ai-agent/slack-file-reader"
+    )
+    const ext = parsed.pathname.split(".").pop()?.toLowerCase() ?? ""
+    const mimeByExt: Record<string, string> = {
+      pdf: "application/pdf",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      xls: "application/vnd.ms-excel",
+      csv: "text/csv",
+      txt: "text/plain",
+      json: "application/json",
+      md: "text/plain",
+    }
+    const mimetype = mimeByExt[ext] ?? "application/octet-stream"
+    const kind = classifySlackFile(mimetype, parsed.pathname)
+
+    if (kind === "image") return "❌ This is an image file — use the image attachment support instead."
+    if (kind === "unsupported") return `❌ File type "${ext || "unknown"}" cannot be read as text.`
+
+    if (kind === "pdf") {
+      let pdfText = ""
+      try {
+        pdfText = await extractTextFromBuffer(buffer, "pdf")
+      } catch {
+        // fall through — treat as scanned
+      }
+      if (pdfText.trim().length >= 80) return capText(pdfText, SLACK_FILE_TEXT_CHAR_CAP)
+      return "(Scanned PDF — no text layer found. This file contains images/scans only and cannot be read as text.)"
+    }
+
+    const text = await extractTextFromBuffer(buffer, kind)
+    return capText(text, SLACK_FILE_TEXT_CHAR_CAP) || "(empty file)"
+  } catch (err) {
+    return `❌ Couldn't read attachment: ${err instanceof Error ? err.message : String(err)}`
+  }
 }
 
 /** search_sysdocs handler — ILIKE over title + body of system_docs, returns slug + snippet. */
@@ -1510,6 +1608,7 @@ export async function executeWorkerTool(
   params: Record<string, unknown>,
   availableNames?: Set<string>,
   sourceMessageId?: string | null,
+  currentThreadId?: string | null,
 ): Promise<string> {
   if (name === "start_code_task") {
     const { _currentSlackCtx } = await import("./slack-claude")
@@ -1651,14 +1750,39 @@ export async function executeWorkerTool(
   // Internal knowledge-source reading — Slack-only (gated via enableDocReads at the
   // tool-list level). Executor-gate too (defense-in-depth, R108): never let the Hermes
   // research worker read sysdocs/SOPs/Drive even if a name leaks. All read-only.
-  if (name === "search_sysdocs" || name === "read_sysdoc" || name === "search_sops" || name === "read_drive_file") {
+  if (name === "search_sysdocs" || name === "read_sysdoc" || name === "search_sops" || name === "read_drive_file" || name === "read_portal_attachment") {
     if (!availableNames?.has(name)) {
       return `❌ Tool "${name}" is not permitted in this worker call (doc reading not enabled).`
     }
     if (name === "search_sysdocs") return searchSysdocsForWorker(params)
     if (name === "read_sysdoc") return readSysdocForWorker(params)
     if (name === "search_sops") return searchSopsForWorker(params)
+    if (name === "read_portal_attachment") return readPortalAttachmentForWorker(params)
     return readDriveFileForWorker(params)
+  }
+  // recall_thread — on-demand FULL/searched recall of THIS conversation's permanent
+  // transcript (Slack-only, gated via enableThreadRecall). The thread_id is injected
+  // server-side (currentThreadId) — the model can't address another conversation.
+  // Executor-gate too (defense-in-depth, R108): never let the Hermes research worker
+  // read a thread transcript even if the name leaks. Read-only.
+  if (name === "recall_thread") {
+    if (!availableNames?.has("recall_thread")) {
+      return `❌ Tool "recall_thread" is not permitted in this worker call (thread recall not enabled).`
+    }
+    if (!currentThreadId) {
+      return "❌ No conversation thread is attached to this message, so there's nothing to recall."
+    }
+    const { recallThreadHistory } = await import("./thread-context")
+    const query = typeof params.query === "string" && params.query.trim() ? params.query.trim() : null
+    const res = await recallThreadHistory(currentThreadId, query)
+    if (res.totalTurns === 0) return "This conversation has no earlier turns recorded yet."
+    if (query && res.matchedTurns === 0) {
+      return `No earlier turns in this conversation mention "${query}". (The thread has ${res.totalTurns} turn(s) total — try a different keyword, or omit the query to read the whole thread.)`
+    }
+    const header = query
+      ? `Found ${res.matchedTurns} turn(s) mentioning "${query}" (of ${res.totalTurns} total in this conversation):`
+      : `Full conversation transcript — ${res.totalTurns} turn(s):`
+    return `${header}\n\n${res.text}`
   }
   // find_tool / use_tool — the flexible action surface (Slack-only, gated via
   // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
@@ -1758,11 +1882,24 @@ export interface WorkerImageBlock {
 }
 
 /**
+ * A native document block (PDF). Used for a SCANNED/image-only PDF that has no
+ * extractable text layer — the model reads it natively via vision. Text PDFs are
+ * cheaper to send as decoded text, so the Slack file reader only emits this for
+ * the no-text case. media_type is always "application/pdf".
+ */
+export interface WorkerDocumentBlock {
+  type: "document"
+  source: { type: "base64"; media_type: string; data: string }
+}
+
+/**
  * The user turn handed to the model: either a plain string (text-only — the
  * Hermes/Telegram path and every legacy caller) or an array of content blocks
- * (text + images — the Slack screenshot path).
+ * (text + images + document PDFs — the Slack attachment path).
  */
-type WorkerUserContent = string | Array<{ type: "text"; text: string } | WorkerImageBlock>
+type WorkerUserContent =
+  | string
+  | Array<{ type: "text"; text: string } | WorkerImageBlock | WorkerDocumentBlock>
 
 // Default max tool-use iterations. Configurable via AGENT_MAX_TOOL_LOOPS env var
 // (shared with the in-dashboard provider in providers.ts); callWorker callers may
@@ -1818,6 +1955,13 @@ export interface CallWorkerOptions {
    */
   images?: WorkerImageBlock[]
   /**
+   * Optional native PDF document blocks to attach to the user turn (Slack file
+   * reader — a scanned/no-text-layer PDF). Sent alongside any images in the same
+   * multimodal content array. Absent/empty → unchanged. Never set on the
+   * Hermes/Telegram path.
+   */
+  documents?: WorkerDocumentBlock[]
+  /**
    * Expose the Slack-only start_code_task tool for this call. Set by the Slack
    * worker (processSlackEvent). When true, START_CODE_TASK_TOOL is appended to
    * whatever tool list this call resolves to. The Hermes/Telegram path never sets
@@ -1840,6 +1984,21 @@ export interface CallWorkerOptions {
    * its worker keeps the curated read-only subset (R108) and never gets raw SQL.
    */
   enableDbRead?: boolean
+  /**
+   * Expose the Slack-only recall_thread tool for this call (persistent memory). When
+   * true, RECALL_THREAD_TOOL is appended so the worker can read THIS conversation's
+   * full permanent transcript on demand (verbatim detail / keyword search), even
+   * months later. The thread is identified server-side from opts.threadId. The
+   * Hermes/Telegram path never sets this (R108).
+   */
+  enableThreadRecall?: boolean
+  /**
+   * Expose Anthropic's SERVER-SIDE web tools (web_search + web_fetch) for this call,
+   * so the worker can research the open web / read a URL. Slack-only; the Hermes/Telegram
+   * research worker never sets it (R108). Independently gated by the WORKER_WEB_SEARCH_ENABLED
+   * env kill-switch in the caller. web_search is capped at WORKER_WEB_SEARCH_MAX_USES per turn.
+   */
+  enableWebSearch?: boolean
   /**
    * Expose the Slack-only send_email tool for this call. Set by the Slack worker
    * (processSlackEvent). When true, SEND_EMAIL_TOOL is appended to the resolved tool
@@ -1928,24 +2087,49 @@ export function oneParagraphSummary(reply: string): string {
  * for dispatch (the extra allow-list guard). Returns reachedMaxLoops=true only
  * when the loop is exhausted without a final answer.
  */
+/** Per-turn cap on web searches (cost guard). Tunable via env; defaults to 5. */
+export const WORKER_WEB_SEARCH_MAX_USES = Number(process.env.WORKER_WEB_SEARCH_MAX_USES) || 5
+
+/**
+ * Anthropic SERVER-SIDE web tools to attach when web research is enabled: web_search
+ * (capped per turn) + web_fetch (read a specific URL). The `_20260209` versions add
+ * dynamic result-filtering (supported on claude-sonnet-4-6) — Anthropic runs the search
+ * and returns filtered results in the same call; no provider/key/beta header needed.
+ * Pure — exported for tests.
+ */
+export function buildWebServerTools(): Array<Record<string, unknown>> {
+  return [
+    { type: "web_search_20260209", name: "web_search", max_uses: WORKER_WEB_SEARCH_MAX_USES },
+    { type: "web_fetch_20260209", name: "web_fetch" },
+  ]
+}
+
 export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
   systemPrompt: string,
   maxIterations?: number,
   sourceMessageId?: string | null,
+  currentThreadId?: string | null,
+  serverTools?: Array<Record<string, unknown>>,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
-  // Anthropic tool format
-  const claudeTools = tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: t.parameters,
-  }))
+  // Anthropic tool format. Client tools (executed by executeWorkerTool) carry an
+  // input_schema; ANTHROPIC SERVER tools (web_search / web_fetch — run on Anthropic's
+  // side, returned as server_tool_use + *_tool_result blocks, never as client tool_use)
+  // are passed through verbatim as {type, name, …} and appended after the client tools.
+  const claudeTools: Array<Record<string, unknown>> = [
+    ...tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.parameters,
+    })),
+    ...(serverTools ?? []),
+  ]
 
   // The exact tool names offered to the model this call — used to executor-gate
   // real-send tools (send_email) so they can't fire when they weren't injected.
@@ -2003,6 +2187,17 @@ export async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const textBlocks = data.content.filter((b: any) => b.type === "text")
 
+    // Server-side tool (web_search / web_fetch) hit its internal step limit mid-turn
+    // and returned WITHOUT a client tool_use block. The API wants us to re-send the
+    // assistant turn with NO added user message so it resumes the server tool. Without
+    // this guard the next check would treat zero client tools as "done" and stop early.
+    // (A pause_turn that ALSO carries a client tool_use falls through to the normal
+    // execute-and-continue path below, which re-sends and resumes just the same.)
+    if (data.stop_reason === "pause_turn" && toolUseBlocks.length === 0) {
+      currentMessages = [...currentMessages, { role: "assistant", content: data.content }]
+      continue
+    }
+
     if (toolUseBlocks.length === 0 || data.stop_reason === "end_turn") {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reply = textBlocks.map((b: any) => b.text).join("\n") || ""
@@ -2018,7 +2213,7 @@ export async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
-      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId)
+      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId, currentThreadId)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -2254,6 +2449,13 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     tools = [...tools, RUN_SQL_QUERY_TOOL]
   }
 
+  // Slack-only: append the on-demand thread-recall tool (persistent memory). Gated on
+  // enableThreadRecall so it NEVER reaches the Hermes research worker (R108) and never
+  // double-adds. The thread is identified server-side (opts.threadId), not by the model.
+  if (opts.enableThreadRecall && opts.threadId && !tools.some((t) => t.name === RECALL_THREAD_TOOL.name)) {
+    tools = [...tools, RECALL_THREAD_TOOL]
+  }
+
   // Slack-only: append the direct email-send tool. Gated on enableEmailSend so it
   // NEVER reaches the Hermes research worker (R108) and never double-adds. Sending
   // still requires Antonio's explicit "send it" — enforced by the prompt.
@@ -2286,7 +2488,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // NEVER reach the Hermes research worker (R108) and never double-add. Read-only;
   // the executor also re-checks availableNames (defense-in-depth).
   if (opts.enableDocReads) {
-    for (const t of [SEARCH_SYSDOCS_TOOL, READ_SYSDOC_TOOL, SEARCH_SOPS_TOOL, READ_DRIVE_FILE_TOOL]) {
+    for (const t of [SEARCH_SYSDOCS_TOOL, READ_SYSDOC_TOOL, SEARCH_SOPS_TOOL, READ_DRIVE_FILE_TOOL, READ_PORTAL_ATTACHMENT_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }
@@ -2316,8 +2518,11 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // [{text}, ...images]; otherwise the plain string — identical to every prior
   // caller. deriveThreadTitle / thread context above still use the string body.
   const images = Array.isArray(opts.images) ? opts.images : []
+  const documents = Array.isArray(opts.documents) ? opts.documents : []
   const userContent: WorkerUserContent =
-    images.length > 0 ? [{ type: "text", text: userBody }, ...images] : userBody
+    images.length > 0 || documents.length > 0
+      ? [{ type: "text", text: userBody }, ...images, ...documents]
+      : userBody
 
   // Auto-recall (Decision Memory): surface relevant past lessons up-front so the
   // worker applies them without having to choose to call memory_recall — the gap
@@ -2332,7 +2537,23 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     systemPrompt = `${systemPrompt}${await buildClientRecallSuffix(userBody, opts.clientKey, opts.clientName)}`
   }
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null)
+  // Persistent memory — cross-thread recall ("connect the dots"): surface RELATED
+  // PAST conversations (other threads, even months old) by semantic similarity, so
+  // the worker links this message to prior history instead of treating it as new.
+  // Slack-only (enableThreadRecall) so the Hermes research worker never triggers it
+  // (R108). Best-effort: "" on missing key / un-applied migration / any error.
+  if (opts.enableThreadRecall) {
+    systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId)}`
+  }
+
+  // Slack-only web research (Anthropic server tools). Gated by the option AND the env
+  // kill-switch so it ships dark and Antonio flips it on after sandbox QA.
+  const serverTools =
+    opts.enableWebSearch && process.env.WORKER_WEB_SEARCH_ENABLED === "true"
+      ? buildWebServerTools()
+      : undefined
+
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools)
 
   if (threadId) {
     try {
@@ -2344,6 +2565,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
           ? "action_proposed"
           : "investigation_complete"
       await resolveThread(threadId, outcome, oneParagraphSummary(result.reply))
+      // Persistent memory: re-embed this thread's fresh summary so it's recallable by
+      // FUTURE conversations (cross-thread "connect the dots"). Slack-only (the gate),
+      // best-effort — never block the reply over a memory write.
+      if (opts.enableThreadRecall) {
+        await embedThreadSummary(threadId).catch(() => {})
+      }
     } catch (err) {
       console.warn(
         `[callWorker] resolveThread failed for ${threadId} (reply still returned):`,

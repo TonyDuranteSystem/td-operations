@@ -52,6 +52,8 @@ import {
   collectSlackReferences,
   fetchReferencedThreads,
   MAX_SLACK_REFERENCES,
+  readSlackFiles,
+  fetchThreadFiles,
 } from "@/lib/ai-agent/slack-claude"
 import { createHmac } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -159,7 +161,26 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // the system — CRM record, run_sql_query, KB/SOPs — instead of asking Antonio;
     // added after the worker asked "which language?" when the contact's language
     // was already in the CRM (Gritti/Evolue)).
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(10200)
+    // → 10700 (2026-06-23, ATTACHMENTS line (multi-format file reader) + recall_thread
+    // guidance in the MEMORY block (persistent memory: read this conversation's full
+    // permanent transcript on demand before saying you don't remember)).
+    // → 11000 (2026-06-25, read_portal_attachment added to SOURCES block so the
+    // worker can read PDFs clients attach in portal chat).
+    // → 11600 (2026-06-25, SOURCES FIRST (MANDATORY): rewrote the soft "SOURCES" fallback
+    // into a mandatory, universal rule — look up the rule/process/policy in KB+SOPs+sysdocs
+    // and ground the answer before replying, never improvise from memory or one CRM field;
+    // added after the worker improvised billing answers for Gritti/Evolue until Antonio
+    // forced it to "go see the SOP". Merged with the read_portal_attachment line above).
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11600)
+  })
+
+  it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SOURCES FIRST/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/MANDATORY/)
+    // must name the three doc sources it has to search
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/search_sysdocs/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/search_sops/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/kb_search/)
   })
 
   it("instructs SELF-SERVE: look facts up in the system before asking Antonio", () => {
@@ -227,6 +248,7 @@ describe("findOrCreateConversationThread", () => {
       select: vi.fn().mockReturnThis(),
       not: vi.fn().mockReturnThis(),
       gt: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue({ data: [], error: null }),
     }
@@ -326,6 +348,54 @@ describe("findOrCreateConversationThread", () => {
     expect(result).not.toBe("existing-thread")
     expect(createThreadSummary).toHaveBeenCalled()
   })
+
+  it("recovers a thread across a >30-min gap via the durable Slack-thread anchor", async () => {
+    // Incident 2026-06-23: a 47-min code-task build aged the 30-min window out, so the
+    // windowed passes find NOTHING — but the reply is in the same Slack thread, so the
+    // anchor query (by thread_ts) must recover the original thread_id, not mint a new one.
+    const anchoredThreadId = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    const mockChain = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      gt: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi
+        .fn()
+        // 1st call = the 30-min windowed query → empty (gap aged it out)
+        .mockResolvedValueOnce({ data: [], error: null })
+        // 2nd call = anchor query on slack_thread_ts → finds the original thread
+        .mockResolvedValueOnce({ data: [{ thread_id: anchoredThreadId }], error: null }),
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(mockChain)
+
+    const result = await findOrCreateConversationThread("C123", "1781000000.000100")
+    expect(result).toBe(anchoredThreadId)
+    expect(createThreadSummary).not.toHaveBeenCalled()
+  })
+
+  it("does NOT reuse memory from a different Slack thread (anchor finds nothing → new thread)", async () => {
+    // The anchor query is filtered by channel + this thread's ts, so a different thread's
+    // rows never match. With no window match and no anchor match, a fresh thread is created.
+    const mockChain = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      gt: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({ data: [], error: null }), // window + both anchor queries empty
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn().mockReturnValue(mockChain)
+    ;(createThreadSummary as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    const result = await findOrCreateConversationThread("C123", "9999999999.000999")
+    expect(typeof result).toBe("string")
+    expect(createThreadSummary).toHaveBeenCalled()
+  })
 })
 
 // -------------------------------------------------------------------------
@@ -383,6 +453,8 @@ describe("processSlackEvent", () => {
       enableCodeTasks: true,
       enableSlackSend: true,
       enableDbRead: true,
+      enableThreadRecall: true,
+      enableWebSearch: true,
       enableEmailSend: true,
       enableCallReads: true,
       enableDocReads: true,
@@ -858,6 +930,119 @@ describe("prepareSlackImages", () => {
 })
 
 // -------------------------------------------------------------------------
+// readSlackFiles (multi-format file reader)
+// -------------------------------------------------------------------------
+
+describe("readSlackFiles", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("downloads a text file and returns its content as a labeled text block", async () => {
+    const csv = Buffer.from("name,amount\nAcme,1000", "utf-8")
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(csv.buffer.slice(csv.byteOffset, csv.byteOffset + csv.byteLength)),
+    })
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/x.csv", name: "x.csv", mimetype: "text/csv" },
+    ])
+    expect(documentBlocks).toEqual([])
+    expect(textBlocks).toHaveLength(1)
+    expect(textBlocks[0]).toContain('"x.csv"')
+    expect(textBlocks[0]).toContain("name,amount")
+    expect(textBlocks[0]).toContain("Acme,1000")
+  })
+
+  it("notes an unsupported type without downloading it", async () => {
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/v.mp3", name: "v.mp3", mimetype: "audio/mpeg" },
+    ])
+    expect(documentBlocks).toEqual([])
+    expect(textBlocks[0]).toMatch(/can't read this file type/)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("notes an oversize file (by declared size) without downloading it", async () => {
+    const { textBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/huge.csv", name: "huge.csv", mimetype: "text/csv", size: 50 * 1024 * 1024 },
+    ])
+    expect(textBlocks[0]).toMatch(/too large/)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("emits a native document block for a scanned PDF (no text layer)", async () => {
+    // A minimal PDF whose pdf-parse text layer is empty → falls back to a document block.
+    const JSZip = (await import("jszip")).default // ensure dynamic-import infra is warm
+    void JSZip
+    const pdfBytes = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF", "utf-8")
+    mockFetch.mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength)),
+    })
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/scan.pdf", name: "scan.pdf", mimetype: "application/pdf" },
+    ])
+    expect(documentBlocks).toHaveLength(1)
+    expect(documentBlocks[0]).toEqual({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: pdfBytes.toString("base64") },
+    })
+    expect(textBlocks.some((b) => /scanned/.test(b))).toBe(true)
+  })
+
+  it("adds a note (no crash) when the download responds non-ok", async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 403 })
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/x.csv", name: "x.csv", mimetype: "text/csv" },
+    ])
+    expect(documentBlocks).toEqual([])
+    expect(textBlocks[0]).toMatch(/couldn't download/)
+  })
+
+  it("returns empty (and does not fetch) when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const { textBlocks, documentBlocks } = await readSlackFiles([
+      { url: "https://files.slack.com/x.csv", name: "x.csv", mimetype: "text/csv" },
+    ])
+    expect(textBlocks).toEqual([])
+    expect(documentBlocks).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe("fetchThreadFiles", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SLACK_BOT_TOKEN_CLAUDE = "xoxb-test-token"
+  })
+
+  it("harvests non-image files from thread history, skipping images", async () => {
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { files: [{ url_private: "https://files.slack.com/a.pdf", name: "a.pdf", mimetype: "application/pdf", size: 1234 }] },
+            { files: [{ url_private: "https://files.slack.com/b.png", name: "b.png", mimetype: "image/png" }] },
+          ],
+        }),
+    })
+    const refs = await fetchThreadFiles("C1", "111.222")
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toEqual({ url: "https://files.slack.com/a.pdf", name: "a.pdf", mimetype: "application/pdf", size: 1234 })
+  })
+
+  it("returns [] when the bot token is missing", async () => {
+    delete process.env.SLACK_BOT_TOKEN_CLAUDE
+    const refs = await fetchThreadFiles("C1", "111.222")
+    expect(refs).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+// -------------------------------------------------------------------------
 // fetchThreadImages
 // -------------------------------------------------------------------------
 
@@ -1015,6 +1200,47 @@ describe("fetchThreadHistory", () => {
     })
     const out = await fetchThreadHistory("C123", "100.000")
     expect(out).toBe("Bot: automated note\nSomeone: hello")
+  })
+
+  it("keeps Claude's code-task lifecycle posts (launch + done) but still drops acks/progress", async () => {
+    // The Mac Mini posts these as the Claude bot; they live ONLY in Slack (not in
+    // agent_messages), so the worker must see them — otherwise it forgets/denies the
+    // task it launched (incident 2026-06-23). Acks, thinking frames and progress
+    // spinners (also Claude) must STAY skipped.
+    mockFetch.mockResolvedValue({
+      json: () =>
+        Promise.resolve({
+          ok: true,
+          messages: [
+            { user: "U0BAALR4Y4Q", text: "clean up periskope" }, // Antonio — kept
+            { user: "U0B9S675WTT", text: "On it 👍" }, // ack — skipped
+            { user: "U0B9S675WTT", text: "🔧 *Periskope Cleanup* — Mac Mini picked it up, working on it…" }, // launch — kept
+            { user: "U0B9S675WTT", text: "🧪 Running tests… _Periskope Cleanup_" }, // progress — skipped
+            { user: "U0B9S675WTT", text: "✅ *Periskope Cleanup* — done. Branch pushed for review." }, // done — kept
+          ],
+        }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    const linesByLabel = out.split("\n")
+    expect(out).toContain("Antonio: clean up periskope")
+    expect(out).toContain("Claude (code task): 🔧 *Periskope Cleanup* — Mac Mini picked it up")
+    expect(out).toContain("Claude (code task): ✅ *Periskope Cleanup* — done")
+    expect(out).not.toContain("On it 👍")
+    expect(out).not.toContain("Running tests")
+    // exactly three kept lines (1 Antonio + 2 code-task), nothing else
+    expect(linesByLabel).toHaveLength(3)
+  })
+
+  it("truncates a long kept code-task deliverable post", async () => {
+    const longDeliverable = "✅ *WhatsApp Import* — done. " + "x".repeat(1000)
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, messages: [{ user: "U0B9S675WTT", text: longDeliverable }] }),
+    })
+    const out = await fetchThreadHistory("C123", "100.000")
+    expect(out.startsWith("Claude (code task): ✅ *WhatsApp Import* — done")).toBe(true)
+    expect(out.endsWith("…")).toBe(true)
+    // sender label + 300-char cap + ellipsis — far shorter than the 1000-char body
+    expect(out.length).toBeLessThan(360)
   })
 
   it("returns '' when the Slack API responds not-ok (e.g. missing scope)", async () => {

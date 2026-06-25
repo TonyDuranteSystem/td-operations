@@ -10254,6 +10254,8 @@ export type Database = {
           formation_date: string | null
           id: string
           language: string | null
+          mailing_city_state_zip: string | null
+          mailing_street: string | null
           member_count: number
           pdf_signed_drive_id: string | null
           pdf_unsigned_drive_id: string | null
@@ -10283,6 +10285,8 @@ export type Database = {
           formation_date?: string | null
           id?: string
           language?: string | null
+          mailing_city_state_zip?: string | null
+          mailing_street?: string | null
           member_count?: number
           pdf_signed_drive_id?: string | null
           pdf_unsigned_drive_id?: string | null
@@ -10312,6 +10316,8 @@ export type Database = {
           formation_date?: string | null
           id?: string
           language?: string | null
+          mailing_city_state_zip?: string | null
+          mailing_street?: string | null
           member_count?: number
           pdf_signed_drive_id?: string | null
           pdf_unsigned_drive_id?: string | null

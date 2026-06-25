@@ -58,7 +58,15 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       category,
       drive_file_id: driveFileId || null,
       status: 'classified',
-      confidence: 1.0,
+      // Must be one of 'high' | 'medium' | 'low' — the production `documents`
+      // table has a CHECK constraint (documents_confidence_check) enforcing
+      // exactly those values. The previous numeric `1.0` violated it, so EVERY
+      // autoSaveDocument insert (ITIN W-7/1040-NR/Schedule OI, signed OA, lease,
+      // contract) failed in production and was silently swallowed — the root
+      // cause of "docs in Drive but not in the documents table" (Daniel Pasztor,
+      // 2026-06-25). Sandbox lacks the constraint, which masked it. 'high' =
+      // these are deterministically-generated/known docs (full confidence).
+      confidence: 'high',
       processed_at: new Date().toISOString(),
       portal_visible: params.portalVisible ?? false,
       // service_delivery_id isn't in the generated DB types yet; included in the

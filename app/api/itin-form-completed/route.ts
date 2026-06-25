@@ -333,29 +333,65 @@ export async function POST(req: NextRequest) {
           if (nrUpload?.id) generatedAttachments.push({ kind: "1040nr", file_id: nrUpload.id, file_name: nrName, mime_type: "application/pdf" })
           if (oiUpload?.id) generatedAttachments.push({ kind: "schedule_oi", file_id: oiUpload.id, file_name: oiName, mime_type: "application/pdf" })
 
+          results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/` })
+
           // Register PDFs in the portal documents table so the client sees
-          // them under Documents (category=3 Tax, portal_visible=true).
-          // ITIN SDs are contact-only by Phase 1 rule. Phase B (2026-05-11)
-          // extended autoSaveDocument to accept contact_id — pure contact-only
-          // ITINs (no account_id) now register portal documents scoped to the
-          // contact. If the contact also owns an LLC (sub.account_id set),
-          // file under that account so other account members can see the docs.
-          // Stamp the generated docs with the active ITIN SD (deliveryId) so they
-          // surface on the flow workspace / portal flow page (which query by
-          // service_delivery_id). portal_visible=true: W-7/1040-NR/Schedule OI are
-          // client-facing (no internal COA is generated on this path).
-          if (sub.account_id) {
-            await autoSaveDocument({ accountId: sub.account_id, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
-            await autoSaveDocument({ accountId: sub.account_id, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
-            await autoSaveDocument({ accountId: sub.account_id, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
-            results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated, uploaded to Drive/ITIN/, and registered in portal documents (account-scoped)` })
-          } else if (contactId) {
-            await autoSaveDocument({ contactId, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
-            await autoSaveDocument({ contactId, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
-            await autoSaveDocument({ contactId, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true, serviceDeliveryId: deliveryId })
-            results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated, uploaded to Drive/ITIN/, and registered in portal documents (contact-scoped)` })
+          // them under Documents (category=3 Tax, portal_visible=true) and so
+          // they surface on the flow workspace / portal flow page (queried by
+          // service_delivery_id). ITIN SDs are contact-only by Phase 1 rule;
+          // autoSaveDocument accepts contact_id for pure contact-only ITINs. If
+          // the contact also owns an LLC (sub.account_id set), file under that
+          // account so other account members can see the docs.
+          //
+          // 2026-06-25 (Issue 2 fix — Daniel Pasztor): the previous version
+          // ignored autoSaveDocument's return value and ALWAYS pushed a
+          // docs_generated "ok", masking insert failures (the documents row
+          // never appeared yet the action_log said "ok"). autoSaveDocument never
+          // throws — it returns { error } — so the bug was invisible. We now (a)
+          // skip + report any PDF whose Drive upload returned no id (a null
+          // drive_file_id violates the documents NOT NULL constraint — verified),
+          // and (b) check each return value and surface the actual error in a
+          // dedicated docs_registered result.
+          const registrationTarget: { accountId?: string; contactId?: string } | null =
+            sub.account_id ? { accountId: sub.account_id } : contactId ? { contactId } : null
+
+          if (!registrationTarget) {
+            results.push({ step: "docs_registered", status: "skipped", detail: "No account or contact — portal documents not registered" })
           } else {
-            results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/ (no account or contact — portal documents skipped)` })
+            const toRegister: { fileName: string; documentType: string; driveId?: string }[] = [
+              { fileName: w7Name, documentType: "ITIN W-7", driveId: w7Upload?.id },
+              { fileName: nrName, documentType: "ITIN 1040-NR", driveId: nrUpload?.id },
+              { fileName: oiName, documentType: "ITIN Schedule OI", driveId: oiUpload?.id },
+            ]
+            const regErrors: string[] = []
+            let regOk = 0
+            for (const doc of toRegister) {
+              if (!doc.driveId) {
+                regErrors.push(`${doc.documentType}: Drive upload returned no file id`)
+                continue
+              }
+              const saved = await autoSaveDocument({
+                ...registrationTarget,
+                fileName: doc.fileName,
+                documentType: doc.documentType,
+                category: 3,
+                driveFileId: doc.driveId,
+                portalVisible: true,
+                serviceDeliveryId: deliveryId,
+              })
+              if (saved.error) {
+                regErrors.push(`${doc.documentType}: ${saved.error}`)
+              } else {
+                regOk++
+              }
+            }
+            const scope = sub.account_id ? "account-scoped" : "contact-scoped"
+            if (regErrors.length === 0) {
+              results.push({ step: "docs_registered", status: "ok", detail: `${regOk}/3 registered in portal documents (${scope})` })
+            } else {
+              console.error(`[itin-form-completed] document registration failed: ${regErrors.join(" | ")}`)
+              results.push({ step: "docs_registered", status: "error", detail: `${regOk}/3 registered (${scope}). Failures: ${regErrors.join("; ")}` })
+            }
           }
         }
       }
