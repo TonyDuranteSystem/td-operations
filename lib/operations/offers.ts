@@ -189,6 +189,8 @@ export interface CreateOfferParams {
   partner_agreed_price?: number | null
   partner_payout_model?: "none" | "price_difference" | "percentage" | "flat_fee" | "credit_note" | null
   partner_payout_rate?: number | null
+  /** Partner's recurring renewal share for this sale (USD). Persisted to accounts.partner_deal at activation. */
+  partner_renewal_payout?: number | null
 
   // Control flags
   auto_fill_referrer_from_lead?: boolean // default true
@@ -512,6 +514,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         partner_agreed_price: params.partner_agreed_price ?? null,
         partner_payout_model: params.partner_payout_model ?? null,
         partner_payout_rate: params.partner_payout_rate ?? null,
+        partner_renewal_payout: params.partner_renewal_payout ?? null,
         referrer_name: refName,
         referrer_email: refEmail,
         referrer_type: refType,

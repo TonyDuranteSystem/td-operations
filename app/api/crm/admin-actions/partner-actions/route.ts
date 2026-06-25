@@ -39,6 +39,16 @@ export async function POST(req: NextRequest) {
     let result: { success: boolean; detail: string; data?: unknown }
 
     switch (action) {
+      // ─── LIST PARTNERS (for the offer-creation deal picker) ───
+      case 'list': {
+        const { data: partners } = await supabaseAdmin
+          .from('client_partners')
+          .select('id, partner_name, default_payout_model, default_payout_rate, status')
+          .order('partner_name', { ascending: true })
+        result = { success: true, detail: 'ok', data: { partners: (partners ?? []).filter(p => p.status !== 'inactive') } }
+        break
+      }
+
       // ─── CREATE PARTNER ───
       case 'create_partner': {
         const { contact_id, partner_name, partner_email, commission_model, agreed_services, price_list, notes } = params || {}
