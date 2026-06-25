@@ -942,20 +942,12 @@ export async function createClientConversationFromModal(args: {
   )
   if (!threadTs) return { ok: false, error: "could not post the conversation message" }
 
-  // Now that the message has a ts, add the 💬 Open button (a deep link to THIS thread)
-  // alongside Follow · Close · Remove — every action lives ON the card, one message.
-  // Deterministic workspace-domain deep link, so no API call that can fail.
-  const openUrl = buildSlackThreadDeepLink(args.channelId, threadTs)
-  await updateSlackMessage(
-    args.channelId,
-    threadTs,
-    text,
-    buildClientThreadRootBlocks(text, { openUrl, status: "open" }),
-  ).catch((err) => {
-    console.error("[slack-claude] add card buttons (chat.update) failed:", err)
-    return false
-  })
-
+  // Insert client_threads BEFORE updating the card with the Open button.
+  // The isOpenClientConversationThread gate in the events webhook queries this row
+  // to decide whether to process thread replies. If we insert last (after the Slack
+  // update), any message typed while the card is visible but before the INSERT
+  // completes is silently dropped. Inserting here — as soon as we have the threadTs —
+  // means the row exists before the card's Open button is even rendered.
   const row: Record<string, unknown> = {
     account_id: kind === "account" ? id : null,
     contact_id: kind === "contact" ? id : null,
@@ -971,6 +963,18 @@ export async function createClientConversationFromModal(args: {
   if (ins.error && !/duplicate key/i.test(ins.error.message ?? "")) {
     console.error("[slack-claude] client_threads insert failed:", ins.error)
   }
+
+  // Now add the 💬 Open button (a deep link to THIS thread) alongside Follow · Close · Remove.
+  const openUrl = buildSlackThreadDeepLink(args.channelId, threadTs)
+  await updateSlackMessage(
+    args.channelId,
+    threadTs,
+    text,
+    buildClientThreadRootBlocks(text, { openUrl, status: "open" }),
+  ).catch((err) => {
+    console.error("[slack-claude] add card buttons (chat.update) failed:", err)
+    return false
+  })
 
   return { ok: true, threadTs }
 }
