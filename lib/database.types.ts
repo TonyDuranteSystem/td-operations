@@ -7566,6 +7566,7 @@ export type Database = {
           partner_invoice_target: string | null
           partner_payout_model: string | null
           partner_payout_rate: number | null
+          partner_renewal_payout: number | null
           payment_links: Json | null
           payment_type: string | null
           recurring_costs: Json | null
@@ -7624,6 +7625,7 @@ export type Database = {
           partner_invoice_target?: string | null
           partner_payout_model?: string | null
           partner_payout_rate?: number | null
+          partner_renewal_payout?: number | null
           payment_links?: Json | null
           payment_type?: string | null
           recurring_costs?: Json | null
@@ -7682,6 +7684,7 @@ export type Database = {
           partner_invoice_target?: string | null
           partner_payout_model?: string | null
           partner_payout_rate?: number | null
+          partner_renewal_payout?: number | null
           payment_links?: Json | null
           payment_type?: string | null
           recurring_costs?: Json | null

@@ -21,7 +21,7 @@ import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
 import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission } from "@/lib/operations/referral"
-import { shouldRunReferralCredit } from "@/lib/partners/partner-deal"
+import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
@@ -154,7 +154,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Get the offer to determine contract_type and bundled_pipelines
   const { data: offer } = await supabase
     .from("offers")
-    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target")
+    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout")
     .eq("token", activation.offer_token)
     .single()
 
@@ -1441,6 +1441,31 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           status: result.error ? "manual_review" : "created",
           detail: `Payout ${payoutRow?.id?.slice(0, 8)}: ${offer.partner_payout_model} ${result.amount ?? "—"} ${payoutCurrency}${result.error ? ` (${result.error})` : ""}`,
         })
+      }
+
+      // Persist the durable partner deal + link on the account so the recurring
+      // renewal payout (Slice 2, years later) knows the partner and the renewal
+      // share. partner_renewal_payout / partner_deal are new columns — cast
+      // until the migration is promoted to prod and types regenerate.
+      const renewalPayout = (offer as { partner_renewal_payout?: number | string | null }).partner_renewal_payout
+      const partnerDeal = buildPartnerDeal({
+        partnerId: offer.partner_id,
+        setupPayout: result.amount,
+        renewalPayout: renewalPayout != null ? Number(renewalPayout) : null,
+        currency: payoutCurrency,
+        offerToken: activation.offer_token,
+      })
+      if (autoAccountId && partnerDeal) {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- new columns not yet in generated types (sandbox-applied, prod pending); cast until regen
+          supabase.from("accounts").update({
+            partner_id: offer.partner_id,
+            partner_deal: partnerDeal,
+            updated_at: new Date().toISOString(),
+          } as Record<string, unknown> as never).eq("id", autoAccountId),
+          "accounts.partner_deal",
+        )
+        steps.push({ step: "partner_deal", status: "created", detail: `Deal saved on ${autoAccountId.slice(0, 8)}: setup ${partnerDeal.setup_payout ?? "—"} / renewal ${partnerDeal.renewal_payout ?? "—"} ${partnerDeal.currency}` })
       }
     } else if (offer?.partner_id) {
       steps.push({ step: "partner_payout", status: "skipped", detail: "Partner present but payout_model='none'" })
