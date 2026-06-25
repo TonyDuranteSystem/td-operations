@@ -164,7 +164,9 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // → 10700 (2026-06-23, ATTACHMENTS line (multi-format file reader) + recall_thread
     // guidance in the MEMORY block (persistent memory: read this conversation's full
     // permanent transcript on demand before saying you don't remember)).
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(10700)
+    // → 11000 (2026-06-25, read_portal_attachment added to SOURCES block so the
+    // worker can read PDFs clients attach in portal chat).
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11000)
   })
 
   it("instructs SELF-SERVE: look facts up in the system before asking Antonio", () => {
