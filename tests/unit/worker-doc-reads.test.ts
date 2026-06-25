@@ -7,13 +7,15 @@ import {
   READ_SYSDOC_TOOL,
   SEARCH_SOPS_TOOL,
   READ_DRIVE_FILE_TOOL,
+  READ_PORTAL_ATTACHMENT_TOOL,
   searchSysdocsForWorker,
   readSysdocForWorker,
   searchSopsForWorker,
   readDriveFileForWorker,
+  readPortalAttachmentForWorker,
 } from '@/lib/ai-agent/worker-tools'
 
-const DOC_TOOL_NAMES = ['search_sysdocs', 'read_sysdoc', 'search_sops', 'read_drive_file']
+const DOC_TOOL_NAMES = ['search_sysdocs', 'read_sysdoc', 'search_sops', 'read_drive_file', 'read_portal_attachment']
 
 describe('snippetAround', () => {
   it('centres the window on the first case-insensitive match', () => {
@@ -63,6 +65,7 @@ describe('doc-source reading tools are Slack-gated (R108)', () => {
     expect(READ_SYSDOC_TOOL.name).toBe('read_sysdoc')
     expect(SEARCH_SOPS_TOOL.name).toBe('search_sops')
     expect(READ_DRIVE_FILE_TOOL.name).toBe('read_drive_file')
+    expect(READ_PORTAL_ATTACHMENT_TOOL.name).toBe('read_portal_attachment')
   })
 })
 
@@ -78,5 +81,42 @@ describe('doc-source handlers validate required params before touching the DB', 
   })
   it('read_drive_file requires a file_id', async () => {
     expect(await readDriveFileForWorker({})).toContain('file_id is required')
+  })
+  it('read_portal_attachment requires a url', async () => {
+    expect(await readPortalAttachmentForWorker({})).toContain('url is required')
+  })
+})
+
+describe('read_portal_attachment security guard', () => {
+  it('rejects URLs from untrusted hosts', async () => {
+    const res = await readPortalAttachmentForWorker({ url: 'https://evil.com/malware.pdf' })
+    expect(res).toContain('not from a trusted source')
+    expect(res).toContain('evil.com')
+  })
+
+  it('rejects malformed URLs', async () => {
+    const res = await readPortalAttachmentForWorker({ url: 'not-a-url' })
+    expect(res).toContain('Invalid URL')
+  })
+
+  it('accepts production Supabase storage host (network error expected without real file)', async () => {
+    // URL is valid + trusted — it will fail at fetch (no real file), but the
+    // security guard must not reject it. We just check the rejection message is
+    // NOT the "not from a trusted source" message.
+    const res = await readPortalAttachmentForWorker({
+      url: 'https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/chat-attachments/fake.pdf',
+    })
+    expect(res).not.toContain('not from a trusted source')
+    // Will fail with a fetch/HTTP error — that's fine
+  })
+
+  it('is not in WORKER_TOOLS (R108 — Hermes/Telegram never gets it)', () => {
+    const names = WORKER_TOOLS.map((t) => t.name)
+    expect(names).not.toContain('read_portal_attachment')
+  })
+
+  it('executeWorkerTool refuses it when not offered (no availableNames)', async () => {
+    const res = await executeWorkerTool('read_portal_attachment', { url: 'https://ydzipybqeebtpcvsbtvs.supabase.co/x.pdf' })
+    expect(res).toContain('not permitted')
   })
 })

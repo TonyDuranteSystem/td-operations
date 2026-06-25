@@ -830,6 +830,87 @@ export const READ_DRIVE_FILE_TOOL: ToolDef = {
   },
 }
 
+export const READ_PORTAL_ATTACHMENT_TOOL: ToolDef = {
+  name: "read_portal_attachment",
+  description: [
+    "Read the content of a file (PDF, Word doc, spreadsheet, etc.) that a client attached in the portal chat.",
+    "Pass the URL exactly as shown in the portal_chat_read output (the URL after the 📎 filename).",
+    "Works for PDFs (text layer), DOCX, XLSX, CSV, and plain text files hosted on our Supabase storage.",
+    "Use this whenever portal_chat_read shows 📎 attachments and you need to know what's inside them.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Full URL of the portal chat attachment from portal_chat_read output." },
+    },
+    required: ["url"],
+  },
+}
+
+/** Trusted Supabase storage hostnames. Only URLs from these hosts are downloaded. */
+const TRUSTED_STORAGE_HOSTS = new Set([
+  "ydzipybqeebtpcvsbtvs.supabase.co", // production
+  "xjcxlmlpeywtwkhstjlw.supabase.co", // sandbox
+])
+
+/** read_portal_attachment handler — downloads a portal chat attachment from Supabase Storage and extracts its text. */
+export async function readPortalAttachmentForWorker(params: Record<string, unknown>): Promise<string> {
+  const url = typeof params.url === "string" ? params.url.trim() : ""
+  if (!url) return "url is required."
+
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return "Invalid URL — could not parse."
+  }
+  if (!TRUSTED_STORAGE_HOSTS.has(parsed.hostname)) {
+    return `❌ URL not from a trusted source (${parsed.hostname}). Only portal chat attachments from our Supabase storage can be read here.`
+  }
+
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return `❌ Couldn't download attachment (HTTP ${res.status}).`
+    const buffer = Buffer.from(await res.arrayBuffer())
+
+    const { classifySlackFile, extractTextFromBuffer, capText, SLACK_FILE_TEXT_CHAR_CAP } = await import(
+      "@/lib/ai-agent/slack-file-reader"
+    )
+    const ext = parsed.pathname.split(".").pop()?.toLowerCase() ?? ""
+    const mimeByExt: Record<string, string> = {
+      pdf: "application/pdf",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      xls: "application/vnd.ms-excel",
+      csv: "text/csv",
+      txt: "text/plain",
+      json: "application/json",
+      md: "text/plain",
+    }
+    const mimetype = mimeByExt[ext] ?? "application/octet-stream"
+    const kind = classifySlackFile(mimetype, parsed.pathname)
+
+    if (kind === "image") return "❌ This is an image file — use the image attachment support instead."
+    if (kind === "unsupported") return `❌ File type "${ext || "unknown"}" cannot be read as text.`
+
+    if (kind === "pdf") {
+      let pdfText = ""
+      try {
+        pdfText = await extractTextFromBuffer(buffer, "pdf")
+      } catch {
+        // fall through — treat as scanned
+      }
+      if (pdfText.trim().length >= 80) return capText(pdfText, SLACK_FILE_TEXT_CHAR_CAP)
+      return "(Scanned PDF — no text layer found. This file contains images/scans only and cannot be read as text.)"
+    }
+
+    const text = await extractTextFromBuffer(buffer, kind)
+    return capText(text, SLACK_FILE_TEXT_CHAR_CAP) || "(empty file)"
+  } catch (err) {
+    return `❌ Couldn't read attachment: ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
 /** search_sysdocs handler — ILIKE over title + body of system_docs, returns slug + snippet. */
 export async function searchSysdocsForWorker(params: Record<string, unknown>): Promise<string> {
   const q = typeof params.query === "string" ? params.query.trim() : ""
@@ -1669,13 +1750,14 @@ export async function executeWorkerTool(
   // Internal knowledge-source reading — Slack-only (gated via enableDocReads at the
   // tool-list level). Executor-gate too (defense-in-depth, R108): never let the Hermes
   // research worker read sysdocs/SOPs/Drive even if a name leaks. All read-only.
-  if (name === "search_sysdocs" || name === "read_sysdoc" || name === "search_sops" || name === "read_drive_file") {
+  if (name === "search_sysdocs" || name === "read_sysdoc" || name === "search_sops" || name === "read_drive_file" || name === "read_portal_attachment") {
     if (!availableNames?.has(name)) {
       return `❌ Tool "${name}" is not permitted in this worker call (doc reading not enabled).`
     }
     if (name === "search_sysdocs") return searchSysdocsForWorker(params)
     if (name === "read_sysdoc") return readSysdocForWorker(params)
     if (name === "search_sops") return searchSopsForWorker(params)
+    if (name === "read_portal_attachment") return readPortalAttachmentForWorker(params)
     return readDriveFileForWorker(params)
   }
   // recall_thread — on-demand FULL/searched recall of THIS conversation's permanent
@@ -2406,7 +2488,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // NEVER reach the Hermes research worker (R108) and never double-add. Read-only;
   // the executor also re-checks availableNames (defense-in-depth).
   if (opts.enableDocReads) {
-    for (const t of [SEARCH_SYSDOCS_TOOL, READ_SYSDOC_TOOL, SEARCH_SOPS_TOOL, READ_DRIVE_FILE_TOOL]) {
+    for (const t of [SEARCH_SYSDOCS_TOOL, READ_SYSDOC_TOOL, SEARCH_SOPS_TOOL, READ_DRIVE_FILE_TOOL, READ_PORTAL_ATTACHMENT_TOOL]) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }
