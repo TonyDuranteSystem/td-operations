@@ -21,6 +21,7 @@ import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
 import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission } from "@/lib/operations/referral"
+import { shouldRunReferralCredit } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
@@ -1147,7 +1148,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // ─── STEP 3.5: Referral Record (AUTO, non-blocking) ──────
   let referralNoteLine = ""
   try {
-    if (offer?.referrer_name) {
+    if (offer && shouldRunReferralCredit(offer)) {
       // a. Find or create referrer contact
       let referrerContactId: string | null = null
       const { data: referrerContacts } = await supabase
@@ -1304,6 +1305,10 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       } else {
         steps.push({ step: "referral", status: "error", detail: "Could not find or create referrer contact" })
       }
+    } else if (offer?.referrer_name && offer?.partner_id) {
+      // Managed-partner offer: compensation runs through the partner-payout path
+      // (Step 3.6). Skip the generic referral credit so the partner isn't paid twice.
+      steps.push({ step: "referral", status: "skipped", detail: "Referral handled by partner-payout path (offer has partner_id) — referral credit skipped to avoid double-pay" })
     } else {
       steps.push({ step: "referral", status: "skipped", detail: "No referral on this offer" })
     }
