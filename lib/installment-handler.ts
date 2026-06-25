@@ -25,6 +25,7 @@ import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
+import { parsePartnerDeal, shouldPayRenewal } from "@/lib/partners/partner-deal"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -42,7 +43,7 @@ export async function onFirstInstallmentPaid(
   // Get account details
   const { data: account } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, entity_type, member_structure, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date")
+    .select("id, company_name, entity_type, member_structure, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date, partner_id, partner_deal")
     .eq("id", accountId)
     .single()
 
@@ -284,6 +285,71 @@ export async function onFirstInstallmentPaid(
     }
   } catch (e) {
     steps.push({ step: "lease_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+  }
+
+  // ─── Partner renewal payout (recurring, USD) ───
+  // A managed partner earns a renewal share each year the client renews. Fires
+  // once per year (this is the annual 1st-installment trigger) and ONLY in years
+  // AFTER formation — the formation year's compensation is the one-time setup
+  // payout (activation Step 3.6). Idempotent per (account, year).
+  try {
+    const partnerId = account.partner_id ?? null
+    const deal = parsePartnerDeal(account.partner_deal)
+    const formationYear = account.formation_date ? new Date(account.formation_date).getFullYear() : null
+    const decision = shouldPayRenewal({ partnerDeal: deal, formationYear, paymentYear: year })
+
+    if (partnerId && decision.pay && deal) {
+      const reference = `renewal:${accountId}:${year}`
+      const { data: existingPayout } = await supabaseAdmin
+        .from("referral_payouts")
+        .select("id")
+        .eq("partner_id", partnerId)
+        .eq("reference", reference)
+        .limit(1)
+        .maybeSingle()
+
+      if (existingPayout) {
+        steps.push({ step: "partner_renewal_payout", status: "skipped", detail: `Already paid for ${year}` })
+      } else {
+        const { data: payoutRow } = await dbWriteSafe(
+          supabaseAdmin
+            .from("referral_payouts")
+            .insert({
+              partner_id: partnerId,
+              referral_id: null,
+              payout_type: "renewal",
+              amount: decision.amount,
+              currency: deal.currency || "USD",
+              status: "pending",
+              reference,
+              notes: `Annual renewal payout ${year} for ${account.company_name}`,
+            })
+            .select("id")
+            .single(),
+          "referral_payouts.insert",
+        )
+
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- mirrors the activation partner-payout task pattern
+          supabaseAdmin.from("tasks").insert({
+            task_title: `Partner renewal payout — ${account.company_name} ${year} (${decision.amount} ${deal.currency})`,
+            assigned_to: "Antonio",
+            category: "Payment",
+            priority: "Normal",
+            status: "To Do",
+            account_id: accountId,
+            description: `Recurring partner renewal payout for ${year}.\nAmount: ${decision.amount} ${deal.currency}\nPayout id: ${payoutRow?.id}\n\nReview & approve in CRM → Partners → detail page.`,
+          }),
+          "tasks.insert",
+        )
+
+        steps.push({ step: "partner_renewal_payout", status: "created", detail: `Renewal payout ${decision.amount} ${deal.currency} for ${year} (${payoutRow?.id?.slice(0, 8)})` })
+      }
+    } else if (partnerId) {
+      steps.push({ step: "partner_renewal_payout", status: "skipped", detail: decision.reason })
+    }
+  } catch (e) {
+    steps.push({ step: "partner_renewal_payout", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   return { steps }

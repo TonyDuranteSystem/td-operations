@@ -187,6 +187,7 @@ export type Database = {
           notes: string | null
           onboarding_date: string | null
           partner_id: string | null
+          partner_deal: Json | null
           payment_gateway: string | null
           payment_link: string | null
           physical_address: string | null
@@ -271,6 +272,7 @@ export type Database = {
           notes?: string | null
           onboarding_date?: string | null
           partner_id?: string | null
+          partner_deal?: Json | null
           payment_gateway?: string | null
           payment_link?: string | null
           physical_address?: string | null
@@ -355,6 +357,7 @@ export type Database = {
           notes?: string | null
           onboarding_date?: string | null
           partner_id?: string | null
+          partner_deal?: Json | null
           payment_gateway?: string | null
           payment_link?: string | null
           physical_address?: string | null

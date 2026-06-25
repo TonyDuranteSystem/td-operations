@@ -68,3 +68,41 @@ export function shouldRunReferralCredit(offer: {
 }): boolean {
   return !!offer.referrer_name && !offer.partner_id
 }
+
+/** Parse the `accounts.partner_deal` jsonb back into a typed PartnerDeal. */
+export function parsePartnerDeal(raw: unknown): PartnerDeal | null {
+  if (!raw || typeof raw !== "object") return null
+  const o = raw as Record<string, unknown>
+  const setup = o.setup_payout == null ? null : Number(o.setup_payout)
+  const renewal = o.renewal_payout == null ? null : Number(o.renewal_payout)
+  return {
+    setup_payout: typeof setup === "number" && Number.isFinite(setup) ? setup : null,
+    renewal_payout: typeof renewal === "number" && Number.isFinite(renewal) ? renewal : null,
+    currency: typeof o.currency === "string" && o.currency ? o.currency : "USD",
+    offer_token: typeof o.offer_token === "string" ? o.offer_token : null,
+  }
+}
+
+/**
+ * Decide whether to pay a partner their recurring renewal share for an annual
+ * cycle. Pays ONLY in years AFTER the formation year — the formation year's
+ * compensation is the one-time setup payout (activation Step 3.6), so paying
+ * renewal in the same cycle would double-pay. Pure — unit tested.
+ */
+export function shouldPayRenewal(input: {
+  partnerDeal: PartnerDeal | null
+  formationYear: number | null
+  paymentYear: number
+}): { pay: boolean; amount: number; reason: "ok" | "no_renewal_deal" | "unknown_formation_year" | "formation_year" } {
+  const deal = input.partnerDeal
+  if (!deal || !deal.renewal_payout || deal.renewal_payout <= 0) {
+    return { pay: false, amount: 0, reason: "no_renewal_deal" }
+  }
+  if (input.formationYear == null) {
+    return { pay: false, amount: 0, reason: "unknown_formation_year" }
+  }
+  if (input.paymentYear <= input.formationYear) {
+    return { pay: false, amount: 0, reason: "formation_year" }
+  }
+  return { pay: true, amount: deal.renewal_payout, reason: "ok" }
+}
