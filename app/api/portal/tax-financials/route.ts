@@ -161,16 +161,32 @@ export async function GET(request: NextRequest) {
       .eq('job_type', 'ingest_bank_statement')
       .eq('account_id', accountId)
       .in('status', ['pending', 'processing', 'failed', 'completed'])
-    let ingestPending = 0
-    let ingestFailed = 0
-    for (const j of (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean } | null; payload: { tax_year?: number | string } | null }>) {
+    // Count by distinct FILE (payload.path), not by job: the stuck-job reaper
+    // re-enqueues, so one file can have several rows (a merged file Luca uploaded
+    // had 3 failed rows). Counting jobs told the client "3 files couldn't be
+    // read" for 1 file. A file is DONE if ANY of its jobs completed successfully
+    // (result.ok !== false on a completed row) — earlier failed/retried attempts
+    // for that same path are then irrelevant. ('cancelled' is excluded by the
+    // query above — superseded enqueues must not count as failures.)
+    const byPath = new Map<string, { succeeded: boolean; pending: boolean; failed: boolean }>()
+    for (const j of (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean } | null; payload: { tax_year?: number | string; path?: string } | null }>) {
       // Scope to THIS tax year (the account may have statements for other years).
       if (String(j.payload?.tax_year ?? '') !== String(taxYear)) continue
-      if (j.status === 'pending' || j.status === 'processing') ingestPending++
-      // A file the parser couldn't read returns ok:false and the job COMPLETES
-      // (retrying won't fix an unreadable file); a thrown/transient error ends as
-      // 'failed'. Both mean "this statement didn't make it in" for the client.
-      else if (j.status === 'failed' || (j.status === 'completed' && j.result?.ok === false)) ingestFailed++
+      const path = j.payload?.path
+      if (!path) continue
+      const e = byPath.get(path) ?? { succeeded: false, pending: false, failed: false }
+      if (j.status === 'completed' && j.result?.ok !== false) e.succeeded = true
+      else if (j.status === 'pending' || j.status === 'processing') e.pending = true
+      // Unreadable file → completes with ok:false; transient/throw → 'failed'.
+      else if (j.status === 'failed' || (j.status === 'completed' && j.result?.ok === false)) e.failed = true
+      byPath.set(path, e)
+    }
+    let ingestPending = 0
+    let ingestFailed = 0
+    for (const e of Array.from(byPath.values())) {
+      if (e.succeeded) continue // the file made it in — ignore earlier attempts
+      if (e.pending) ingestPending++
+      else if (e.failed) ingestFailed++
     }
 
     return NextResponse.json({
