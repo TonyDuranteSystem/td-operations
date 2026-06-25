@@ -299,7 +299,54 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
   await updateJobProgress(job.id, result)
 
-  // ─── 6. DRIVE SAVE (Tax Organizer PDF + uploaded files) ───
+  // ─── 6. BANK STATEMENTS → per-file background ingest jobs (MMLLC/Corp) ───
+  // ENQUEUED EARLY — BEFORE the Drive copy below — because that copy can be
+  // slow / hang / get killed with many files, and the client's P&L must not
+  // depend on it. One small `ingest_bank_statement` job per file (CSV or PDF);
+  // the worker drains them and the financials view builds on demand.
+  if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
+    const acctId = p.account_id
+    const ty = taxYear
+    try {
+      // Match BOTH shapes: CURRENT per-bank `bank_accounts_<N>_statements_…`
+      // and LEGACY flat `bank_statements_…`. Accept CSV + PDF (+ zip).
+      const statementPaths = uploadPaths.filter(
+        path => /\/(bank_accounts_\d+_statements|bank_statements)_/.test(path) && /\.(csv|pdf|zip)$/i.test(path),
+      )
+      if (statementPaths.length > 0) {
+        const { enqueueJobs } = await import("../queue")
+        const { ids } = await enqueueJobs(
+          statementPaths.map(path => {
+            const fileName = path.split("/").pop() ?? "statement"
+            // Prefer the per-bank bank name the client typed; fall back to the
+            // filename lead token. Fallback label only — the parser detects the
+            // real bank from file CONTENT.
+            const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
+            const typed = idx !== undefined ? String((sd as Record<string, unknown>)[`bank_accounts_${idx}_bank_name`] ?? "").trim() : ""
+            const fromName = fileName.replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-z0-9]+_/i, "").split(/[_\-.]/)[0]
+            const bankLabel = typed || fromName || "Bank"
+            return {
+              job_type: "ingest_bank_statement",
+              payload: { account_id: acctId, tax_year: ty, path, bank_label: bankLabel },
+              priority: 4,
+              account_id: acctId,
+              created_by: "portal_wizard",
+            }
+          }),
+        )
+        result.steps.push(step("portal_csv_ingest", "ok",
+          `Queued ${ids.length} statement ingest job(s) — transactions land as each completes`))
+      } else {
+        result.steps.push(step("portal_csv_ingest", "skipped", "No bank statement uploads on the submission"))
+      }
+    } catch (e) {
+      result.steps.push(step("portal_csv_ingest", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  await updateJobProgress(job.id, result)
+
+  // ─── 6b. DRIVE SAVE (Tax Organizer PDF + uploaded files) ───
   if (p.account_id) {
     try {
       const { data: acc } = await supabaseAdmin
@@ -347,63 +394,6 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
   }
 
   await updateJobProgress(job.id, result)
-
-  // ─── 7. BANK STATEMENTS → per-file background ingest jobs (MMLLC/Corp) ───
-  // The wizard's `bank_statements` uploads (CSV or PDF) feed the client's P&L +
-  // Balance Sheet screen (/portal/tax-financials). Reading ONE statement —
-  // especially a PDF via AI extraction — can take ~2 min, so reading a client's
-  // whole set inline here would blow the job worker's 300s window and previously
-  // stranded the client (killed mid-run → orphaned job → false "Submission
-  // failed", zero transactions). Instead we enqueue ONE `ingest_bank_statement`
-  // job per file: each is small, fits the window, the worker drains them
-  // one-by-one (chained), and the financials view builds on demand as rows land.
-  //
-  // NOTE: the old filter looked for `bank_accounts_N_statements_` — a field the
-  // tax wizard never produced — so it matched nothing and ingested zero. The
-  // real wizard field is the flat `bank_statements`.
-  if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
-    const acctId = p.account_id
-    const ty = taxYear
-    try {
-      // Match BOTH shapes the wizard can produce (config comment: "readers
-      // accept both shapes"): the CURRENT per-bank repeater field
-      // `bank_accounts_<N>_statements_…` and the LEGACY flat `bank_statements_…`
-      // an old in-flight draft may still carry. Accept CSV + PDF (+ zip).
-      const statementPaths = uploadPaths.filter(
-        path => /\/(bank_accounts_\d+_statements|bank_statements)_/.test(path) && /\.(csv|pdf|zip)$/i.test(path),
-      )
-      if (statementPaths.length > 0) {
-        const { enqueueJobs } = await import("../queue")
-        const sd = p.submitted_data ?? {}
-        const { ids } = await enqueueJobs(
-          statementPaths.map(path => {
-            const fileName = path.split("/").pop() ?? "statement"
-            // Prefer the bank name the client typed for this per-bank section
-            // (`bank_accounts_<N>_bank_name`); fall back to the filename's lead
-            // token for legacy uploads. Either way it's a FALLBACK label only —
-            // the parser re-detects the real bank from file CONTENT, never routing.
-            const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
-            const typed = idx !== undefined ? String((sd as Record<string, unknown>)[`bank_accounts_${idx}_bank_name`] ?? "").trim() : ""
-            const fromName = fileName.replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-z0-9]+_/i, "").split(/[_\-.]/)[0]
-            const bankLabel = typed || fromName || "Bank"
-            return {
-              job_type: "ingest_bank_statement",
-              payload: { account_id: acctId, tax_year: ty, path, bank_label: bankLabel },
-              priority: 4,
-              account_id: acctId,
-              created_by: "portal_wizard",
-            }
-          }),
-        )
-        result.steps.push(step("portal_csv_ingest", "ok",
-          `Queued ${ids.length} statement ingest job(s) — transactions land as each completes`))
-      } else {
-        result.steps.push(step("portal_csv_ingest", "skipped", "No bank statement uploads on the submission"))
-      }
-    } catch (e) {
-      result.steps.push(step("portal_csv_ingest", "error", e instanceof Error ? e.message : String(e)))
-    }
-  }
 
   if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
     try {

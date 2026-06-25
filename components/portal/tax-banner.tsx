@@ -369,6 +369,12 @@ export function TaxBanner({
         <div className="flex-1 min-w-0">
           <p className={`font-semibold text-sm sm:text-base ${t.title}`}>{cfg.title}</p>
           <p className={`text-xs sm:text-sm mt-1 ${t.desc}`}>{cfg.desc}</p>
+          {/* Post-submit: surface the P&L / Balance Sheet review link. The flow-
+              workspace path is SD-stage-driven (no review_status), so without
+              this the client lands on a link-less "Under review" banner and can
+              never reach /portal/tax-financials. (financialsLink is null unless
+              showFinancialsLink — MMLLC/Corp with a submission.) */}
+          {(flowState === 'under_review' || flowState === 'preparing') && financialsLink}
         </div>
         {cfg.action && (
           <div className={`shrink-0 flex items-center gap-1.5 self-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${t.btn}`}>
