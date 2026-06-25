@@ -268,12 +268,12 @@ const TAX_SMLLC_COMPANY: FieldConfig[] = [
 const TAX_DOCUMENTS_BASE: FieldConfig[] = [
   {
     name: 'bank_accounts',
-    label: 'Your bank accounts — upload the CSV export for the entire year',
-    labelIt: 'I tuoi conti bancari — carica l\'export CSV dell\'intero anno',
+    label: 'Your bank accounts — upload the CSV export (or PDF statement) for the entire year',
+    labelIt: 'I tuoi conti bancari — carica l\'export CSV (o l\'estratto conto PDF) dell\'intero anno',
     type: 'repeater',
     repeaterRequired: true,
-    hint: 'Please upload ONLY CSV files, and the ENTIRE year (January 1 – December 31), not a piece of it. This file lets us prepare your Profit & Loss and Balance Sheet for you — accurately and at no extra cost. Every bank lets you export it: in your online banking, open the account, choose Export/Download, set the dates to the full year, and pick CSV. Add one section per bank account.',
-    hintIt: 'Carica SOLO file CSV, e l\'INTERO anno (1 gennaio – 31 dicembre), non una parte. Questo file ci permette di preparare per te il Conto Economico e lo Stato Patrimoniale — con precisione e senza costi aggiuntivi. Ogni banca permette di esportarlo: nell\'online banking, apri il conto, scegli Esporta/Scarica, imposta le date sull\'anno intero e seleziona CSV. Aggiungi una sezione per ogni conto bancario.',
+    hint: 'Upload your CSV export OR the official PDF statement, for the ENTIRE year (January 1 – December 31), not a piece of it. This lets us prepare your Profit & Loss and Balance Sheet for you — accurately and at no extra cost. Every bank lets you export it: in your online banking, open the account, choose Export/Download, set the dates to the full year, and pick CSV (or download the PDF statements). Add one section per bank account.',
+    hintIt: 'Carica il tuo export CSV OPPURE l\'estratto conto PDF ufficiale, per l\'INTERO anno (1 gennaio – 31 dicembre), non una parte. Questo ci permette di preparare per te il Conto Economico e lo Stato Patrimoniale — con precisione e senza costi aggiuntivi. Ogni banca permette di esportarlo: nell\'online banking, apri il conto, scegli Esporta/Scarica, imposta le date sull\'anno intero e seleziona CSV (oppure scarica gli estratti conto PDF). Aggiungi una sezione per ogni conto bancario.',
     repeaterAddLabel: 'Add a bank account',
     repeaterAddLabelIt: 'Aggiungi un conto bancario',
     repeaterFields: [
@@ -283,7 +283,7 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
         { value: 'checking', label: 'Bank account (checking)', labelIt: 'Conto corrente' },
         { value: 'credit_card', label: 'Credit card', labelIt: 'Carta di credito' },
       ] },
-      { name: 'statements', label: 'CSV export — entire year', labelIt: 'Export CSV — anno intero', type: 'file', required: true, accept: '.csv,text/csv', hint: 'Only CSV. The entire year, not a piece of it.', hintIt: 'Solo CSV. L\'anno intero, non una parte.' },
+      { name: 'statements', label: 'CSV export or PDF statement — entire year', labelIt: 'Export CSV o estratto conto PDF — anno intero', type: 'file', required: true, accept: '.csv,.pdf,text/csv,application/pdf', hint: 'CSV export or the official PDF statement — the entire year, not a piece of it.', hintIt: 'Export CSV o estratto conto PDF ufficiale — l\'anno intero, non una parte.' },
     ],
   },
   // "Financial Statements (optional)" upload REMOVED (2026-06-17, Antonio): it sat
@@ -503,6 +503,10 @@ export const TAX_MMLLC_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'comp_foreign_accounts_over_10k', label: 'Did that account (or all foreign accounts together) ever hold more than $10,000 at any moment during the year?', labelIt: 'Quel conto (o tutti i conti esteri insieme) ha mai superato i $10.000 in qualsiasi momento dell\'anno?', type: 'select', required: true, conditional: { field: 'comp_foreign_accounts', value: 'Yes' }, options: YN, hint: 'Above $10,000 a separate report (FBAR) is required — missing it carries heavy penalties, so we handle it for you. Even one single day above $10,000 counts.', hintIt: 'Sopra i $10.000 serve una dichiarazione separata (FBAR) — dimenticarla comporta sanzioni pesanti, quindi ce ne occupiamo noi. Conta anche un solo giorno sopra i $10.000.' },
     { name: 'comp_foreign_subsidiaries', label: 'Does the company OWN any other company, US or foreign?', labelIt: 'La società POSSIEDE altre società, USA o estere?', type: 'select', required: true, options: YN, hint: 'For example a subsidiary, a holding position, or shares above 20% in another business.', hintIt: 'Per esempio una controllata, una holding, o quote sopra il 20% di un\'altra azienda.' },
     { name: 'comp_foreign_trusts', label: 'Did the company send money to, or receive money from, a foreign trust?', labelIt: 'La società ha inviato o ricevuto denaro da un trust estero?', type: 'select', required: true, options: YN, hint: 'If you don\'t know what a trust is, your answer is No.', hintIt: 'Se non sai cos\'è un trust, la risposta è No.' },
+    // Restored 2026-06-25 (Antonio): these two Schedule-B / 1065 questions were
+    // dropped in the §14 MMLLC redesign (commit 9916eeb9) and asked back for.
+    { name: 'mmllc_foreign_partners', label: 'Any foreign partners?', labelIt: 'Soci stranieri?', type: 'select', required: false, options: YN },
+    { name: 'mmllc_assets_over_50k', label: 'Total assets over $50,000?', labelIt: 'Attivi totali superiori a $50.000?', type: 'select', required: false, options: YN },
     { name: 'comp_digital_assets', label: 'Did the company RECEIVE crypto as a payment, or SELL / convert / spend any crypto during the year?', labelIt: 'La società ha RICEVUTO crypto come pagamento, o VENDUTO / convertito / speso crypto durante l\'anno?', type: 'select', required: true, options: YN, hint: 'Only BUYING and HOLDING does not count — if the company just bought crypto and kept it, answer No. Answer Yes if crypto came IN as payment for something, or went OUT: sold, converted to dollars/euros, or used to pay for something. Simple signal: if your exchange (Kraken, Coinbase…) sent you a tax form (1099 / 1099-DA), the answer is almost certainly Yes.', hintIt: 'Solo COMPRARE e TENERE non conta — se la società ha solo comprato crypto e le ha tenute, rispondi No. Rispondi Sì se sono ENTRATE crypto come pagamento, o se sono USCITE: vendute, convertite in dollari/euro, o usate per pagare qualcosa. Segnale semplice: se il tuo exchange (Kraken, Coinbase…) ti ha inviato un modulo fiscale (1099 / 1099-DA), la risposta è quasi certamente Sì.' },
     { name: 'comp_digital_assets_scenario', label: 'What happened with the crypto?', labelIt: 'Cosa è successo con le crypto?', type: 'select', required: true, conditional: { field: 'comp_digital_assets', value: 'Yes' }, options: [
       { value: 'received_payment', label: 'We received crypto as payment from customers', labelIt: 'Abbiamo ricevuto crypto come pagamento dai clienti' },

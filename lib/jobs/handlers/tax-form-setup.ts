@@ -365,20 +365,27 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
     const acctId = p.account_id
     const ty = taxYear
     try {
+      // Match BOTH shapes the wizard can produce (config comment: "readers
+      // accept both shapes"): the CURRENT per-bank repeater field
+      // `bank_accounts_<N>_statements_…` and the LEGACY flat `bank_statements_…`
+      // an old in-flight draft may still carry. Accept CSV + PDF (+ zip).
       const statementPaths = uploadPaths.filter(
-        path => /\/bank_statements_/.test(path) && /\.(csv|pdf|zip)$/i.test(path),
+        path => /\/(bank_accounts_\d+_statements|bank_statements)_/.test(path) && /\.(csv|pdf|zip)$/i.test(path),
       )
       if (statementPaths.length > 0) {
         const { enqueueJobs } = await import("../queue")
+        const sd = p.submitted_data ?? {}
         const { ids } = await enqueueJobs(
           statementPaths.map(path => {
             const fileName = path.split("/").pop() ?? "statement"
-            // Best-effort bank label from the original filename
-            // ("bank_statements_<hash>_MERCURY_..." → "MERCURY"). The parser
-            // re-detects the real bank from file CONTENT, so this is a fallback
-            // label only, never routing.
-            const original = fileName.replace(/^bank_statements_[a-z0-9]+_/i, "")
-            const bankLabel = (original.split(/[_\-.]/)[0] || "Bank").toUpperCase()
+            // Prefer the bank name the client typed for this per-bank section
+            // (`bank_accounts_<N>_bank_name`); fall back to the filename's lead
+            // token for legacy uploads. Either way it's a FALLBACK label only —
+            // the parser re-detects the real bank from file CONTENT, never routing.
+            const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
+            const typed = idx !== undefined ? String((sd as Record<string, unknown>)[`bank_accounts_${idx}_bank_name`] ?? "").trim() : ""
+            const fromName = fileName.replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-z0-9]+_/i, "").split(/[_\-.]/)[0]
+            const bankLabel = typed || fromName || "Bank"
             return {
               job_type: "ingest_bank_statement",
               payload: { account_id: acctId, tax_year: ty, path, bank_label: bankLabel },
