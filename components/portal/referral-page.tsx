@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { Copy, Check, Share2, Gift } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, type Locale } from '@/lib/portal/i18n'
+import { formatMoney } from '@/lib/portal/referral-aggregate'
 
 interface ReferralRow {
   id: string
@@ -145,7 +146,7 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     {totalPaid > 0 && (
-                      <span className="text-sm font-medium text-emerald-600">€{totalPaid.toLocaleString()}</span>
+                      <span className="text-sm font-medium text-emerald-600">{formatMoney(totalPaid, r.commission_currency)}</span>
                     )}
                     <span className={cn('text-xs px-2.5 py-1 rounded-full font-medium', s.color)}>
                       {label}

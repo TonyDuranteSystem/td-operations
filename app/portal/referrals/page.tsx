@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { ReferralPage } from '@/components/portal/referral-page'
+import { computePrimaryAccountIds, sumEarnedByCurrency, formatEarnedSummary } from '@/lib/portal/referral-aggregate'
 
 export default async function PortalReferralsPage() {
   const supabase = createClient()
@@ -21,17 +22,42 @@ export default async function PortalReferralsPage() {
   // which generates the code on demand in a reliable request context (a write
   // during this server render would not persist on Vercel).
 
-  // Get this contact's referrals + payouts in parallel
-  const { data: referrals } = await supabaseAdmin
+  // A contact sees referrals they made personally (referrer_contact_id) PLUS
+  // referrals made by a company where they are the PRIMARY contact. Primary is
+  // resolved leak-safely (explicit is_primary flag → else sole member → else
+  // none) so co-members of a multi-member LLC never see each other's earnings.
+  const { data: myMemberships } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id')
+    .eq('contact_id', contactId)
+
+  const myAccountIds = Array.from(new Set((myMemberships ?? []).map(m => m.account_id).filter(Boolean) as string[]))
+
+  let primaryAccountIds: string[] = []
+  if (myAccountIds.length > 0) {
+    const { data: allMembers } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id, contact_id, is_primary')
+      .in('account_id', myAccountIds)
+    primaryAccountIds = computePrimaryAccountIds(contactId, myAccountIds, allMembers ?? [])
+  }
+
+  // Get this contact's referrals (personal + primary-account) + payouts
+  let referralQuery = supabaseAdmin
     .from('referrals')
     .select(`
       id, referred_name, status, commission_amount, commission_currency,
       credited_amount, paid_amount, created_at,
       referred_account:accounts!referrals_referred_account_id_fkey(company_name)
     `)
-    .eq('referrer_contact_id', contactId)
     .eq('is_test', false)
     .order('created_at', { ascending: false })
+
+  referralQuery = primaryAccountIds.length > 0
+    ? referralQuery.or(`referrer_contact_id.eq.${contactId},referrer_account_id.in.(${primaryAccountIds.join(',')})`)
+    : referralQuery.eq('referrer_contact_id', contactId)
+
+  const { data: referrals } = await referralQuery
 
   const referralIds = (referrals ?? []).map(r => r.id)
 
@@ -69,8 +95,9 @@ export default async function PortalReferralsPage() {
   // Stats
   const totalReferrals = referralRows.length
   const convertedCount = referralRows.filter(r => r.status !== 'pending' && r.status !== 'cancelled').length
-  const totalEarned = referralRows.reduce((s, r) =>
-    s + (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0), 0)
+  // Earned must stay per-currency: USD ($) and EUR (€) rewards coexist and must
+  // never be summed into one number under a single symbol.
+  const earnedSummary = formatEarnedSummary(sumEarnedByCurrency(referralRows))
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
@@ -96,7 +123,7 @@ export default async function PortalReferralsPage() {
         <div className="bg-white rounded-xl border shadow-sm p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('referrals.earned', locale)}</p>
           <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">
-            €{totalEarned.toLocaleString('en-US', { minimumFractionDigits: 0 })}
+            {earnedSummary}
           </p>
         </div>
       </div>
