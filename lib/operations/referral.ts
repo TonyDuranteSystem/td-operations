@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { calculateCommission } from "@/lib/referral-utils"
 
 export const REFERRAL_COMMISSION_PCT = 10
 
@@ -156,6 +157,35 @@ export function decideReferralAutoCredit(input: {
   if (!input.referrerAccountId) return { autoCredit: false, reason: "no_referrer_account" }
   if (!input.commissionAmount || input.commissionAmount <= 0) return { autoCredit: false, reason: "zero_amount" }
   return { autoCredit: true, reason: "ok" }
+}
+
+/**
+ * Derive the referral commission (type, pct, amount, currency) from an offer's
+ * referrer fields + the referred client's setup-fee total. Mirrors the
+ * historical inline logic in activate-service Step 3.5, extracted so it can be
+ * unit-tested. Reward currency is always USD (the figure is taken directly from
+ * the EUR setup fee, no FX, so it nets against USD installments). Pure.
+ */
+export function resolveOfferCommission(
+  offer: {
+    referrer_commission_type?: string | null
+    referrer_type?: string | null
+    referrer_commission_pct?: number | null
+    referrer_agreed_price?: number | null
+  },
+  setupFeeTotal: number,
+): { commissionType: string; commissionPct: number | null; commissionAmount: number; commissionCurrency: "USD" } {
+  const commissionType = offer.referrer_commission_type
+    || (offer.referrer_type === "partner" ? "price_difference" : "credit_note")
+  const commissionPct = offer.referrer_commission_pct ?? (commissionType !== "price_difference" ? 10 : null)
+  const commissionAmount = calculateCommission(
+    commissionType,
+    commissionPct,
+    offer.referrer_agreed_price || null,
+    setupFeeTotal,
+    setupFeeTotal, // basePriceForState = full setup fee for price_difference calc
+  )
+  return { commissionType, commissionPct, commissionAmount, commissionCurrency: "USD" }
 }
 
 /**
