@@ -505,6 +505,44 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
         </div>
       )}
+      {/* Prominent "Chatting about" banner — multi-entity clients only. Big and
+          unmissable (Antonio): the client must instantly see which company this
+          conversation is tagged to. Single-entity clients are auto-tagged → no
+          banner. pr-10 keeps the Switch button clear of the absolute refresh icon. */}
+      {isMultiEntity && currentEntity && (() => {
+        const accent =
+          currentEntity.kind === 'formation'
+            ? { bar: 'bg-amber-50 border-amber-200', badge: 'bg-amber-100 text-amber-700', label: 'text-amber-600', name: 'text-amber-900', btn: 'border-amber-300 text-amber-800 hover:bg-amber-100' }
+            : currentEntity.kind === 'personal'
+              ? { bar: 'bg-zinc-100 border-zinc-200', badge: 'bg-zinc-200 text-zinc-600', label: 'text-zinc-500', name: 'text-zinc-900', btn: 'border-zinc-300 text-zinc-700 hover:bg-zinc-200' }
+              : { bar: 'bg-blue-50 border-blue-200', badge: 'bg-blue-100 text-blue-700', label: 'text-blue-600', name: 'text-blue-900', btn: 'border-blue-300 text-blue-800 hover:bg-blue-100' }
+        const Icon = currentEntity.kind === 'formation' ? Sparkles : currentEntity.kind === 'personal' ? UserIcon : Building2
+        return (
+          <div className={cn('flex items-center justify-between gap-3 px-4 py-3 border-b pr-10', accent.bar)}>
+            <div className="flex items-center gap-3 min-w-0">
+              <span className={cn('flex items-center justify-center h-9 w-9 rounded-full shrink-0', accent.badge)}>
+                <Icon className="h-5 w-5" />
+              </span>
+              <div className="min-w-0">
+                <div className={cn('text-[10px] font-semibold uppercase tracking-wider', accent.label)}>
+                  {locale === 'it' ? 'Stai scrivendo a' : 'Chatting about'}
+                </div>
+                <div className={cn('text-base sm:text-lg font-bold leading-tight truncate', accent.name)} title={entityLabel(currentEntity)}>
+                  {entityLabel(currentEntity)}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPopupOpen(true)}
+              className={cn('shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border text-xs font-semibold transition-colors', accent.btn)}
+            >
+              {locale === 'it' ? 'Cambia' : 'Switch'}
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )
+      })()}
       {/* Topic tabs — always visible. General = untagged messages. Named tabs = thread per topic. */}
       <div className="px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
         <button
@@ -956,33 +994,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
         </div>
       )}
 
-      {/* "Chatting about" pill — multi-entity clients only. Shows the active
-          company/personal scope; "switch" re-opens the chooser. Single-entity
-          clients are auto-tagged, so no pill. */}
-      {isMultiEntity && currentEntity && (
-        <div className="px-3 sm:px-4 pt-2 pb-1 flex items-center gap-2 border-t bg-zinc-50/40">
-          <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium shrink-0">
-            {locale === 'it' ? 'Argomento azienda' : 'Chatting about'}
-          </span>
-          <div className="flex items-center gap-1.5 bg-white border rounded-full pl-2 pr-1 py-0.5 min-w-0">
-            {currentEntity.kind === 'formation'
-              ? <Sparkles className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-              : currentEntity.kind === 'personal'
-                ? <UserIcon className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-                : <Building2 className="h-3.5 w-3.5 text-blue-600 shrink-0" />}
-            <span className="text-[11px] font-medium text-zinc-800 truncate max-w-[180px]" title={entityLabel(currentEntity)}>
-              {entityLabel(currentEntity)}
-            </span>
-            <button
-              type="button"
-              onClick={() => setPopupOpen(true)}
-              className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1.5 py-0.5 rounded-full hover:bg-blue-50 shrink-0"
-            >
-              {locale === 'it' ? 'Cambia' : 'switch'}
-            </button>
-          </div>
-        </div>
-      )}
+      {/* (The "Chatting about" indicator moved to the prominent top banner —
+          see above. The bottom pill was removed per Antonio's UI feedback.) */}
 
       {/* Company chooser popup — "Which company is this message about?" */}
       {popupOpen && (
