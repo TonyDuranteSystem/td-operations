@@ -20,8 +20,7 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
-import { calculateCommission } from "@/lib/referral-utils"
-import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote } from "@/lib/operations/referral"
+import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission } from "@/lib/operations/referral"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
@@ -1192,18 +1191,8 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
         } catch { /* cost_summary parse failed, setupFeeTotal stays 0 */ }
 
-        // c. Determine commission type and calculate
-        const commissionType = offer.referrer_commission_type
-          || (offer.referrer_type === "partner" ? "price_difference" : "credit_note")
-        const commissionPct = offer.referrer_commission_pct ?? (commissionType !== "price_difference" ? 10 : null)
-        const commissionAmount = calculateCommission(
-          commissionType,
-          commissionPct,
-          offer.referrer_agreed_price || null,
-          setupFeeTotal,
-          setupFeeTotal, // basePriceForState = full setup fee for price_difference calc
-        )
-        const commissionCurrency = "USD" // reward credited in USD (figure taken directly, no FX) so it nets against USD installments
+        // c. Determine commission type, amount, currency (USD reward — pure helper)
+        const { commissionType, commissionPct, commissionAmount, commissionCurrency } = resolveOfferCommission(offer, setupFeeTotal)
 
         // d. Idempotency / cross-path dedup: skip if a referral already exists
         //    for this offer (re-activation) or this lead (a Calendly pending
