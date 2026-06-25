@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
 import { resolveFlowsByContact } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
+import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
@@ -233,6 +234,11 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   const formationFlow = contactFlows.find(
     (f) => f.flow_type === 'Company Formation' && f.status === 'active' && f.service_delivery_id,
   )
+  // Contact-scoped active ITIN → prominent workspace banner (same visibility as
+  // formation; ITIN is also contact-scoped so the account page can't show it).
+  const itinFlow = contactFlows.find(
+    (f) => f.flow_type === 'ITIN' && f.status === 'active' && f.service_delivery_id,
+  )
 
   return (
     <div className="p-6 lg:p-8">
@@ -245,6 +251,12 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         <FormationWorkspaceBanner
           serviceDeliveryId={formationFlow.service_delivery_id}
           stage={formationFlow.stage_name}
+        />
+      )}
+      {itinFlow?.service_delivery_id && (
+        <ItinWorkspaceBanner
+          serviceDeliveryId={itinFlow.service_delivery_id}
+          stage={itinFlow.stage_name}
         />
       )}
       <ContactDetail
