@@ -8,6 +8,7 @@ import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
+import { PortalFlowStatusSection } from '@/components/portal/flow-status-section'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight, ListChecks } from 'lucide-react'
 import Link from 'next/link'
@@ -74,6 +75,17 @@ export default async function PortalDashboardPage() {
   const contactId = getClientContactId(user)
   const locale = getLocale(user)
 
+  // ITIN is contact-scoped (account_id NULL), so a formation-tier client who
+  // also has an ITIN would never see it: the formation branches below return
+  // FormationDashboard early, before the account/lead Service Status sections.
+  // Load the contact's active ITIN flow(s) here so each FormationDashboard
+  // return can render them alongside (see PortalFlowStatusSection usages). Cheap:
+  // one contact-scoped query, only run for the formation branches that call it.
+  const loadItinFlows = async () =>
+    contactId
+      ? (await getPortalFlows('', locale, contactId)).filter(f => f.flow_type === 'ITIN')
+      : []
+
   // Teammate (Portal Team Access) — a simple scoped landing. Granted sections are
   // reached via the (capability-filtered) sidebar; the overview's contact-centric
   // data fetch does not apply to teammates.
@@ -130,20 +142,28 @@ export default async function PortalDashboardPage() {
       const trackerSteps = tracker?.currentStage
         ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
         : null
+      const itinFlows = await loadItinFlows()
       return (
-        <FormationDashboard
-          firstName={firstName}
-          locale={locale}
-          account={null}
-          wizardData={ctx.wizard}
-          ss4Data={ctx.ss4}
-          oaData={ctx.oa}
-          leaseData={ctx.lease}
-          trackerSteps={trackerSteps}
-          formationLeadId={selectedFormation.leadId}
-          sdStage={tracker?.currentStage ?? null}
-          filedAt={tracker?.filedAt ?? null}
-        />
+        <div className="space-y-4">
+          {itinFlows.length > 0 && (
+            <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
+              <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+            </div>
+          )}
+          <FormationDashboard
+            firstName={firstName}
+            locale={locale}
+            account={null}
+            wizardData={ctx.wizard}
+            ss4Data={ctx.ss4}
+            oaData={ctx.oa}
+            leaseData={ctx.lease}
+            trackerSteps={trackerSteps}
+            formationLeadId={selectedFormation.leadId}
+            sdStage={tracker?.currentStage ?? null}
+            filedAt={tracker?.filedAt ?? null}
+          />
+        </div>
       )
     }
   }
@@ -273,20 +293,28 @@ export default async function PortalDashboardPage() {
         const trackerSteps = tracker?.currentStage
           ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
           : null
+        const itinFlows = await loadItinFlows()
         return (
-          <FormationDashboard
-            firstName={firstName}
-            locale={locale}
-            account={formationAccount}
-            wizardData={wizardRes.data}
-            ss4Data={ss4Res.data}
-            oaData={oaRes.data}
-            leaseData={leaseRes.data}
-            closureData={closureSd}
-            trackerSteps={trackerSteps}
-            sdStage={tracker?.currentStage ?? null}
-            filedAt={tracker?.filedAt ?? null}
-          />
+          <div className="space-y-4">
+            {itinFlows.length > 0 && (
+              <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
+                <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+              </div>
+            )}
+            <FormationDashboard
+              firstName={firstName}
+              locale={locale}
+              account={formationAccount}
+              wizardData={wizardRes.data}
+              ss4Data={ss4Res.data}
+              oaData={oaRes.data}
+              leaseData={leaseRes.data}
+              closureData={closureSd}
+              trackerSteps={trackerSteps}
+              sdStage={tracker?.currentStage ?? null}
+              filedAt={tracker?.filedAt ?? null}
+            />
+          </div>
         )
       }
 
@@ -296,20 +324,28 @@ export default async function PortalDashboardPage() {
       const trackerSteps = tracker?.currentStage
         ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
         : null
+      const itinFlows = await loadItinFlows()
       return (
-        <FormationDashboard
-          firstName={firstName}
-          locale={locale}
-          account={null}
-          wizardData={ctx.wizard}
-          ss4Data={ctx.ss4}
-          oaData={ctx.oa}
-          leaseData={ctx.lease}
-          closureData={closureSd}
-          trackerSteps={trackerSteps}
-          sdStage={tracker?.currentStage ?? null}
-          filedAt={tracker?.filedAt ?? null}
-        />
+        <div className="space-y-4">
+          {itinFlows.length > 0 && (
+            <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
+              <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+            </div>
+          )}
+          <FormationDashboard
+            firstName={firstName}
+            locale={locale}
+            account={null}
+            wizardData={ctx.wizard}
+            ss4Data={ctx.ss4}
+            oaData={ctx.oa}
+            leaseData={ctx.lease}
+            closureData={closureSd}
+            trackerSteps={trackerSteps}
+            sdStage={tracker?.currentStage ?? null}
+            filedAt={tracker?.filedAt ?? null}
+          />
+        </div>
       )
     }
 
@@ -427,28 +463,36 @@ export default async function PortalDashboardPage() {
     const trackerSteps = tracker?.currentStage
       ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
       : null
+    const itinFlows = await loadItinFlows()
     return (
-      <FormationDashboard
-        firstName={firstName}
-        locale={locale}
-        account={accountRes ? {
-          id: accountRes.id,
-          company_name: accountRes.company_name,
-          entity_type: accountRes.entity_type,
-          state_of_formation: accountRes.state_of_formation,
-          formation_date: accountRes.formation_date,
-          filing_id: accountRes.filing_id,
-          status: accountRes.status,
-          ein_number: accountRes.ein_number,
-        } : null}
-        wizardData={wizardRes.data}
-        ss4Data={ss4Res.data}
-        oaData={oaRes.data}
-        leaseData={leaseRes.data}
-        trackerSteps={trackerSteps}
-        sdStage={tracker?.currentStage ?? null}
-        filedAt={tracker?.filedAt ?? null}
-      />
+      <div className="space-y-4">
+        {itinFlows.length > 0 && (
+          <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
+            <PortalFlowStatusSection flows={itinFlows} locale={locale} />
+          </div>
+        )}
+        <FormationDashboard
+          firstName={firstName}
+          locale={locale}
+          account={accountRes ? {
+            id: accountRes.id,
+            company_name: accountRes.company_name,
+            entity_type: accountRes.entity_type,
+            state_of_formation: accountRes.state_of_formation,
+            formation_date: accountRes.formation_date,
+            filing_id: accountRes.filing_id,
+            status: accountRes.status,
+            ein_number: accountRes.ein_number,
+          } : null}
+          wizardData={wizardRes.data}
+          ss4Data={ss4Res.data}
+          oaData={oaRes.data}
+          leaseData={leaseRes.data}
+          trackerSteps={trackerSteps}
+          sdStage={tracker?.currentStage ?? null}
+          filedAt={tracker?.filedAt ?? null}
+        />
+      </div>
     )
   }
 
