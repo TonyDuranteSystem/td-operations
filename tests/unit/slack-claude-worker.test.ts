@@ -166,7 +166,21 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // permanent transcript on demand before saying you don't remember)).
     // → 11000 (2026-06-25, read_portal_attachment added to SOURCES block so the
     // worker can read PDFs clients attach in portal chat).
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11000)
+    // → 11600 (2026-06-25, SOURCES FIRST (MANDATORY): rewrote the soft "SOURCES" fallback
+    // into a mandatory, universal rule — look up the rule/process/policy in KB+SOPs+sysdocs
+    // and ground the answer before replying, never improvise from memory or one CRM field;
+    // added after the worker improvised billing answers for Gritti/Evolue until Antonio
+    // forced it to "go see the SOP". Merged with the read_portal_attachment line above).
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11600)
+  })
+
+  it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/SOURCES FIRST/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/MANDATORY/)
+    // must name the three doc sources it has to search
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/search_sysdocs/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/search_sops/)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/kb_search/)
   })
 
   it("instructs SELF-SERVE: look facts up in the system before asking Antonio", () => {
