@@ -1393,7 +1393,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         tdBaseCost,
       })
 
-      const payoutCurrency = "EUR"
+      // Referrer/partner payouts are ALWAYS USD — clients pay in EUR but we pay
+      // partners the figure directly in USD, no FX (Antonio 2026-06-25). For
+      // price_difference this takes the EUR-magnitude diff directly as USD,
+      // matching the referral-credit rule.
+      const payoutCurrency = "USD"
       const payoutStatus = result.error ? "manual_review" : "pending"
 
       const { data: payoutRow, error: payoutErr } = await dbWriteSafe(
