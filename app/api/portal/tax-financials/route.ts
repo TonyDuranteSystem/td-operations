@@ -146,12 +146,41 @@ export async function GET(request: NextRequest) {
       .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
       .sort((a, b) => b.total - a.total)
 
+    // Ingestion status — the financials are computed on demand from
+    // bank_transactions, which land asynchronously as each per-file
+    // ingest_bank_statement job completes (a busy account's full year of PDF
+    // statements takes ~45 min via AI extraction). Without this, the page
+    // renders a misleading all-zeros P&L while jobs are still running and the
+    // client thinks the tool is broken (Luca QA, 2026-06-25). We surface the
+    // in-flight + failed counts so the UI can show "still preparing" instead of
+    // fake zeros, and so attestation is blocked until ingestion is complete.
+    // tax_year is stored as a JSON number in the payload → compare as text.
+    const { data: ingestJobs } = await supabaseAdmin
+      .from('job_queue')
+      .select('status, result, payload')
+      .eq('job_type', 'ingest_bank_statement')
+      .eq('account_id', accountId)
+      .in('status', ['pending', 'processing', 'failed', 'completed'])
+    let ingestPending = 0
+    let ingestFailed = 0
+    for (const j of (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean } | null; payload: { tax_year?: number | string } | null }>) {
+      // Scope to THIS tax year (the account may have statements for other years).
+      if (String(j.payload?.tax_year ?? '') !== String(taxYear)) continue
+      if (j.status === 'pending' || j.status === 'processing') ingestPending++
+      // A file the parser couldn't read returns ok:false and the job COMPLETES
+      // (retrying won't fix an unreadable file); a thrown/transient error ends as
+      // 'failed'. Both mean "this statement didn't make it in" for the client.
+      else if (j.status === 'failed' || (j.status === 'completed' && j.result?.ok === false)) ingestFailed++
+    }
+
     return NextResponse.json({
       ...view,
       questions,
       coverage,
       expense_breakdown,
       buckets,
+      ingestPending,
+      ingestFailed,
       attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
     })

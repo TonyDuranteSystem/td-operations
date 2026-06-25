@@ -37,6 +37,12 @@ interface View {
   gates: Gate[]
   canConfirm: boolean
   transactionCount: number
+  /** Per-file ingest jobs still running for this account+year. While > 0 the
+   *  P&L is incomplete — show "still preparing", not a misleading $0, and block
+   *  attestation. */
+  ingestPending: number
+  /** Statement files that couldn't be read (unreadable/merged or failed). */
+  ingestFailed: number
   questions: QuestionGroup[]
   buckets: Bucket[]
   expense_breakdown?: { slug: string; label: string; total: number }[]
@@ -105,6 +111,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
   }, [accountId, taxYear, it])
 
   useEffect(() => { void load() }, [load])
+
+  // While statements are still ingesting in the background (a busy account's
+  // full year can take ~45 min of AI extraction), poll so the page fills in on
+  // its own — the client doesn't have to guess when to refresh. Stops as soon
+  // as nothing is pending. (Only polls when something is actually in flight.)
+  useEffect(() => {
+    if (!view || view.ingestPending <= 0) return
+    const t = setInterval(() => { void load() }, 20000)
+    return () => clearInterval(t)
+  }, [view, load])
 
   const answer = async (g: QuestionGroup, value: string) => {
     setBusy(g.group_key)
@@ -343,8 +359,40 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {view && (
+      {/* Ingestion still running with nothing landed yet — show a clear
+          "preparing" state instead of a misleading all-zeros P&L. The page
+          polls itself (effect above) and fills in as jobs finish. */}
+      {view && view.ingestPending > 0 && view.transactionCount === 0 && (
+        <section className="rounded-xl border border-blue-200 bg-blue-50 px-5 py-6 text-center">
+          <p className="text-sm font-semibold text-blue-900">
+            {it ? 'Stiamo preparando i tuoi prospetti…' : 'We\'re preparing your statements…'}
+          </p>
+          <p className="text-xs text-blue-700 mt-1.5 max-w-md mx-auto">
+            {it
+              ? `Stiamo leggendo i tuoi estratti conto (${view.ingestPending} in elaborazione). Per un anno intero può richiedere fino a 30–45 minuti. Questa pagina si aggiorna da sola — puoi lasciarla aperta o tornare più tardi.`
+              : `We're reading your bank statements (${view.ingestPending} still processing). For a full year this can take up to 30–45 minutes. This page refreshes on its own — you can leave it open or come back later.`}
+          </p>
+          {view.ingestFailed > 0 && (
+            <p className="text-xs text-amber-700 mt-2">
+              {it
+                ? `${view.ingestFailed} file non è stato leggibile — controlla i file qui sotto quando l'elaborazione è finita.`
+                : `${view.ingestFailed} file couldn't be read — check your files below once processing finishes.`}
+            </p>
+          )}
+        </section>
+      )}
+
+      {view && !(view.ingestPending > 0 && view.transactionCount === 0) && (
         <>
+          {/* Some statements still processing, but partial data is showing —
+              be honest that the numbers aren't final yet. */}
+          {view.ingestPending > 0 && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              {it
+                ? `Ancora ${view.ingestPending} estratto/i conto in elaborazione — i numeri qui sotto sono parziali e si aggiorneranno da soli. Non confermare finché non abbiamo finito.`
+                : `${view.ingestPending} statement(s) still processing — the numbers below are partial and will update on their own. Please don't confirm until we're done.`}
+            </div>
+          )}
           {/* Gates */}
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
             <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Verifiche' : 'Verifications'}</h2>
@@ -764,7 +812,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || busy !== null}
+                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busy !== null}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >
