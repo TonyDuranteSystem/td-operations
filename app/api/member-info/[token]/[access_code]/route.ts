@@ -121,16 +121,10 @@ export async function POST(
   //    parallel array of contact_id (or null) per member.
   const memberContactIds = await provisionMemberContacts({ members, accountId, now })
 
-  // 6. Delete existing members for this account, then insert new
-  const { error: deleteErr } = await supabaseAdmin
-    .from('members')
-    .delete()
-    .eq('account_id', accountId)
-
-  if (deleteErr) {
-    return NextResponse.json({ error: `Failed to clear existing members: ${deleteErr.message}` }, { status: 500 })
-  }
-
+  // 6. Replace members atomically: submit_member_info() DELETEs existing rows
+  //    then INSERTs the new set inside one transaction. If the INSERT fails
+  //    (e.g. two 'individual' rows resolve to the same contact_id) the whole
+  //    operation rolls back, so the account never ends up memberless.
   const insertRows = members.map((m, idx) => ({
     account_id: accountId,
     member_type: m.member_type,
@@ -160,12 +154,14 @@ export async function POST(
     updated_at: now,
   }))
 
-  const { error: insertErr } = await supabaseAdmin
-    .from('members')
-    .insert(insertRows)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: submitErr } = await (supabaseAdmin as any).rpc('submit_member_info', {
+    p_account_id: accountId,
+    p_members: insertRows,
+  })
 
-  if (insertErr) {
-    return NextResponse.json({ error: `Failed to save members: ${insertErr.message}` }, { status: 500 })
+  if (submitErr) {
+    return NextResponse.json({ error: `Failed to save members: ${submitErr.message}` }, { status: 500 })
   }
 
   // 7. Mark request as submitted
