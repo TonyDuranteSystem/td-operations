@@ -180,10 +180,11 @@ export async function completeJob(jobId: string, result: JobResult): Promise<voi
  * Mark job as failed.
  */
 export async function failJob(jobId: string, errorMsg: string, result?: JobResult): Promise<void> {
-  // Get current attempts
+  // Get current attempts + the fields needed to notify the client if this is a
+  // wizard job reaching its FINAL failed state (see wizard-failure-notify.ts).
   const { data: job } = await supabaseAdmin
     .from("job_queue")
-    .select("attempts, max_attempts")
+    .select("attempts, max_attempts, job_type, account_id, payload")
     .eq("id", jobId)
     .single()
 
@@ -204,8 +205,11 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
       .eq("id", jobId)
     if (error) throw new Error(`failJob (retry) failed: ${error.message}`)
   } else {
-    // Max attempts reached — mark as failed
-    const { error } = await supabaseAdmin
+    // Max attempts reached — mark as failed. The `.neq('status','failed')` is a
+    // TOCTOU guard: only the FIRST caller to flip the job into 'failed' gets a
+    // returned row, so the client notification below fires exactly once even if
+    // two paths ever race to fail the same job.
+    const { data: transitioned, error } = await supabaseAdmin
       .from("job_queue")
       .update({
         status: "failed",
@@ -215,7 +219,31 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
         completed_at: new Date().toISOString(),
       })
       .eq("id", jobId)
+      .neq("status", "failed")
+      .select("id")
     if (error) throw new Error(`failJob (final) failed: ${error.message}`)
+
+    // Tell the client their submission hit a snag. AWAIT it (not fire-and-forget):
+    // callers `await failJob()` and then immediately return the HTTP response, so a
+    // detached promise would race the serverless function freezing after the
+    // response is sent and the insert could be dropped — defeating the whole point.
+    // notifyClientOfWizardJobFailure self-gates to wizard job types and never
+    // throws (its own try/catch returns a result), so awaiting it here can never
+    // break failJob; it only guarantees the message lands before we return. Gated
+    // on the real transition (guard above) so a re-entrant call can't double-post.
+    if ((transitioned?.length ?? 0) > 0) {
+      try {
+        const { notifyClientOfWizardJobFailure } = await import("./wizard-failure-notify")
+        await notifyClientOfWizardJobFailure({
+          id: jobId,
+          job_type: (job?.job_type as string | undefined) ?? "",
+          account_id: (job?.account_id as string | null | undefined) ?? null,
+          payload: (job?.payload as Record<string, unknown> | null | undefined) ?? null,
+        })
+      } catch (e) {
+        console.error(`[failJob] wizard failure notify error for ${jobId}:`, e)
+      }
+    }
   }
 }
 
