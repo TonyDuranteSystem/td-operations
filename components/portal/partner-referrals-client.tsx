@@ -11,15 +11,30 @@ export interface PartnerReferralView {
   clientName: string
   createdAt: string | null
   progress: Record<ReferralStage, boolean>
+  /** One-time acquisition reward. */
   payouts: Array<{
     id: string
-    type: 'setup' | 'renewal'
+    type: 'setup'
     amount: number
     currency: string
     status: string
     requestedAt: string | null
-    /** Renewal payouts only — the billing-cycle year (from reference `renewal:<acct>:<year>`). */
-    year: number | null
+  }>
+  /** Recurring annual renewals — per year, per installment invoice (issued→paid)
+      with the partner's OWN share. Only renewal years (after formation) with a
+      real installment invoice appear. */
+  renewals: Array<{
+    year: number
+    installments: Array<{
+      n: number
+      label: string
+      invoicePaid: boolean
+      paidDate: string | null
+      amount: number
+      currency: string
+      payoutId: string | null
+      payoutStatus: string | null
+    }>
   }>
 }
 
@@ -120,10 +135,7 @@ function ReferralLinkCard() {
 }
 
 function ReferralCard({ referral }: { referral: PartnerReferralView }) {
-  const setupPayouts = referral.payouts.filter((p) => p.type === 'setup')
-  const renewalPayouts = referral.payouts
-    .filter((p) => p.type === 'renewal')
-    .sort((a, b) => (b.year ?? 0) - (a.year ?? 0)) // most recent renewal year first
+  const setupPayouts = referral.payouts
   return (
     <div className="bg-white rounded-xl border shadow-sm p-4 sm:p-5 space-y-4">
       <div className="flex items-center justify-between">
@@ -168,18 +180,69 @@ function ReferralCard({ referral }: { referral: PartnerReferralView }) {
         </div>
       )}
 
-      {/* Annual renewals — recurring billing cycle (R106), one line per year the
-          client has renewed. Only years with a real renewal payout are shown. */}
-      {renewalPayouts.length > 0 && (
-        <div className="border-t pt-3 space-y-2">
+      {/* Annual renewals — recurring billing cycle (R106). Per year, each
+          installment invoice (issued → paid) with the partner's OWN share; the
+          payout is requestable once that installment is paid. */}
+      {referral.renewals.length > 0 && (
+        <div className="border-t pt-3 space-y-3">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 flex items-center gap-1.5">
             <RefreshCw className="h-3 w-3" /> Annual renewals
           </p>
-          {renewalPayouts.map((p) => (
-            <PayoutRow key={p.id} payout={p} />
+          {referral.renewals.map((ry) => (
+            <div key={ry.year} className="space-y-1.5">
+              <p className="text-xs font-semibold text-zinc-700">{ry.year}</p>
+              {ry.installments.map((inst) => (
+                <RenewalInstallmentRow key={inst.n} inst={inst} />
+              ))}
+            </div>
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function RenewalInstallmentRow({ inst }: { inst: PartnerReferralView['renewals'][number]['installments'][number] }) {
+  const [open, setOpen] = useState(false)
+  const canRequest = inst.invoicePaid && !!inst.payoutId && inst.payoutStatus === 'pending'
+  return (
+    <div className="rounded-lg bg-zinc-50 border border-zinc-100 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Banknote className="h-4 w-4 text-zinc-400 shrink-0" />
+          <span className="text-sm text-zinc-800">
+            {inst.label} · <b>{money(inst.amount, inst.currency)}</b>
+          </span>
+        </div>
+        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0',
+          inst.invoicePaid ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-600')}>
+          {inst.invoicePaid
+            ? `Invoice paid${inst.paidDate ? ' · ' + inst.paidDate.slice(0, 10) : ''}`
+            : 'Invoice issued'}
+        </span>
+      </div>
+      <div className="mt-2">
+        {!inst.invoicePaid ? (
+          <p className="text-[11px] text-zinc-400">Your payout becomes available to request once this installment is paid.</p>
+        ) : inst.payoutStatus && inst.payoutStatus !== 'pending' ? (
+          <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium', PAYOUT_BADGE[inst.payoutStatus] || 'bg-zinc-100 text-zinc-600')}>
+            {PAYOUT_LABEL[inst.payoutStatus] || inst.payoutStatus}
+          </span>
+        ) : canRequest ? (
+          <>
+            <button
+              onClick={() => setOpen((v) => !v)}
+              className="inline-flex items-center gap-1 text-xs font-medium text-violet-700 hover:text-violet-900"
+            >
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
+              {open ? 'Hide' : 'Request this payout'}
+            </button>
+            {open && inst.payoutId && <PayoutRequestForm payoutId={inst.payoutId} />}
+          </>
+        ) : (
+          <p className="text-[11px] text-zinc-400">Your payout is being prepared.</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -193,9 +256,7 @@ function PayoutRow({ payout }: { payout: PartnerReferralView['payouts'][number] 
         <div className="flex items-center gap-2 min-w-0">
           <Banknote className="h-4 w-4 text-zinc-400 shrink-0" />
           <span className="text-sm text-zinc-800">
-            {payout.type === 'renewal'
-              ? (payout.year ? `Renewal ${payout.year}` : 'Renewal payout')
-              : 'Setup payout'} · <b>{money(payout.amount, payout.currency)}</b>
+            Setup payout · <b>{money(payout.amount, payout.currency)}</b>
           </span>
         </div>
         <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0', PAYOUT_BADGE[payout.status] || 'bg-zinc-100 text-zinc-600')}>
