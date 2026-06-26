@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useActionState } from 'react'
-import { Check, Circle, Share2, Banknote, ChevronDown } from 'lucide-react'
+import { useState, useEffect, useActionState } from 'react'
+import { Check, Circle, Share2, Banknote, ChevronDown, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { REFERRAL_STAGES, REFERRAL_STAGE_LABELS, type ReferralStage } from '@/lib/portal/partner-referrals'
 import { requestPartnerPayout, type RequestPayoutState } from '@/app/portal/partner/referrals/actions'
@@ -45,9 +45,11 @@ export function PartnerReferralsClient({ referrals }: { partnerName?: string; re
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">My Referrals</h1>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">
-          Track each client you referred and request your payout once they&rsquo;ve paid.
+          Share your link, track each client&rsquo;s progress, and request your payout once they&rsquo;ve paid.
         </p>
       </div>
+
+      <ReferralLinkCard />
 
       {referrals.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
@@ -58,6 +60,59 @@ export function PartnerReferralsClient({ referrals }: { partnerName?: string; re
       ) : (
         referrals.map((r) => <ReferralCard key={r.offerToken} referral={r} />)
       )}
+    </div>
+  )
+}
+
+function ReferralLinkCard() {
+  const [link, setLink] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    fetch('/api/portal/referral-code')
+      .then((r) => (r.ok ? r.json() : { link: null }))
+      .then((d) => { if (active) setLink(d.link ?? null) })
+      .catch(() => { if (active) setLink(null) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  const copy = () => {
+    if (!link) return
+    navigator.clipboard.writeText(link)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="bg-gradient-to-r from-violet-50 to-indigo-50 rounded-xl border border-violet-200 p-4 sm:p-5">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-full bg-violet-100 flex items-center justify-center shrink-0">
+          <Share2 className="h-4.5 w-4.5 text-violet-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="font-semibold text-sm text-zinc-900">Your referral link</h3>
+          <p className="text-xs text-zinc-500 mt-0.5">Share it with a prospect — they book a call, and their progress shows below.</p>
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex-1 bg-white rounded-lg border px-3 py-2 text-xs sm:text-sm text-zinc-700 truncate font-mono">
+              {loading ? 'Loading…' : (link ?? 'Link unavailable — contact us')}
+            </div>
+            <button
+              onClick={copy}
+              disabled={!link}
+              className={cn('shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50',
+                copied ? 'bg-emerald-500 text-white' : 'bg-violet-600 text-white hover:bg-violet-700')}
+            >
+              <span className="flex items-center gap-1.5">
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied ? 'Copied' : 'Copy'}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

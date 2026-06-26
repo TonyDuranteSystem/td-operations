@@ -129,15 +129,15 @@ export function PartnerPayoutsSection({ partnerId, payouts }: Props) {
       {/* Summary */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-amber-50 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-amber-700">€{totalPending.toLocaleString()}</div>
+          <div className="text-xl font-bold text-amber-700">${totalPending.toLocaleString()}</div>
           <div className="text-[10px] text-amber-600 uppercase tracking-wide">Pending review</div>
         </div>
         <div className="bg-blue-50 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-blue-700">€{totalApproved.toLocaleString()}</div>
+          <div className="text-xl font-bold text-blue-700">${totalApproved.toLocaleString()}</div>
           <div className="text-[10px] text-blue-600 uppercase tracking-wide">Approved</div>
         </div>
         <div className="bg-emerald-50 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-emerald-700">€{totalPaid.toLocaleString()}</div>
+          <div className="text-xl font-bold text-emerald-700">${totalPaid.toLocaleString()}</div>
           <div className="text-[10px] text-emerald-600 uppercase tracking-wide">Paid</div>
         </div>
       </div>

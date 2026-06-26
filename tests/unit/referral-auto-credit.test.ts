@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { decideReferralAutoCredit, resolveOfferCommission } from '@/lib/operations/referral'
+import { decideReferralAutoCredit, resolveOfferCommission, shouldRecoverReferralCredit } from '@/lib/operations/referral'
 
 describe('decideReferralAutoCredit', () => {
   it('auto-credits when there is a referrer account and a positive amount', () => {
@@ -67,5 +67,26 @@ describe('resolveOfferCommission', () => {
   it('always returns USD currency regardless of type', () => {
     expect(resolveOfferCommission({ referrer_type: 'client' }, 1000).commissionCurrency).toBe('USD')
     expect(resolveOfferCommission({ referrer_type: 'partner', referrer_agreed_price: 1 }, 0).commissionCurrency).toBe('USD')
+  })
+})
+
+describe('shouldRecoverReferralCredit (self-heal after a crash)', () => {
+  it('recovers a converted-but-uncredited referral with a commission', () => {
+    expect(shouldRecoverReferralCredit({ status: 'converted', creditedAmount: 0, commissionAmount: 300 })).toBe(true)
+    expect(shouldRecoverReferralCredit({ status: 'converted', creditedAmount: null, commissionAmount: 300 })).toBe(true)
+  })
+
+  it('does NOT recover an already-credited referral (no double-pay)', () => {
+    expect(shouldRecoverReferralCredit({ status: 'converted', creditedAmount: 300, commissionAmount: 300 })).toBe(false)
+    expect(shouldRecoverReferralCredit({ status: 'credited', creditedAmount: 300, commissionAmount: 300 })).toBe(false)
+  })
+
+  it('leaves pending referrals to the normal flow', () => {
+    expect(shouldRecoverReferralCredit({ status: 'pending', creditedAmount: 0, commissionAmount: 300 })).toBe(false)
+  })
+
+  it('does nothing without a commission amount', () => {
+    expect(shouldRecoverReferralCredit({ status: 'converted', creditedAmount: 0, commissionAmount: 0 })).toBe(false)
+    expect(shouldRecoverReferralCredit({ status: 'converted', creditedAmount: 0, commissionAmount: null })).toBe(false)
   })
 })

@@ -20,7 +20,7 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
-import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission } from "@/lib/operations/referral"
+import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission, shouldRecoverReferralCredit } from "@/lib/operations/referral"
 import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
@@ -1203,15 +1203,41 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         if (leadId) dedupFilters.push(`referred_lead_id.eq.${leadId}`)
         const { data: existingReferral } = await supabase
           .from("referrals")
-          .select("id, status")
+          .select("id, status, credited_amount, referrer_account_id, referrer_contact_id, commission_amount")
           .or(dedupFilters.join(","))
           .neq("status", "cancelled")
           .limit(1)
           .maybeSingle()
 
         if (existingReferral) {
-          const ex = existingReferral as { id: string; status: string }
-          steps.push({ step: "referral", status: "skipped", detail: `Referral already exists (${ex.id.slice(0, 8)}, ${ex.status}) — no duplicate created` })
+          const ex = existingReferral as { id: string; status: string; credited_amount: number | null; referrer_account_id: string | null; referrer_contact_id: string | null; commission_amount: number | null }
+          // Self-heal: if a prior activation inserted the referral but was killed
+          // BEFORE issuing the credit (converted + uncredited), credit it now.
+          // Idempotent via issueReferralCreditNote's idempotency_key, so this can
+          // never double-pay.
+          if (shouldRecoverReferralCredit({ status: ex.status, creditedAmount: ex.credited_amount, commissionAmount: ex.commission_amount })) {
+            let recoverAccount = ex.referrer_account_id
+            if (!recoverAccount && ex.referrer_contact_id) {
+              const { data: link } = await supabase
+                .from("account_contacts").select("account_id").eq("contact_id", ex.referrer_contact_id).limit(1).maybeSingle()
+              recoverAccount = (link as { account_id: string } | null)?.account_id ?? null
+            }
+            if (recoverAccount) {
+              try {
+                await issueReferralCreditNote(
+                  { referralId: ex.id, referrerAccountId: recoverAccount, amount: Number(ex.commission_amount), currency: "USD", description: "Referral reward — credit (recovered)" },
+                  supabase,
+                )
+                steps.push({ step: "referral", status: "credited", detail: `Recovered uncredited referral ${ex.id.slice(0, 8)} → ${ex.commission_amount} USD` })
+              } catch (recoverErr) {
+                steps.push({ step: "referral", status: "skipped", detail: `Referral ${ex.id.slice(0, 8)} (${ex.status}); credit recovery failed: ${recoverErr instanceof Error ? recoverErr.message : String(recoverErr)}` })
+              }
+            } else {
+              steps.push({ step: "referral", status: "skipped", detail: `Referral already exists (${ex.id.slice(0, 8)}, ${ex.status}) — uncredited, no account to recover` })
+            }
+          } else {
+            steps.push({ step: "referral", status: "skipped", detail: `Referral already exists (${ex.id.slice(0, 8)}, ${ex.status}) — no duplicate created` })
+          }
         } else {
           // e. Insert referral record
           const { data: referral, error: refErr } = await dbWriteSafe(
@@ -1460,7 +1486,30 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         steps.push({ step: "partner_deal", status: "created", detail: `Deal saved on ${autoAccountId.slice(0, 8)}: setup ${partnerDeal.setup_payout ?? "—"} / renewal ${partnerDeal.renewal_payout ?? "—"} ${partnerDeal.currency}` })
       }
     } else if (offer?.partner_id) {
-      steps.push({ step: "partner_payout", status: "skipped", detail: "Partner present but payout_model='none'" })
+      // Renewal-only deal (no setup payout): still persist the partner link + deal
+      // so the recurring renewal payout fires in later years.
+      const renewalOnly = (offer as { partner_renewal_payout?: number | string | null }).partner_renewal_payout
+      const renewalDeal = buildPartnerDeal({
+        partnerId: offer.partner_id,
+        setupPayout: null,
+        renewalPayout: renewalOnly != null ? Number(renewalOnly) : null,
+        currency: "USD",
+        offerToken: activation.offer_token,
+      })
+      if (autoAccountId && renewalDeal) {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- new columns not yet in generated types; cast until prod migration + regen
+          supabase.from("accounts").update({
+            partner_id: offer.partner_id,
+            partner_deal: renewalDeal,
+            updated_at: new Date().toISOString(),
+          } as Record<string, unknown> as never).eq("id", autoAccountId),
+          "accounts.partner_deal",
+        )
+        steps.push({ step: "partner_payout", status: "skipped", detail: `payout_model='none' — renewal-only deal saved (renewal ${renewalDeal.renewal_payout} ${renewalDeal.currency})` })
+      } else {
+        steps.push({ step: "partner_payout", status: "skipped", detail: "Partner present but payout_model='none'" })
+      }
     } else {
       steps.push({ step: "partner_payout", status: "skipped", detail: "No partner on this offer" })
     }

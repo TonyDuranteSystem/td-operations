@@ -160,6 +160,22 @@ export function decideReferralAutoCredit(input: {
 }
 
 /**
+ * Self-heal guard: a referral that's already 'converted' but never got its credit
+ * (a prior activation was killed between inserting the referral and issuing the
+ * credit) should be credited now. Pending referrals are left to the normal flow;
+ * already-credited ones are skipped. Pure — unit tested. The actual credit is
+ * idempotent (issueReferralCreditNote), so re-running can never double-pay.
+ */
+export function shouldRecoverReferralCredit(input: {
+  status: string | null | undefined
+  creditedAmount: number | null | undefined
+  commissionAmount: number | null | undefined
+}): boolean {
+  const status = (input.status || "").toLowerCase()
+  return status === "converted" && !input.creditedAmount && !!input.commissionAmount && Number(input.commissionAmount) > 0
+}
+
+/**
  * Derive the referral commission (type, pct, amount, currency) from an offer's
  * referrer fields + the referred client's setup-fee total. Mirrors the
  * historical inline logic in activate-service Step 3.5, extracted so it can be
