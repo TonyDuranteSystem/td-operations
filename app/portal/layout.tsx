@@ -29,6 +29,7 @@ import { ViewAsBanner } from '@/components/portal/view-as-banner'
 import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
+import { resolvePortalMode } from '@/lib/portal/portal-mode'
 import Script from 'next/script'
 
 export const viewport: Viewport = {
@@ -170,6 +171,17 @@ export default async function PortalLayout({
   const [contactTier, portalRole] = contactId
     ? await Promise.all([getPortalTierByContact(contactId), getPortalRoleByContact(contactId)])
     : [(user.app_metadata?.portal_tier as string) || 'lead', null]
+
+  // Dual-role (client AND partner) → cookie-driven view + a switcher. Single-role
+  // users are unchanged.
+  const portalModeCtx = await resolvePortalMode(
+    contactId,
+    accounts.length > 0 || inProgress.length > 0,
+    cookieStore.get('portal_mode')?.value,
+  )
+  const effectivePortalRole = portalModeCtx.mode === 'partner'
+    ? 'partner'
+    : (portalModeCtx.dual ? 'client' : portalRole)
   const selected = resolveSelectedEntity({
     accounts, inProgress, accountCookie: cookieAccountId, formationCookie: cookieFormation, fallbackTier: contactTier,
   })
@@ -240,7 +252,9 @@ export default async function PortalLayout({
             unreadDocsCount={unreadDocsCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
-            portalRole={portalRole}
+            portalRole={effectivePortalRole}
+            dualRole={portalModeCtx.dual}
+            portalMode={portalModeCtx.mode}
             hasWizardPending={hasWizardPending}
             inProgress={inProgress}
             selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}

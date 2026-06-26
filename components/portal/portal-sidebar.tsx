@@ -50,6 +50,9 @@ interface PortalSidebarProps {
   accountType?: string | null
   contactId?: string
   portalRole?: string | null
+  /** Dual-role (client AND partner) → show the Client ⇄ Partner switcher. */
+  dualRole?: boolean
+  portalMode?: 'client' | 'partner'
   /** Companies being formed that have no account yet — selectable in the switcher. */
   inProgress?: InProgressFormation[]
   /** Set when an in-progress formation is the current selection. */
@@ -173,7 +176,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -487,6 +490,27 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {/* Client ⇄ Partner switcher — only for someone who is BOTH. */}
+        {dualRole && (
+          <div className="px-5 py-3 border-b">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">View</div>
+            <div className="flex gap-1 bg-zinc-100 rounded-lg p-0.5">
+              <a
+                href="/portal/switch-mode?mode=client"
+                className={`flex-1 text-center text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${portalMode === 'client' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                Client
+              </a>
+              <a
+                href="/portal/switch-mode?mode=partner"
+                className={`flex-1 text-center text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${portalMode === 'partner' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                Partner
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Contact name — the person is the home (PR 2 Step 7).
             Hidden for partners (they're not "logged in as a contact" in the
