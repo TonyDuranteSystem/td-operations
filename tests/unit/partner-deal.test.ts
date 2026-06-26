@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPartnerDeal, shouldRunReferralCredit, parsePartnerDeal, shouldPayRenewal, splitRenewalPayout, renewalShareForInstallment } from '@/lib/partners/partner-deal'
+import { buildPartnerDeal, shouldRunReferralCredit, parsePartnerDeal, shouldPayRenewal } from '@/lib/partners/partner-deal'
 
 describe('shouldRunReferralCredit (double-pay guard)', () => {
   it('runs the referral credit for a plain referrer (no partner)', () => {
@@ -89,36 +89,5 @@ describe('shouldPayRenewal (formation-year guard)', () => {
     for (const y of [2027, 2028, 2035]) {
       expect(shouldPayRenewal({ partnerDeal: deal, formationYear: 2026, paymentYear: y }).pay).toBe(true)
     }
-  })
-})
-
-describe('splitRenewalPayout / renewalShareForInstallment', () => {
-  it('splits an even total 50/50', () => {
-    expect(splitRenewalPayout(500, 2)).toEqual([250, 250])
-  })
-
-  it('last installment absorbs the rounding remainder (sums to total)', () => {
-    const parts = splitRenewalPayout(501, 2)
-    expect(parts[0]).toBe(250.5)
-    expect(parts[1]).toBe(250.5)
-    expect(parts[0] + parts[1]).toBe(501)
-  })
-
-  it('odd-cent total still sums exactly', () => {
-    const parts = splitRenewalPayout(333.33, 2)
-    expect(Math.round((parts[0] + parts[1]) * 100) / 100).toBe(333.33)
-  })
-
-  it('returns [] for non-positive or invalid totals', () => {
-    expect(splitRenewalPayout(0, 2)).toEqual([])
-    expect(splitRenewalPayout(-100, 2)).toEqual([])
-    expect(splitRenewalPayout(NaN, 2)).toEqual([])
-  })
-
-  it('renewalShareForInstallment picks the right 1-based part, 0 out of range', () => {
-    expect(renewalShareForInstallment(500, 1)).toBe(250)
-    expect(renewalShareForInstallment(500, 2)).toBe(250)
-    expect(renewalShareForInstallment(500, 3)).toBe(0)
-    expect(renewalShareForInstallment(0, 1)).toBe(0)
   })
 })

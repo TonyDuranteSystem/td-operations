@@ -25,19 +25,20 @@ import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
-import { parsePartnerDeal, shouldPayRenewal, renewalShareForInstallment } from "@/lib/partners/partner-deal"
+import { parsePartnerDeal, shouldPayRenewal } from "@/lib/partners/partner-deal"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
 }
 
 /**
- * Create the partner's renewal-share payout for ONE installment of a renewal
- * year (Antonio 2026-06-26: two payouts/year, one per installment, each
- * requestable when its own installment is paid). The annual renewal share is
- * split evenly across the installments. Idempotent per
- * (partner, account, year, installment) via reference `renewal:<acct>:<year>:<n>`.
- * Years AFTER formation only (formation year = the one-time setup payout).
+ * Create the partner's renewal payout for ONE installment of a renewal year
+ * (Antonio 2026-06-26: two payouts/year, one per installment, each requestable
+ * when its own installment is paid). NO split — each installment that is paid
+ * yields a payout equal to the FULL agreed renewal amount (`renewal_payout`).
+ * Idempotent per (partner, account, year, installment) via reference
+ * `renewal:<acct>:<year>:<n>`. Years AFTER formation only (formation year = the
+ * one-time setup payout).
  */
 async function payInstallmentRenewalShare(args: {
   account: { id: string; company_name: string; partner_id?: string | null; partner_deal?: unknown; formation_date?: string | null }
@@ -54,8 +55,8 @@ async function payInstallmentRenewalShare(args: {
   const decision = shouldPayRenewal({ partnerDeal: deal, formationYear, paymentYear: year })
   if (!decision.pay || !deal) return { step: stepName, status: "skipped", detail: decision.reason }
 
-  const amount = renewalShareForInstallment(decision.amount, installmentNumber)
-  if (amount <= 0) return { step: stepName, status: "skipped", detail: "zero share" }
+  const amount = decision.amount // full agreed renewal amount per installment (no split)
+  if (amount <= 0) return { step: stepName, status: "skipped", detail: "zero amount" }
 
   const reference = `renewal:${account.id}:${year}:${installmentNumber}`
   const { data: existing } = await supabaseAdmin

@@ -699,7 +699,7 @@ export function CreateOfferDialog({
             <div className="rounded-lg border border-zinc-200 p-3 space-y-2">
               <p className="text-xs font-semibold text-zinc-700 uppercase tracking-wide">Partner deal (optional)</p>
               <p className="text-[11px] text-zinc-500">
-                For a sale brought by a managed partner: their <b>setup share</b> (paid at activation) and <b>renewal share</b> (paid each year the client renews). Amounts in USD.
+                For a sale brought by a managed partner: their <b>setup payout</b> (paid once at activation) and <b>renewal payout</b> (paid in full on EACH installment the client pays — two per year). Leave renewal blank if none agreed. Amounts in USD.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <select
@@ -731,7 +731,7 @@ export function CreateOfferDialog({
                 <input
                   type="number"
                   inputMode="decimal"
-                  placeholder="Renewal payout $/yr"
+                  placeholder="Renewal payout $ (each installment)"
                   value={partnerRenewalPayout}
                   onChange={(e) => setPartnerRenewalPayout(e.target.value)}
                   disabled={!partnerId}

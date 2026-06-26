@@ -14,7 +14,8 @@
 export interface PartnerDeal {
   /** One-time partner share paid at setup/activation (deal currency). */
   setup_payout: number | null
-  /** Recurring partner share paid on each annual renewal (deal currency). */
+  /** Agreed renewal amount, paid IN FULL on EACH installment the client pays —
+   *  no split, two payouts/year (deal currency). Null when no renewal agreed. */
   renewal_payout: number | null
   /** ISO currency code; partner payouts are USD by default (Antonio 2026-06-25). */
   currency: string
@@ -105,31 +106,4 @@ export function shouldPayRenewal(input: {
     return { pay: false, amount: 0, reason: "formation_year" }
   }
   return { pay: true, amount: deal.renewal_payout, reason: "ok" }
-}
-
-/**
- * Split a year's renewal share across the annual installments. The partner deal
- * carries a single ANNUAL `renewal_payout`; the client pays the renewal in two
- * installments (Jan + Jun), and the partner earns a matching share PER
- * installment — each becomes requestable when its own installment is paid
- * (Antonio 2026-06-26). The split is EVEN (the deal figure is flat, independent
- * of the client's installment amounts); the last part absorbs any rounding
- * remainder so the parts always sum to the total to the cent.
- */
-export function splitRenewalPayout(total: number, parts = 2): number[] {
-  if (!Number.isFinite(total) || total <= 0 || parts < 1) return []
-  const cents = (n: number) => Math.round(n * 100) / 100
-  const each = cents(total / parts)
-  const out = Array(parts).fill(each)
-  out[parts - 1] = cents(total - each * (parts - 1))
-  return out
-}
-
-/**
- * The partner's renewal share for a specific 1-based installment number, given
- * the year's total renewal share. Returns 0 if out of range.
- */
-export function renewalShareForInstallment(total: number, installmentNumber: number, parts = 2): number {
-  const split = splitRenewalPayout(total, parts)
-  return split[installmentNumber - 1] ?? 0
 }

@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { redirect } from 'next/navigation'
 import { computeReferralProgress } from '@/lib/portal/partner-referrals'
-import { parsePartnerDeal, renewalShareForInstallment } from '@/lib/partners/partner-deal'
+import { parsePartnerDeal } from '@/lib/partners/partner-deal'
 import { PartnerReferralsClient, type PartnerReferralView } from '@/components/portal/partner-referrals-client'
 
 const INSTALLMENT_META: Record<string, { n: number; label: string }> = {
@@ -144,7 +144,7 @@ export default async function PartnerReferralsPage() {
           label: meta.label,
           invoicePaid: (iv.status || '').toLowerCase() === 'paid',
           paidDate: iv.paid_date,
-          amount: payout?.amount ?? renewalShareForInstallment(deal!.renewal_payout ?? 0, meta.n),
+          amount: payout?.amount ?? (deal!.renewal_payout ?? 0),
           currency: payout?.currency ?? (deal!.currency || 'USD'),
           payoutId: payout?.id ?? null,
           payoutStatus: payout?.status ?? null,
