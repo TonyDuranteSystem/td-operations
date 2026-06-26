@@ -10,7 +10,7 @@ import {
   Loader2, ChevronRight, Eye, EyeOff, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, ScanText, Trash2,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
-  Activity, Plus, GitBranch,
+  Activity, Plus, GitBranch, Ban,
 } from 'lucide-react'
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
@@ -161,6 +161,7 @@ interface PortalAuth {
   exists: boolean
   lastLogin: string | null
   createdAt: string | null
+  suspended: boolean
 }
 
 interface ContactDocumentRecord {
@@ -334,11 +335,15 @@ export function ContactDetail({
                 className="text-2xl font-bold"
                 onSave={makeContactSaver('full_name')}
               />
-              {contact.portal_tier && (
+              {portalAuth.suspended ? (
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-700">
+                  <Ban className="h-3 w-3" /> Suspended
+                </span>
+              ) : contact.portal_tier ? (
                 <span className={cn('text-xs font-medium px-2 py-0.5 rounded', TIER_COLORS[contact.portal_tier] ?? 'bg-zinc-100')}>
                   {contact.portal_tier}
                 </span>
-              )}
+              ) : null}
               {contact.status && contact.status !== 'active' && (
                 <span className="text-xs font-medium px-2 py-0.5 rounded bg-zinc-100 text-zinc-500">
                   {contact.status}
@@ -2288,9 +2293,44 @@ function PortalTab({
   const [loading, setLoading] = useState<string | null>(null)
   const [tier, setTier] = useState(contact.portal_tier ?? '')
   const [portalExists, setPortalExists] = useState(portalAuth.exists)
+  const [suspended, setSuspended] = useState(portalAuth.suspended)
   const [revokedAccountIds, setRevokedAccountIds] = useState<Set<string>>(new Set())
 
   const memberAccounts = accounts.filter(a => a.role === 'Member')
+
+  // Suspend blocks the person's portal LOGIN entirely (one login per email),
+  // so the confirm dialog lists every company they can reach — the full blast
+  // radius — before the admin commits.
+  const handleSuspendToggle = async (action: 'suspend' | 'unsuspend') => {
+    if (action === 'suspend') {
+      const companyList = accounts.length > 0
+        ? `\n\nThis blocks their login to ALL of these companies:\n• ${accounts.map(a => a.company_name).join('\n• ')}`
+        : ''
+      if (!confirm(`Suspend ${contact.full_name}'s portal login?${companyList}\n\nThey will be unable to log in and will receive a suspension email.`)) return
+    } else {
+      if (!confirm(`Restore ${contact.full_name}'s portal login? They will be able to log in again and will receive a restoration email.`)) return
+    }
+    setLoading(action)
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-portal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, contact_id: contact.id }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        toast.success(data.message)
+        setSuspended(action === 'suspend')
+        setTimeout(() => window.location.reload(), 1200)
+      } else {
+        toast.error(data.error ?? 'Failed')
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setLoading(null)
+    }
+  }
 
   const handleAction = async (action: string, extra?: Record<string, string>) => {
     setLoading(action)
@@ -2400,13 +2440,18 @@ function PortalTab({
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Account</span>
             <div className="flex items-center gap-2">
-              {portalExists ? (
+              {!portalExists ? (
+                <span className="text-sm text-zinc-400">Not created</span>
+              ) : suspended ? (
+                <>
+                  <Ban className="h-4 w-4 text-red-500" />
+                  <span className="text-sm font-medium text-red-700">Suspended</span>
+                </>
+              ) : (
                 <>
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                   <span className="text-sm font-medium text-emerald-700">Active</span>
                 </>
-              ) : (
-                <span className="text-sm text-zinc-400">Not created</span>
               )}
             </div>
           </div>
@@ -2499,6 +2544,30 @@ function PortalTab({
                   : 'No original credentials email is on record. '}
                 This sends a <strong>new temporary password</strong> only (not the full welcome email) — the old password stops working and the client sets their own at next login.
               </p>
+
+              {/* Suspend / Unsuspend portal login. Blocks the person's login
+                  entirely (auth ban) without touching tier or company status.
+                  One login per person, so suspend affects every company they
+                  can reach — the confirm dialog lists them. */}
+              {suspended ? (
+                <button
+                  onClick={() => handleSuspendToggle('unsuspend')}
+                  disabled={loading === 'unsuspend'}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-medium hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+                >
+                  {loading === 'unsuspend' ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Unsuspend Login
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleSuspendToggle('suspend')}
+                  disabled={loading === 'suspend'}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 disabled:opacity-50 transition-colors"
+                >
+                  {loading === 'suspend' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                  Suspend Login
+                </button>
+              )}
             </div>
           )}
 

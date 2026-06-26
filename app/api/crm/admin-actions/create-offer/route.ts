@@ -48,6 +48,13 @@ export async function POST(req: NextRequest) {
       immediate_actions: body.immediate_actions,
       referrer_name: body.referrer_name,
       referrer_type: body.referrer_type,
+      // Managed-partner deal (per-sale): a partner sells at a custom price with a
+      // setup share (paid at activation) + a renewal share (paid each year).
+      partner_id: body.partner_id ?? null,
+      partner_invoice_target: body.partner_invoice_target ?? null,
+      partner_payout_model: body.partner_payout_model ?? null,
+      partner_payout_rate: body.partner_payout_rate ?? null,
+      partner_renewal_payout: body.partner_renewal_payout ?? null,
       source: "crm-button",
     }
 

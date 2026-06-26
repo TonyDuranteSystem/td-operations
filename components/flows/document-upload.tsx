@@ -51,6 +51,19 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
 
   const uploadLabel = label || 'Upload Document'
 
+  // The formation flow's Articles-of-Organization upload (stage "Filed with
+  // State") AUTO-ADVANCES into "Articles Received", which materializes the CRM
+  // company and pins the SS-4's formation date (Line 11). So for THIS upload we
+  // make staff confirm the real state filing date (OCR-prefilled from the
+  // Articles) instead of letting the materializer default it to today.
+  const FORMATION_ARTICLES_STAGE = 'Filed with State'
+  const needsFormationDate = flowStage === FORMATION_ARTICLES_STAGE
+
+  const [confirming, setConfirming] = useState(false)
+  const [formationDate, setFormationDate] = useState('')
+  const [prefilling, setPrefilling] = useState(false)
+  const stagedPathRef = useRef<string | null>(null)
+
   function handlePick(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = e.target.files?.[0] ?? null
     setFile(picked)
@@ -63,65 +76,112 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     if (inputRef.current) inputRef.current.value = ''
   }
 
+  // Stage the file to Supabase Storage via a signed URL (bypasses the 4.5MB
+  // Vercel body limit). Returns the storage path. Throws on failure.
+  async function stageFile(picked: File): Promise<string> {
+    const storagePath = `flow-uploads/${serviceDeliveryId}/${Date.now()}_${picked.name}`
+    const sigRes = await fetch('/api/storage/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bucket: 'onboarding-uploads',
+        path: storagePath,
+        contentType: picked.type || 'application/pdf',
+      }),
+    })
+    if (!sigRes.ok) {
+      const d = await sigRes.json().catch(() => ({}))
+      throw new Error(d.error || 'Could not start the upload. Please try again.')
+    }
+    const { signedUrl } = await sigRes.json()
+    if (!signedUrl) throw new Error('Could not start the upload. Please try again.')
+    const putRes = await fetch(signedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': picked.type || 'application/pdf' },
+      body: picked,
+    })
+    if (!putRes.ok) throw new Error('The file could not be saved to storage. Please try again.')
+    return storagePath
+  }
+
+  // Register the staged file against the flow (Drive + documents row +
+  // auto-advance). Passes the staff-confirmed formation date when present.
+  async function commitUpload(storagePath: string, fileName: string, fileType: string, confirmedDate?: string) {
+    const apiRes = await fetch(`/api/flows/${serviceDeliveryId}/upload-document`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        storage_path: storagePath,
+        file_name: fileName,
+        mime_type: fileType || 'application/pdf',
+        flow_stage: flowStage,
+        auto_advance: autoAdvance === false ? false : undefined,
+        ...(confirmedDate ? { formation_date: confirmedDate } : {}),
+      }),
+    })
+    const data = await apiRes.json().catch(() => ({}))
+    if (!apiRes.ok || !data.success) {
+      throw new Error(data.detail || data.error || 'Upload failed — please try again.')
+    }
+    setDone(`${fileName} uploaded`)
+    clearPick()
+    stagedPathRef.current = null
+    window.dispatchEvent(
+      new CustomEvent<FlowDocUploadedDetail>(FLOW_DOC_UPLOADED_EVENT, { detail: { serviceDeliveryId } }),
+    )
+    router.refresh()
+  }
+
   async function handleUpload() {
     if (!file || uploading) return
     setUploading(true)
     setError(null)
     setDone(null)
     try {
-      const storagePath = `flow-uploads/${serviceDeliveryId}/${Date.now()}_${file.name}`
+      const storagePath = await stageFile(file)
 
-      // a. Signed URL.
-      const sigRes = await fetch('/api/storage/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bucket: 'onboarding-uploads',
-          path: storagePath,
-          contentType: file.type || 'application/pdf',
-        }),
-      })
-      if (!sigRes.ok) {
-        const d = await sigRes.json().catch(() => ({}))
-        throw new Error(d.error || 'Could not start the upload. Please try again.')
+      // Company-Formation Articles: stage the file, then make staff confirm the
+      // formation date (OCR-prefilled) before committing — the commit advances
+      // and materializes the company with that date.
+      if (needsFormationDate) {
+        stagedPathRef.current = storagePath
+        setFormationDate('')
+        setConfirming(true)
+        setPrefilling(true)
+        try {
+          const res = await fetch(
+            `/api/flows/${serviceDeliveryId}/articles-formation-date?storage_path=${encodeURIComponent(storagePath)}`,
+          )
+          const data = await res.json().catch(() => ({}))
+          if (data?.formation_date) setFormationDate(data.formation_date)
+        } catch {
+          // ignore — staff enter the date manually
+        } finally {
+          setPrefilling(false)
+          setUploading(false)
+        }
+        return
       }
-      const { signedUrl } = await sigRes.json()
-      if (!signedUrl) throw new Error('Could not start the upload. Please try again.')
 
-      // b. PUT to Storage.
-      const putRes = await fetch(signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/pdf' },
-        body: file,
-      })
-      if (!putRes.ok) throw new Error('The file could not be saved to storage. Please try again.')
+      await commitUpload(storagePath, file.name, file.type)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
+    } finally {
+      if (!needsFormationDate) setUploading(false)
+    }
+  }
 
-      // c. Register against the flow (Drive + documents row + auto-advance).
-      const apiRes = await fetch(`/api/flows/${serviceDeliveryId}/upload-document`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storage_path: storagePath,
-          file_name: file.name,
-          mime_type: file.type || 'application/pdf',
-          flow_stage: flowStage,
-          // Default true preserves existing auto-advance behavior for every
-          // other upload stage; only pass false when explicitly opted out.
-          auto_advance: autoAdvance === false ? false : undefined,
-        }),
-      })
-      const data = await apiRes.json().catch(() => ({}))
-      if (!apiRes.ok || !data.success) {
-        throw new Error(data.detail || data.error || 'Upload failed — please try again.')
-      }
-      setDone(`${file.name} uploaded`)
-      clearPick()
-      // Tell the sibling DocumentViewer to re-fetch immediately (router.refresh()
-      // re-runs server components but not the viewer's client effect).
-      window.dispatchEvent(
-        new CustomEvent<FlowDocUploadedDetail>(FLOW_DOC_UPLOADED_EVENT, { detail: { serviceDeliveryId } }),
-      )
-      router.refresh()
+  async function confirmFormationDate() {
+    if (!file || !stagedPathRef.current) return
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(formationDate)) {
+      setError('Please enter the formation date before continuing.')
+      return
+    }
+    setUploading(true)
+    setError(null)
+    try {
+      await commitUpload(stagedPathRef.current, file.name, file.type, formationDate)
+      setConfirming(false)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
     } finally {
@@ -197,7 +257,54 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
           {done}
         </p>
       )}
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && !confirming && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+      {confirming && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-semibold text-zinc-900">Confirm the formation date</h3>
+            <p className="mt-1 text-sm text-zinc-600">
+              The date the state formed the company — the filing date on the Articles
+              of Organization. This goes on the SS-4, so please verify it before the
+              company is created.
+            </p>
+            <label className="mt-4 block text-sm font-medium text-zinc-700">
+              Formation date
+              <input
+                type="date"
+                value={formationDate}
+                onChange={(e) => setFormationDate(e.target.value)}
+                disabled={uploading}
+                className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+              />
+            </label>
+            {prefilling && <p className="mt-2 text-xs text-zinc-500">Reading the date from the Articles…</p>}
+            {!prefilling && formationDate && (
+              <p className="mt-2 text-xs text-emerald-700">Pre-filled from the uploaded Articles — confirm it&apos;s correct.</p>
+            )}
+            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setConfirming(false); setError(null); setUploading(false); stagedPathRef.current = null }}
+                disabled={uploading}
+                className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmFormationDate}
+                disabled={uploading || prefilling}
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-400"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                {uploading ? 'Creating company…' : 'Confirm & Upload'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

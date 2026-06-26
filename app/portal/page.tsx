@@ -109,11 +109,18 @@ export default async function PortalDashboardPage() {
     )
   }
 
-  // Partners have their own section — redirect immediately
+  // Partners have their own section. A dual-role person (client AND partner)
+  // only redirects when they're in PARTNER mode (portal_mode cookie); in client
+  // mode they see this client dashboard.
   if (contactId) {
-    const { getPortalRoleByContact } = await import('@/lib/portal/queries')
-    const portalRole = await getPortalRoleByContact(contactId)
-    if (portalRole === 'partner') redirect('/portal/partner/clients')
+    const { resolvePortalMode } = await import('@/lib/portal/portal-mode')
+    const { count: membershipCount } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id', { count: 'exact', head: true })
+      .eq('contact_id', contactId)
+    const cookieStore = await cookies()
+    const modeCtx = await resolvePortalMode(contactId, (membershipCount ?? 0) > 0, cookieStore.get('portal_mode')?.value)
+    if (modeCtx.mode === 'partner') redirect('/portal/partner/clients')
   }
 
   // Get accounts (may be empty for leads)

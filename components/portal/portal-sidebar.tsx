@@ -50,6 +50,9 @@ interface PortalSidebarProps {
   accountType?: string | null
   contactId?: string
   portalRole?: string | null
+  /** Dual-role (client AND partner) → show the Client ⇄ Partner switcher. */
+  dualRole?: boolean
+  portalMode?: 'client' | 'partner'
   /** Companies being formed that have no account yet — selectable in the switcher. */
   inProgress?: InProgressFormation[]
   /** Set when an in-progress formation is the current selection. */
@@ -155,6 +158,7 @@ const companyItems: NavItem[] = [
 // not under any section header.
 const partnerItems: NavItem[] = [
   { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
+  { key: 'nav.partnerReferrals', href: '/portal/partner/referrals', icon: Share2, partnerOnly: true },
   { key: 'nav.partnerNewRequest', href: '/portal/partner/new-request', icon: PlusCircle, partnerOnly: true },
   { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle, partnerOnly: true },
@@ -172,7 +176,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -509,6 +513,22 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+          {/* Dual-role (client + partner): the SAME company switcher carries the
+              Partner entry, shown in both views so they can always switch. */}
+          {dualRole && (
+            <div className="pb-2 mb-1 border-b">
+              <CompanySwitcher
+                accounts={accounts}
+                selectedAccountId={selectedAccountId}
+                inProgress={inProgress}
+                selectedFormationId={selectedFormationId}
+                userName={fullName || user.email?.split('@')[0]}
+                dualRole
+                partnerMode={portalMode === 'partner'}
+                partnerHref="/portal/partner/referrals"
+              />
+            </div>
+          )}
           {/* Tier-specific top items (Offer for leads, Wizard for onboarding) — */}
           {/* sit ABOVE the Personal section because they're action CTAs for clients */}
           {/* who don't yet have a company. */}
@@ -542,7 +562,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
               <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                 {companiesLabel}
               </div>
-              {isMultiEntity ? (
+              {isMultiEntity && !dualRole ? (
                 <div className="px-0 py-1">
                   <CompanySwitcher
                     accounts={accounts}

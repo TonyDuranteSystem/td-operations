@@ -187,6 +187,7 @@ export type Database = {
           notes: string | null
           onboarding_date: string | null
           partner_id: string | null
+          partner_deal: Json | null
           payment_gateway: string | null
           payment_link: string | null
           physical_address: string | null
@@ -271,6 +272,7 @@ export type Database = {
           notes?: string | null
           onboarding_date?: string | null
           partner_id?: string | null
+          partner_deal?: Json | null
           payment_gateway?: string | null
           payment_link?: string | null
           physical_address?: string | null
@@ -355,6 +357,7 @@ export type Database = {
           notes?: string | null
           onboarding_date?: string | null
           partner_id?: string | null
+          partner_deal?: Json | null
           payment_gateway?: string | null
           payment_link?: string | null
           physical_address?: string | null
@@ -7566,6 +7569,7 @@ export type Database = {
           partner_invoice_target: string | null
           partner_payout_model: string | null
           partner_payout_rate: number | null
+          partner_renewal_payout: number | null
           payment_links: Json | null
           payment_type: string | null
           recurring_costs: Json | null
@@ -7624,6 +7628,7 @@ export type Database = {
           partner_invoice_target?: string | null
           partner_payout_model?: string | null
           partner_payout_rate?: number | null
+          partner_renewal_payout?: number | null
           payment_links?: Json | null
           payment_type?: string | null
           recurring_costs?: Json | null
@@ -7682,6 +7687,7 @@ export type Database = {
           partner_invoice_target?: string | null
           partner_payout_model?: string | null
           partner_payout_rate?: number | null
+          partner_renewal_payout?: number | null
           payment_links?: Json | null
           payment_type?: string | null
           recurring_costs?: Json | null
@@ -9534,6 +9540,13 @@ export type Database = {
           partner_id: string | null
           payment_id: string | null
           payout_method: string | null
+          account_id: string | null
+          contact_id: string | null
+          invoice_name: string | null
+          invoice_url: string | null
+          offer_token: string | null
+          payout_request: Json | null
+          requested_at: string | null
           payout_type: string
           reference: string | null
           referral_id: string | null
@@ -9572,6 +9585,13 @@ export type Database = {
           partner_id?: string | null
           payment_id?: string | null
           payout_method?: string | null
+          account_id?: string | null
+          contact_id?: string | null
+          invoice_name?: string | null
+          invoice_url?: string | null
+          offer_token?: string | null
+          payout_request?: Json | null
+          requested_at?: string | null
           payout_type?: string
           reference?: string | null
           referral_id?: string | null

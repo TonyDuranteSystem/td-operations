@@ -26,6 +26,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const body = await req.json().catch(() => ({}))
     const targetStage: string | undefined =
       typeof body.target_stage === 'string' ? body.target_stage : undefined
+    // Staff-confirmed formation (filing) date — sent by the workspace when
+    // advancing a Company Formation into "Articles Received". ISO YYYY-MM-DD.
+    const formationDate: string | undefined =
+      typeof body.formation_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.formation_date)
+        ? body.formation_date
+        : undefined
 
     if (!targetStage) {
       return NextResponse.json(
@@ -37,6 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = await advanceServiceDelivery({
       delivery_id: serviceDeliveryId,
       target_stage: targetStage,
+      formation_date: formationDate,
       actor: 'flow-action',
       notes: `Advanced to "${targetStage}" via flow Workspace action`,
     })

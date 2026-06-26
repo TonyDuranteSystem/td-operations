@@ -30,7 +30,14 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     const isAdmin = !!user && !isClient(user)
 
-    const { action, params } = await req.json()
+    // Accept BOTH request shapes: wrapped `{ action, params: {...} }` (payouts
+    // section, create-offer list) AND flat `{ action, ...fields }` (the partner
+    // CRM dialogs + the callPartnerAction helper, which never wrapped). Reading
+    // only `params` silently dropped every flat caller's fields → "Missing
+    // contact_id" on create_partner, etc. (pre-existing mismatch, fixed 2026-06-26).
+    const body = await req.json()
+    const { action } = body
+    const params = body.params ?? body
 
     if (!action) {
       return NextResponse.json({ success: false, detail: 'Missing action' }, { status: 400 })
@@ -39,6 +46,16 @@ export async function POST(req: NextRequest) {
     let result: { success: boolean; detail: string; data?: unknown }
 
     switch (action) {
+      // ─── LIST PARTNERS (for the offer-creation deal picker) ───
+      case 'list': {
+        const { data: partners } = await supabaseAdmin
+          .from('client_partners')
+          .select('id, partner_name, default_payout_model, default_payout_rate, status')
+          .order('partner_name', { ascending: true })
+        result = { success: true, detail: 'ok', data: { partners: (partners ?? []).filter(p => p.status !== 'inactive') } }
+        break
+      }
+
       // ─── CREATE PARTNER ───
       case 'create_partner': {
         const { contact_id, partner_name, partner_email, commission_model, agreed_services, price_list, notes } = params || {}
@@ -357,7 +374,7 @@ export async function POST(req: NextRequest) {
           result = { success: false, detail: 'Payout not found' }
           break
         }
-        if (existing.status !== 'pending' && existing.status !== 'manual_review') {
+        if (existing.status !== 'pending' && existing.status !== 'manual_review' && existing.status !== 'requested') {
           result = { success: false, detail: `Payout already ${existing.status} — cannot approve` }
           break
         }

@@ -25,9 +25,71 @@ import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
+import { parsePartnerDeal, shouldPayRenewal } from "@/lib/partners/partner-deal"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
+}
+
+/**
+ * Create the partner's renewal payout for ONE installment of a renewal year
+ * (Antonio 2026-06-26: two payouts/year, one per installment, each requestable
+ * when its own installment is paid). NO split — each installment that is paid
+ * yields a payout equal to the FULL agreed renewal amount (`renewal_payout`).
+ * Idempotent per (partner, account, year, installment) via reference
+ * `renewal:<acct>:<year>:<n>`. Years AFTER formation only (formation year = the
+ * one-time setup payout).
+ */
+async function payInstallmentRenewalShare(args: {
+  account: { id: string; company_name: string; partner_id?: string | null; partner_deal?: unknown; formation_date?: string | null }
+  year: number
+  installmentNumber: 1 | 2
+}): Promise<{ step: string; status: string; detail?: string }> {
+  const { account, year, installmentNumber } = args
+  const stepName = `partner_renewal_payout_${installmentNumber}`
+  const partnerId = account.partner_id ?? null
+  if (!partnerId) return { step: stepName, status: "skipped", detail: "no partner" }
+
+  const deal = parsePartnerDeal(account.partner_deal)
+  const formationYear = account.formation_date ? new Date(account.formation_date).getFullYear() : null
+  const decision = shouldPayRenewal({ partnerDeal: deal, formationYear, paymentYear: year })
+  if (!decision.pay || !deal) return { step: stepName, status: "skipped", detail: decision.reason }
+
+  const amount = decision.amount // full agreed renewal amount per installment (no split)
+  if (amount <= 0) return { step: stepName, status: "skipped", detail: "zero amount" }
+
+  const reference = `renewal:${account.id}:${year}:${installmentNumber}`
+  const { data: existing } = await supabaseAdmin
+    .from("referral_payouts")
+    .select("id")
+    .eq("partner_id", partnerId)
+    .eq("reference", reference)
+    .limit(1)
+    .maybeSingle()
+  if (existing) return { step: stepName, status: "skipped", detail: `Already created for ${year} installment ${installmentNumber}` }
+
+  const { data: payoutRow } = await dbWriteSafe(
+    supabaseAdmin
+      .from("referral_payouts")
+      // eslint-disable-next-line no-restricted-syntax -- new referral_payouts columns (offer_token/account_id) not yet in generated types; cast until prod migration + regen
+      .insert({
+        partner_id: partnerId,
+        referral_id: null,
+        payout_type: "renewal",
+        amount,
+        currency: deal.currency || "USD",
+        status: "pending",
+        reference,
+        notes: `Annual renewal payout ${year} (installment ${installmentNumber}) for ${account.company_name}`,
+        account_id: account.id,
+        offer_token: deal.offer_token ?? null,
+      } as never)
+      .select("id")
+      .single(),
+    "referral_payouts.insert",
+  )
+  // No CRM task — the partner self-serves the payout request from their portal.
+  return { step: stepName, status: "created", detail: `Renewal payout ${amount} ${deal.currency || "USD"} for ${year} installment ${installmentNumber} (${payoutRow?.id?.slice(0, 8)})` }
 }
 
 /**
@@ -42,7 +104,7 @@ export async function onFirstInstallmentPaid(
   // Get account details
   const { data: account } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, entity_type, member_structure, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date")
+    .select("id, company_name, entity_type, member_structure, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date, partner_id, partner_deal")
     .eq("id", accountId)
     .single()
 
@@ -286,6 +348,16 @@ export async function onFirstInstallmentPaid(
     steps.push({ step: "lease_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
+  // ─── Partner renewal payout — installment 1 share (recurring, USD) ───
+  // A managed partner earns a renewal share each year the client renews, split
+  // per installment. This is the 1st-installment trigger → installment-1 share.
+  // ONLY in years AFTER formation (formation year = one-time setup payout).
+  try {
+    steps.push(await payInstallmentRenewalShare({ account, year, installmentNumber: 1 }))
+  } catch (e) {
+    steps.push({ step: "partner_renewal_payout_1", status: "error", detail: e instanceof Error ? e.message : String(e) })
+  }
+
   return { steps }
 }
 
@@ -300,7 +372,7 @@ export async function onSecondInstallmentPaid(
 
   const { data: account } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name")
+    .select("id, company_name, partner_id, partner_deal, formation_date")
     .eq("id", accountId)
     .single()
 
@@ -496,6 +568,14 @@ export async function onSecondInstallmentPaid(
     }
   } catch (e) {
     steps.push({ step: "accountant_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+  }
+
+  // ─── Partner renewal payout — installment 2 share (recurring, USD) ───
+  // The 2nd-installment trigger → installment-2 share of the annual renewal.
+  try {
+    steps.push(await payInstallmentRenewalShare({ account, year, installmentNumber: 2 }))
+  } catch (e) {
+    steps.push({ step: "partner_renewal_payout_2", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   return { steps }

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { calculateCommission } from "@/lib/referral-utils"
 
 export const REFERRAL_COMMISSION_PCT = 10
 
@@ -91,6 +92,119 @@ export interface CreditReferrerResult {
 }
 
 /**
+ * Issue a referral reward credit note: a negative-total `payments` row on the
+ * referrer's account (USD by default — the figure is taken directly, no FX, so
+ * it nets against the referrer's USD installments), tagged
+ * `invoice_status='Credit'` with `credit_remaining`, and flip the referral to
+ * `credited`. Idempotent per referral via `idempotency_key='referral-credit:<id>'`.
+ * Shared by the Calendly-payment path (`creditReferrerForLead`) and the
+ * offer-referrer path (activate-service Step 3.5).
+ */
+export async function issueReferralCreditNote(
+  params: {
+    referralId: string
+    referrerAccountId: string
+    amount: number
+    currency?: "EUR" | "USD"
+    description?: string
+  },
+  supabase: SupabaseClient
+): Promise<{ paymentId: string }> {
+  const currency = params.currency || "USD"
+  const amount = Math.abs(params.amount)
+  const today = new Date().toISOString().split("T")[0]
+
+  const result = await createTDInvoice({
+    account_id: params.referrerAccountId,
+    line_items: [
+      {
+        description: params.description || `Referral reward — ${REFERRAL_COMMISSION_PCT}% credit`,
+        unit_price: -amount,
+        quantity: 1,
+      },
+    ],
+    currency,
+    mark_as_paid: true,
+    paid_date: today,
+    idempotency_key: `referral-credit:${params.referralId}`,
+    skip_credit_netting: true, // this IS a credit note — must not net into itself
+  })
+
+  // Tag it as a credit and finalize the referral.
+  // eslint-disable-next-line no-restricted-syntax -- credit-note status tag on the payments row created via createTDInvoice (sanctioned write path)
+  await supabase
+    .from("payments")
+    .update({ invoice_status: "Credit", credit_remaining: amount })
+    .eq("id", result.paymentId)
+  await supabase
+    .from("referrals")
+    .update({ status: "credited", credited_amount: amount })
+    .eq("id", params.referralId)
+
+  return { paymentId: result.paymentId }
+}
+
+/**
+ * Decide whether a referral can be auto-credited at activation: it needs a
+ * referrer account to credit and a positive commission amount. Otherwise the
+ * caller falls back to a manual "process commission" task so nothing is lost.
+ * Pure — unit tested.
+ */
+export function decideReferralAutoCredit(input: {
+  commissionAmount: number | null | undefined
+  referrerAccountId: string | null | undefined
+}): { autoCredit: boolean; reason: "ok" | "no_referrer_account" | "zero_amount" } {
+  if (!input.referrerAccountId) return { autoCredit: false, reason: "no_referrer_account" }
+  if (!input.commissionAmount || input.commissionAmount <= 0) return { autoCredit: false, reason: "zero_amount" }
+  return { autoCredit: true, reason: "ok" }
+}
+
+/**
+ * Self-heal guard: a referral that's already 'converted' but never got its credit
+ * (a prior activation was killed between inserting the referral and issuing the
+ * credit) should be credited now. Pending referrals are left to the normal flow;
+ * already-credited ones are skipped. Pure — unit tested. The actual credit is
+ * idempotent (issueReferralCreditNote), so re-running can never double-pay.
+ */
+export function shouldRecoverReferralCredit(input: {
+  status: string | null | undefined
+  creditedAmount: number | null | undefined
+  commissionAmount: number | null | undefined
+}): boolean {
+  const status = (input.status || "").toLowerCase()
+  return status === "converted" && !input.creditedAmount && !!input.commissionAmount && Number(input.commissionAmount) > 0
+}
+
+/**
+ * Derive the referral commission (type, pct, amount, currency) from an offer's
+ * referrer fields + the referred client's setup-fee total. Mirrors the
+ * historical inline logic in activate-service Step 3.5, extracted so it can be
+ * unit-tested. Reward currency is always USD (the figure is taken directly from
+ * the EUR setup fee, no FX, so it nets against USD installments). Pure.
+ */
+export function resolveOfferCommission(
+  offer: {
+    referrer_commission_type?: string | null
+    referrer_type?: string | null
+    referrer_commission_pct?: number | null
+    referrer_agreed_price?: number | null
+  },
+  setupFeeTotal: number,
+): { commissionType: string; commissionPct: number | null; commissionAmount: number; commissionCurrency: "USD" } {
+  const commissionType = offer.referrer_commission_type
+    || (offer.referrer_type === "partner" ? "price_difference" : "credit_note")
+  const commissionPct = offer.referrer_commission_pct ?? (commissionType !== "price_difference" ? 10 : null)
+  const commissionAmount = calculateCommission(
+    commissionType,
+    commissionPct,
+    offer.referrer_agreed_price || null,
+    setupFeeTotal,
+    setupFeeTotal, // basePriceForState = full setup fee for price_difference calc
+  )
+  return { commissionType, commissionPct, commissionAmount, commissionCurrency: "USD" }
+}
+
+/**
  * Called when a referred client's PAYMENT is received (activation). Converts the
  * pending client referral and auto-creates the referrer's reward credit note:
  * a negative-total `payments` row on the referrer's account that nets against
@@ -160,35 +274,18 @@ export async function creditReferrerForLead(
   }
 
   // Auto-create the credit note (negative invoice), idempotent per referral.
-  const today = new Date().toISOString().split("T")[0]
-  const result = await createTDInvoice({
-    account_id: referrerAccountId,
-    line_items: [
-      {
-        description: `Referral reward — ${REFERRAL_COMMISSION_PCT}% credit`,
-        unit_price: -Math.abs(commissionAmount),
-        quantity: 1,
-      },
-    ],
-    currency,
-    mark_as_paid: true,
-    paid_date: today,
-    idempotency_key: `referral-credit:${referral.id}`,
-    skip_credit_netting: true, // this IS a credit note — must not net into itself
-  })
+  const { paymentId } = await issueReferralCreditNote(
+    {
+      referralId: referral.id,
+      referrerAccountId,
+      amount: commissionAmount,
+      currency,
+      description: `Referral reward — ${REFERRAL_COMMISSION_PCT}% credit`,
+    },
+    supabase,
+  )
 
-  // Tag it as a credit and finalize the referral.
-  // eslint-disable-next-line no-restricted-syntax -- credit-note status tag on the payments row created via createTDInvoice (sanctioned write path); mirrors app/(dashboard)/payments/invoice-actions.ts createCreditNote.
-  await supabase
-    .from("payments")
-    .update({ invoice_status: "Credit", credit_remaining: commissionAmount })
-    .eq("id", result.paymentId)
-  await supabase
-    .from("referrals")
-    .update({ status: "credited", credited_amount: commissionAmount })
-    .eq("id", referral.id)
-
-  return { issued: true, referralId: referral.id, amount: commissionAmount, paymentId: result.paymentId }
+  return { issued: true, referralId: referral.id, amount: commissionAmount, paymentId }
 }
 
 /**

@@ -199,6 +199,24 @@ export function CreateOfferDialog({
   // Admin notes (internal only)
   const [adminNotes, setAdminNotes] = useState('')
 
+  // Partner deal (optional, per-sale): a managed partner sells the service at a
+  // custom price with a setup share (paid at activation) + a renewal share (paid
+  // each year the client renews). Amounts are USD.
+  const [partners, setPartners] = useState<Array<{ id: string; partner_name: string; default_payout_model: string | null; default_payout_rate: number | null }>>([])
+  const [partnerId, setPartnerId] = useState('')
+  const [partnerSetupPayout, setPartnerSetupPayout] = useState('')
+  const [partnerRenewalPayout, setPartnerRenewalPayout] = useState('')
+  useEffect(() => {
+    fetch('/api/crm/admin-actions/partner-actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'list', params: {} }),
+    })
+      .then((r) => (r.ok ? r.json() : { data: { partners: [] } }))
+      .then((d) => setPartners(d.data?.partners ?? []))
+      .catch(() => setPartners([]))
+  }, [])
+
   // Narrative content (client-facing, AI-generated or manual)
   const [narrativeOpen, setNarrativeOpen] = useState(false)
   const [narrativeLoading, setNarrativeLoading] = useState(false)
@@ -597,6 +615,12 @@ export function CreateOfferDialog({
             bundled_pipelines: derivedPipelines,
             referrer_name: referrerName || null,
             referrer_type: referrerType || null,
+            // Managed-partner deal (per-sale): flat-fee setup share (paid at
+            // activation) + renewal share (paid each year). USD.
+            partner_id: partnerId || null,
+            partner_payout_model: partnerId ? (partnerSetupPayout ? 'flat_fee' : 'none') : null,
+            partner_payout_rate: partnerId && partnerSetupPayout ? Number(partnerSetupPayout) : null,
+            partner_renewal_payout: partnerId && partnerRenewalPayout ? Number(partnerRenewalPayout) : null,
             required_documents: requiredDocsJson,
             issues: issuesJson,
             admin_notes: combinedNotes,
@@ -669,6 +693,53 @@ export function CreateOfferDialog({
               <p className="text-xs text-blue-600">Referrer: {referrerName} ({referrerType || 'client'})</p>
             )}
           </div>
+
+          {/* Partner deal (optional, per-sale) */}
+          {partners.length > 0 && (
+            <div className="rounded-lg border border-zinc-200 p-3 space-y-2">
+              <p className="text-xs font-semibold text-zinc-700 uppercase tracking-wide">Partner deal (optional)</p>
+              <p className="text-[11px] text-zinc-500">
+                For a sale brought by a managed partner: their <b>setup payout</b> (paid once at activation) and <b>renewal payout</b> (paid in full on EACH installment the client pays — two per year). Leave renewal blank if none agreed. Amounts in USD.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <select
+                  value={partnerId}
+                  onChange={(e) => {
+                    setPartnerId(e.target.value)
+                    if (!e.target.value) { setPartnerSetupPayout(''); setPartnerRenewalPayout('') }
+                    const p = partners.find((x) => x.id === e.target.value)
+                    if (p && p.default_payout_model === 'flat_fee' && p.default_payout_rate != null && !partnerSetupPayout) {
+                      setPartnerSetupPayout(String(p.default_payout_rate))
+                    }
+                  }}
+                  className="border rounded px-2 py-1.5 text-sm"
+                >
+                  <option value="">No partner</option>
+                  {partners.map((p) => (
+                    <option key={p.id} value={p.id}>{p.partner_name}</option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Setup payout $"
+                  value={partnerSetupPayout}
+                  onChange={(e) => setPartnerSetupPayout(e.target.value)}
+                  disabled={!partnerId}
+                  className="border rounded px-2 py-1.5 text-sm disabled:bg-zinc-50"
+                />
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Renewal payout $ (each installment)"
+                  value={partnerRenewalPayout}
+                  onChange={(e) => setPartnerRenewalPayout(e.target.value)}
+                  disabled={!partnerId}
+                  className="border rounded px-2 py-1.5 text-sm disabled:bg-zinc-50"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Notes & Call Context */}
           {(notesLoading || notesContext.length > 0) && (

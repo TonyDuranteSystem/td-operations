@@ -1,10 +1,19 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, CheckCircle2, Send } from 'lucide-react'
 
-export type PayoutStatus = 'pending' | 'manual_review' | 'approved' | 'paid' | 'cancelled'
+export type PayoutStatus = 'pending' | 'manual_review' | 'requested' | 'approved' | 'paid' | 'cancelled'
+
+export interface PayoutBankDetails {
+  account_name?: string
+  account_number?: string
+  iban?: string
+  swift_bic?: string
+  bank_name?: string
+  note?: string
+}
 
 export interface PayoutRow {
   id: string
@@ -18,6 +27,11 @@ export interface PayoutRow {
   paid_at: string | null
   created_at: string | null
   notes: string | null
+  payout_request: PayoutBankDetails | null
+  invoice_url: string | null
+  invoice_name: string | null
+  invoice_signed_url?: string | null
+  requested_at: string | null
 }
 
 interface Props {
@@ -34,6 +48,7 @@ const PAYOUT_METHODS: ReadonlyArray<{ value: string; label: string }> = [
 const STATUS_BADGE: Record<PayoutStatus, string> = {
   pending: 'bg-amber-100 text-amber-800',
   manual_review: 'bg-orange-100 text-orange-800',
+  requested: 'bg-violet-100 text-violet-800',
   approved: 'bg-blue-100 text-blue-800',
   paid: 'bg-emerald-100 text-emerald-800',
   cancelled: 'bg-zinc-100 text-zinc-600',
@@ -114,15 +129,15 @@ export function PartnerPayoutsSection({ partnerId, payouts }: Props) {
       {/* Summary */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-amber-50 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-amber-700">€{totalPending.toLocaleString()}</div>
+          <div className="text-xl font-bold text-amber-700">${totalPending.toLocaleString()}</div>
           <div className="text-[10px] text-amber-600 uppercase tracking-wide">Pending review</div>
         </div>
         <div className="bg-blue-50 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-blue-700">€{totalApproved.toLocaleString()}</div>
+          <div className="text-xl font-bold text-blue-700">${totalApproved.toLocaleString()}</div>
           <div className="text-[10px] text-blue-600 uppercase tracking-wide">Approved</div>
         </div>
         <div className="bg-emerald-50 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-emerald-700">€{totalPaid.toLocaleString()}</div>
+          <div className="text-xl font-bold text-emerald-700">${totalPaid.toLocaleString()}</div>
           <div className="text-[10px] text-emerald-600 uppercase tracking-wide">Paid</div>
         </div>
       </div>
@@ -152,10 +167,12 @@ export function PartnerPayoutsSection({ partnerId, payouts }: Props) {
             </thead>
             <tbody>
               {payouts.map(p => {
-                const isPending = p.status === 'pending' || p.status === 'manual_review'
+                const isApprovable = p.status === 'pending' || p.status === 'manual_review' || p.status === 'requested'
                 const isApproved = p.status === 'approved'
+                const req = p.payout_request
                 return (
-                  <tr key={p.id} className="border-b last:border-0 align-middle">
+                  <Fragment key={p.id}>
+                  <tr className="border-b last:border-0 align-middle">
                     <td className="py-2 pr-3">
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${STATUS_BADGE[p.status]}`}>
                         {p.status}
@@ -175,7 +192,7 @@ export function PartnerPayoutsSection({ partnerId, payouts }: Props) {
                       {p.notes ?? '—'}
                     </td>
                     <td className="py-2 pr-3 text-right">
-                      {isPending && (
+                      {isApprovable && (
                         <button
                           onClick={() => handleApprove(p.id)}
                           disabled={busyId === p.id}
@@ -214,6 +231,26 @@ export function PartnerPayoutsSection({ partnerId, payouts }: Props) {
                       )}
                     </td>
                   </tr>
+                  {req && (p.status === 'requested' || p.status === 'approved' || p.status === 'paid') && (
+                    <tr className="bg-violet-50/40 border-b">
+                      <td colSpan={6} className="px-3 pb-2 text-xs text-zinc-600">
+                        <span className="font-medium text-zinc-700">Partner bank details (USD)</span>
+                        {p.requested_at ? ` · requested ${new Date(p.requested_at).toLocaleDateString()}` : ''}:{' '}
+                        {[
+                          req.account_name && `Name: ${req.account_name}`,
+                          req.bank_name && `Bank: ${req.bank_name}`,
+                          req.account_number && `Acct: ${req.account_number}`,
+                          req.iban && `IBAN: ${req.iban}`,
+                          req.swift_bic && `SWIFT: ${req.swift_bic}`,
+                          req.note && `Note: ${req.note}`,
+                        ].filter(Boolean).join(' · ') || '—'}
+                        {p.invoice_signed_url && (
+                          <> · <a href={p.invoice_signed_url} target="_blank" rel="noopener noreferrer" className="text-violet-700 underline">Invoice{p.invoice_name ? ` (${p.invoice_name})` : ''}</a></>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>

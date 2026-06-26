@@ -20,8 +20,8 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
-import { calculateCommission } from "@/lib/referral-utils"
-import { creditReferrerForLead } from "@/lib/operations/referral"
+import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission, shouldRecoverReferralCredit } from "@/lib/operations/referral"
+import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
@@ -154,7 +154,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Get the offer to determine contract_type and bundled_pipelines
   const { data: offer } = await supabase
     .from("offers")
-    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target")
+    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout")
     .eq("token", activation.offer_token)
     .single()
 
@@ -1148,7 +1148,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // ─── STEP 3.5: Referral Record (AUTO, non-blocking) ──────
   let referralNoteLine = ""
   try {
-    if (offer?.referrer_name) {
+    if (offer && shouldRunReferralCredit(offer)) {
       // a. Find or create referrer contact
       let referrerContactId: string | null = null
       const { data: referrerContacts } = await supabase
@@ -1192,72 +1192,149 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
         } catch { /* cost_summary parse failed, setupFeeTotal stays 0 */ }
 
-        // c. Determine commission type and calculate
-        const commissionType = offer.referrer_commission_type
-          || (offer.referrer_type === "partner" ? "price_difference" : "credit_note")
-        const commissionPct = offer.referrer_commission_pct ?? (commissionType !== "price_difference" ? 10 : null)
-        const commissionAmount = calculateCommission(
-          commissionType,
-          commissionPct,
-          offer.referrer_agreed_price || null,
-          setupFeeTotal,
-          setupFeeTotal, // basePriceForState = full setup fee for price_difference calc
-        )
-        const commissionCurrency = "EUR"
+        // c. Determine commission type, amount, currency (USD reward — pure helper)
+        const { commissionType, commissionPct, commissionAmount, commissionCurrency } = resolveOfferCommission(offer, setupFeeTotal)
 
-        // d. Insert referral record
-        const { data: referral, error: refErr } = await dbWriteSafe(
-          supabase
-            .from("referrals")
-            .insert({
-              referrer_contact_id: referrerContactId,
-              referrer_account_id: offer.referrer_account_id || null,
-              referred_contact_id: contactId || null,
-              referred_account_id: autoAccountId || null,
-              referred_lead_id: leadId || null,
-              referred_name: offer.client_name || activation.client_name,
-              offer_token: activation.offer_token,
-              status: "converted",
-              commission_type: commissionType,
-              commission_pct: commissionPct,
-              commission_amount: commissionAmount || null,
-              commission_currency: commissionCurrency,
-            })
-            .select("id")
-            .single(),
-          "referrals.insert"
-        )
+        // d. Idempotency / cross-path dedup: skip if a referral already exists
+        //    for this offer (re-activation) or this lead (a Calendly pending
+        //    referral that Step 3.5b will credit) — prevents duplicate rows AND
+        //    double credits now that this path auto-issues the credit.
+        const dedupFilters = [`offer_token.eq.${activation.offer_token}`]
+        if (leadId) dedupFilters.push(`referred_lead_id.eq.${leadId}`)
+        const { data: existingReferral } = await supabase
+          .from("referrals")
+          .select("id, status, credited_amount, referrer_account_id, referrer_contact_id, commission_amount")
+          .or(dedupFilters.join(","))
+          .neq("status", "cancelled")
+          .limit(1)
+          .maybeSingle()
 
-        if (refErr) {
-          steps.push({ step: "referral", status: "error", detail: `Insert failed: ${refErr}` })
+        if (existingReferral) {
+          const ex = existingReferral as { id: string; status: string; credited_amount: number | null; referrer_account_id: string | null; referrer_contact_id: string | null; commission_amount: number | null }
+          // Self-heal: if a prior activation inserted the referral but was killed
+          // BEFORE issuing the credit (converted + uncredited), credit it now.
+          // Idempotent via issueReferralCreditNote's idempotency_key, so this can
+          // never double-pay.
+          if (shouldRecoverReferralCredit({ status: ex.status, creditedAmount: ex.credited_amount, commissionAmount: ex.commission_amount })) {
+            let recoverAccount = ex.referrer_account_id
+            if (!recoverAccount && ex.referrer_contact_id) {
+              const { data: link } = await supabase
+                .from("account_contacts").select("account_id").eq("contact_id", ex.referrer_contact_id).limit(1).maybeSingle()
+              recoverAccount = (link as { account_id: string } | null)?.account_id ?? null
+            }
+            if (recoverAccount) {
+              try {
+                await issueReferralCreditNote(
+                  { referralId: ex.id, referrerAccountId: recoverAccount, amount: Number(ex.commission_amount), currency: "USD", description: "Referral reward — credit (recovered)" },
+                  supabase,
+                )
+                steps.push({ step: "referral", status: "credited", detail: `Recovered uncredited referral ${ex.id.slice(0, 8)} → ${ex.commission_amount} USD` })
+              } catch (recoverErr) {
+                steps.push({ step: "referral", status: "skipped", detail: `Referral ${ex.id.slice(0, 8)} (${ex.status}); credit recovery failed: ${recoverErr instanceof Error ? recoverErr.message : String(recoverErr)}` })
+              }
+            } else {
+              steps.push({ step: "referral", status: "skipped", detail: `Referral already exists (${ex.id.slice(0, 8)}, ${ex.status}) — uncredited, no account to recover` })
+            }
+          } else {
+            steps.push({ step: "referral", status: "skipped", detail: `Referral already exists (${ex.id.slice(0, 8)}, ${ex.status}) — no duplicate created` })
+          }
         } else {
-          // e. Create follow-up task
-          await dbWriteSafe(
-            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-            supabase.from("tasks").insert({
-              task_title: `Process referral commission — ${offer.referrer_name} → ${activation.client_name} (${commissionAmount ? `${commissionAmount} ${commissionCurrency}` : "TBD"})`,
-              assigned_to: "Antonio",
-              category: "Payment",
-              priority: "Normal",
-              status: "To Do",
-              account_id: autoAccountId || null,
-              description: `Referral by ${offer.referrer_name} (${offer.referrer_type || "client"}). Commission: ${commissionType} — ${commissionAmount || "TBD"} ${commissionCurrency}. Offer: ${activation.offer_token}.`,
-            }),
-            "tasks.insert"
+          // e. Insert referral record
+          const { data: referral, error: refErr } = await dbWriteSafe(
+            supabase
+              .from("referrals")
+              .insert({
+                referrer_contact_id: referrerContactId,
+                referrer_account_id: offer.referrer_account_id || null,
+                referred_contact_id: contactId || null,
+                referred_account_id: autoAccountId || null,
+                referred_lead_id: leadId || null,
+                referred_name: offer.client_name || activation.client_name,
+                offer_token: activation.offer_token,
+                referrer_type: offer.referrer_type || "client",
+                status: "converted",
+                commission_type: commissionType,
+                commission_pct: commissionPct,
+                commission_amount: commissionAmount || null,
+                commission_currency: commissionCurrency,
+              })
+              .select("id")
+              .single(),
+            "referrals.insert"
           )
 
-          // f. Info line for team notification email
-          referralNoteLine = `📎 Referral: ${offer.referrer_name} (${offer.referrer_type || "client"}) — commission ${commissionAmount || "TBD"} ${commissionCurrency}`
+          if (refErr || !referral) {
+            steps.push({ step: "referral", status: "error", detail: `Insert failed: ${refErr}` })
+          } else {
+            // Resolve the referrer's account to credit (offer's account, else the
+            // referrer contact's first linked account).
+            let referrerAccountId: string | null = offer.referrer_account_id || null
+            if (!referrerAccountId && referrerContactId) {
+              const { data: link } = await supabase
+                .from("account_contacts")
+                .select("account_id")
+                .eq("contact_id", referrerContactId)
+                .limit(1)
+                .maybeSingle()
+              referrerAccountId = (link as { account_id: string } | null)?.account_id ?? null
+            }
 
-          steps.push({
-            step: "referral",
-            status: "created",
-            detail: `Referral ${referral?.id?.slice(0, 8)}: ${offer.referrer_name} → ${activation.client_name} | ${commissionType} ${commissionAmount || "TBD"} ${commissionCurrency}`,
-          })
+            // Manual fallback task — used when we can't auto-credit, or it fails,
+            // so a commission is never silently lost.
+            const createReferralTask = (note: string) =>
+              dbWriteSafe(
+                // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
+                supabase.from("tasks").insert({
+                  task_title: `Process referral commission — ${offer.referrer_name} → ${activation.client_name} (${commissionAmount ? `${commissionAmount} ${commissionCurrency}` : "TBD"})`,
+                  assigned_to: "Antonio",
+                  category: "Payment",
+                  priority: "Normal",
+                  status: "To Do",
+                  account_id: autoAccountId || null,
+                  description: `Referral by ${offer.referrer_name} (${offer.referrer_type || "client"}).${note ? ` ${note}` : ""} Commission: ${commissionType} — ${commissionAmount || "TBD"} ${commissionCurrency}. Offer: ${activation.offer_token}.`,
+                }),
+                "tasks.insert"
+              )
+
+            const decision = decideReferralAutoCredit({ commissionAmount, referrerAccountId })
+
+            if (decision.autoCredit && referrerAccountId) {
+              // f. Auto-issue the referrer's reward credit note (USD), idempotent per referral.
+              try {
+                await issueReferralCreditNote(
+                  {
+                    referralId: referral.id,
+                    referrerAccountId,
+                    amount: commissionAmount as number,
+                    currency: commissionCurrency,
+                    description: commissionType === "price_difference"
+                      ? "Referral reward — partner commission"
+                      : `Referral reward — ${commissionPct ?? 10}% credit`,
+                  },
+                  supabase
+                )
+                referralNoteLine = `📎 Referral credited: ${offer.referrer_name} — ${commissionAmount} ${commissionCurrency}`
+                steps.push({ step: "referral", status: "credited", detail: `Referral ${referral.id.slice(0, 8)} auto-credited ${commissionAmount} ${commissionCurrency} to ${offer.referrer_name}` })
+              } catch (creditErr) {
+                await createReferralTask("⚠️ Auto-credit failed — issue the credit manually.")
+                referralNoteLine = `📎 Referral (manual — auto-credit failed): ${offer.referrer_name} — ${commissionAmount || "TBD"} ${commissionCurrency}`
+                steps.push({ step: "referral", status: "error", detail: `Auto-credit failed for ${referral.id.slice(0, 8)}, manual task created: ${creditErr instanceof Error ? creditErr.message : String(creditErr)}` })
+              }
+            } else {
+              // No referrer account or zero amount → keep the manual task path.
+              await createReferralTask("")
+              referralNoteLine = `📎 Referral: ${offer.referrer_name} (${offer.referrer_type || "client"}) — commission ${commissionAmount || "TBD"} ${commissionCurrency} (manual: ${decision.reason})`
+              steps.push({ step: "referral", status: "created", detail: `Referral ${referral.id.slice(0, 8)} → manual task (${decision.reason})` })
+            }
+          }
         }
       } else {
         steps.push({ step: "referral", status: "error", detail: "Could not find or create referrer contact" })
       }
+    } else if (offer?.referrer_name && offer?.partner_id) {
+      // Managed-partner offer: compensation runs through the partner-payout path
+      // (Step 3.6). Skip the generic referral credit so the partner isn't paid twice.
+      steps.push({ step: "referral", status: "skipped", detail: "Referral handled by partner-payout path (offer has partner_id) — referral credit skipped to avoid double-pay" })
     } else {
       steps.push({ step: "referral", status: "skipped", detail: "No referral on this offer" })
     }
@@ -1342,12 +1419,17 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         tdBaseCost,
       })
 
-      const payoutCurrency = "EUR"
+      // Referrer/partner payouts are ALWAYS USD — clients pay in EUR but we pay
+      // partners the figure directly in USD, no FX (Antonio 2026-06-25). For
+      // price_difference this takes the EUR-magnitude diff directly as USD,
+      // matching the referral-credit rule.
+      const payoutCurrency = "USD"
       const payoutStatus = result.error ? "manual_review" : "pending"
 
       const { data: payoutRow, error: payoutErr } = await dbWriteSafe(
         supabase
           .from("referral_payouts")
+          // eslint-disable-next-line no-restricted-syntax -- new referral_payouts columns (offer_token/account_id/contact_id) not yet in generated types; cast until prod migration + regen
           .insert({
             partner_id: offer.partner_id,
             referral_id: null,
@@ -1357,7 +1439,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             payment_id: paymentIdForPayout,
             status: payoutStatus,
             notes: result.note || null,
-          })
+            // Flexible referral anchor — the offer works for COMPANY or INDIVIDUAL referrals.
+            offer_token: activation.offer_token,
+            account_id: autoAccountId || null,
+            contact_id: contactId || null,
+          } as never)
           .select("id")
           .single(),
         "referral_payouts.insert"
@@ -1366,29 +1452,64 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       if (payoutErr) {
         steps.push({ step: "partner_payout", status: "error", detail: `Insert failed: ${payoutErr}` })
       } else {
-        // Create a follow-up CRM task so payouts show up in the inbox.
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; mirrors Step 3.5 pattern
-          supabase.from("tasks").insert({
-            task_title: `Partner payout — ${partnerRow?.partner_name || "Partner"} → ${activation.client_name} (${result.amount ?? "TBD"} ${payoutCurrency})`,
-            assigned_to: "Antonio",
-            category: "Payment",
-            priority: result.error ? "Urgent" : "Normal",
-            status: "To Do",
-            account_id: autoAccountId || null,
-            description: `Payout pending for partner ${partnerRow?.partner_name || offer.partner_id}.\nModel: ${offer.partner_payout_model}\nAmount: ${result.amount ?? "—"} ${payoutCurrency}\nNote: ${result.note || "—"}\nPayout id: ${payoutRow?.id}\nOffer: ${activation.offer_token}\n\nReview & approve in CRM → Partners → detail page.`,
-          }),
-          "tasks.insert"
-        )
-
+        // No CRM task — the partner self-serves the payout request from their
+        // portal (My Referrals); staff approve & pay in CRM → Partners.
         steps.push({
           step: "partner_payout",
           status: result.error ? "manual_review" : "created",
           detail: `Payout ${payoutRow?.id?.slice(0, 8)}: ${offer.partner_payout_model} ${result.amount ?? "—"} ${payoutCurrency}${result.error ? ` (${result.error})` : ""}`,
         })
       }
+
+      // Persist the durable partner deal + link on the account so the recurring
+      // renewal payout (Slice 2, years later) knows the partner and the renewal
+      // share. partner_renewal_payout / partner_deal are new columns — cast
+      // until the migration is promoted to prod and types regenerate.
+      const renewalPayout = (offer as { partner_renewal_payout?: number | string | null }).partner_renewal_payout
+      const partnerDeal = buildPartnerDeal({
+        partnerId: offer.partner_id,
+        setupPayout: result.amount,
+        renewalPayout: renewalPayout != null ? Number(renewalPayout) : null,
+        currency: payoutCurrency,
+        offerToken: activation.offer_token,
+      })
+      if (autoAccountId && partnerDeal) {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- new columns not yet in generated types (sandbox-applied, prod pending); cast until regen
+          supabase.from("accounts").update({
+            partner_id: offer.partner_id,
+            partner_deal: partnerDeal,
+            updated_at: new Date().toISOString(),
+          } as Record<string, unknown> as never).eq("id", autoAccountId),
+          "accounts.partner_deal",
+        )
+        steps.push({ step: "partner_deal", status: "created", detail: `Deal saved on ${autoAccountId.slice(0, 8)}: setup ${partnerDeal.setup_payout ?? "—"} / renewal ${partnerDeal.renewal_payout ?? "—"} ${partnerDeal.currency}` })
+      }
     } else if (offer?.partner_id) {
-      steps.push({ step: "partner_payout", status: "skipped", detail: "Partner present but payout_model='none'" })
+      // Renewal-only deal (no setup payout): still persist the partner link + deal
+      // so the recurring renewal payout fires in later years.
+      const renewalOnly = (offer as { partner_renewal_payout?: number | string | null }).partner_renewal_payout
+      const renewalDeal = buildPartnerDeal({
+        partnerId: offer.partner_id,
+        setupPayout: null,
+        renewalPayout: renewalOnly != null ? Number(renewalOnly) : null,
+        currency: "USD",
+        offerToken: activation.offer_token,
+      })
+      if (autoAccountId && renewalDeal) {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- new columns not yet in generated types; cast until prod migration + regen
+          supabase.from("accounts").update({
+            partner_id: offer.partner_id,
+            partner_deal: renewalDeal,
+            updated_at: new Date().toISOString(),
+          } as Record<string, unknown> as never).eq("id", autoAccountId),
+          "accounts.partner_deal",
+        )
+        steps.push({ step: "partner_payout", status: "skipped", detail: `payout_model='none' — renewal-only deal saved (renewal ${renewalDeal.renewal_payout} ${renewalDeal.currency})` })
+      } else {
+        steps.push({ step: "partner_payout", status: "skipped", detail: "Partner present but payout_model='none'" })
+      }
     } else {
       steps.push({ step: "partner_payout", status: "skipped", detail: "No partner on this offer" })
     }
