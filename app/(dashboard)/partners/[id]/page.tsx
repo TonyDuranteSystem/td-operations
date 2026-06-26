@@ -7,6 +7,7 @@ import { PartnerHeaderActions, type PartnerData, type ManagedAccount } from './c
 import { ManagedClientsSection } from './components/managed-clients-section'
 import { PartnerPayoutsSection, type PayoutRow } from './components/partner-payouts-section'
 import { BackButton } from '@/components/ui/back-button'
+import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { labelForServiceStatic } from '@/lib/services'
 
@@ -201,6 +202,7 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
         }`}>
           {partner.status}
         </span>
+        {contact?.id && <ViewAsClientButton contactId={contact.id} label="View as partner" />}
         <PartnerHeaderActions partner={partnerData} />
       </div>
 
