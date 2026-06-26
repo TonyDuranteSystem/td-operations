@@ -30,7 +30,14 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     const isAdmin = !!user && !isClient(user)
 
-    const { action, params } = await req.json()
+    // Accept BOTH request shapes: wrapped `{ action, params: {...} }` (payouts
+    // section, create-offer list) AND flat `{ action, ...fields }` (the partner
+    // CRM dialogs + the callPartnerAction helper, which never wrapped). Reading
+    // only `params` silently dropped every flat caller's fields → "Missing
+    // contact_id" on create_partner, etc. (pre-existing mismatch, fixed 2026-06-26).
+    const body = await req.json()
+    const { action } = body
+    const params = body.params ?? body
 
     if (!action) {
       return NextResponse.json({ success: false, detail: 'Missing action' }, { status: 400 })
