@@ -335,11 +335,15 @@ export function ContactDetail({
                 className="text-2xl font-bold"
                 onSave={makeContactSaver('full_name')}
               />
-              {contact.portal_tier && (
+              {portalAuth.suspended ? (
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-700">
+                  <Ban className="h-3 w-3" /> Suspended
+                </span>
+              ) : contact.portal_tier ? (
                 <span className={cn('text-xs font-medium px-2 py-0.5 rounded', TIER_COLORS[contact.portal_tier] ?? 'bg-zinc-100')}>
                   {contact.portal_tier}
                 </span>
-              )}
+              ) : null}
               {contact.status && contact.status !== 'active' && (
                 <span className="text-xs font-medium px-2 py-0.5 rounded bg-zinc-100 text-zinc-500">
                   {contact.status}
