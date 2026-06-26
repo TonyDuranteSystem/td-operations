@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-// ── enqueueJobs spy ──
-const enqueueJobsMock = vi.fn(async (..._a: unknown[]) => ({ ids: ["j1"] }))
-vi.mock("@/lib/jobs/queue", () => ({ enqueueJobs: (...a: unknown[]) => enqueueJobsMock(...a) }))
-
-// ── supabase-admin: job_queue.select(...).eq().eq().neq() resolves to existing rows ──
+// ── supabase-admin: dedup via select().eq().neq() → existingRows; DIRECT
+//    insert() captured in jobInserts (the code inserts straight into job_queue,
+//    NOT via enqueueJobs — that would dangle triggerWorker on Vercel). ──
 let existingRows: Array<{ payload: { path?: string } }> = []
+const jobInserts: unknown[] = []
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: () => {
@@ -13,6 +12,7 @@ vi.mock("@/lib/supabase-admin", () => ({
       chain.select = () => chain
       chain.eq = () => chain
       chain.neq = () => Promise.resolve({ data: existingRows, error: null })
+      chain.insert = (rows: unknown) => { jobInserts.push(rows); return Promise.resolve({ error: null }) }
       return chain
     },
   },
@@ -28,7 +28,7 @@ const base = "tax/acc-1"
 const p = (n: string) => `${base}/${n}`
 
 beforeEach(() => {
-  enqueueJobsMock.mockClear()
+  jobInserts.length = 0
   existingRows = []
 })
 
@@ -67,7 +67,7 @@ describe("enqueueStatementIngestJobs", () => {
       accountId: "acc-1", taxYear: 2025, uploadPaths: [p("prior_year_return_x.pdf")], submittedData: {},
     })
     expect(r).toEqual({ enqueued: 0, skipped: 0 })
-    expect(enqueueJobsMock).not.toHaveBeenCalled()
+    expect(jobInserts).toHaveLength(0)
   })
 
   it("enqueues one job per new statement file", async () => {
@@ -77,8 +77,8 @@ describe("enqueueStatementIngestJobs", () => {
       submittedData: { bank_accounts_0_bank_name: "Chase", bank_accounts_1_bank_name: "Mercury" },
     })
     expect(r).toEqual({ enqueued: 2, skipped: 0 })
-    expect(enqueueJobsMock).toHaveBeenCalledTimes(1)
-    const rows = enqueueJobsMock.mock.calls[0][0] as Array<{ payload: { path: string; bank_label: string; tax_year: number } }>
+    expect(jobInserts).toHaveLength(1)
+    const rows = jobInserts[0] as Array<{ payload: { path: string; bank_label: string; tax_year: number } }>
     expect(rows).toHaveLength(2)
     expect(rows[0].payload.bank_label).toBe("Chase")
     expect(rows[0].payload.tax_year).toBe(2025)
@@ -92,7 +92,7 @@ describe("enqueueStatementIngestJobs", () => {
       submittedData: {},
     })
     expect(r).toEqual({ enqueued: 1, skipped: 1 })
-    const rows = enqueueJobsMock.mock.calls[0][0] as Array<{ payload: { path: string } }>
+    const rows = jobInserts[0] as Array<{ payload: { path: string } }>
     expect(rows).toHaveLength(1)
     expect(rows[0].payload.path).toBe(p("bank_accounts_1_statements_bb_Mercury.csv"))
   })
@@ -107,6 +107,6 @@ describe("enqueueStatementIngestJobs", () => {
       submittedData: {},
     })
     expect(r).toEqual({ enqueued: 0, skipped: 1 })
-    expect(enqueueJobsMock).not.toHaveBeenCalled()
+    expect(jobInserts).toHaveLength(0)
   })
 })

@@ -168,14 +168,20 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
       .in("status", ["pending", "processing"])
       .limit(1)
     if (!existing || existing.length === 0) {
-      const { enqueueJobs } = await import("@/lib/jobs/queue")
-      await enqueueJobs([{
+      // DIRECT insert — NOT enqueueJobs(), which fires triggerWorker() as a
+      // dangling fetch (await fetch(.../api/jobs/process) it does not await).
+      // That promise + its 5s timeout keep the event loop alive past the HTTP
+      // response, so Vercel tears the function down → "No response is returned
+      // from route handler" → empty 500 to the client even though ingestion
+      // succeeded (prod bug 2026-06-26, the second instance of this class).
+      // The 5-min process-jobs cron drains this pending row; the AI pass is
+      // advisory (ai_lean/ai_bucket hints) so a few minutes' delay is fine.
+      await sb.from("job_queue").insert({
         job_type: "recategorize_ai",
         payload: { account_id: accountId, tax_year: taxYear },
-        priority: 5,
         account_id: accountId,
         created_by: "portal_csv_ingest",
-      }])
+      } as never)
     }
   } catch (e) {
     console.error("[portal-csv-ingest] failed to enqueue AI categorization job:", e)

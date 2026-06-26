@@ -18,7 +18,6 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { enqueueJobs } from "@/lib/jobs/queue"
 
 const STATEMENT_PATH_RE = /\/(bank_accounts_\d+_statements|bank_statements)_/
 const STATEMENT_EXT_RE = /\.(csv|pdf|zip)$/i
@@ -85,14 +84,19 @@ export async function enqueueStatementIngestJobs(params: {
     return { enqueued: 0, skipped: statementPaths.length }
   }
 
-  await enqueueJobs(
+  // DIRECT insert — NOT enqueueJobs(), which fires triggerWorker() as a dangling
+  // fetch that outlives the HTTP response and gets the Vercel function torn down
+  // ("No response is returned from route handler" → 500 to the client). This is
+  // called from the wizard-submit REQUEST path, so it must leave no dangling
+  // promise. The 5-min process-jobs cron drains these ingest rows. (2026-06-26)
+  await supabaseAdmin.from("job_queue").insert(
     toEnqueue.map(path => ({
       job_type: "ingest_bank_statement",
       payload: { account_id: accountId, tax_year: taxYear, path, bank_label: bankLabelForPath(path, submittedData) },
       priority: 4,
       account_id: accountId,
       created_by: createdBy,
-    })),
+    })) as never,
   )
 
   return { enqueued: toEnqueue.length, skipped: statementPaths.length - toEnqueue.length }

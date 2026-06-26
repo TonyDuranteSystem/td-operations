@@ -9,6 +9,7 @@ vi.mock("@/lib/bank-statement-parser", async (importOriginal) => {
 
 const upsertCalls: unknown[] = []
 const existingRows: unknown[] = []
+const jobInserts: unknown[] = []
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
@@ -31,10 +32,12 @@ vi.mock("@/lib/supabase-admin", () => ({
         return chain
       }
       if (table === "job_queue") {
-        // dedup lookup for the recategorize_ai enqueue: select().eq().eq().eq().in().limit()
+        // dedup lookup: select().eq().eq().eq().in().limit() → no existing job.
+        // + DIRECT insert (not enqueueJobs — that would dangle triggerWorker).
         const chain = {
           select: () => chain, eq: () => chain, in: () => chain,
           limit: () => Promise.resolve({ data: [], error: null }),
+          insert: (rows: unknown) => { jobInserts.push(rows); return Promise.resolve({ error: null }) },
         }
         return chain
       }
@@ -42,9 +45,6 @@ vi.mock("@/lib/supabase-admin", () => ({
     },
   },
 }))
-
-const enqueueJobsMock = vi.fn(async (..._a: unknown[]) => ({ ids: ["job-ai-1"] }))
-vi.mock("@/lib/jobs/queue", () => ({ enqueueJobs: (...a: unknown[]) => enqueueJobsMock(...a) }))
 
 const recatMock = vi.fn().mockResolvedValue({ scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 3 })
 vi.mock("@/lib/tax/categorization-engine", () => ({
@@ -66,7 +66,7 @@ const INPUT = {
   buffer: Buffer.from("csv-content"), fileName: "export.csv",
 }
 
-beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); enqueueJobsMock.mockClear(); upsertCalls.length = 0; existingRows.length = 0 })
+beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); jobInserts.length = 0; upsertCalls.length = 0; existingRows.length = 0 })
 
 describe("ingestPortalCsv", () => {
   it("unreadable file → guiding error, nothing inserted", async () => {
@@ -114,8 +114,9 @@ describe("ingestPortalCsv", () => {
     // background job (not a dangling promise — prod fire-and-forget fix).
     expect(recatMock).toHaveBeenCalledTimes(1)
     expect(recatMock.mock.calls[0][2]).toBeUndefined()
-    expect(enqueueJobsMock).toHaveBeenCalledTimes(1)
-    const aiJob = (enqueueJobsMock.mock.calls[0][0] as Array<{ job_type: string; payload: unknown }>)[0]
+    // AI pass enqueued via a DIRECT job_queue insert (no enqueueJobs/triggerWorker).
+    expect(jobInserts).toHaveLength(1)
+    const aiJob = jobInserts[0] as { job_type: string; payload: unknown }
     expect(aiJob.job_type).toBe("recategorize_ai")
     expect(aiJob.payload).toEqual({ account_id: "acc-1", tax_year: 2025 })
   })
