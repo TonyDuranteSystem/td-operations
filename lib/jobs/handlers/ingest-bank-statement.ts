@@ -72,6 +72,14 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     result.steps.push(step("ingest", "ok",
       `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})${r.alert ? ` — ${r.alert}` : ""}`))
     result.summary = `Ingested ${fileName}: ${r.inserted} transactions`
+
+    // If this was the LAST statement for the account+year, tell the client their
+    // P&L is ready (one-time, locale-aware). Self-gates + never throws, so it
+    // can never break the ingest job. selfJobId is excluded from the in-flight
+    // count (this job is still 'processing' while its handler runs).
+    const { notifyIfIngestComplete } = await import("../ingest-complete-notify")
+    const notif = await notifyIfIngestComplete({ accountId: p.account_id, taxYear: p.tax_year, selfJobId: job.id })
+    if (notif.notified) result.steps.push(step("notify_ready", "ok", "client notified: statements ready"))
   } else {
     // Unreadable file — do NOT throw (retrying won't help). Surface it.
     result.steps.push(step("ingest", "error", `${fileName}: ${r.error ?? "could not read file"}`))

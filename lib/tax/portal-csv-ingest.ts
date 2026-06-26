@@ -69,7 +69,9 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
     return fail(
       `We could not read any transactions from this file${detail}. ` +
-      `Please upload the statement exactly as your bank exports it — a CSV or the official PDF statement for the full period. Do not edit or re-save the file before uploading.`,
+      `Please upload each statement exactly as your bank exports it — a CSV or the official PDF for the full period. ` +
+      `Do not merge, combine, or edit the files: tools like merge-csv.com change the format and make the file unreadable. ` +
+      `Upload one file per bank account, just as the bank gives it to you.`,
     )
   }
 

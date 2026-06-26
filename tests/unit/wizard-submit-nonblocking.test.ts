@@ -33,6 +33,7 @@ function makeBuilder(table: string) {
   const chain = () => b
   b.select = chain
   b.eq = chain
+  b.is = chain
   b.order = chain
   b.limit = chain
   b.neq = chain

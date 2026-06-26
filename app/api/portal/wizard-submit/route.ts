@@ -243,6 +243,22 @@ export async function POST(req: NextRequest) {
       }
       submissionId = (sub as Record<string, unknown> | null)?.id as string || null
 
+      // Mark the tax submission "submitted" SYNCHRONOUSLY on first submit so the
+      // portal banner reads "submitted — under review" the instant the client
+      // lands back on the dashboard. The background handler (tax-form-setup
+      // step 9) otherwise sets review_status a few seconds later, leaving the
+      // client briefly on the "Complete your tax form" banner and prone to
+      // re-submitting (Luca, 2026-06-25). Guarded to review_status IS NULL so a
+      // resubmit-after-revision is left untouched for the handler's
+      // submitted/resubmitted logic; the handler still appends review_history.
+      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && submissionId) {
+        await supabaseAdmin
+          .from('tax_return_submissions')
+          .update({ review_status: 'submitted' })
+          .eq('id', submissionId)
+          .is('review_status', null)
+      }
+
       // Prior-year return matrix (tax wizard, master plan §5): resolve the
       // client's answer — verify Case A against our records, extract+validate
       // a Case-B upload, cross-check Case C vs formation date, store the

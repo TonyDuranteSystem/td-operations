@@ -62,7 +62,8 @@ describe("ingestPortalCsv", () => {
     parseMock.mockResolvedValue({ transactions: [], bank_name: "unknown", errors: ["Could not find required columns"] })
     const r = await ingestPortalCsv(INPUT)
     expect(r.ok).toBe(false)
-    expect(r.error).toContain("a CSV or the official PDF statement")
+    expect(r.error).toContain("a CSV or the official PDF")
+    expect(r.error).toContain("Do not merge, combine, or edit")
     expect(upsertCalls).toHaveLength(0)
   })
 
