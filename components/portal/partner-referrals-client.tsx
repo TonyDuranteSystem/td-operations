@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useActionState } from 'react'
-import { Check, Circle, Share2, Banknote, ChevronDown, Copy } from 'lucide-react'
+import { Check, Circle, Share2, Banknote, ChevronDown, Copy, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { REFERRAL_STAGES, REFERRAL_STAGE_LABELS, type ReferralStage } from '@/lib/portal/partner-referrals'
 import { requestPartnerPayout, type RequestPayoutState } from '@/app/portal/partner/referrals/actions'
@@ -18,6 +18,8 @@ export interface PartnerReferralView {
     currency: string
     status: string
     requestedAt: string | null
+    /** Renewal payouts only — the billing-cycle year (from reference `renewal:<acct>:<year>`). */
+    year: number | null
   }>
 }
 
@@ -118,6 +120,10 @@ function ReferralLinkCard() {
 }
 
 function ReferralCard({ referral }: { referral: PartnerReferralView }) {
+  const setupPayouts = referral.payouts.filter((p) => p.type === 'setup')
+  const renewalPayouts = referral.payouts
+    .filter((p) => p.type === 'renewal')
+    .sort((a, b) => (b.year ?? 0) - (a.year ?? 0)) // most recent renewal year first
   return (
     <div className="bg-white rounded-xl border shadow-sm p-4 sm:p-5 space-y-4">
       <div className="flex items-center justify-between">
@@ -153,10 +159,23 @@ function ReferralCard({ referral }: { referral: PartnerReferralView }) {
         })}
       </div>
 
-      {/* Payouts */}
-      {referral.payouts.length > 0 && (
+      {/* Setup payout — the one-time acquisition reward (end of the funnel). */}
+      {setupPayouts.length > 0 && (
         <div className="border-t pt-3 space-y-2">
-          {referral.payouts.map((p) => (
+          {setupPayouts.map((p) => (
+            <PayoutRow key={p.id} payout={p} />
+          ))}
+        </div>
+      )}
+
+      {/* Annual renewals — recurring billing cycle (R106), one line per year the
+          client has renewed. Only years with a real renewal payout are shown. */}
+      {renewalPayouts.length > 0 && (
+        <div className="border-t pt-3 space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 flex items-center gap-1.5">
+            <RefreshCw className="h-3 w-3" /> Annual renewals
+          </p>
+          {renewalPayouts.map((p) => (
             <PayoutRow key={p.id} payout={p} />
           ))}
         </div>
@@ -174,7 +193,9 @@ function PayoutRow({ payout }: { payout: PartnerReferralView['payouts'][number] 
         <div className="flex items-center gap-2 min-w-0">
           <Banknote className="h-4 w-4 text-zinc-400 shrink-0" />
           <span className="text-sm text-zinc-800">
-            {payout.type === 'renewal' ? 'Renewal payout' : 'Setup payout'} · <b>{money(payout.amount, payout.currency)}</b>
+            {payout.type === 'renewal'
+              ? (payout.year ? `Renewal ${payout.year}` : 'Renewal payout')
+              : 'Setup payout'} · <b>{money(payout.amount, payout.currency)}</b>
           </span>
         </div>
         <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0', PAYOUT_BADGE[payout.status] || 'bg-zinc-100 text-zinc-600')}>

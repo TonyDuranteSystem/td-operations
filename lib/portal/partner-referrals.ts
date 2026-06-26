@@ -2,14 +2,20 @@
  * Partner portal — referral progress.
  *
  * A partner's referral is anchored on the OFFER (works for an INDIVIDUAL/contact
- * or a COMPANY/account). The progress stepper is derived ENTIRELY from real CRM /
- * Finance state — never a manual flag (Antonio 2026-06-25):
+ * or a COMPANY/account). The progress stepper is the ONE-TIME ACQUISITION funnel,
+ * derived ENTIRELY from real CRM / Finance state — never a manual flag
+ * (Antonio 2026-06-25):
  *   - Call done    ← a call_summaries row exists (the CRM call record)
  *   - Offer sent   ← offer.status ∈ {sent, viewed, signed, completed}
  *   - Client signed← offer.status ∈ {signed, completed}
  *   - Client paid  ← offer.status = completed OR a setup payout exists (the
  *                    payout the system auto-creates when Finance confirms payment)
- *   - Annual renewal ← a renewal payout exists
+ *
+ * The funnel ENDS at "Client paid" (the setup sale). ANNUAL RENEWAL is NOT a
+ * stage here: it's a separate, RECURRING billing cycle (R106 — billing, not an
+ * SD) that repeats every year the client renews. It is shown separately, one
+ * line per year, driven by the renewal payouts (see the My Referrals page) — a
+ * recurring cycle can't be a single terminal checkmark in a one-time funnel.
  *
  * Stages are MONOTONIC: a later stage implies all earlier ones (you can't send an
  * offer without a call, can't be paid without signing) — so the stepper never
@@ -21,14 +27,12 @@ export type ReferralStage =
   | "offer_sent"
   | "client_signed"
   | "client_paid"
-  | "annual_renewal"
 
 export const REFERRAL_STAGES: ReferralStage[] = [
   "call_done",
   "offer_sent",
   "client_signed",
   "client_paid",
-  "annual_renewal",
 ]
 
 export interface ReferralProgressInput {
@@ -37,8 +41,6 @@ export interface ReferralProgressInput {
   hasCallSummary: boolean
   /** A non-renewal (setup) payout exists for this referral. */
   hasSetupPayout: boolean
-  /** A renewal payout exists for this referral. */
-  hasRenewalPayout: boolean
 }
 
 export function computeReferralProgress(input: ReferralProgressInput): Record<ReferralStage, boolean> {
@@ -54,7 +56,6 @@ export function computeReferralProgress(input: ReferralProgressInput): Record<Re
     offer_sent: offerSent || clientPaid,
     client_signed: clientSigned || clientPaid,
     client_paid: clientPaid,
-    annual_renewal: input.hasRenewalPayout,
   }
 }
 
@@ -64,7 +65,6 @@ export const REFERRAL_STAGE_LABELS: Record<ReferralStage, string> = {
   offer_sent: "Offer sent",
   client_signed: "Client signed",
   client_paid: "Client paid",
-  annual_renewal: "Annual renewal",
 }
 
 /** Whether a payout row is requestable by the partner (auto-created, not yet requested). */

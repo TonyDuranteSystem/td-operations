@@ -1,44 +1,41 @@
 import { describe, it, expect } from 'vitest'
 import { computeReferralProgress, isPayoutRequestable } from '@/lib/portal/partner-referrals'
 
-const base = { offerStatus: 'draft', hasCallSummary: false, hasSetupPayout: false, hasRenewalPayout: false }
+// Acquisition funnel only — 4 stages. Annual renewal is a separate recurring
+// billing cycle (R106), shown per-year from renewal payouts, NOT a stage here.
+const base = { offerStatus: 'draft', hasCallSummary: false, hasSetupPayout: false }
 
 describe('computeReferralProgress', () => {
   it('draft offer with a logged call → only Call done', () => {
     expect(computeReferralProgress({ ...base, offerStatus: 'draft', hasCallSummary: true }))
-      .toEqual({ call_done: true, offer_sent: false, client_signed: false, client_paid: false, annual_renewal: false })
+      .toEqual({ call_done: true, offer_sent: false, client_signed: false, client_paid: false })
   })
 
   it('sent offer → Call done + Offer sent (monotonic: call implied even without a summary)', () => {
     expect(computeReferralProgress({ ...base, offerStatus: 'sent' }))
-      .toEqual({ call_done: true, offer_sent: true, client_signed: false, client_paid: false, annual_renewal: false })
+      .toEqual({ call_done: true, offer_sent: true, client_signed: false, client_paid: false })
   })
 
   it('signed offer → through Client signed', () => {
     expect(computeReferralProgress({ ...base, offerStatus: 'signed' }))
-      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: false, annual_renewal: false })
+      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: false })
   })
 
-  it('completed offer → through Client paid', () => {
+  it('completed offer → through Client paid (funnel ends here)', () => {
     expect(computeReferralProgress({ ...base, offerStatus: 'completed' }))
-      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: true, annual_renewal: false })
+      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: true })
   })
 
   it('a setup payout marks Client paid even if the offer status lags', () => {
     expect(computeReferralProgress({ ...base, offerStatus: 'signed', hasSetupPayout: true }))
-      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: true, annual_renewal: false })
-  })
-
-  it('a renewal payout lights Annual renewal', () => {
-    expect(computeReferralProgress({ ...base, offerStatus: 'completed', hasSetupPayout: true, hasRenewalPayout: true }))
-      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: true, annual_renewal: true })
+      .toEqual({ call_done: true, offer_sent: true, client_signed: true, client_paid: true })
   })
 
   it('is monotonic — never a checked stage after an unchecked earlier one', () => {
     for (const status of ['draft', 'sent', 'viewed', 'signed', 'completed', 'expired', null]) {
       for (const hasCallSummary of [false, true]) {
         for (const hasSetupPayout of [false, true]) {
-          const p = computeReferralProgress({ offerStatus: status, hasCallSummary, hasSetupPayout, hasRenewalPayout: false })
+          const p = computeReferralProgress({ offerStatus: status, hasCallSummary, hasSetupPayout })
           const order = [p.call_done, p.offer_sent, p.client_signed, p.client_paid]
           const firstFalse = order.indexOf(false)
           if (firstFalse !== -1) {

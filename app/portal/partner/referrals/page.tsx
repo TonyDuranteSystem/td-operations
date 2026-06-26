@@ -38,7 +38,7 @@ export default async function PartnerReferralsPage() {
   const { data: payouts } = tokens.length
     ? await supabaseAdmin
         .from('referral_payouts')
-        .select('id, offer_token, payout_type, amount, currency, status, requested_at')
+        .select('id, offer_token, payout_type, amount, currency, status, requested_at, reference')
         .eq('partner_id', partner.id)
         .in('offer_token', tokens)
     : { data: [] as Array<Record<string, unknown>> }
@@ -65,7 +65,6 @@ export default async function PartnerReferralsPage() {
   const referrals: PartnerReferralView[] = offerList.map(o => {
     const mine = (payouts ?? []).filter((p) => (p as { offer_token?: string }).offer_token === o.token)
     const hasSetup = mine.some((p) => (p as { payout_type?: string }).payout_type !== 'renewal')
-    const hasRenewal = mine.some((p) => (p as { payout_type?: string }).payout_type === 'renewal')
     const hasCall =
       (!!o.lead_id && callKeys.has(`lead:${o.lead_id}`)) ||
       (!!o.account_id && callKeys.has(`acct:${o.account_id}`)) ||
@@ -79,17 +78,21 @@ export default async function PartnerReferralsPage() {
         offerStatus: o.status,
         hasCallSummary: hasCall,
         hasSetupPayout: hasSetup,
-        hasRenewalPayout: hasRenewal,
       }),
       payouts: mine.map((p) => {
-        const r = p as { id: string; payout_type: string | null; amount: number | null; currency: string | null; status: string | null; requested_at: string | null }
+        const r = p as { id: string; payout_type: string | null; amount: number | null; currency: string | null; status: string | null; requested_at: string | null; reference: string | null }
+        const isRenewal = r.payout_type === 'renewal'
+        // Renewal payouts carry reference `renewal:<acct>:<year>` — surface the year
+        // so the recurring annual cycle is shown one line per year.
+        const yearMatch = isRenewal && r.reference ? r.reference.match(/:(\d{4})$/) : null
         return {
           id: r.id,
-          type: r.payout_type === 'renewal' ? 'renewal' as const : 'setup' as const,
+          type: isRenewal ? 'renewal' as const : 'setup' as const,
           amount: Number(r.amount) || 0,
           currency: r.currency || 'USD',
           status: (r.status || 'pending').toLowerCase(),
           requestedAt: r.requested_at,
+          year: yearMatch ? Number(yearMatch[1]) : null,
         }
       }),
     }
