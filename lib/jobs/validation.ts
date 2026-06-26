@@ -3,6 +3,9 @@
  * Used by auto-chain handlers to validate wizard submissions before processing.
  */
 
+import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
+import { normalizeEntityType } from "@/lib/portal/entity-type"
+
 export interface ValidationError {
   field: string
   message: string
@@ -138,7 +141,10 @@ export function validateOnboardingData(data: Record<string, unknown>): Validatio
 /**
  * Run all validations for formation wizard data.
  */
-export function validateFormationData(data: Record<string, unknown>): ValidationResult {
+export function validateFormationData(
+  data: Record<string, unknown>,
+  entityType?: string | null,
+): ValidationResult {
   const errors: ValidationError[] = []
   const warnings: ValidationError[] = []
 
@@ -146,11 +152,58 @@ export function validateFormationData(data: Record<string, unknown>): Validation
   const requiredFields = ["owner_first_name", "owner_last_name", "llc_name_1"]
   errors.push(...validateRequiredFields(data, requiredFields))
 
+  // ─── MMLLC signer + ownership (server-side backstop) ───
+  // The portal wizard already enforces these client-side (wizard-client.tsx
+  // handleSubmit), but a direct API hit could bypass that. We re-check here so
+  // the SS-4 Responsible Party and ownership split are sound before any
+  // formation_submissions row / SD is created. Gated on an EXPLICIT MMLLC
+  // entityType: the wizard-submit route passes it, but the background
+  // formation-setup re-validation calls validateFormationData(data) with NO
+  // entityType — so this never fires there, preserving processing of legacy
+  // in-flight MMLLC submissions created before this rule existed.
+  if (entityType && normalizeEntityType(entityType) === "MMLLC") {
+    const members = extractMembersFromWizardData(data)
+
+    // Exactly one signer across owner + additional members.
+    let signerCount = isSignerFlag(data.owner_is_signer) ? 1 : 0
+    for (const m of members) {
+      if (m.is_signer === true) signerCount++
+    }
+    if (signerCount !== 1) {
+      errors.push({
+        field: "is_signer",
+        message:
+          "Select exactly one person (the owner or a member) as the SS-4 Responsible Party.",
+        severity: "error",
+      })
+    }
+
+    // Additional members' ownership must total >0% and <100% (the owner takes
+    // the remaining 100 − sum at materialization).
+    const ownershipSum = members.reduce(
+      (sum, m) => sum + (m.member_ownership_pct ?? 0),
+      0,
+    )
+    if (!(ownershipSum > 0 && ownershipSum < 100)) {
+      errors.push({
+        field: "member_ownership_pct",
+        message: `Additional members' ownership must total more than 0% and less than 100% (currently ${ownershipSum}%). The owner takes the remaining share.`,
+        severity: "error",
+      })
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,
     warnings,
   }
+}
+
+/** Truthy check for the is_signer flat keys. Booleans come through as `true`
+ *  from JSONB / a JSON POST; tolerate the string "true" defensively. */
+function isSignerFlag(v: unknown): boolean {
+  return v === true || v === "true"
 }
 
 /** Empty check shared by the tax validator: undefined, null, or blank string. */
@@ -232,13 +285,14 @@ export function validateTaxData(data: Record<string, unknown>): ValidationResult
  */
 export function validateWizardData(
   wizardType: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  entityType?: string | null,
 ): ValidationResult {
   switch (wizardType) {
     case "onboarding":
       return validateOnboardingData(data)
     case "formation":
-      return validateFormationData(data)
+      return validateFormationData(data, entityType)
     case "tax":
     case "tax_return":
       return validateTaxData(data)
