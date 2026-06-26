@@ -314,6 +314,7 @@ export async function onFirstInstallmentPaid(
         const { data: payoutRow } = await dbWriteSafe(
           supabaseAdmin
             .from("referral_payouts")
+            // eslint-disable-next-line no-restricted-syntax -- new referral_payouts columns (offer_token/account_id) not yet in generated types; cast until prod migration + regen
             .insert({
               partner_id: partnerId,
               referral_id: null,
@@ -323,26 +324,17 @@ export async function onFirstInstallmentPaid(
               status: "pending",
               reference,
               notes: `Annual renewal payout ${year} for ${account.company_name}`,
-            })
+              // Flexible referral anchor — renewals are account-based; carry the originating offer too.
+              account_id: accountId,
+              offer_token: deal.offer_token ?? null,
+            } as never)
             .select("id")
             .single(),
           "referral_payouts.insert",
         )
 
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- mirrors the activation partner-payout task pattern
-          supabaseAdmin.from("tasks").insert({
-            task_title: `Partner renewal payout — ${account.company_name} ${year} (${decision.amount} ${deal.currency})`,
-            assigned_to: "Antonio",
-            category: "Payment",
-            priority: "Normal",
-            status: "To Do",
-            account_id: accountId,
-            description: `Recurring partner renewal payout for ${year}.\nAmount: ${decision.amount} ${deal.currency}\nPayout id: ${payoutRow?.id}\n\nReview & approve in CRM → Partners → detail page.`,
-          }),
-          "tasks.insert",
-        )
-
+        // No CRM task — the partner self-serves the payout request from their
+        // portal (My Referrals); staff approve & pay in CRM → Partners.
         steps.push({ step: "partner_renewal_payout", status: "created", detail: `Renewal payout ${decision.amount} ${deal.currency} for ${year} (${payoutRow?.id?.slice(0, 8)})` })
       }
     } else if (partnerId) {

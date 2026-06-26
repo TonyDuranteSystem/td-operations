@@ -1403,6 +1403,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       const { data: payoutRow, error: payoutErr } = await dbWriteSafe(
         supabase
           .from("referral_payouts")
+          // eslint-disable-next-line no-restricted-syntax -- new referral_payouts columns (offer_token/account_id/contact_id) not yet in generated types; cast until prod migration + regen
           .insert({
             partner_id: offer.partner_id,
             referral_id: null,
@@ -1412,7 +1413,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             payment_id: paymentIdForPayout,
             status: payoutStatus,
             notes: result.note || null,
-          })
+            // Flexible referral anchor — the offer works for COMPANY or INDIVIDUAL referrals.
+            offer_token: activation.offer_token,
+            account_id: autoAccountId || null,
+            contact_id: contactId || null,
+          } as never)
           .select("id")
           .single(),
         "referral_payouts.insert"
@@ -1421,21 +1426,8 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       if (payoutErr) {
         steps.push({ step: "partner_payout", status: "error", detail: `Insert failed: ${payoutErr}` })
       } else {
-        // Create a follow-up CRM task so payouts show up in the inbox.
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; mirrors Step 3.5 pattern
-          supabase.from("tasks").insert({
-            task_title: `Partner payout — ${partnerRow?.partner_name || "Partner"} → ${activation.client_name} (${result.amount ?? "TBD"} ${payoutCurrency})`,
-            assigned_to: "Antonio",
-            category: "Payment",
-            priority: result.error ? "Urgent" : "Normal",
-            status: "To Do",
-            account_id: autoAccountId || null,
-            description: `Payout pending for partner ${partnerRow?.partner_name || offer.partner_id}.\nModel: ${offer.partner_payout_model}\nAmount: ${result.amount ?? "—"} ${payoutCurrency}\nNote: ${result.note || "—"}\nPayout id: ${payoutRow?.id}\nOffer: ${activation.offer_token}\n\nReview & approve in CRM → Partners → detail page.`,
-          }),
-          "tasks.insert"
-        )
-
+        // No CRM task — the partner self-serves the payout request from their
+        // portal (My Referrals); staff approve & pay in CRM → Partners.
         steps.push({
           step: "partner_payout",
           status: result.error ? "manual_review" : "created",
