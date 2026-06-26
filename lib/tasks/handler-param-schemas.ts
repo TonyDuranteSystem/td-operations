@@ -97,14 +97,11 @@ export const chainUpdateAccountFieldParams = z.object({
 
 // ── Service-specific handlers ───────────────────────────────────────────
 
-/** ITIN: no catalog-configurable params (content composed from task_meta + service config). */
-export const itinApproveAndSendParams = z.object({}).strict()
+// itinApproveAndSendParams + itinRecallAndRecorrectParams removed 2026-06-25
+// (workspace-only ITIN flow — those handlers no longer exist).
 
 /** ITIN: number / issue date / IRS-letter URL come from operator's requires_input. */
 export const itinConfirmNumberReceivedParams = z.object({}).strict()
-
-/** ITIN: recall reason comes from operator's requires_input. */
-export const itinRecallAndRecorrectParams = z.object({}).strict()
 
 /**
  * Banking: provider-specific follow-up task copy lives in handler_params.followup_task.

@@ -35,9 +35,7 @@ import {
   chainUploadDocumentParams,
   chainUpdateContactFieldParams,
   chainUpdateAccountFieldParams,
-  itinApproveAndSendParams,
   itinConfirmNumberReceivedParams,
-  itinRecallAndRecorrectParams,
   bankingApproveFormParams,
   taxApproveAndApplyParams,
   closureApproveDataParams,
@@ -62,8 +60,6 @@ const HANDLER_PARAM_SCHEMAS: Record<string, ZodTypeAny> = {
   "chain.update_contact_field": chainUpdateContactFieldParams,
   "chain.update_account_field": chainUpdateAccountFieldParams,
 
-  "itin.approve_and_send": itinApproveAndSendParams,
-  "itin.recall_and_recorrect": itinRecallAndRecorrectParams,
   "itin.confirm_number_received": itinConfirmNumberReceivedParams,
 
   "banking.approve_form": bankingApproveFormParams,

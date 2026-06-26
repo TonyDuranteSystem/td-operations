@@ -160,9 +160,7 @@ describe("empty-schema handlers — strict, reject any extra keys", () => {
     "chain.upload_document",
     "closure.approve_data",
     "formation.confirm_ein_received",
-    "itin.approve_and_send",
     "itin.confirm_number_received",
-    "itin.recall_and_recorrect",
     "tax.approve_and_apply",
   ]
   it.each(emptyHandlerSlugs)("%s accepts {} and rejects {foo:'x'}", (slug) => {

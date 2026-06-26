@@ -181,21 +181,25 @@ export async function advanceServiceDelivery(
 
   const autoTriggers: string[] = []
 
-  // 6b. Sync the formation_progress workflow task's task_meta with the new SD
+  // 6b. Sync the workspace-pointer workflow task's task_meta with the new SD
   // stage. The workspace advances the SD through THIS function, a different path
   // from the workflow engine's chain.advance_sd_stage handler (which already
-  // patches task_meta) — so without this the task card showed a stale stage.
-  // The formation_progress card is now a read-only pointer to the workspace, so
-  // this only keeps its displayed stage honest. Best-effort: never fail the
-  // advance. Scoped to Company Formation (the only service_type with a
-  // formation_progress workflow).
-  if (delivery.service_type === "Company Formation") {
+  // patches task_meta) — so without this the pointer task card showed a stale
+  // stage. Both formation_progress (Company Formation) and itin_review (ITIN)
+  // are read-only workspace pointers, so this only keeps their displayed stage
+  // honest. Best-effort: never fail the advance.
+  const POINTER_WORKFLOW_SLUG_BY_SERVICE: Record<string, string> = {
+    "Company Formation": "formation_progress",
+    "ITIN": "itin_review",
+  }
+  const pointerWorkflowSlug = POINTER_WORKFLOW_SLUG_BY_SERVICE[delivery.service_type]
+  if (pointerWorkflowSlug) {
     try {
       const { mergeSdStageIntoTaskMeta } = await import("@/lib/tasks/sd-stage-sync")
       const { data: wfTasks } = await supabaseAdmin
         .from("tasks")
         .select("id, task_meta")
-        .eq("workflow_slug", "formation_progress")
+        .eq("workflow_slug", pointerWorkflowSlug)
         .or(`delivery_id.eq.${delivery_id},task_meta->>service_delivery_id.eq.${delivery_id}`)
       for (const t of wfTasks ?? []) {
         await dbWriteSafe(
@@ -215,7 +219,7 @@ export async function advanceServiceDelivery(
       }
       if (wfTasks?.length) {
         autoTriggers.push(
-          `Synced ${wfTasks.length} formation_progress task(s) → sd_stage="${targetStage.stage_name}"`,
+          `Synced ${wfTasks.length} ${pointerWorkflowSlug} task(s) → sd_stage="${targetStage.stage_name}"`,
         )
       }
     } catch (syncErr) {
@@ -339,6 +343,78 @@ export async function advanceServiceDelivery(
       autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed`)
     } catch (emailErr) {
       autoTriggers.push(`Stage-change email failed: ${emailErr instanceof Error ? emailErr.message : String(emailErr)}`)
+    }
+  }
+
+  // 8c. ITIN — post the client a portal chat message when staff advance the
+  // workspace from "Document Preparation" → "Client Signing". This is the ONLY
+  // client communication for the ITIN document hand-off (2026-06-25, branch
+  // fix/itin-workspace-only): the client gets the documents from the PORTAL
+  // (Documents tab), prints them, wet-ink-signs, includes two color passport
+  // copies, and mails everything to the TD office. We do NOT email the PDFs —
+  // the portal is the delivery mechanism (this replaced the old
+  // itin.approve_and_send email handler). Stamped with service_delivery_id so it
+  // threads into the workspace flow chat AND the client's portal chat. Bilingual
+  // (EN/IT) per the contact's CRM language. Best-effort: a chat failure never
+  // fails the advance. Suppressed under skip_notify (bulk reconcile/backfill).
+  // ITIN SDs are contact-scoped (account_id null, contact_id set).
+  if (
+    !skip_notify &&
+    delivery.service_type === "ITIN" &&
+    (delivery.stage || "") === "Document Preparation" &&
+    targetStage.stage_name === "Client Signing" &&
+    delivery.contact_id
+  ) {
+    try {
+      // Stable system admin sender (portal_messages.sender_id is NOT NULL, no
+      // FK). Same id the prior ITIN handler + other admin messages use.
+      const ITIN_ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+      const { buildFlowTopic, deriveFlowYear } = await import("@/lib/flows/resolve-flows")
+      const { notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
+
+      const { data: contact } = await supabaseAdmin
+        .from("contacts")
+        .select("language")
+        .eq("id", delivery.contact_id)
+        .maybeSingle()
+      const lang = contact?.language === "it" ? "it" : "en"
+
+      const message =
+        lang === "it"
+          ? `I tuoi documenti ITIN sono pronti nel portale. Per favore stampali, firmali a inchiostro (firma originale), includi due copie a colori del passaporto e spedisci tutto al nostro ufficio. Troverai le istruzioni complete e l'indirizzo di spedizione nel tuo portale.`
+          : `Your ITIN documents are ready in your portal. Please print them, sign with wet ink, include two color copies of your passport, and mail everything to our office. You'll find the complete instructions and mailing address in your portal.`
+
+      const topic = buildFlowTopic(delivery.service_type, deriveFlowYear(delivery)) || null
+
+      // service_delivery_id is not in the generated portal_messages Insert type
+      // until the column is promoted to production; the `as any` cast keeps the
+      // build green (same pattern as app/api/flows/[id]/save-ein).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: chatErr } = await (supabaseAdmin as any).from("portal_messages").insert({
+        account_id: delivery.account_id ?? null,
+        contact_id: delivery.contact_id,
+        service_delivery_id: delivery.id,
+        topic,
+        sender_type: "admin",
+        sender_id: ITIN_ADMIN_SENDER_ID,
+        message,
+      })
+      if (chatErr) {
+        autoTriggers.push(`ITIN client portal message failed: ${chatErr.message}`)
+      } else {
+        autoTriggers.push(`ITIN client portal message posted (${lang})`)
+        // Email/digest notification of the chat message (R103-throttled 1/2h).
+        void notifyClientOfAdminMessage({
+          account_id: delivery.account_id ?? null,
+          contact_id: delivery.contact_id,
+          topic,
+          messagePreview: message,
+        }).catch(() => {})
+      }
+    } catch (itinChatErr) {
+      autoTriggers.push(
+        `ITIN client portal message error: ${itinChatErr instanceof Error ? itinChatErr.message : String(itinChatErr)}`,
+      )
     }
   }
 

@@ -9,8 +9,9 @@
  * 3. Save data summary PDF to Drive
  * 4. Advance SD: Data Collection -> Document Preparation
  * 5. Auto-generate W-7 + 1040-NR + Schedule OI via itin_prepare_documents
- * 6. Email team with all data + "Documents generated, please review"
- * 7. Create task: "Review ITIN documents" assigned to Luca
+ * 6. Email team (internal, support@) with all data + "Documents generated, please review"
+ * 7. Create a plain task pointing to the workspace (/flows/[sd_id]) — NOT a
+ *    workflow task. Managing the ITIN happens entirely in the workspace.
  * 8. Update SD history
  * 9. Log action
  *
@@ -61,13 +62,12 @@ export async function POST(req: NextRequest) {
 
     // Get client name
     let clientName = token
-    let clientEmail = ""
     if (sub.lead_id) {
-      const { data: lead } = await supabaseAdmin.from("leads").select("full_name, email").eq("id", sub.lead_id).single()
-      if (lead) { clientName = lead.full_name; clientEmail = lead.email || "" }
+      const { data: lead } = await supabaseAdmin.from("leads").select("full_name").eq("id", sub.lead_id).single()
+      if (lead) { clientName = lead.full_name }
     } else if (sub.contact_id) {
-      const { data: contact } = await supabaseAdmin.from("contacts").select("full_name, email").eq("id", sub.contact_id).single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || "" }
+      const { data: contact } = await supabaseAdmin.from("contacts").select("full_name").eq("id", sub.contact_id).single()
+      if (contact) { clientName = contact.full_name }
     }
 
     // Get company name if linked
@@ -288,15 +288,6 @@ export async function POST(req: NextRequest) {
     // Now: static import at top of file (handler import is build-validated);
     // gate split so each failure mode reports honestly.
     let docsGenerated = false
-    // Captured from Step 4 to be pinned into task_meta on the Slice 4 workflow
-    // task in Step 6. Each entry mirrors the itin_review_v1 Zod schema.
-    const generatedAttachments: Array<{
-      kind: "w7" | "1040nr" | "schedule_oi"
-      file_id: string
-      file_name: string
-      mime_type: "application/pdf"
-    }> = []
-    let itinDriveFolderId: string | null = null
     try {
       if (!sd.first_name || !sd.last_name) {
         results.push({ step: "docs_generated", status: "skipped", detail: "Missing first_name or last_name in submission data" })
@@ -318,7 +309,6 @@ export async function POST(req: NextRequest) {
             const nf = await cf(driveFolderId, "ITIN")
             itinFolder = { id: nf.id, name: "ITIN", mimeType: "application/vnd.google-apps.folder" }
           }
-          itinDriveFolderId = itinFolder.id
 
           const slug = `${sd.first_name}_${sd.last_name}`.replace(/\s+/g, "_")
           const w7Name = `W-7_${slug}.pdf`
@@ -329,9 +319,6 @@ export async function POST(req: NextRequest) {
           const oiUpload = await uploadBinaryToDrive(oiName, oiBuffer, "application/pdf", itinFolder.id) as { id?: string }
 
           docsGenerated = true
-          if (w7Upload?.id) generatedAttachments.push({ kind: "w7", file_id: w7Upload.id, file_name: w7Name, mime_type: "application/pdf" })
-          if (nrUpload?.id) generatedAttachments.push({ kind: "1040nr", file_id: nrUpload.id, file_name: nrName, mime_type: "application/pdf" })
-          if (oiUpload?.id) generatedAttachments.push({ kind: "schedule_oi", file_id: oiUpload.id, file_name: oiName, mime_type: "application/pdf" })
 
           results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/` })
 
@@ -460,12 +447,23 @@ export async function POST(req: NextRequest) {
       results.push({ step: "email_team", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // --- STEP 6: Create task for Luca ---
-    // Workflow System (Slice 4 / dev_task e364e980): when docs were generated
-    // AND we have everything required by the itin_review_v1 schema, create a
-    // catalog-driven workflow task that renders via WorkflowTaskCard with
-    // Approve / Needs Fix / Waiting / Recall actions. Otherwise (or on any
-    // failure) fall back to the legacy plain task. Bug #16 mitigation.
+    // --- STEP 6: Notify staff via the itin_review WORKSPACE-POINTER workflow ---
+    // 2026-06-26: the ITIN flow is managed EXCLUSIVELY from the workspace
+    // (/flows/[sd_id]), but the staff notification MUST surface in the What's New
+    // feed (Portal Chats) where Luca watches — NOT only on the task board. That
+    // feed is driven by the `workflow_spawned` chat-event the dispatcher emits;
+    // a plain tasks.insert emits nothing, so it was invisible there (regression).
+    //
+    // Fix (mirrors formation_progress): itin_review is now a `workspace_pointer`
+    // catalog workflow with EMPTY actions + the lightweight sd_progress_v1 meta.
+    // Dispatching it (a) emits workflow_spawned → the What's New note, and (b)
+    // creates a task whose WorkflowTaskCard renders "Open in Workspace"
+    // (/flows/[delivery_id]) and NO action buttons (workspace_pointer empties
+    // them). No email-the-client handler exists; the client message comes only
+    // from the Document Preparation → Client Signing advance hook in
+    // lib/service-delivery.ts §8c. Idempotent by submission_id (dispatcher) and
+    // task_title (outer guard). Falls back to a plain task if the SD is missing
+    // or the dispatch can't match (defensive — keeps the chain robust).
     try {
       const taskTitle = docsGenerated
         ? `Review ITIN documents -- ${displayName}`
@@ -474,92 +472,59 @@ export async function POST(req: NextRequest) {
       const { data: existingTask } = await supabaseAdmin
         .from("tasks").select("id").eq("task_title", taskTitle).maybeSingle()
 
-      if (existingTask) {
-        // Task already exists — no-op (idempotent).
-      } else {
-        // Slice 8 Pass 6: workflow dispatch is catalog-driven via the generic
-        // dispatcher. The form-specific gate `canBuildWorkflowMeta` stays
-        // (without the required inputs, task_meta would fail Zod and the
-        // dispatcher would return meta_invalid anyway — gating here gives a
-        // cleaner reason for the legacy fallback path).
-        const canBuildWorkflowMeta =
-          docsGenerated &&
-          generatedAttachments.length >= 3 &&
-          itinDriveFolderId &&
-          clientEmail &&
-          sd.first_name &&
-          sd.last_name
+      if (!existingTask) {
+        const workspaceUrl = deliveryId ? `/flows/${deliveryId}` : null
+        const description = docsGenerated
+          ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\n${workspaceUrl ? `Open the workspace to review and advance: ${workspaceUrl}` : "Open the ITIN workspace to review and advance."}\n\nReview the PDFs, then click the advance button ("Documents Reviewed — Send to Client"). That posts the client a portal message with the print / wet-ink-sign / passport-copies / mail-to-office instructions. Do NOT email the client — the portal is the delivery mechanism.`
+          : `ITIN form completed for ${displayName}.\n\nDocument generation did not run.\n${workspaceUrl ? `Open the workspace to review: ${workspaceUrl}\n` : ""}You can regenerate the documents with itin_prepare_documents(token="${token}") if needed.`
 
-        let workflowTaskCreated = false
-        if (canBuildWorkflowMeta) {
+        let workflowSpawned = false
+        // Only the workspace-pointer workflow gives the What's New note + the
+        // workspace link, and it needs a delivery_id for that link.
+        if (deliveryId) {
           const dispatch = await dispatchWorkflowForFormCompletion({
             form_table: "itin_submissions",
             submission: { ...sub },
             build_task_meta: async () => ({
-              submission_id: sub.id,
-              drive_folder_id: itinDriveFolderId,
-              attachments: generatedAttachments,
-              generated_at: new Date().toISOString(),
-              client_language: (sub.language === "it" ? "it" : "en"),
-              client_email: clientEmail,
-              client_first_name: sd.first_name,
-              client_last_name: sd.last_name,
+              service_delivery_id: deliveryId,
+              service_type: "ITIN",
+              sd_stage: "Document Preparation",
+              account_id: sub.account_id ?? null,
+              contact_id: contactId ?? null,
             }),
             task_title: taskTitle,
-            description: `W-7 + 1040-NR + Schedule OI auto-generated for ${displayName}. Review the PDFs, then click Approve & Send to Client (workflow action) to email the package to ${clientEmail} and advance the SD.`,
-            // assigned_to intentionally omitted — the dispatcher resolves from
-            // the catalog row's default_assignee, then falls back to
-            // defaultTaskAssignee(). Passing an explicit value here would
-            // override per-workflow catalog config.
+            description,
+            // assigned_to omitted — dispatcher resolves catalog default_assignee,
+            // then defaultTaskAssignee().
             priority: "High",
             account_id: sub.account_id || null,
             contact_id: contactId || null,
-            delivery_id: deliveryId || null,
+            delivery_id: deliveryId,
             actor: "itin-form-completed:auto-chain",
-            idempotency: { field: "submission_id", value: sub.id },
+            // Dedup on the SD (one itin_review pointer per ITIN SD). Must be a
+            // field PRESENT in the pinned task_meta (sd_progress_v1) — the
+            // dispatcher checks task_meta->>service_delivery_id on retry.
+            idempotency: { field: "service_delivery_id", value: deliveryId },
           })
           if (dispatch.spawned) {
-            workflowTaskCreated = true
-            results.push({
-              step: "task_created",
-              status: "ok",
-              detail: `Workflow ${dispatch.workflow_slug} task ${dispatch.task_id}`,
-            })
+            workflowSpawned = true
+            results.push({ step: "task_created", status: "ok", detail: `Workflow ${dispatch.workflow_slug} task ${dispatch.task_id}` })
           } else if (dispatch.reason === "already_spawned") {
-            // Webhook retry. Outer existingTask check (by title) already runs
-            // before this block, so this branch is defense-in-depth. Mark as
-            // created so legacy fallback does not also fire.
-            workflowTaskCreated = true
-            results.push({
-              step: "task_created",
-              status: "skipped",
-              detail: `Workflow task already exists for submission ${sub.id} (task ${dispatch.task_id})`,
-            })
-          } else if (dispatch.reason === "ambiguous") {
-            console.warn(
-              `[itin-form-completed] AMBIGUOUS workflow match (${dispatch.candidates?.join(", ")}) — falling back to legacy plain task.`,
-            )
-          } else if (dispatch.reason === "meta_invalid" || dispatch.reason === "spawn_failed") {
-            console.warn(
-              `[itin-form-completed] dispatch failed (${dispatch.reason}): ${dispatch.meta_error ?? dispatch.spawn_error}`,
-            )
+            workflowSpawned = true
+            results.push({ step: "task_created", status: "skipped", detail: `Workflow task already exists for submission ${sub.id} (task ${dispatch.task_id})` })
+          } else {
+            console.warn(`[itin-form-completed] itin_review dispatch did not spawn (${dispatch.reason}): ${dispatch.meta_error ?? dispatch.spawn_error ?? ""} — falling back to plain task.`)
           }
         }
 
-        // Legacy fallback: plain task with no workflow_snapshot. Used when (a)
-        // docs were NOT generated (different next-steps for reviewer), (b) the
-        // catalog has no matching trigger row (defensive — production before
-        // migration applies), or (c) the dispatcher returned a reason other
-        // than spawned. Keeps the auto-chain robust if the workflow surface
-        // has any hiccup.
-        if (!workflowTaskCreated) {
+        // Defensive fallback: plain task (no workflow, no What's New note) when
+        // there is no SD or the dispatch couldn't match/spawn.
+        if (!workflowSpawned) {
           await dbWriteSafe(
             // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
             supabaseAdmin.from("tasks").insert({
               task_title: taskTitle,
-              description: docsGenerated
-                ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Seminole FL.`
-                : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
+              description,
               assigned_to: defaultTaskAssignee(),
               priority: "High",
               category: "KYC",
@@ -575,7 +540,7 @@ export async function POST(req: NextRequest) {
             }),
             "tasks.insert"
           )
-          results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (legacy)` })
+          results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (plain fallback)` })
         }
       }
     } catch (e) {

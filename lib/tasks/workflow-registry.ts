@@ -36,8 +36,12 @@ import { chainUpdateContactField } from "./workflow-handlers/chain-update-contac
 import { chainUpdateAccountField } from "./workflow-handlers/chain-update-account-field"
 
 // Service-specific handlers (Slice 4 + Slice 5.1).
-import { itinApproveAndSend } from "./workflow-handlers/itin-approve-and-send"
-import { itinRecallAndRecorrect } from "./workflow-handlers/itin-recall-and-recorrect"
+// itin.approve_and_send + itin.recall_and_recorrect were REMOVED 2026-06-25
+// (branch fix/itin-workspace-only): the ITIN flow is now driven exclusively by
+// the workspace (/flows/[sd_id]). The old "Approve & Send" email handler and
+// its recall sibling no longer exist — the workspace advance button posts the
+// client a portal chat message instead of emailing the PDFs, and itin_review is
+// a plain notification pointing to the workspace (not a workflow task).
 import { itinConfirmNumberReceived } from "./workflow-handlers/itin-confirm-number-received"
 
 // Service-specific handlers (Slice 8 — banking + tax).
@@ -84,9 +88,9 @@ const HANDLERS: Record<string, WorkflowHandler> = {
   "chain.upload_document": chainUploadDocument, // stub
   "chain.update_contact_field": chainUpdateContactField,
   "chain.update_account_field": chainUpdateAccountField,
-  // Service-specific (Slice 4 + 5.1)
-  "itin.approve_and_send": itinApproveAndSend,
-  "itin.recall_and_recorrect": itinRecallAndRecorrect,
+  // Service-specific (Slice 5.1) — itin.approve_and_send + itin.recall_and_recorrect
+  // removed 2026-06-25 (workspace-only ITIN flow). confirm_number_received stays
+  // (itin_irs_processing → itin_number_received chain remains catalog-driven).
   "itin.confirm_number_received": itinConfirmNumberReceived,
   // Service-specific (Slice 8 — banking + tax)
   "banking.approve_form": bankingApproveForm,
