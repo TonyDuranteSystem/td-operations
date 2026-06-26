@@ -120,7 +120,7 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
   // not legacy per-deal referrals.
   const { data: payoutRows } = await supabaseAdmin
     .from('referral_payouts')
-    .select('id, status, amount, currency, payout_type, payout_method, payment_id, approved_at, paid_at, created_at, notes')
+    .select('id, status, amount, currency, payout_type, payout_method, payment_id, approved_at, paid_at, created_at, notes, payout_request, invoice_url, invoice_name, requested_at')
     .eq('partner_id', params.id)
     .order('created_at', { ascending: false })
 
@@ -136,7 +136,23 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
     paid_at: r.paid_at,
     created_at: r.created_at,
     notes: r.notes,
+    payout_request: (r.payout_request ?? null) as PayoutRow['payout_request'],
+    invoice_url: r.invoice_url,
+    invoice_name: r.invoice_name,
+    invoice_signed_url: null,
+    requested_at: r.requested_at,
   }))
+
+  // Sign any partner-uploaded invoices so staff can open them.
+  await Promise.all(
+    payouts.map(async (p) => {
+      if (!p.invoice_url) return
+      const { data: signed } = await supabaseAdmin.storage
+        .from('portal-uploads')
+        .createSignedUrl(p.invoice_url, 3600)
+      p.invoice_signed_url = signed?.signedUrl ?? null
+    }),
+  )
 
   const priceList = (partner.price_list ?? {}) as Record<string, number>
 

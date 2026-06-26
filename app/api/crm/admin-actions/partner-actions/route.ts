@@ -367,7 +367,7 @@ export async function POST(req: NextRequest) {
           result = { success: false, detail: 'Payout not found' }
           break
         }
-        if (existing.status !== 'pending' && existing.status !== 'manual_review') {
+        if (existing.status !== 'pending' && existing.status !== 'manual_review' && existing.status !== 'requested') {
           result = { success: false, detail: `Payout already ${existing.status} — cannot approve` }
           break
         }
