@@ -206,17 +206,22 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   }
 
   // Portal auth status
-  let portalAuth: { exists: boolean; lastLogin: string | null; createdAt: string | null } = {
-    exists: false, lastLogin: null, createdAt: null,
+  let portalAuth: { exists: boolean; lastLogin: string | null; createdAt: string | null; suspended: boolean } = {
+    exists: false, lastLogin: null, createdAt: null, suspended: false,
   }
   if (contact.email) {
     try {
       const authUser = await findAuthUserByEmail(contact.email)
       if (authUser) {
+        // A login is "suspended" when its auth user is banned with a
+        // still-in-the-future banned_until. listUsers returns banned_until
+        // reliably (same source team-management uses for its disabled flag).
+        const bannedUntil = (authUser as { banned_until?: string | null }).banned_until ?? null
         portalAuth = {
           exists: true,
           lastLogin: authUser.last_sign_in_at ?? null,
           createdAt: authUser.created_at ?? null,
+          suspended: !!bannedUntil && new Date(bannedUntil) > new Date(),
         }
       }
     } catch {
