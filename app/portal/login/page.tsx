@@ -1,11 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { teammateLogin } from './actions'
 import Link from 'next/link'
+
+// Shown both when a suspended client attempts to log in (auth returns
+// 'user_banned') and when middleware bounces an active suspended session here
+// with ?reason=suspended.
+const SUSPENDED_MESSAGE = 'Your login has been suspended by the administrator.'
 
 export default function PortalLoginPage() {
   const [identifier, setIdentifier] = useState('')
@@ -14,6 +19,15 @@ export default function PortalLoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+
+  // Middleware redirects a suspended-but-still-logged-in client here with
+  // ?reason=suspended — surface the message immediately (read client-side to
+  // avoid the useSearchParams Suspense requirement).
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('reason') === 'suspended') {
+      setError(SUSPENDED_MESSAGE)
+    }
+  }, [])
 
   const finishLogin = () => {
     // Audit log login (fire-and-forget)
@@ -50,7 +64,15 @@ export default function PortalLoginPage() {
     const { data, error: authError } = await supabase.auth.signInWithPassword({ email: value, password })
 
     if (authError) {
-      setError('Invalid email or password')
+      // A login suspended by an admin is banned at the auth layer. Supabase
+      // returns code 'user_banned' (verified in sandbox: fires on both correct
+      // and wrong password). Surface a clear suspension message instead of the
+      // generic credential error so the client knows why they can't get in.
+      if (authError.code === 'user_banned') {
+        setError(SUSPENDED_MESSAGE)
+      } else {
+        setError('Invalid email or password')
+      }
       setLoading(false)
       return
     }

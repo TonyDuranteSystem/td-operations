@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
   // Get contact
   const { data: contact } = await supabaseAdmin
     .from('contacts')
-    .select('id, full_name, email, portal_tier')
+    .select('id, full_name, email, portal_tier, language')
     .eq('id', contact_id)
     .single()
 
@@ -494,8 +494,15 @@ export async function POST(request: NextRequest) {
       { onConflict: 'account_id,contact_id' },
     )
 
+    // Guard: do NOT lift a DELIBERATE admin suspension here. revoke/restore_access
+    // is per-company membership; suspension is a separate login-level action.
+    // Both share the auth ban switch, so without this guard, restoring one
+    // company's membership would silently un-suspend a deliberately-suspended
+    // login. The app_metadata.suspended flag (set by the suspend action)
+    // distinguishes the two. A membership-revoke ban has no flag and is lifted.
     const authUser = await findAuthUser()
-    if (authUser) {
+    const isDeliberatelySuspended = authUser?.app_metadata?.suspended === true
+    if (authUser && !isDeliberatelySuspended) {
       await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
         ban_duration: 'none',
       })
@@ -507,11 +514,117 @@ export async function POST(request: NextRequest) {
       table_name: 'account_contacts',
       record_id: contact_id,
       account_id,
-      summary: `Portal access restored for ${contact.full_name} on account ${account_id}`,
-      details: { auth_user_found: !!authUser },
+      summary: `Portal access restored for ${contact.full_name} on account ${account_id}${isDeliberatelySuspended ? ' (login kept suspended — use Unsuspend to lift)' : ''}`,
+      details: { auth_user_found: !!authUser, kept_suspended: isDeliberatelySuspended },
     })
 
-    return NextResponse.json({ success: true, message: 'Access restored' })
+    return NextResponse.json({
+      success: true,
+      message: isDeliberatelySuspended
+        ? 'Membership restored. Login remains suspended — use Unsuspend to lift it.'
+        : 'Access restored',
+    })
+  }
+
+  // ── Suspend / Unsuspend the portal LOGIN ──────────────────────────────────
+  // Blocks (or restores) the person's ability to log in at the auth layer,
+  // WITHOUT changing portal tier or company status. One auth user per email →
+  // suspend affects every company that login can reach (the UI confirms the
+  // blast radius). ban_duration '876600h' (~100y) bans; 'none' lifts it.
+  // Mechanism is the same proven switch used by revoke/restore_access above and
+  // the account-audit portal-access route.
+  if (action === 'suspend' || action === 'unsuspend') {
+    const isSuspend = action === 'suspend'
+    const actor = `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`
+
+    const authUser = await findAuthUser()
+    if (!authUser) {
+      return NextResponse.json({ error: 'No portal login found for this contact' }, { status: 404 })
+    }
+
+    // Tag the ban as a DELIBERATE admin suspension via app_metadata.suspended.
+    // This is what lets restore_access (per-company membership restore) tell a
+    // deliberate suspension apart from a membership-revoke ban and refuse to
+    // silently un-suspend. Merge to preserve existing app_metadata.
+    const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+      ban_duration: isSuspend ? '876600h' : 'none',
+      app_metadata: { ...authUser.app_metadata, suspended: isSuspend },
+    })
+    if (banErr) {
+      return NextResponse.json({ error: banErr.message }, { status: 500 })
+    }
+
+    // Notify the client (bilingual by contact language — same convention as the
+    // rest of the codebase: 'Italian'/'it' → IT, else EN). Suspend email has no
+    // login button (they can't log in); restore email links back to the portal.
+    const isItalian = contact.language === 'Italian' || contact.language === 'it'
+    try {
+      const { gmailPost } = await import('@/lib/gmail')
+      const loginUrl = `${PORTAL_BASE_URL}/portal/login`
+      const greetingName = contact.full_name || (isItalian ? 'ciao' : 'there')
+      const subject = isSuspend
+        ? (isItalian ? 'Il tuo accesso al portale Tony Durante è stato sospeso' : 'Your Tony Durante portal access has been suspended')
+        : (isItalian ? 'Il tuo accesso al portale Tony Durante è stato ripristinato' : 'Your Tony Durante portal access has been restored')
+      const heading = isSuspend
+        ? (isItalian ? 'Accesso sospeso' : 'Access suspended')
+        : (isItalian ? 'Accesso ripristinato' : 'Access restored')
+      const bodyText = isSuspend
+        ? (isItalian
+            ? `Ciao ${greetingName}, il tuo accesso al portale clienti Tony Durante è stato sospeso dal nostro team. Finché è sospeso non potrai accedere. Se pensi che sia un errore, rispondi a questa email e ti aiuteremo.`
+            : `Hi ${greetingName}, your access to the Tony Durante client portal has been suspended by our team. While suspended, you won't be able to log in. If you think this is a mistake, just reply to this email and we'll help.`)
+        : (isItalian
+            ? `Ciao ${greetingName}, il tuo accesso al portale clienti Tony Durante è stato ripristinato. Puoi accedere di nuovo dal portale. Bentornato.`
+            : `Hi ${greetingName}, your access to the Tony Durante client portal has been restored. You can log in again at the portal. Welcome back.`)
+      const ctaBlock = isSuspend
+        ? ''
+        : `<a href="${loginUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 8px;">${isItalian ? 'Vai al portale' : 'Go to the portal'}</a>`
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: #18181b; padding: 20px; border-radius: 12px 12px 0 0;">
+            <h1 style="color: white; margin: 0; font-size: 18px;">${heading} — Tony Durante</h1>
+          </div>
+          <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+            <p>${bodyText}</p>
+            ${ctaBlock}
+          </div>
+        </div>
+      `
+      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+      const boundary = `boundary_${Date.now()}`
+      const rawEmail = [
+        'From: Tony Durante <support@tonydurante.us>',
+        `To: ${contact.email}`,
+        `Subject: ${encodedSubject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/html; charset=UTF-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        Buffer.from(html).toString('base64'),
+        `--${boundary}--`,
+      ].join('\r\n')
+      await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+    } catch (emailErr) {
+      console.error(`${action} email failed:`, emailErr)
+    }
+
+    await supabaseAdmin.from('action_log').insert({
+      actor,
+      action_type: 'update',
+      table_name: 'auth.users',
+      record_id: contact_id,
+      summary: `Portal login ${isSuspend ? 'suspended' : 'unsuspended'} for ${contact.full_name}`,
+      details: { auth_user_id: authUser.id, email: contact.email },
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: isSuspend
+        ? `${contact.full_name}'s portal login suspended. Notice sent to the client.`
+        : `${contact.full_name}'s portal login restored. Notice sent to the client.`,
+    })
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })

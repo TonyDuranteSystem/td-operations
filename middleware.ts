@@ -193,6 +193,26 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
+  // --- Suspended login (admin ban): block immediately ---
+  // A login suspended from the dashboard is banned at the auth layer. getUser()
+  // (already called above) returns banned_until reliably even on a still-valid
+  // access token, so this bounces a suspended client on their very NEXT request
+  // instead of waiting for their token to expire. Clear the stale Supabase
+  // session cookies and send them to login with the suspension notice. No loop:
+  // /portal/login is a public path and returns earlier, so the login page itself
+  // is reachable. No added cost: the getUser() call already happens for auth.
+  const bannedUntil = (user as { banned_until?: string | null }).banned_until ?? null
+  if (bannedUntil && new Date(bannedUntil) > new Date()) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/portal/login'
+    url.search = 'reason=suspended'
+    const res = NextResponse.redirect(url)
+    for (const c of request.cookies.getAll()) {
+      if (c.name.startsWith('sb-')) res.cookies.delete(c.name)
+    }
+    return res
+  }
+
   const role = user.app_metadata?.role
 
   // --- Portal paths: require client role ---
