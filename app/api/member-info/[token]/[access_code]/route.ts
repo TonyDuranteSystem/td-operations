@@ -245,10 +245,35 @@ async function provisionMemberContacts({
         .limit(1)
         .maybeSingle()
 
+      // The address/phone the member just provided — used for both creating a
+      // new contact AND refreshing an existing one.
+      const personPhone = m.member_type === 'company' ? (m.representative_phone?.trim() || null) : (m.phone?.trim() || null)
+      const personAddress = {
+        address_line1: m.member_type === 'company' ? (m.representative_address_street?.trim() || null) : (m.address_street?.trim() || null),
+        address_city: m.member_type === 'company' ? (m.representative_address_city?.trim() || null) : (m.address_city?.trim() || null),
+        address_state: m.member_type === 'company' ? (m.representative_address_state?.trim() || null) : (m.address_state?.trim() || null),
+        address_zip: m.member_type === 'company' ? (m.representative_address_zip?.trim() || null) : (m.address_zip?.trim() || null),
+        address_country: m.member_type === 'company' ? (m.representative_address_country?.trim() || null) : (m.address_country?.trim() || null),
+      }
+
       let contactId: string
 
       if (existingContact) {
         contactId = existingContact.id
+        // Sync the address/phone the member just submitted back onto their
+        // existing contact record. Previously only NEWLY-created contacts got
+        // the address, so an existing member's contact card kept a stale
+        // address even though the member updated it (Luca / B&P, 2026-06-26).
+        // Only write fields the member actually provided, so we never blank
+        // out good data.
+        const contactUpdates: Record<string, unknown> = {}
+        if (personPhone) contactUpdates.phone = personPhone
+        for (const [k, v] of Object.entries(personAddress)) { if (v) contactUpdates[k] = v }
+        if (Object.keys(contactUpdates).length > 0) {
+          contactUpdates.updated_at = now
+          // eslint-disable-next-line no-restricted-syntax -- member form provisioning; deferred migration per dev_task 7ebb1e0c
+          await supabaseAdmin.from('contacts').update(contactUpdates).eq('id', contactId)
+        }
       } else {
         // eslint-disable-next-line no-restricted-syntax -- member form provisioning; deferred migration per dev_task 7ebb1e0c
         const { data: created, error: createErr } = await supabaseAdmin
@@ -256,12 +281,8 @@ async function provisionMemberContacts({
           .insert({
             full_name: personName,
             email: personEmail,
-            phone: m.member_type === 'company' ? (m.representative_phone?.trim() || null) : (m.phone?.trim() || null),
-            address_line1: m.member_type === 'company' ? (m.representative_address_street?.trim() || null) : (m.address_street?.trim() || null),
-            address_city: m.member_type === 'company' ? (m.representative_address_city?.trim() || null) : (m.address_city?.trim() || null),
-            address_state: m.member_type === 'company' ? (m.representative_address_state?.trim() || null) : (m.address_state?.trim() || null),
-            address_zip: m.member_type === 'company' ? (m.representative_address_zip?.trim() || null) : (m.address_zip?.trim() || null),
-            address_country: m.member_type === 'company' ? (m.representative_address_country?.trim() || null) : (m.address_country?.trim() || null),
+            phone: personPhone,
+            ...personAddress,
             created_at: now,
             updated_at: now,
           })
