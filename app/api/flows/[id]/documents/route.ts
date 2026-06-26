@@ -37,7 +37,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
     const { data, error } = await adminUntyped
       .from('documents')
-      .select('id, file_name, drive_link, mime_type, file_size, flow_stage, created_at')
+      .select('id, file_name, drive_link, drive_file_id, mime_type, file_size, flow_stage, created_at')
       .eq('service_delivery_id', serviceDeliveryId)
       .order('created_at', { ascending: false })
 
@@ -48,11 +48,38 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       )
     }
 
+    // Resolve a viewable link for each document.
+    //
+    // Bug (2026-06-26, Luca): autoSaveDocument (ITIN W-7/1040-NR/Schedule OI,
+    // signed OA/lease/contract) writes `drive_file_id` but NEVER `drive_link`,
+    // so the workspace document-viewer — which only renders a clickable "View"
+    // when `drive_link` is set — showed a non-clickable "No link" for every ITIN
+    // doc. Confirmed against prod: all ITIN docs have drive_file_id set,
+    // drive_link NULL. Fix here (not a backfill) repairs existing + future docs:
+    // when the stored drive_link is empty but a drive_file_id exists, fall back
+    // to the service-account-backed `/api/documents/[id]/preview` streamer
+    // (handles BOTH Drive ids and `storage:<path>` ids, no Google login needed).
+    // We only fall back when drive_link is empty so working signed-storage URLs
+    // (flow uploads) are preserved.
+    const documents = (data ?? []).map((d) => {
+      const driveLink = (d.drive_link as string | null) || null
+      const driveFileId = (d.drive_file_id as string | null) || null
+      return {
+        id: d.id,
+        file_name: d.file_name,
+        drive_link: driveLink ?? (driveFileId ? `/api/documents/${d.id as string}/preview` : null),
+        mime_type: d.mime_type,
+        file_size: d.file_size,
+        flow_stage: d.flow_stage,
+        created_at: d.created_at,
+      }
+    })
+
     // Explicit no-store so neither the browser nor any CDN caches the doc list —
     // defense-in-depth alongside the client cache:'no-store' and the admin
     // client's uncached fetch (the "documents not showing on sandbox" bug).
     return NextResponse.json(
-      { success: true, documents: data ?? [] },
+      { success: true, documents },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } },
     )
   } catch (e) {
