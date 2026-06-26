@@ -525,6 +525,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
                 userName={fullName || user.email?.split('@')[0]}
                 dualRole
                 partnerMode={portalMode === 'partner'}
+                partnerHref="/portal/partner/referrals"
               />
             </div>
           )}
