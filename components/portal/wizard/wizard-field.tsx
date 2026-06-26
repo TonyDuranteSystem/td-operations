@@ -20,6 +20,9 @@ export interface FieldConfig {
    *  `value`. Used to make a high-stakes answer explicit to the client (e.g. a
    *  "No" to the related-party question that carries a $25,000 IRS penalty). */
   warningOnValue?: { value: string; text: string; textIt?: string }
+  /** Always-visible strong (red) warning box above the field. Used to steer a
+   *  high-stakes choice — e.g. "don't upload PDFs, they're slow and lossy". */
+  danger?: { text: string; textIt?: string }
   prefilled?: boolean
   accept?: string                  // file input accept attribute override
   repeaterFields?: FieldConfig[]   // sub-fields for repeater type
@@ -107,6 +110,14 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
           )}
         </label>
       </div>
+      {field.danger && (
+        <div className="rounded-lg border-2 border-red-300 bg-red-50 p-3 flex gap-2.5">
+          <div className="shrink-0 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white text-lg font-black leading-none">!</div>
+          <p className="text-xs text-red-900 leading-relaxed">
+            {locale === 'it' && field.danger.textIt ? field.danger.textIt : field.danger.text}
+          </p>
+        </div>
+      )}
       {/* Always-visible field explanation — replaces the old click-to-reveal
           "i" tooltip. People don't click info icons, so guidance that matters
           (e.g. the $25k related-party question) must be on screen by default. */}

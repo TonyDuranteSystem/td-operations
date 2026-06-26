@@ -281,6 +281,28 @@ export async function POST(req: NextRequest) {
           }))
           .catch(e => console.error('[wizard-submit] Prior-return case processing failed:', e))
       }
+
+      // Bank statements → ingest jobs, enqueued SYNCHRONOUSLY here (not only
+      // from the fire-and-forget tax_form_setup handler, which can be killed
+      // mid-run before reaching its enqueue step — leaving statements accepted
+      // but never read, P&L stuck at $0). Idempotent: a file already queued is
+      // skipped, so the handler's backstop call never double-processes a PDF.
+      // (Luca / Dynamiq, 2026-06-26.)
+      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && account_id && taxYear !== null) {
+        try {
+          const { enqueueStatementIngestJobs } = await import('@/lib/tax/statement-ingest-enqueue')
+          const { enqueued } = await enqueueStatementIngestJobs({
+            accountId: account_id,
+            taxYear,
+            uploadPaths,
+            submittedData: data,
+            createdBy: 'portal_wizard',
+          })
+          if (enqueued > 0) console.warn(`[wizard-submit] Queued ${enqueued} statement ingest job(s) synchronously`)
+        } catch (e) {
+          console.error('[wizard-submit] Statement ingest enqueue failed:', e)
+        }
+      }
     }
 
     // ─── 4b. BANKING WIZARD — fire-and-forget background work, return immediately ───

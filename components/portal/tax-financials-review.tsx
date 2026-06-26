@@ -256,37 +256,50 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
     }
   }
 
-  const uploadStatement = async (file: File) => {
+  // Upload one statement file; throws on failure with the server's message.
+  const uploadOneStatement = async (file: File, bank: string): Promise<void> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('account_id', accountId)
+    fd.append('tax_year', String(taxYear))
+    fd.append('bank_name', bank)
+    fd.append('account_kind', uploadKind)
+    const res = await fetch('/api/portal/tax-financials/upload', { method: 'POST', body: fd })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(d.error || (it ? 'Caricamento non riuscito — riprova.' : 'Upload failed — please try again.'))
+    }
+  }
+
+  // Upload one or more files SEQUENTIALLY (one at a time), refreshing the P&L
+  // after each so the numbers grow as files land. Per-file failures are
+  // collected and surfaced without aborting the rest of the batch.
+  const uploadStatements = async (files: File[]) => {
     const bank = uploadBank.trim()
     if (!bank) { setError(it ? 'Indica il nome della banca prima di caricare.' : 'Enter the bank name before uploading.'); return }
+    if (files.length === 0) return
+    setError(null)
     setUploadNote(null)
     setBusy('upload')
+    let ok = 0
+    const failures: string[] = []
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('account_id', accountId)
-      fd.append('tax_year', String(taxYear))
-      fd.append('bank_name', bank)
-      fd.append('account_kind', uploadKind)
-      const res = await fetch('/api/portal/tax-financials/upload', { method: 'POST', body: fd })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        throw new Error(d.error || (it ? 'Caricamento non riuscito — riprova.' : 'Upload failed — please try again.'))
-      }
-      // Live feedback, mirroring the endpoint's instant-parse result.
-      if (d.alert) {
-        setUploadNote(d.alert)
-      } else {
-        const months = Array.isArray(d.months) && d.months.length
-          ? ` (${d.months[0]} → ${d.months[d.months.length - 1]})` : ''
-        setUploadNote(it
-          ? `✓ Caricato: ${d.inserted ?? 0} transazioni da ${d.bankDetected ?? bank}${months}.`
-          : `✓ Added ${d.inserted ?? 0} transactions from ${d.bankDetected ?? bank}${months}.`)
+      for (let i = 0; i < files.length; i++) {
+        setUploadNote(it ? `Caricamento ${i + 1} di ${files.length}…` : `Uploading ${i + 1} of ${files.length}…`)
+        try {
+          await uploadOneStatement(files[i], bank)
+          ok++
+          await load()
+        } catch (e) {
+          failures.push(`${files[i].name}: ${e instanceof Error ? e.message : String(e)}`)
+        }
       }
       setUploadBank('')
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setUploadNote(
+        (it ? `✓ ${ok} di ${files.length} file caricati.` : `✓ ${ok} of ${files.length} file(s) added.`)
+        + (failures.length ? (it ? ` ${failures.length} non riusciti.` : ` ${failures.length} failed.`) : ''),
+      )
+      if (failures.length) setError(failures.join(' · '))
     } finally {
       setBusy(null)
     }
@@ -376,6 +389,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
 
   const visibleAnswers = useMemo(() => (g: QuestionGroup) => ANSWERS.filter(a => a.directions.includes(g.direction)), [])
 
+  // Strong, deliberate warning against PDF uploads (Antonio, 2026-06-26).
+  // PDFs are read by AI extraction — slow (minutes/file, hours for a full
+  // year) and lossy. CSV is fast and reliable, and every bank offers it.
+  const pdfWarning = (
+    <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4 sm:p-5 flex gap-3">
+      <div className="shrink-0 flex h-9 w-9 items-center justify-center rounded-full bg-red-600 text-white text-2xl font-black leading-none">!</div>
+      <div className="text-sm text-red-900">
+        <p className="font-bold">
+          {it ? 'Caricare PDF NON è consigliato.' : 'Uploading PDFs is NOT recommended.'}
+        </p>
+        <p className="mt-1 text-red-800">
+          {it
+            ? 'Qualsiasi commercialista o sistema impiega ore per estrarre i dati da un PDF, e alcune transazioni possono andare perse. Consigliamo vivamente di caricare solo file CSV — è più facile e sicuro per tutti, e TUTTE le banche permettono di scaricare i CSV. Non avere fretta in questo passaggio: è il tuo Conto Economico e Stato Patrimoniale, un passaggio importante per la tua LLC.'
+            : 'Any CPA or system takes hours to extract the data from a PDF, and transactions can be lost. We strongly recommend uploading CSV files only — it\'s easier and safer for everyone, and ALL banks let you download CSV. Don\'t rush this step: it\'s your Profit & Loss and Balance Sheet, an important step for your LLC.'}
+        </p>
+      </div>
+    </div>
+  )
+
   // Bank statements list + "Add a statement" uploader. Extracted so it can
   // render both in the normal populated view AND in the empty state (no
   // transactions yet) without duplicating markup.
@@ -403,12 +435,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             ))}
           </ul>
         )}
+        {pdfWarning}
         <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50/60 p-3 sm:p-4">
-          <div className="text-sm font-medium text-zinc-800">{it ? 'Aggiungi un estratto conto' : 'Add a statement'}</div>
+          <div className="text-sm font-medium text-zinc-800">{it ? 'Aggiungi gli estratti conto' : 'Add statements'}</div>
           <p className="text-xs text-zinc-500 mt-1">
             {it
-              ? 'Carica l\'export dell\'intero anno per ogni conto (CSV o PDF ufficiale). Non unire o modificare i file — caricali separati, uno per banca.'
-              : 'Upload each account\'s full-year export (CSV or official PDF). Don\'t merge or edit the files — upload them separately, one per bank.'}
+              ? 'Scegli il conto, poi seleziona uno o più file CSV di quella banca per l\'intero anno. Non unire o modificare i file — caricali separati, uno per banca.'
+              : 'Pick the account, then select one or more CSV files for that bank\'s full year. Don\'t merge or edit the files — upload them separately, one per bank.'}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <input
@@ -429,16 +462,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
               <option value="credit_card">{it ? 'Carta di credito' : 'Credit card'}</option>
             </select>
             <label className={`rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 ${busy !== null ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}`}>
-              {busy === 'upload' ? (it ? 'Caricamento…' : 'Uploading…') : (it ? 'Scegli file' : 'Choose file')}
+              {busy === 'upload' ? (it ? 'Caricamento…' : 'Uploading…') : (it ? 'Scegli file' : 'Choose files')}
               <input
                 type="file"
                 accept=".csv,.pdf,.zip"
+                multiple
                 disabled={busy !== null}
                 className="hidden"
                 onChange={e => {
-                  const f = e.target.files?.[0]
+                  const files = Array.from(e.target.files ?? [])
                   e.target.value = ''
-                  if (f) void uploadStatement(f)
+                  if (files.length) void uploadStatements(files)
                 }}
               />
             </label>

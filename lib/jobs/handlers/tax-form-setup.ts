@@ -322,36 +322,23 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
     const acctId = p.account_id
     const ty = taxYear
     try {
-      // Match BOTH shapes: CURRENT per-bank `bank_accounts_<N>_statements_…`
-      // and LEGACY flat `bank_statements_…`. Accept CSV + PDF (+ zip).
-      const statementPaths = uploadPaths.filter(
-        path => /\/(bank_accounts_\d+_statements|bank_statements)_/.test(path) && /\.(csv|pdf|zip)$/i.test(path),
-      )
-      if (statementPaths.length > 0) {
-        const { enqueueJobs } = await import("../queue")
-        const { ids } = await enqueueJobs(
-          statementPaths.map(path => {
-            const fileName = path.split("/").pop() ?? "statement"
-            // Prefer the per-bank bank name the client typed; fall back to the
-            // filename lead token. Fallback label only — the parser detects the
-            // real bank from file CONTENT.
-            const idx = path.match(/\/bank_accounts_(\d+)_statements_/)?.[1]
-            const typed = idx !== undefined ? String((sd as Record<string, unknown>)[`bank_accounts_${idx}_bank_name`] ?? "").trim() : ""
-            const fromName = fileName.replace(/^(bank_accounts_\d+_statements|bank_statements)_[a-z0-9]+_/i, "").split(/[_\-.]/)[0]
-            const bankLabel = typed || fromName || "Bank"
-            return {
-              job_type: "ingest_bank_statement",
-              payload: { account_id: acctId, tax_year: ty, path, bank_label: bankLabel },
-              priority: 4,
-              account_id: acctId,
-              created_by: "portal_wizard",
-            }
-          }),
-        )
-        result.steps.push(step("portal_csv_ingest", "ok",
-          `Queued ${ids.length} statement ingest job(s) — transactions land as each completes`))
-      } else {
+      // Idempotent backstop. The portal wizard-submit route already enqueues
+      // these synchronously at submit time (reliable even if THIS handler is
+      // killed mid-run); the staff review path relies on this call. The helper
+      // skips any file already queued, so a PDF is never AI-extracted twice.
+      const { enqueueStatementIngestJobs } = await import("@/lib/tax/statement-ingest-enqueue")
+      const { enqueued, skipped } = await enqueueStatementIngestJobs({
+        accountId: acctId,
+        taxYear: ty,
+        uploadPaths,
+        submittedData: sd as Record<string, unknown>,
+        createdBy: "portal_wizard",
+      })
+      if (enqueued === 0 && skipped === 0) {
         result.steps.push(step("portal_csv_ingest", "skipped", "No bank statement uploads on the submission"))
+      } else {
+        result.steps.push(step("portal_csv_ingest", "ok",
+          `Queued ${enqueued} statement ingest job(s)${skipped > 0 ? ` (${skipped} already queued)` : ""} — transactions land as each completes`))
       }
     } catch (e) {
       result.steps.push(step("portal_csv_ingest", "error", e instanceof Error ? e.message : String(e)))

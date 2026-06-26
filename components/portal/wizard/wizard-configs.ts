@@ -283,7 +283,12 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
         { value: 'checking', label: 'Bank account (checking)', labelIt: 'Conto corrente' },
         { value: 'credit_card', label: 'Credit card', labelIt: 'Carta di credito' },
       ] },
-      { name: 'statements', label: 'CSV export or PDF statement — entire year', labelIt: 'Export CSV o estratto conto PDF — anno intero', type: 'file', required: true, accept: '.csv,.pdf,text/csv,application/pdf', hint: 'CSV export or the official PDF statement — the entire year, not a piece of it.', hintIt: 'Export CSV o estratto conto PDF ufficiale — l\'anno intero, non una parte.' },
+      { name: 'statements', label: 'CSV export — entire year (PDF accepted but not recommended)', labelIt: 'Export CSV — anno intero (PDF accettato ma sconsigliato)', type: 'file', required: true, accept: '.csv,.pdf,text/csv,application/pdf',
+        danger: {
+          text: 'Uploading PDFs is NOT recommended. Any CPA or system takes hours to extract the data from a PDF, and transactions can be lost. We strongly recommend uploading CSV files only — it\'s easier and safer for everyone, and ALL banks let you download CSV. Don\'t rush this step: it\'s your Profit & Loss and Balance Sheet, an important step for your LLC.',
+          textIt: 'Caricare PDF NON è consigliato. Qualsiasi commercialista o sistema impiega ore per estrarre i dati da un PDF, e alcune transazioni possono andare perse. Consigliamo vivamente di caricare solo file CSV — è più facile e sicuro per tutti, e TUTTE le banche permettono di scaricare i CSV. Non avere fretta in questo passaggio: è il tuo Conto Economico e Stato Patrimoniale, un passaggio importante per la tua LLC.',
+        },
+        hint: 'CSV export for the entire year, not a piece of it.', hintIt: 'Export CSV per l\'intero anno, non una parte.' },
     ],
   },
   // "Financial Statements (optional)" upload REMOVED (2026-06-17, Antonio): it sat
