@@ -45,6 +45,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const fileName: string | undefined = body.file_name
     const mimeType: string | undefined = body.mime_type
     const flowStageInput: string | null = typeof body.flow_stage === 'string' ? body.flow_stage : null
+    // Staff-confirmed formation (filing) date — sent when uploading the Articles
+    // of Organization on a Company Formation flow. The upload auto-advances into
+    // "Articles Received", which MATERIALIZES the company; without this the
+    // materializer defaults formation_date to today (the processing day) and the
+    // SS-4 prints the wrong date. ISO YYYY-MM-DD only.
+    const formationDate: string | undefined =
+      typeof body.formation_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.formation_date)
+        ? body.formation_date
+        : undefined
     // Default true: every existing upload stage auto-advances. A caller can opt
     // out (auto_advance:false) when a separate action owns the advance — e.g. the
     // Tax Return "Tax Return Prepared" stage, where "Send for Signature" advances.
@@ -195,6 +204,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         const result = await advanceServiceDelivery({
           delivery_id: serviceDeliveryId,
+          formation_date: formationDate,
           actor: 'flow-upload',
           notes: `Document uploaded: ${fileName}`,
         })
