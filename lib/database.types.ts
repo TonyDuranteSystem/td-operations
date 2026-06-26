@@ -9540,6 +9540,13 @@ export type Database = {
           partner_id: string | null
           payment_id: string | null
           payout_method: string | null
+          account_id: string | null
+          contact_id: string | null
+          invoice_name: string | null
+          invoice_url: string | null
+          offer_token: string | null
+          payout_request: Json | null
+          requested_at: string | null
           payout_type: string
           reference: string | null
           referral_id: string | null
@@ -9578,6 +9585,13 @@ export type Database = {
           partner_id?: string | null
           payment_id?: string | null
           payout_method?: string | null
+          account_id?: string | null
+          contact_id?: string | null
+          invoice_name?: string | null
+          invoice_url?: string | null
+          offer_token?: string | null
+          payout_request?: Json | null
+          requested_at?: string | null
           payout_type?: string
           reference?: string | null
           referral_id?: string | null

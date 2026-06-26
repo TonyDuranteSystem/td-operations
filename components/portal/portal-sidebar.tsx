@@ -155,6 +155,7 @@ const companyItems: NavItem[] = [
 // not under any section header.
 const partnerItems: NavItem[] = [
   { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
+  { key: 'nav.partnerReferrals', href: '/portal/partner/referrals', icon: Share2, partnerOnly: true },
   { key: 'nav.partnerNewRequest', href: '/portal/partner/new-request', icon: PlusCircle, partnerOnly: true },
   { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle, partnerOnly: true },
