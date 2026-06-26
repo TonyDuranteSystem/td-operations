@@ -529,10 +529,10 @@ export function registerITINFormTools(server: McpServer) {
   // ***************************************
   server.tool(
     "itin_prepare_documents",
-    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Uploads all 3 PDFs + passport copies to the client's Google Drive folder (ITIN subfolder). Optionally sends email to client with PDFs attached and mailing instructions. Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) Client must have an account with drive_folder_id (for LLC clients) OR a contact record (for individual clients). Run itin_form_review first to verify data, then use this tool to generate documents.`,
+    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Uploads all 3 PDFs + passport copies to the client's Google Drive folder (ITIN subfolder) and registers them as portal-visible documents (the client sees/downloads them in the portal). Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) Client must have an account with drive_folder_id (for LLC clients) OR a contact record (for individual clients). Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
     {
       token: z.string().describe("ITIN form token"),
-      send_email: z.boolean().optional().default(false).describe("If true, send email to client with PDFs and mailing instructions"),
+      send_email: z.boolean().optional().default(false).describe("DEPRECATED — do NOT use. The client gets the ITIN documents via the PORTAL/workspace, never by email. Leave false; advancing the workspace to Client Signing notifies the client."),
       drive_folder_id: z.string().optional().describe("Override Drive folder ID (auto-detected from account if omitted)"),
     },
     async ({ token, send_email, drive_folder_id }) => {
@@ -789,7 +789,7 @@ support@tonydurante.us
         results.push("")
         results.push("---")
         if (!send_email) {
-          results.push("Documents generated and uploaded. To send to client, run again with send_email=true")
+          results.push("Documents generated, uploaded to Drive, and registered as portal-visible. Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
         }
 
         return { content: [{ type: "text" as const, text: results.join("\n") }] }
