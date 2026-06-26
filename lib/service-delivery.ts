@@ -181,21 +181,25 @@ export async function advanceServiceDelivery(
 
   const autoTriggers: string[] = []
 
-  // 6b. Sync the formation_progress workflow task's task_meta with the new SD
+  // 6b. Sync the workspace-pointer workflow task's task_meta with the new SD
   // stage. The workspace advances the SD through THIS function, a different path
   // from the workflow engine's chain.advance_sd_stage handler (which already
-  // patches task_meta) — so without this the task card showed a stale stage.
-  // The formation_progress card is now a read-only pointer to the workspace, so
-  // this only keeps its displayed stage honest. Best-effort: never fail the
-  // advance. Scoped to Company Formation (the only service_type with a
-  // formation_progress workflow).
-  if (delivery.service_type === "Company Formation") {
+  // patches task_meta) — so without this the pointer task card showed a stale
+  // stage. Both formation_progress (Company Formation) and itin_review (ITIN)
+  // are read-only workspace pointers, so this only keeps their displayed stage
+  // honest. Best-effort: never fail the advance.
+  const POINTER_WORKFLOW_SLUG_BY_SERVICE: Record<string, string> = {
+    "Company Formation": "formation_progress",
+    "ITIN": "itin_review",
+  }
+  const pointerWorkflowSlug = POINTER_WORKFLOW_SLUG_BY_SERVICE[delivery.service_type]
+  if (pointerWorkflowSlug) {
     try {
       const { mergeSdStageIntoTaskMeta } = await import("@/lib/tasks/sd-stage-sync")
       const { data: wfTasks } = await supabaseAdmin
         .from("tasks")
         .select("id, task_meta")
-        .eq("workflow_slug", "formation_progress")
+        .eq("workflow_slug", pointerWorkflowSlug)
         .or(`delivery_id.eq.${delivery_id},task_meta->>service_delivery_id.eq.${delivery_id}`)
       for (const t of wfTasks ?? []) {
         await dbWriteSafe(
@@ -215,7 +219,7 @@ export async function advanceServiceDelivery(
       }
       if (wfTasks?.length) {
         autoTriggers.push(
-          `Synced ${wfTasks.length} formation_progress task(s) → sd_stage="${targetStage.stage_name}"`,
+          `Synced ${wfTasks.length} ${pointerWorkflowSlug} task(s) → sd_stage="${targetStage.stage_name}"`,
         )
       }
     } catch (syncErr) {

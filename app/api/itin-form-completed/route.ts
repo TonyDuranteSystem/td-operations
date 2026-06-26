@@ -30,6 +30,7 @@ import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { APP_BASE_URL } from "@/lib/config"
 import { generateW7Pdf, generate1040NRPdf, generateScheduleOIPdf } from "@/lib/itin-pdf-generator"
+import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import type { Json } from "@/lib/database.types"
 
@@ -446,17 +447,23 @@ export async function POST(req: NextRequest) {
       results.push({ step: "email_team", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // --- STEP 6: Notify staff — plain task pointing to the workspace ---
-    // 2026-06-25 (branch fix/itin-workspace-only): the ITIN flow is managed
-    // EXCLUSIVELY from the workspace (/flows/[sd_id]). This is a plain "review
-    // me" pointer — NOT a workflow task. No action buttons, no email-the-client
-    // handler. Staff open the workspace, review the auto-generated W-7 /
-    // 1040-NR / Schedule OI, and click the advance button ("Documents
-    // Reviewed — Send to Client"); advancing Document Preparation → Client
-    // Signing posts the client a portal chat message with the print / sign /
-    // passport-copies / mail-to-office instructions (see the ITIN hook in
-    // lib/service-delivery.ts). The client is NEVER emailed the PDFs — the
-    // portal is the delivery mechanism. Idempotent by task_title.
+    // --- STEP 6: Notify staff via the itin_review WORKSPACE-POINTER workflow ---
+    // 2026-06-26: the ITIN flow is managed EXCLUSIVELY from the workspace
+    // (/flows/[sd_id]), but the staff notification MUST surface in the What's New
+    // feed (Portal Chats) where Luca watches — NOT only on the task board. That
+    // feed is driven by the `workflow_spawned` chat-event the dispatcher emits;
+    // a plain tasks.insert emits nothing, so it was invisible there (regression).
+    //
+    // Fix (mirrors formation_progress): itin_review is now a `workspace_pointer`
+    // catalog workflow with EMPTY actions + the lightweight sd_progress_v1 meta.
+    // Dispatching it (a) emits workflow_spawned → the What's New note, and (b)
+    // creates a task whose WorkflowTaskCard renders "Open in Workspace"
+    // (/flows/[delivery_id]) and NO action buttons (workspace_pointer empties
+    // them). No email-the-client handler exists; the client message comes only
+    // from the Document Preparation → Client Signing advance hook in
+    // lib/service-delivery.ts §8c. Idempotent by submission_id (dispatcher) and
+    // task_title (outer guard). Falls back to a plain task if the SD is missing
+    // or the dispatch can't match (defensive — keeps the chain robust).
     try {
       const taskTitle = docsGenerated
         ? `Review ITIN documents -- ${displayName}`
@@ -471,27 +478,70 @@ export async function POST(req: NextRequest) {
           ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\n${workspaceUrl ? `Open the workspace to review and advance: ${workspaceUrl}` : "Open the ITIN workspace to review and advance."}\n\nReview the PDFs, then click the advance button ("Documents Reviewed — Send to Client"). That posts the client a portal message with the print / wet-ink-sign / passport-copies / mail-to-office instructions. Do NOT email the client — the portal is the delivery mechanism.`
           : `ITIN form completed for ${displayName}.\n\nDocument generation did not run.\n${workspaceUrl ? `Open the workspace to review: ${workspaceUrl}\n` : ""}You can regenerate the documents with itin_prepare_documents(token="${token}") if needed.`
 
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-          supabaseAdmin.from("tasks").insert({
+        let workflowSpawned = false
+        // Only the workspace-pointer workflow gives the What's New note + the
+        // workspace link, and it needs a delivery_id for that link.
+        if (deliveryId) {
+          const dispatch = await dispatchWorkflowForFormCompletion({
+            form_table: "itin_submissions",
+            submission: { ...sub },
+            build_task_meta: async () => ({
+              service_delivery_id: deliveryId,
+              service_type: "ITIN",
+              sd_stage: "Document Preparation",
+              account_id: sub.account_id ?? null,
+              contact_id: contactId ?? null,
+            }),
             task_title: taskTitle,
             description,
-            assigned_to: defaultTaskAssignee(),
+            // assigned_to omitted — dispatcher resolves catalog default_assignee,
+            // then defaultTaskAssignee().
             priority: "High",
-            category: "KYC",
-            status: "To Do",
-            due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            delivery_id: deliveryId || undefined,
-            account_id: sub.account_id || undefined,
-            contact_id: contactId || undefined,
-            created_by: "System",
-            // tasks.attachments is NOT NULL with no default — satisfy
-            // explicitly so dbWriteSafe doesn't silently capture a 23502.
-            attachments: [],
-          }),
-          "tasks.insert"
-        )
-        results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (workspace pointer)` })
+            account_id: sub.account_id || null,
+            contact_id: contactId || null,
+            delivery_id: deliveryId,
+            actor: "itin-form-completed:auto-chain",
+            // Dedup on the SD (one itin_review pointer per ITIN SD). Must be a
+            // field PRESENT in the pinned task_meta (sd_progress_v1) — the
+            // dispatcher checks task_meta->>service_delivery_id on retry.
+            idempotency: { field: "service_delivery_id", value: deliveryId },
+          })
+          if (dispatch.spawned) {
+            workflowSpawned = true
+            results.push({ step: "task_created", status: "ok", detail: `Workflow ${dispatch.workflow_slug} task ${dispatch.task_id}` })
+          } else if (dispatch.reason === "already_spawned") {
+            workflowSpawned = true
+            results.push({ step: "task_created", status: "skipped", detail: `Workflow task already exists for submission ${sub.id} (task ${dispatch.task_id})` })
+          } else {
+            console.warn(`[itin-form-completed] itin_review dispatch did not spawn (${dispatch.reason}): ${dispatch.meta_error ?? dispatch.spawn_error ?? ""} — falling back to plain task.`)
+          }
+        }
+
+        // Defensive fallback: plain task (no workflow, no What's New note) when
+        // there is no SD or the dispatch couldn't match/spawn.
+        if (!workflowSpawned) {
+          await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
+            supabaseAdmin.from("tasks").insert({
+              task_title: taskTitle,
+              description,
+              assigned_to: defaultTaskAssignee(),
+              priority: "High",
+              category: "KYC",
+              status: "To Do",
+              due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || undefined,
+              account_id: sub.account_id || undefined,
+              contact_id: contactId || undefined,
+              created_by: "System",
+              // tasks.attachments is NOT NULL with no default — satisfy
+              // explicitly so dbWriteSafe doesn't silently capture a 23502.
+              attachments: [],
+            }),
+            "tasks.insert"
+          )
+          results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (plain fallback)` })
+        }
       }
     } catch (e) {
       results.push({ step: "task_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
