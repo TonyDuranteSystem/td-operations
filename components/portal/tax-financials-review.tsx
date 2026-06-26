@@ -85,6 +85,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
   const [attestChecked, setAttestChecked] = useState(false)
   const [attested, setAttested] = useState(false)
   const [newBucket, setNewBucket] = useState('')
+  // Add-a-statement uploader (wires the existing owner-only /upload endpoint
+  // that was built but never connected to UI). Lets the owner add the rest of
+  // the year's statements right here, instead of the copy pointing at an
+  // uploader that didn't exist.
+  const [uploadBank, setUploadBank] = useState('')
+  const [uploadKind, setUploadKind] = useState('checking')
+  const [uploadNote, setUploadNote] = useState<string | null>(null)
   // P&L expense-category drill-down (Luca's request, dev_task 1bee0ffe).
   const [openCat, setOpenCat] = useState<string | null>(null)
   const [catData, setCatData] = useState<Record<string, CategoryDrill>>({})
@@ -241,6 +248,42 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile eliminare il file — riprova.' : 'Could not delete the file — please try again.'))
       }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const uploadStatement = async (file: File) => {
+    const bank = uploadBank.trim()
+    if (!bank) { setError(it ? 'Indica il nome della banca prima di caricare.' : 'Enter the bank name before uploading.'); return }
+    setUploadNote(null)
+    setBusy('upload')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('account_id', accountId)
+      fd.append('tax_year', String(taxYear))
+      fd.append('bank_name', bank)
+      fd.append('account_kind', uploadKind)
+      const res = await fetch('/api/portal/tax-financials/upload', { method: 'POST', body: fd })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(d.error || (it ? 'Caricamento non riuscito — riprova.' : 'Upload failed — please try again.'))
+      }
+      // Live feedback, mirroring the endpoint's instant-parse result.
+      if (d.alert) {
+        setUploadNote(d.alert)
+      } else {
+        const months = Array.isArray(d.months) && d.months.length
+          ? ` (${d.months[0]} → ${d.months[d.months.length - 1]})` : ''
+        setUploadNote(it
+          ? `✓ Caricato: ${d.inserted ?? 0} transazioni da ${d.bankDetected ?? bank}${months}.`
+          : `✓ Added ${d.inserted ?? 0} transactions from ${d.bankDetected ?? bank}${months}.`)
+      }
+      setUploadBank('')
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -706,11 +749,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             </section>
           )}
 
-          {/* Files */}
-          {view.files.length > 0 && (
-            <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
-              <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'File caricati' : 'Uploaded files'}</h2>
-              <ul className="space-y-2">
+          {/* Files + add-a-statement uploader. Always rendered so the owner can
+              add the rest of the year's statements even when none are present. */}
+          <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
+            <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Estratti conto' : 'Bank statements'}</h2>
+            {view.files.length > 0 && (
+              <ul className="space-y-2 mb-4">
                 {view.files.map(f => (
                   <li key={f.source_file_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 px-3 py-2">
                     <div className="text-sm text-zinc-800">
@@ -727,8 +771,50 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                   </li>
                 ))}
               </ul>
-            </section>
-          )}
+            )}
+            <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50/60 p-3 sm:p-4">
+              <div className="text-sm font-medium text-zinc-800">{it ? 'Aggiungi un estratto conto' : 'Add a statement'}</div>
+              <p className="text-xs text-zinc-500 mt-1">
+                {it
+                  ? 'Carica l\'export dell\'intero anno per ogni conto (CSV o PDF ufficiale). Non unire o modificare i file — caricali separati, uno per banca.'
+                  : 'Upload each account\'s full-year export (CSV or official PDF). Don\'t merge or edit the files — upload them separately, one per bank.'}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  value={uploadBank}
+                  onChange={e => setUploadBank(e.target.value)}
+                  placeholder={it ? 'Nome della banca (es. Mercury)' : 'Bank name (e.g. Mercury)'}
+                  disabled={busy !== null}
+                  className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50"
+                />
+                <select
+                  value={uploadKind}
+                  onChange={e => setUploadKind(e.target.value)}
+                  disabled={busy !== null}
+                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600 disabled:opacity-50"
+                >
+                  <option value="checking">{it ? 'Conto corrente' : 'Checking'}</option>
+                  <option value="savings">{it ? 'Conto risparmio' : 'Savings'}</option>
+                  <option value="credit_card">{it ? 'Carta di credito' : 'Credit card'}</option>
+                </select>
+                <label className={`rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 ${busy !== null ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}`}>
+                  {busy === 'upload' ? (it ? 'Caricamento…' : 'Uploading…') : (it ? 'Scegli file' : 'Choose file')}
+                  <input
+                    type="file"
+                    accept=".csv,.pdf,.zip"
+                    disabled={busy !== null}
+                    className="hidden"
+                    onChange={e => {
+                      const f = e.target.files?.[0]
+                      e.target.value = ''
+                      if (f) void uploadStatement(f)
+                    }}
+                  />
+                </label>
+              </div>
+              {uploadNote && <div className="mt-2 text-xs text-emerald-700">{uploadNote}</div>}
+            </div>
+          </section>
 
           {/* Completeness summary (dev_task 95127bb2) — translate the checks
               that didn't fully pass into plain language so the client can
