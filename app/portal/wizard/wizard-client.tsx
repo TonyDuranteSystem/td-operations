@@ -15,6 +15,43 @@ interface FieldError {
   message: string
 }
 
+/**
+ * Radio selector for the SS-4 Responsible Party (the signer) in the MMLLC
+ * formation wizard. Rendered once on the owner step and once per additional
+ * member; all instances share the parent's signerIndex so exactly one is
+ * selectable. dev_task — MMLLC workspace enhancements.
+ */
+function SignerRadio({
+  checked,
+  onSelect,
+  label,
+  hint,
+}: {
+  checked: boolean
+  onSelect: () => void
+  label: string
+  hint?: string
+}) {
+  return (
+    <label
+      className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${
+        checked ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 hover:border-zinc-300'
+      }`}
+    >
+      <input
+        type="radio"
+        checked={checked}
+        onChange={onSelect}
+        className="mt-0.5 h-4 w-4 accent-blue-600"
+      />
+      <span className="text-sm">
+        <span className="font-medium text-zinc-800">{label}</span>
+        {hint && <span className="block text-xs text-zinc-500 mt-0.5">{hint}</span>}
+      </span>
+    </label>
+  )
+}
+
 interface WizardClientProps {
   wizardType: string
   entityType: string
@@ -74,9 +111,41 @@ export function WizardClient({
 
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
+  // MMLLC formation only: who is the SS-4 Responsible Party (the signer).
+  // Exactly one of {owner, each additional member} must be selected. This block
+  // is inert for SMLLC and for non-formation wizards (the members step + owner
+  // signer radio only render when isMMLLC).
+  const isMMLLC = entityType === 'MMLLC'
+
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
   const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
+
+  // signerIndex: -1 = owner, 0+ = additional member index, null = none chosen.
+  // Derived from any previously-saved is_signer flags so a resumed draft keeps
+  // the selection. Saved JSONB may surface booleans as true or string 'true'.
+  const isTruthyFlag = (v: unknown) => v === true || v === 'true'
+  const [signerIndex, setSignerIndex] = useState<number | null>(() => {
+    if (isTruthyFlag(initialData.owner_is_signer)) return -1
+    for (const k of Object.keys(initialData)) {
+      const m = k.match(/^member_(\d+)_is_signer$/)
+      if (m && isTruthyFlag(initialData[k])) return parseInt(m[1], 10)
+    }
+    return null
+  })
+
+  // Select the signer: stamps the flat is_signer flags into formData so they are
+  // saved/submitted with the rest of the wizard data (owner_is_signer +
+  // member_{i}_is_signer). Exactly one ends up true.
+  const setSigner = useCallback((index: number) => {
+    setSignerIndex(index)
+    setFormData(prev => {
+      const next = { ...prev }
+      next.owner_is_signer = index === -1
+      for (let i = 0; i < memberCount; i++) next[`member_${i}_is_signer`] = index === i
+      return next
+    })
+  }, [memberCount])
   // Track row counts for inline repeater fields (e.g., related_party_transactions)
   const [repeaterCounts, setRepeaterCounts] = useState<Record<string, number>>(() => {
     const counts: Record<string, number> = {}
@@ -273,6 +342,39 @@ export function WizardClient({
       }
     }
 
+    // MMLLC formation: validate exactly one signer chosen and that the
+    // additional members' ownership sums to a sane share (the owner takes the
+    // remainder, 100 − sum, at materialization). Gated to MMLLC so SMLLC and
+    // every other wizard are untouched.
+    if (isMMLLC) {
+      let signerCount = isTruthyFlag(formData.owner_is_signer) ? 1 : 0
+      for (let i = 0; i < memberCount; i++) {
+        if (isTruthyFlag(formData[`member_${i}_is_signer`])) signerCount++
+      }
+      if (signerCount !== 1) {
+        toast.error(
+          locale === 'it'
+            ? 'Seleziona esattamente una persona come Responsible Party del modulo SS-4.'
+            : 'Select exactly one person as the SS-4 Responsible Party.',
+        )
+        return
+      }
+
+      let pctSum = 0
+      for (let i = 0; i < memberCount; i++) {
+        const v = Number(formData[`member_${i}_member_ownership_pct`])
+        if (!Number.isNaN(v)) pctSum += v
+      }
+      if (!(pctSum > 0 && pctSum < 100)) {
+        toast.error(
+          locale === 'it'
+            ? `La somma delle quote dei membri aggiuntivi deve essere maggiore di 0% e minore di 100% (attuale: ${pctSum}%). Il titolare riceve la quota rimanente.`
+            : `Additional members' ownership must total more than 0% and less than 100% (currently ${pctSum}%). The owner takes the remaining share.`,
+        )
+        return
+      }
+    }
+
     setIsSubmitting(true)
     setFieldErrors([])
     try {
@@ -311,7 +413,7 @@ export function WizardClient({
     } finally {
       setIsSubmitting(false)
     }
-  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, validateStep, locale, isResubmitMode, itinCount, memberCount])
+  }, [wizardType, entityType, formData, accountId, contactId, leadId, currentProgressId, validateStep, locale, isResubmitMode, itinCount, memberCount, isMMLLC])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -481,12 +583,16 @@ export function WizardClient({
                     type="button"
                     onClick={() => {
                       setMemberCount(c => c - 1)
-                      // Clear this member's fields
+                      // Clear this member's fields + signer flag
                       setFormData(prev => {
                         const next = { ...prev }
                         stepFields.forEach(f => { delete next[`member_${idx}_${f.name}`] })
+                        delete next[`member_${idx}_is_signer`]
                         return next
                       })
+                      // If the removed member was the signer, clear the selection
+                      // so submit forces a fresh, valid choice.
+                      if (signerIndex === idx) setSignerIndex(null)
                     }}
                     className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
                   >
@@ -519,6 +625,14 @@ export function WizardClient({
                     </div>
                   ))}
               </div>
+              {/* MMLLC: this member can be the SS-4 Responsible Party. */}
+              <SignerRadio
+                checked={signerIndex === idx}
+                onSelect={() => setSigner(idx)}
+                label={locale === 'it'
+                  ? `${idx === 0 ? `Membro ${idx + 1}` : `Membro ${idx + 1}`} è il Responsible Party del modulo SS-4.`
+                  : `Member ${idx + 1} is the SS-4 Responsible Party.`}
+              />
             </div>
           ))}
           <button
@@ -536,6 +650,23 @@ export function WizardClient({
           </button>
         </div>
       ) : (
+        <>
+        {/* MMLLC: owner can elect to be the SS-4 Responsible Party. */}
+        {isMMLLC && stepId === 'owner' && (
+          <div className="mb-4">
+            <p className="text-sm font-semibold text-zinc-700 mb-1.5">
+              {locale === 'it' ? 'Responsible Party (SS-4)' : 'SS-4 Responsible Party'}
+            </p>
+            <SignerRadio
+              checked={signerIndex === -1}
+              onSelect={() => setSigner(-1)}
+              label={locale === 'it' ? 'Sarò io il Responsible Party del modulo SS-4.' : 'I will be the SS-4 Responsible Party.'}
+              hint={locale === 'it'
+                ? 'Una sola persona tra titolare e membri può essere selezionata.'
+                : 'Exactly one person across the owner and members must be selected.'}
+            />
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {stepFields
             .filter(field => {
@@ -648,6 +779,7 @@ export function WizardClient({
               )
             })}
         </div>
+        </>
       )}
     </WizardShell>
   )

@@ -390,7 +390,10 @@ export async function materializeFormationCompany(
                 address_country: m.member_company_country ?? null,
                 ownership_pct: ownershipPct,
                 is_primary: false,
-                is_signer: false,
+                // Signer selected in the MMLLC formation wizard. A company member
+                // can be the SS-4 Responsible Party — it resolves to its
+                // representative at SS-4 generation (decideSs4Signer).
+                is_signer: m.is_signer === true,
                 representative_name: repName,
                 representative_email: repEmail,
                 representative_address_street: m.member_rep_address_street ?? null,
@@ -502,7 +505,9 @@ export async function materializeFormationCompany(
                   address_country: m.member_country ?? null,
                   ownership_pct: ownershipPct,
                   is_primary: isPrimary,
-                  is_signer: false,
+                  // Signer selected in the MMLLC formation wizard
+                  // (member_{idx}_is_signer). See is_signer note above.
+                  is_signer: m.is_signer === true,
                   contact_id: membContactId,
                   updated_at: now,
                 },
@@ -554,7 +559,9 @@ export async function materializeFormationCompany(
           address_country: submitted.owner_country ? String(submitted.owner_country) : null,
           ownership_pct: ownerPct,
           is_primary: primaryMemberIndex === 0,
-          is_signer: false,
+          // Owner is the SS-4 Responsible Party when they selected themselves on
+          // the owner step of the MMLLC formation wizard (owner_is_signer).
+          is_signer: submitted.owner_is_signer === true,
           contact_id: params.contact_id,
           updated_at: new Date().toISOString(),
         },
