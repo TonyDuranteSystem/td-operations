@@ -296,7 +296,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
       }
       setUploadBank('')
       setUploadNote(
-        (it ? `✓ ${ok} di ${files.length} file caricati.` : `✓ ${ok} of ${files.length} file(s) added.`)
+        (it
+          ? `✓ ${ok} di ${files.length} file ricevuti — stiamo leggendo le transazioni, i numeri compaiono tra poco.`
+          : `✓ ${ok} of ${files.length} file(s) received — we're reading the transactions now; your numbers will appear shortly.`)
         + (failures.length ? (it ? ` ${failures.length} non riusciti.` : ` ${failures.length} failed.`) : ''),
       )
       if (failures.length) setError(failures.join(' · '))

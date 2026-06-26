@@ -2,13 +2,21 @@
  * POST /api/portal/tax-financials/upload — multipart
  *   file, account_id, tax_year, bank_name (free text), account_kind
  *
- * Instant-parse ingestion (master plan §3.3): parse by content signature →
- * categorize → duplicate alerts (L1/L2/L3) → source-keyed insert → live
- * feedback ("✓ Full year detected — 248 transactions, Jan–Dec"). The AI
- * categorization refinement runs in the background after the response.
+ * SAVE + ENQUEUE (async ingestion). The route is intentionally THIN: it
+ * authenticates, validates, archives the raw file to storage, and enqueues ONE
+ * `ingest_bank_statement` job — then kicks the worker and returns. The heavy
+ * ingestion (parse → categorize → insert → full-year recategorization) runs in
+ * that background job, NOT in the request.
  *
- * OWNER-ONLY. Accepts CSV and PDF statements (PDFs are read by AI extraction,
- * which can take ~2 min — hence the 300s window).
+ * WHY (prod bug, 2026-06-26): the old route ran the full ingestion synchronously
+ * in-request; on production that work outran the serverless function and Vercel
+ * tore it down before responding → empty 500 ("No response is returned from
+ * route handler") even though the rows ingested. Moving ingestion to a job (the
+ * same path the wizard already uses) removes the entire class. The financials
+ * view surfaces in-flight ingestion (`ingestPending`) and the client polls every
+ * 20s, so transactions + P&L fill in as the job completes.
+ *
+ * OWNER-ONLY. Accepts CSV / PDF / ZIP statements.
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -16,8 +24,8 @@ import { isAccountOwner } from '@/lib/portal/owner-access'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
-// A PDF statement read via AI extraction can run ~2 min; 300s leaves margin.
-export const maxDuration = 300
+// Thin save+enqueue now; kept generous purely for the bounded worker kick.
+export const maxDuration = 60
 
 const MAX_BYTES = 20 * 1024 * 1024 // 20 MB — covers a full-year CSV or PDF statement
 
@@ -32,7 +40,6 @@ export async function POST(request: NextRequest) {
     const accountId = String(form.get('account_id') ?? '')
     const taxYear = Number(form.get('tax_year'))
     const bankLabel = String(form.get('bank_name') ?? '').trim()
-    const accountKind = String(form.get('account_kind') ?? 'checking')
 
     if (!file || !accountId || !Number.isInteger(taxYear) || !bankLabel) {
       return NextResponse.json({ error: 'file, account_id, tax_year and bank_name are required' }, { status: 400 })
@@ -54,34 +61,26 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const { ingestPortalCsv } = await import('@/lib/tax/portal-csv-ingest')
-    const result = await ingestPortalCsv({ accountId, taxYear, bankLabel, accountKind, buffer, fileName: file.name })
+    const { saveAndEnqueueStatementUpload } = await import('@/lib/tax/portal-upload-enqueue')
+    const result = await saveAndEnqueueStatementUpload({ accountId, taxYear, bankLabel, buffer, fileName: file.name })
 
-    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 422 })
-
-    // Keep the raw CSV (content-hash named) so the accountant package can
-    // archive the original exports. AWAITED (not fire-and-forget): a storage
-    // upload left dangling outlives the HTTP response and gets the Vercel
-    // function torn down → the client sees a 500 though ingestion succeeded
-    // (prod bug, 2026-06-26). It's a small, fast upload; failures are logged
-    // but never fail the request (ingestion already committed).
-    if (result.inserted > 0) {
-      try {
-        const { supabaseAdmin } = await import('@/lib/supabase-admin')
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-        const archiveType = /\.pdf$/i.test(file.name) ? 'application/pdf'
-          : /\.zip$/i.test(file.name) ? 'application/zip'
-          : 'text/csv'
-        const { error: archiveErr } = await supabaseAdmin.storage
-          .from('onboarding-uploads')
-          .upload(`tax/${accountId}/financials_${result.sourceFileId.replace('upload:', '')}_${safeName}`, buffer, { contentType: archiveType, upsert: true })
-        if (archiveErr) console.error('[tax-financials] raw CSV archive failed:', archiveErr.message)
-      } catch (archiveEx) {
-        console.error('[tax-financials] raw CSV archive threw:', archiveEx)
-      }
+    // Kick the worker so the file starts processing promptly. AWAITED + bounded
+    // (triggerWorker has a 5s timeout) so it never dangles past the response —
+    // an un-awaited trigger is exactly the teardown pattern we're removing. The
+    // 5-min process-jobs cron drains it regardless if this kick is a no-op.
+    try {
+      const { triggerWorker } = await import('@/lib/jobs/queue')
+      await triggerWorker()
+    } catch {
+      // best-effort — the cron is the safety net
     }
 
-    return NextResponse.json(result)
+    return NextResponse.json({
+      ok: true,
+      queued: result.queued,
+      alreadyQueued: result.alreadyQueued,
+      fileName: file.name,
+    })
   } catch (err) {
     console.error('[tax-financials] upload failed:', err)
     return NextResponse.json({ error: 'Upload failed on our side — please try again in a moment.' }, { status: 500 })
