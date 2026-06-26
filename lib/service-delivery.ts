@@ -43,6 +43,14 @@ export interface AdvanceStageParams {
   skip_notify?: boolean
   notes?: string
   actor?: string // "crm-tracker" | "mcp" | etc.
+  /**
+   * Formation date (ISO YYYY-MM-DD) confirmed by staff when advancing a Company
+   * Formation SD into "Articles Received". Passed straight to
+   * materializeFormationCompany so the SS-4 Line 11 ("date business started")
+   * reflects the real state filing date — NOT the day the company was processed
+   * in the CRM (the old default-to-today bug). Ignored for other transitions.
+   */
+  formation_date?: string
 }
 
 export interface AdvanceStageResult {
@@ -628,6 +636,11 @@ export async function advanceServiceDelivery(
           contact_id: delivery.contact_id,
           chosen_name: confirmedName,
           formation_state: stateCode,
+          // Staff-confirmed filing date (OCR-prefilled in the workspace). When
+          // omitted the materializer still falls back to today — but the
+          // workspace requires it before this transition, so that's a safety net
+          // for non-UI callers (cron/MCP), not the normal path.
+          formation_date: params.formation_date,
           actor: `flow-advance:${actor}`,
         })
         if (mat.success && mat.account_id) {

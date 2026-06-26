@@ -7,8 +7,13 @@
  * "worker is read-only"; if these break, that contract has been broken too.
  */
 
-import { describe, it, expect } from "vitest"
-import { WORKER_READ_ONLY_TOOL_NAMES, WORKER_TOOLS, executeWorkerTool } from "@/lib/ai-agent/worker-tools"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import {
+  WORKER_READ_ONLY_TOOL_NAMES,
+  WORKER_TOOLS,
+  executeWorkerTool,
+  resolveWorkerApiKey,
+} from "@/lib/ai-agent/worker-tools"
 import { AGENT_TOOLS } from "@/lib/ai-agent/tools"
 
 describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
@@ -155,5 +160,35 @@ describe("Hermes ↔ Claude bridge — executeWorkerTool guard", () => {
     const result = await executeWorkerTool("memory_recall", {})
     expect(result).not.toContain("not permitted")
     expect(result).toContain("query")
+  })
+})
+
+describe("Slack worker dedicated key — resolveWorkerApiKey fallback", () => {
+  const SAVED = process.env.ANTHROPIC_API_KEY
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "shared-key"
+  })
+  afterEach(() => {
+    if (SAVED === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = SAVED
+  })
+
+  it("uses the override when it is a non-empty string (dedicated Slack key)", () => {
+    expect(resolveWorkerApiKey("slack-dedicated-key")).toBe("slack-dedicated-key")
+  })
+
+  it("falls back to ANTHROPIC_API_KEY when override is undefined (Hermes / unset)", () => {
+    expect(resolveWorkerApiKey(undefined)).toBe("shared-key")
+  })
+
+  it("falls back to ANTHROPIC_API_KEY when override is an empty string (never breaks)", () => {
+    expect(resolveWorkerApiKey("")).toBe("shared-key")
+  })
+
+  it("throws only when neither override nor ANTHROPIC_API_KEY is set", () => {
+    delete process.env.ANTHROPIC_API_KEY
+    expect(() => resolveWorkerApiKey(undefined)).toThrow("ANTHROPIC_API_KEY not configured")
+    // ...but a present override still works even with no shared key.
+    expect(resolveWorkerApiKey("only-override")).toBe("only-override")
   })
 })

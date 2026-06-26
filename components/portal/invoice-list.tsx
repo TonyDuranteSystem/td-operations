@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { Eye, Search } from 'lucide-react'
+import { InvoiceRowActions } from '@/components/portal/invoice-row-actions'
 
 interface Invoice {
   id: string
@@ -74,7 +75,7 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
 
       {/* Table */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="hidden md:grid md:grid-cols-[1fr,140px,100px,100px,100px,60px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
+        <div className="hidden md:grid md:grid-cols-[1fr,140px,100px,100px,100px,84px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
           <span>Customer</span>
           <span>Invoice #</span>
           <span className="text-right">Amount</span>
@@ -86,7 +87,7 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
           <div className="p-8 text-center text-sm text-zinc-500">No invoices found</div>
         ) : (
           filtered.map(inv => (
-            <div key={inv.id} className="grid grid-cols-1 md:grid-cols-[1fr,140px,100px,100px,100px,60px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
+            <div key={inv.id} className="grid grid-cols-1 md:grid-cols-[1fr,140px,100px,100px,100px,84px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
               <span className="font-medium truncate">{inv.customer_name}</span>
               <span className="text-zinc-600 text-xs">{inv.invoice_number}</span>
               <span className="text-right font-medium">
@@ -101,12 +102,15 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
                   {inv.status}
                 </span>
               </span>
-              <Link
-                href={`/portal/invoices/${inv.id}`}
-                className="p-1.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors"
-              >
-                <Eye className="h-4 w-4" />
-              </Link>
+              <div className="flex items-center justify-end gap-1">
+                <Link
+                  href={`/portal/invoices/${inv.id}`}
+                  className="p-1.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors"
+                >
+                  <Eye className="h-4 w-4" />
+                </Link>
+                <InvoiceRowActions invoice={{ id: inv.id, invoice_number: inv.invoice_number, status: inv.status }} />
+              </div>
             </div>
           ))
         )}

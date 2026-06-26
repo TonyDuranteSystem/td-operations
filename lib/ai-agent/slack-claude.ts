@@ -2063,6 +2063,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   const workerOpts: CallWorkerOptions = {
     threadId: row.thread_id,
     messageId: row.id,
+    // Dedicated key so the Slack worker's spend bills to its own Console line.
+    // Unset → falls back to ANTHROPIC_API_KEY inside the worker (never breaks).
+    apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
     systemPromptOverride: slackSystemPrompt,
     enableCodeTasks: true,
     enableSlackSend: true,
@@ -2219,6 +2222,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
         const textOnlyOpts: CallWorkerOptions = {
           threadId: row.thread_id,
           messageId: row.id,
+          // Dedicated key (cost isolation); unset → falls back to ANTHROPIC_API_KEY.
+          apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
           systemPromptOverride: slackSystemPrompt,
           enableCodeTasks: true,
           enableSlackSend: true,
