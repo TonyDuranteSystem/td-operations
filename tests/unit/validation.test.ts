@@ -209,6 +209,70 @@ describe('validateFormationData', () => {
     const result = validateFormationData(data)
     expect(result.valid).toBe(false)
   })
+
+  // ─── MMLLC signer + ownership (server-side backstop) ───
+  const mmllcBase = {
+    owner_first_name: 'John',
+    owner_last_name: 'Doe',
+    llc_name_1: 'My New LLC',
+    member_count: 1,
+    member_0_member_type: 'individual',
+    member_0_member_first_name: 'Marco',
+    member_0_member_email: 'marco@test.com',
+    member_0_member_ownership_pct: '40',
+  }
+
+  it('MMLLC: passes with exactly one signer and valid ownership', () => {
+    const result = validateFormationData({ ...mmllcBase, owner_is_signer: true, member_0_is_signer: false }, 'MMLLC')
+    expect(result.valid).toBe(true)
+  })
+
+  it('MMLLC: accepts the "Multi Member LLC" spelling', () => {
+    const result = validateFormationData({ ...mmllcBase, member_0_is_signer: true }, 'Multi Member LLC')
+    expect(result.valid).toBe(true)
+  })
+
+  it('MMLLC: fails when no signer is selected', () => {
+    const result = validateFormationData({ ...mmllcBase }, 'MMLLC')
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => e.field === 'is_signer')).toBe(true)
+  })
+
+  it('MMLLC: fails when more than one signer is selected', () => {
+    const result = validateFormationData({ ...mmllcBase, owner_is_signer: true, member_0_is_signer: true }, 'MMLLC')
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => e.field === 'is_signer')).toBe(true)
+  })
+
+  it('MMLLC: fails when additional members own >= 100%', () => {
+    const result = validateFormationData(
+      { ...mmllcBase, member_0_member_ownership_pct: '120', owner_is_signer: true },
+      'MMLLC',
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => e.field === 'member_ownership_pct')).toBe(true)
+  })
+
+  it('MMLLC: fails when additional members own 0% (no members)', () => {
+    const result = validateFormationData(
+      { owner_first_name: 'John', owner_last_name: 'Doe', llc_name_1: 'X LLC', owner_is_signer: true },
+      'MMLLC',
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => e.field === 'member_ownership_pct')).toBe(true)
+  })
+
+  it('accepts string "true" for owner_is_signer', () => {
+    const result = validateFormationData({ ...mmllcBase, owner_is_signer: 'true' }, 'MMLLC')
+    expect(result.valid).toBe(true)
+  })
+
+  it('SMLLC / no entityType: signer + ownership checks are SKIPPED (no regression)', () => {
+    // Same member data, but no MMLLC entityType → MMLLC checks must not fire.
+    expect(validateFormationData({ ...mmllcBase }).valid).toBe(true)
+    expect(validateFormationData({ ...mmllcBase }, 'SMLLC').valid).toBe(true)
+    expect(validateFormationData({ ...mmllcBase }, 'Single Member LLC').valid).toBe(true)
+  })
 })
 
 describe('validateWizardData (dispatcher)', () => {

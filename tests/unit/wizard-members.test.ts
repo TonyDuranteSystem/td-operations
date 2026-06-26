@@ -183,6 +183,51 @@ describe('extractMembersFromWizardData', () => {
     }
   })
 
+  // ─── is_signer (SS-4 Responsible Party) ──────────────────────
+
+  it('extracts is_signer from flat wizard keys', () => {
+    const result = extractMembersFromWizardData({
+      member_count: 2,
+      member_0_member_first_name: 'Marco',
+      member_0_member_email: 'marco@test.com',
+      member_0_is_signer: true,
+      member_1_member_first_name: 'Luca',
+      member_1_member_email: 'luca@test.com',
+      member_1_is_signer: false,
+    })
+    expect(result[0].is_signer).toBe(true)
+    expect(result[1].is_signer).toBe(false)
+  })
+
+  it('parses is_signer from string "true"/"false"', () => {
+    const result = extractMembersFromWizardData({
+      member_count: 1,
+      member_0_member_first_name: 'Marco',
+      member_0_member_email: 'marco@test.com',
+      member_0_is_signer: 'true',
+    })
+    expect(result[0].is_signer).toBe(true)
+  })
+
+  it('is_signer is null when the key is absent (backward-compatible)', () => {
+    const result = extractMembersFromWizardData({
+      member_count: 1,
+      member_0_member_first_name: 'Marco',
+      member_0_member_email: 'marco@test.com',
+    })
+    expect(result[0].is_signer).toBeNull()
+  })
+
+  it('extracts is_signer for a company member', () => {
+    const result = extractMembersFromWizardData({
+      additional_members: [
+        { member_type: 'company', member_company_name: 'Acme Corp', member_rep_name: 'John Doe', is_signer: true },
+      ],
+    })
+    expect(result[0].member_type).toBe('company')
+    expect(result[0].is_signer).toBe(true)
+  })
+
   // ─── Count detection without member_count key ─────────────────
 
   it('detects member count from flat keys when member_count absent', () => {

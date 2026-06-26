@@ -25,6 +25,7 @@ export const STAGE_COMPONENT_TYPES = [
   'ein_entry',
   'shipping_info',
   'formation_names',
+  'members_panel',
   'notes',
 ] as const
 

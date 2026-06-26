@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
   // returned 200 success). The client retried blindly, flooding the queue
   // with duplicate jobs. See dev_task 3d6800c8 for the Luca Gallacci case
   // that motivated this fix.
-  const validation = validateWizardData(wizard_type, data as Record<string, unknown>)
+  const validation = validateWizardData(wizard_type, data as Record<string, unknown>, entity_type)
   if (!validation.valid) {
     return NextResponse.json(
       {

@@ -29,6 +29,11 @@ export type NormalizedIndividualMember = {
   /** Whether this member applies for an ITIN (formation/onboarding wizard, when
    * the offer bundles ITIN). Drives ITIN SD creation. dev_task fcf5e254. */
   member_needs_itin: boolean | null
+  /** Whether this member is the SS-4 Responsible Party (the signer). Set in the
+   * MMLLC formation wizard (member_{idx}_is_signer flat key). Exactly one member
+   * across owner+members carries true. Drives `members.is_signer` at
+   * materialization, which the SS-4 signer guard (decideSs4Signer) reads. */
+  is_signer: boolean | null
 }
 
 export type NormalizedCompanyMember = {
@@ -49,6 +54,9 @@ export type NormalizedCompanyMember = {
   member_rep_address_state: string | null
   member_rep_address_zip: string | null
   member_rep_address_country: string | null
+  /** Whether this company member is the SS-4 Responsible Party (the signer).
+   * Resolved to its representative at SS-4 generation. See is_signer above. */
+  is_signer: boolean | null
 }
 
 export type NormalizedMember = NormalizedIndividualMember | NormalizedCompanyMember
@@ -95,6 +103,7 @@ function normalizeFromObject(raw: Record<string, unknown>): NormalizedMember {
       member_rep_address_state: str(raw.member_rep_address_state),
       member_rep_address_zip: str(raw.member_rep_address_zip),
       member_rep_address_country: str(raw.member_rep_address_country),
+      is_signer: bool(raw.is_signer),
     }
   }
 
@@ -112,6 +121,7 @@ function normalizeFromObject(raw: Record<string, unknown>): NormalizedMember {
     member_zip: str(raw.member_zip),
     member_country: str(raw.member_country),
     member_needs_itin: bool(raw.member_needs_itin),
+    is_signer: bool(raw.is_signer),
   }
 }
 

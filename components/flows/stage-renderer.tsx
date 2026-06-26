@@ -16,6 +16,7 @@ import { EinEntry } from './ein-entry'
 import { FormationNames } from './formation-names'
 import { FlowChat } from './flow-chat'
 import { ShippingInfo } from './shipping-info'
+import { MembersPanel } from './members-panel'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -97,6 +98,8 @@ function renderComponent(
       )
     case 'shipping_info':
       return <ShippingInfo key={key} serviceDelivery={serviceDelivery} />
+    case 'members_panel':
+      return <MembersPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'chat':
       return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':

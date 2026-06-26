@@ -2059,6 +2059,14 @@ export interface CallWorkerOptions {
    */
   clientKey?: string | null
   clientName?: string | null
+  /**
+   * Override the Anthropic API key for this call. Falls back to
+   * process.env.ANTHROPIC_API_KEY when undefined/empty, so an unset override
+   * never breaks the worker. The Slack worker passes SLACK_WORKER_ANTHROPIC_KEY
+   * here so its token spend bills to a dedicated key (cost isolation); the
+   * Hermes/Telegram path passes nothing and stays on the shared key.
+   */
+  apiKeyOverride?: string
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -2104,6 +2112,20 @@ export function buildWebServerTools(): Array<Record<string, unknown>> {
   ]
 }
 
+/**
+ * Resolve the Anthropic API key for a worker call: a non-empty override (the
+ * Slack worker's dedicated SLACK_WORKER_ANTHROPIC_KEY) wins, otherwise fall back
+ * to the shared ANTHROPIC_API_KEY. An unset/empty override therefore never
+ * changes behaviour. Throws only when neither is available. Pure + exported so
+ * the fallback contract is unit-testable.
+ */
+export function resolveWorkerApiKey(override?: string): string {
+  const key =
+    (override && override.length > 0 ? override : undefined) || process.env.ANTHROPIC_API_KEY
+  if (!key) throw new Error("ANTHROPIC_API_KEY not configured")
+  return key
+}
+
 export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
@@ -2112,9 +2134,11 @@ export async function runWorkerLoop(
   sourceMessageId?: string | null,
   currentThreadId?: string | null,
   serverTools?: Array<Record<string, unknown>>,
+  apiKeyOverride?: string,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured")
+  // Dedicated-key override (Slack worker) with fallback to the shared key. Covers
+  // both fetch sites below — they read this same apiKey.
+  const apiKey = resolveWorkerApiKey(apiKeyOverride)
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
@@ -2553,7 +2577,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       ? buildWebServerTools()
       : undefined
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools)
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride)
 
   if (threadId) {
     try {
