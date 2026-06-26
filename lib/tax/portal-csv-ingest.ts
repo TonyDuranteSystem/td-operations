@@ -151,9 +151,35 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   } catch (e) {
     console.error("[portal-csv-ingest] categorization pass failed (rows ingested fine):", e)
   }
-  // …AI assist in the background — instant feedback for the client, AI lands after.
-  void recategorizeAccountYear(accountId, taxYear, { aiAssist: true })
-    .catch(e => console.error("[portal-csv-ingest] AI categorization pass failed:", e))
+  // …AI assist runs as a background JOB, NOT a dangling promise. A promise that
+  // outlives the HTTP response gets the Vercel function torn down mid-flight —
+  // the upload route then returned an empty 500 ("No response is returned from
+  // route handler") to the client even though these rows were already ingested
+  // (prod bug, 2026-06-26). Enqueue idempotently (at most one pending AI job per
+  // account+year) so the worker runs it, fully awaited. Never blocks ingestion.
+  try {
+    const { supabaseAdmin: sb } = await import("@/lib/supabase-admin")
+    const { data: existing } = await sb
+      .from("job_queue")
+      .select("id")
+      .eq("job_type", "recategorize_ai")
+      .eq("account_id", accountId)
+      .eq("payload->>tax_year", String(taxYear))
+      .in("status", ["pending", "processing"])
+      .limit(1)
+    if (!existing || existing.length === 0) {
+      const { enqueueJobs } = await import("@/lib/jobs/queue")
+      await enqueueJobs([{
+        job_type: "recategorize_ai",
+        payload: { account_id: accountId, tax_year: taxYear },
+        priority: 5,
+        account_id: accountId,
+        created_by: "portal_csv_ingest",
+      }])
+    }
+  } catch (e) {
+    console.error("[portal-csv-ingest] failed to enqueue AI categorization job:", e)
+  }
 
   if (inserted > 0) {
     // The data changed — a prior attestation no longer covers it (QA finding).

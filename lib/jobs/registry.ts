@@ -13,6 +13,7 @@ import { handleItinWizardSetup } from "./handlers/itin-wizard-setup"
 import { handleDocumentReprocess } from "./handlers/document-reprocess"
 import { handleInvoiceReminder } from "./handlers/invoice-reminder"
 import { handleIngestBankStatement } from "./handlers/ingest-bank-statement"
+import { handleRecategorizeAi } from "./handlers/recategorize-ai"
 
 type JobHandler = (job: Job) => Promise<JobResult>
 
@@ -31,6 +32,11 @@ const handlers: Record<string, JobHandler> = {
   // Added 2026-06-24 — per-file bank statement ingestion (CSV/PDF) for the
   // portal tax wizard; one job per statement keeps each inside the 300s window.
   ingest_bank_statement: handleIngestBankStatement,
+  // Added 2026-06-26 — AI categorization refinement as a proper job. Was a
+  // dangling promise inside ingestPortalCsv that outlived the HTTP response and
+  // got the Vercel function torn down → upload returned a 500 to the client
+  // even though ingestion succeeded. Now awaited inside the worker.
+  recategorize_ai: handleRecategorizeAi,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

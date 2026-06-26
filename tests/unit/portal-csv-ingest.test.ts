@@ -30,10 +30,21 @@ vi.mock("@/lib/supabase-admin", () => ({
         }
         return chain
       }
+      if (table === "job_queue") {
+        // dedup lookup for the recategorize_ai enqueue: select().eq().eq().eq().in().limit()
+        const chain = {
+          select: () => chain, eq: () => chain, in: () => chain,
+          limit: () => Promise.resolve({ data: [], error: null }),
+        }
+        return chain
+      }
       throw new Error(`unexpected table ${table}`)
     },
   },
 }))
+
+const enqueueJobsMock = vi.fn(async (..._a: unknown[]) => ({ ids: ["job-ai-1"] }))
+vi.mock("@/lib/jobs/queue", () => ({ enqueueJobs: (...a: unknown[]) => enqueueJobsMock(...a) }))
 
 const recatMock = vi.fn().mockResolvedValue({ scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 3 })
 vi.mock("@/lib/tax/categorization-engine", () => ({
@@ -55,7 +66,7 @@ const INPUT = {
   buffer: Buffer.from("csv-content"), fileName: "export.csv",
 }
 
-beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); upsertCalls.length = 0; existingRows.length = 0 })
+beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); enqueueJobsMock.mockClear(); upsertCalls.length = 0; existingRows.length = 0 })
 
 describe("ingestPortalCsv", () => {
   it("unreadable file → guiding error, nothing inserted", async () => {
@@ -99,9 +110,14 @@ describe("ingestPortalCsv", () => {
     const row = upsertCalls[0] as Record<string, unknown>
     expect(row.source_file_id).toBe(uploadSourceId(sha256Hex(INPUT.buffer)))
     expect(row.tax_year).toBe(2025)
-    // deterministic pass synchronous + AI pass in background = 2 calls
-    expect(recatMock).toHaveBeenCalledTimes(2)
-    expect(recatMock.mock.calls[1][2]).toEqual({ aiAssist: true })
+    // deterministic pass runs inline (1 call); the AI pass is ENQUEUED as a
+    // background job (not a dangling promise — prod fire-and-forget fix).
+    expect(recatMock).toHaveBeenCalledTimes(1)
+    expect(recatMock.mock.calls[0][2]).toBeUndefined()
+    expect(enqueueJobsMock).toHaveBeenCalledTimes(1)
+    const aiJob = (enqueueJobsMock.mock.calls[0][0] as Array<{ job_type: string; payload: unknown }>)[0]
+    expect(aiJob.job_type).toBe("recategorize_ai")
+    expect(aiJob.payload).toEqual({ account_id: "acc-1", tax_year: 2025 })
   })
 
   it("unknown bank signature → falls back to the client's label", async () => {

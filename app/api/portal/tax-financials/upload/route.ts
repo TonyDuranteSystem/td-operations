@@ -60,17 +60,25 @@ export async function POST(request: NextRequest) {
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 422 })
 
     // Keep the raw CSV (content-hash named) so the accountant package can
-    // archive the original exports — fire-and-forget, ingestion already done.
+    // archive the original exports. AWAITED (not fire-and-forget): a storage
+    // upload left dangling outlives the HTTP response and gets the Vercel
+    // function torn down → the client sees a 500 though ingestion succeeded
+    // (prod bug, 2026-06-26). It's a small, fast upload; failures are logged
+    // but never fail the request (ingestion already committed).
     if (result.inserted > 0) {
-      const { supabaseAdmin } = await import('@/lib/supabase-admin')
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const archiveType = /\.pdf$/i.test(file.name) ? 'application/pdf'
-        : /\.zip$/i.test(file.name) ? 'application/zip'
-        : 'text/csv'
-      void supabaseAdmin.storage
-        .from('onboarding-uploads')
-        .upload(`tax/${accountId}/financials_${result.sourceFileId.replace('upload:', '')}_${safeName}`, buffer, { contentType: archiveType, upsert: true })
-        .then(({ error }) => { if (error) console.error('[tax-financials] raw CSV archive failed:', error.message) })
+      try {
+        const { supabaseAdmin } = await import('@/lib/supabase-admin')
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const archiveType = /\.pdf$/i.test(file.name) ? 'application/pdf'
+          : /\.zip$/i.test(file.name) ? 'application/zip'
+          : 'text/csv'
+        const { error: archiveErr } = await supabaseAdmin.storage
+          .from('onboarding-uploads')
+          .upload(`tax/${accountId}/financials_${result.sourceFileId.replace('upload:', '')}_${safeName}`, buffer, { contentType: archiveType, upsert: true })
+        if (archiveErr) console.error('[tax-financials] raw CSV archive failed:', archiveErr.message)
+      } catch (archiveEx) {
+        console.error('[tax-financials] raw CSV archive threw:', archiveEx)
+      }
     }
 
     return NextResponse.json(result)
