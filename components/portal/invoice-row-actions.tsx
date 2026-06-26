@@ -18,7 +18,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useTransition } from 'rea
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { MoreVertical, Eye, Pencil, Send, Bell, Ban, Loader2, X } from 'lucide-react'
+import { MoreVertical, Eye, Download, Pencil, Send, Bell, Ban, Loader2, X } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { availableInvoiceActions } from '@/lib/portal/invoice-row-actions-policy'
 import { voidInvoice } from '@/app/portal/invoices/actions'
@@ -116,6 +116,31 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
     }
   }
 
+  const handleDownloadPdf = async () => {
+    setMenuOpen(false)
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/portal/invoices/${invoice.id}/pdf`)
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') || ''
+        const d = ct.includes('json') ? await res.json().catch(() => ({})) : {}
+        throw new Error(d.error || t('invoices.pdfFailed'))
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${invoice.invoice_number || 'invoice'}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success(t('invoices.pdfDownloaded'))
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : t('invoices.pdfFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleVoid = () => {
     startTransition(async () => {
       const result = await voidInvoice(invoice.id)
@@ -147,6 +172,14 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
             className={`${itemClass} text-zinc-700 hover:bg-zinc-50`}
           >
             <Eye className="h-4 w-4" /> {t('invoices.view')}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadPdf}
+            className={`${itemClass} text-zinc-700 hover:bg-zinc-50`}
+          >
+            <Download className="h-4 w-4" /> {t('invoices.downloadPdf')}
           </button>
 
           {actions.includes('edit') && (
