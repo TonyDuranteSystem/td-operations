@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Building2, ChevronDown, Check, Sparkles } from 'lucide-react'
+import { Building2, ChevronDown, Check, Sparkles, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PortalAccount } from '@/lib/types'
 import type { InProgressFormation } from '@/lib/portal/queries'
@@ -15,6 +15,12 @@ interface CompanySwitcherProps {
   /** Set when an in-progress formation is the current selection. */
   selectedFormationId?: string
   userName?: string
+  /** When the viewer is ALSO a partner — adds a "Partner" entry to this switcher. */
+  dualRole?: boolean
+  /** True when the partner view is the current selection. */
+  partnerMode?: boolean
+  /** Where the partner entry navigates (default: the partner home). */
+  partnerHref?: string
 }
 
 /**
@@ -25,7 +31,7 @@ interface CompanySwitcherProps {
  * Tier-independent: the parent renders this whenever there is more than one
  * entity, so a client viewing a formation can always switch back.
  */
-export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], selectedFormationId, userName }: CompanySwitcherProps) {
+export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], selectedFormationId, userName, dualRole = false, partnerMode = false, partnerHref = '/portal/partner/clients' }: CompanySwitcherProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const router = useRouter()
@@ -33,7 +39,9 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
   const totalEntities = accounts.length + inProgress.length
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
   const selectedFormation = inProgress.find(f => f.id === selectedFormationId)
-  const selectedLabel = selectedFormation?.label ?? selectedAccount?.company_name ?? userName ?? 'My Account'
+  const selectedLabel = partnerMode
+    ? 'Partner — My Referrals'
+    : (selectedFormation?.label ?? selectedAccount?.company_name ?? userName ?? 'My Account')
 
   // Close on outside click
   useEffect(() => {
@@ -46,22 +54,37 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
+  // Selecting any company/formation also drops out of partner mode.
+  const exitPartnerMode = () => {
+    if (dualRole) document.cookie = `portal_mode=client; path=/portal; max-age=31536000; SameSite=Lax`
+  }
+
   const selectAccount = (accountId: string) => {
     document.cookie = `portal_account_id=${accountId}; path=/portal; max-age=31536000; SameSite=Lax`
     // Clear any in-progress-formation selection so the account view takes over.
     document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+    exitPartnerMode()
     setOpen(false)
-    router.refresh()
+    if (partnerMode) router.push('/portal')
+    else router.refresh()
   }
 
   const selectFormation = (formationId: string) => {
     document.cookie = `portal_formation=${formationId}; path=/portal; max-age=31536000; SameSite=Lax`
+    exitPartnerMode()
     setOpen(false)
-    router.refresh()
+    if (partnerMode) router.push('/portal')
+    else router.refresh()
   }
 
-  if (totalEntities <= 1) {
-    // Single entity — just show the name, no dropdown.
+  const selectPartner = () => {
+    document.cookie = `portal_mode=partner; path=/portal; max-age=31536000; SameSite=Lax`
+    setOpen(false)
+    router.push(partnerHref)
+  }
+
+  if (totalEntities <= 1 && !dualRole) {
+    // Single entity, not a partner — just show the name, no dropdown.
     return (
       <div className="flex items-center gap-2 px-3 py-2">
         {selectedFormation
@@ -78,9 +101,11 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 w-full px-3 py-2 rounded-lg hover:bg-zinc-50 transition-colors"
       >
-        {selectedFormation
-          ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
-          : <Building2 className="h-4 w-4 text-blue-600 shrink-0" />}
+        {partnerMode
+          ? <Share2 className="h-4 w-4 text-violet-600 shrink-0" />
+          : selectedFormation
+            ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
+            : <Building2 className="h-4 w-4 text-blue-600 shrink-0" />}
         <span className="text-sm font-medium text-zinc-900 truncate flex-1 text-left">
           {selectedLabel}
         </span>
@@ -118,6 +143,19 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
               )}
             </button>
           ))}
+          {dualRole && (
+            <>
+              <div className="my-1 border-t border-zinc-100" />
+              <button
+                onClick={selectPartner}
+                className="flex items-center gap-2 w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 transition-colors"
+              >
+                <Share2 className="h-4 w-4 text-violet-600 shrink-0" />
+                <span className="truncate flex-1">Partner — My Referrals</span>
+                {partnerMode && <Check className="h-4 w-4 text-blue-600 shrink-0" />}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

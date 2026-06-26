@@ -491,27 +491,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           </button>
         </div>
 
-        {/* Client ⇄ Partner switcher — only for someone who is BOTH. */}
-        {dualRole && (
-          <div className="px-5 py-3 border-b">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">View</div>
-            <div className="flex gap-1 bg-zinc-100 rounded-lg p-0.5">
-              <a
-                href="/portal/switch-mode?mode=client"
-                className={`flex-1 text-center text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${portalMode === 'client' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
-              >
-                Client
-              </a>
-              <a
-                href="/portal/switch-mode?mode=partner"
-                className={`flex-1 text-center text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${portalMode === 'partner' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
-              >
-                Partner
-              </a>
-            </div>
-          </div>
-        )}
-
         {/* Contact name — the person is the home (PR 2 Step 7).
             Hidden for partners (they're not "logged in as a contact" in the
             same sense — they manage referrals). */}
@@ -534,6 +513,21 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+          {/* Dual-role (client + partner): the SAME company switcher carries the
+              Partner entry, shown in both views so they can always switch. */}
+          {dualRole && (
+            <div className="pb-2 mb-1 border-b">
+              <CompanySwitcher
+                accounts={accounts}
+                selectedAccountId={selectedAccountId}
+                inProgress={inProgress}
+                selectedFormationId={selectedFormationId}
+                userName={fullName || user.email?.split('@')[0]}
+                dualRole
+                partnerMode={portalMode === 'partner'}
+              />
+            </div>
+          )}
           {/* Tier-specific top items (Offer for leads, Wizard for onboarding) — */}
           {/* sit ABOVE the Personal section because they're action CTAs for clients */}
           {/* who don't yet have a company. */}
@@ -567,7 +561,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
               <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                 {companiesLabel}
               </div>
-              {isMultiEntity ? (
+              {isMultiEntity && !dualRole ? (
                 <div className="px-0 py-1">
                   <CompanySwitcher
                     accounts={accounts}
