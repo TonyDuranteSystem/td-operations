@@ -35,8 +35,10 @@ export default function EditInvoicePage() {
       if (!res.ok) { setLoading(false); return }
       const data = await res.json()
 
-      // Only Draft, Sent, Overdue invoices can be edited
-      if (!['Draft', 'Sent', 'Overdue'].includes(data.status)) { setLoading(false); return }
+      // The client's invoice tool allows editing at any stage (incl. Paid) —
+      // it's the client's own record. Only a voided invoice (Cancelled) or a
+      // Split parent (structurally tied to its installments) can't be edited.
+      if (['Cancelled', 'Split'].includes(data.status)) { setLoading(false); return }
 
       // Fetch customers for dropdown
       const custRes = await fetch(`/api/portal/invoices/customers?account_id=${data.account_id}`)

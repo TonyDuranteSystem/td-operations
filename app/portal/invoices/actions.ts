@@ -178,6 +178,7 @@ export async function splitInvoice(
       .limit(1)
       .maybeSingle()
     if (linkedPay) {
+      // eslint-disable-next-line no-restricted-syntax -- legacy portal_invoice_id-linked payment sync on split; tracked by dev_task 7ebb1e0c
       await supabaseAdmin.from('payments').update({
         status: 'Split' as never,
         invoice_status: 'Split' as never,
@@ -218,6 +219,7 @@ export async function splitInvoice(
           .from('client_invoices')
           .update({ status: 'Sent' })
           .eq('id', result.invoiceId)
+        // eslint-disable-next-line no-restricted-syntax -- legacy portal_invoice_id-linked payment sync on split child; tracked by dev_task 7ebb1e0c
         await supabaseAdmin
           .from('payments')
           .update({ status: 'Pending', invoice_status: 'Sent' })
@@ -246,8 +248,16 @@ export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
       .eq('id', invoiceId)
       .single()
     if (!inv) throw new Error('Invoice not found')
-    if (!['Draft', 'Sent', 'Overdue'].includes(inv.status)) {
-      throw new Error(`Cannot void invoice with status '${inv.status}'`)
+    // The client's invoice tool follows the standard lifecycle: any invoice
+    // can be voided (Draft/Sent/Overdue/Paid/Partial) — it's the client's own
+    // record, not a TD accounting document. Only an already-voided invoice
+    // can't be re-voided, and a Split parent is structurally tied to its
+    // installment children so it's left out.
+    if (inv.status === 'Cancelled') {
+      throw new Error('Invoice is already voided')
+    }
+    if (inv.status === 'Split') {
+      throw new Error('Cannot void a split invoice — void its installments instead')
     }
 
     await supabaseAdmin

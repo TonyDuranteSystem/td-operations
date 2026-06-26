@@ -195,11 +195,15 @@ export async function POST(
       contact_id: invoice.contact_id || null,
     })
 
-    // Update invoice status to Sent
-    await supabaseAdmin
-      .from('client_invoices')
-      .update({ status: 'Sent', updated_at: new Date().toISOString() })
-      .eq('id', id)
+    // Standard invoice lifecycle: sending only advances a Draft → Sent. It must
+    // NEVER downgrade an already Sent / Overdue / Paid invoice — re-sending a
+    // paid invoice (e.g. as a record) leaves its status untouched.
+    if (invoice.status === 'Draft') {
+      await supabaseAdmin
+        .from('client_invoices')
+        .update({ status: 'Sent', updated_at: new Date().toISOString() })
+        .eq('id', id)
+    }
 
     return NextResponse.json({ success: true })
   } catch (err) {

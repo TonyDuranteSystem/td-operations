@@ -6,25 +6,28 @@ describe('availableInvoiceActions', () => {
     expect(availableInvoiceActions('Draft')).toEqual(['edit', 'send', 'void'])
   })
 
-  it('Sent → remind, void (no edit, no send)', () => {
-    expect(availableInvoiceActions('Sent')).toEqual(['remind', 'void'])
+  it('Sent → edit, remind, void (no send)', () => {
+    expect(availableInvoiceActions('Sent')).toEqual(['edit', 'remind', 'void'])
   })
 
-  it('Overdue → remind, void', () => {
-    expect(availableInvoiceActions('Overdue')).toEqual(['remind', 'void'])
+  it('Overdue → edit, remind, void', () => {
+    expect(availableInvoiceActions('Overdue')).toEqual(['edit', 'remind', 'void'])
   })
 
-  it('Paid → no actions (cannot void a paid invoice)', () => {
-    expect(availableInvoiceActions('Paid')).toEqual([])
+  it('Paid → edit, void (client can edit/void their own paid invoice; no reminder)', () => {
+    expect(availableInvoiceActions('Paid')).toEqual(['edit', 'void'])
+  })
+
+  it('Partial → edit, void', () => {
+    expect(availableInvoiceActions('Partial')).toEqual(['edit', 'void'])
+  })
+
+  it('Split → no actions (structural parent of installments)', () => {
+    expect(availableInvoiceActions('Split')).toEqual([])
   })
 
   it('Cancelled → no actions (already voided)', () => {
     expect(availableInvoiceActions('Cancelled')).toEqual([])
-  })
-
-  it('Partial / Split → no void (backend rejects)', () => {
-    expect(availableInvoiceActions('Partial')).toEqual([])
-    expect(availableInvoiceActions('Split')).toEqual([])
   })
 
   it('handles null / empty / unknown / whitespace gracefully', () => {
@@ -32,6 +35,6 @@ describe('availableInvoiceActions', () => {
     expect(availableInvoiceActions(undefined)).toEqual([])
     expect(availableInvoiceActions('')).toEqual([])
     expect(availableInvoiceActions('Bogus')).toEqual([])
-    expect(availableInvoiceActions('  Draft  ')).toEqual(['edit', 'send', 'void'])
+    expect(availableInvoiceActions('  Paid  ')).toEqual(['edit', 'void'])
   })
 })
