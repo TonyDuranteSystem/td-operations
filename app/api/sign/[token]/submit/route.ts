@@ -24,6 +24,8 @@ import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
+import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
+import { enqueueJob } from "@/lib/jobs/queue"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -55,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: env } = await db
     .from("esign_envelopes")
-    .select("id, token, status, total_signers")
+    .select("id, token, status, total_signers, routing_order")
     .eq("id", signer.envelope_id)
     .single()
   if (!env) return NextResponse.json({ error: "Document not found." }, { status: 404 })
@@ -163,7 +165,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     await finalizeEsignCompletion(env.id)
   } else {
     await db.from("esign_envelopes").update({ status: "in_progress", updated_at: new Date().toISOString() }).eq("id", env.id)
-    // Phase 3 (sequential): queue the invite for the next signer.
+    // Sequential routing: now email the next pending signer (parallel signers
+    // were all emailed up front). Pick the lowest signing_order still pending.
+    if (env.routing_order === "sequential") {
+      const { data: next } = await db
+        .from("esign_signers")
+        .select("id, email")
+        .eq("envelope_id", env.id)
+        .eq("status", "pending")
+        .order("signing_order", { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      if (next?.email) {
+        const base = chooseLinkBase(originFromHeaders(n => req.headers.get(n)), process.env.VERCEL_ENV === "production")
+        await enqueueJob({
+          job_type: "esign_send_email",
+          payload: { signer_id: next.id, base_url: base },
+          related_entity_type: "esign_envelope",
+          related_entity_id: env.id,
+        })
+      }
+    }
   }
 
   return NextResponse.json({ ok: true, completed })

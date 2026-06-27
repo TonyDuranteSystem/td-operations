@@ -47,6 +47,7 @@ export function EsignEditor() {
   const [activeSigner, setActiveSigner] = useState(0)
   const [tool, setTool] = useState<FieldType>("signature")
   const [fields, setFields] = useState<PlacedField[]>([])
+  const [routingOrder, setRoutingOrder] = useState<"sequential" | "parallel">("sequential")
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState("")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,7 +144,7 @@ export function EsignEditor() {
       const payload = {
         document_name: documentName.trim(),
         owner_account_id: account?.id ?? null,
-        routing_order: "sequential",
+        routing_order: signers.length > 1 ? routingOrder : "sequential",
         signers: signers.map(s => ({ name: s.name.trim(), email: s.email.trim() || null })),
         fields: fields.map(f => ({
           field_type: f.field_type,
@@ -167,7 +168,7 @@ export function EsignEditor() {
     } finally {
       setCreating(false)
     }
-  }, [file, documentName, signers, fields, account])
+  }, [file, documentName, signers, fields, account, routingOrder])
 
   if (result) {
     return (
@@ -276,6 +277,22 @@ export function EsignEditor() {
             ))}
             <button onClick={addSigner} className="text-xs text-blue-600 hover:underline">+ add signer</button>
           </div>
+          {signers.length > 1 && (
+            <div className="mt-2">
+              <label className="text-[11px] text-zinc-500">Signing order</label>
+              <div className="mt-1 inline-flex rounded-md border p-0.5">
+                {(["sequential", "parallel"] as const).map(o => (
+                  <button
+                    key={o}
+                    onClick={() => setRoutingOrder(o)}
+                    className={`rounded px-2.5 py-1 text-xs font-medium ${routingOrder === o ? "bg-blue-600 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}
+                  >
+                    {o === "sequential" ? "One at a time" : "All at once"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div>
