@@ -89,6 +89,71 @@ function isFieldVisible(field: FieldConfig, stepFields: FieldConfig[], data: Rec
   return parent ? isFieldVisible(parent, stepFields, data, depth + 1) : true
 }
 
+type BankGuide = { name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }
+
+/** "Before You Start" step: tells the client to upload their transactions as a
+ *  CSV and gives a bank-name lookup with the exact CSV-download steps. The P&L /
+ *  Balance Sheet we build from it is a gift — but only if they bring clean data. */
+function PrepareCsvStep({ locale, bankGuides }: { locale: string; bankGuides: BankGuide[] }) {
+  const [bank, setBank] = useState('')
+  const it = locale === 'it'
+  const q = bank.toLowerCase().trim()
+  const guide = q.length >= 3 ? bankGuides.find(g => g.matchTerms.some(t => q.includes(t))) : null
+  const gSteps = guide ? (it && guide.stepsIt.length > 0 ? guide.stepsIt : guide.stepsEn) : []
+  const gNote = guide ? (it && guide.noteIt ? guide.noteIt : guide.noteEn) : ''
+  return (
+    <div className="space-y-5">
+      <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4">
+        <p className="text-base font-semibold text-blue-900">
+          {it ? '📄 Prima di iniziare: prepara le transazioni della tua banca in CSV' : '📄 Before you start: get your bank transactions as a CSV file'}
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-blue-900/90">
+          {it
+            ? "Per preparare il tuo Conto Economico e lo Stato Patrimoniale ci servono TUTTE le transazioni dell'anno, per ogni conto, in formato CSV. Quasi tutte le banche permettono di scaricarlo in pochi clic — molto più veloce e preciso del PDF. Scarica il CSV ora, prima di proseguire."
+            : 'To prepare your Profit & Loss and Balance Sheet, we need ALL of the year’s transactions, for each account, as a CSV file. Almost every bank lets you download one in a few clicks — far faster and more accurate than a PDF. Download your CSV now, before you continue.'}
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700">
+          {it ? 'Qual è la tua banca? (es. Mercury, Wise, Chase, Revolut, Airwallex, Relay)' : 'Which bank do you use? (e.g. Mercury, Wise, Chase, Revolut, Airwallex, Relay)'}
+        </label>
+        <input
+          type="text"
+          value={bank}
+          onChange={e => setBank(e.target.value)}
+          placeholder={it ? 'Scrivi il nome della banca…' : 'Type your bank name…'}
+          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        {q.length >= 3 && !guide && (
+          <p className="mt-2 text-xs text-gray-500">
+            {it
+              ? 'Non abbiamo istruzioni specifiche per questa banca — apri la tua banca online, vai su transazioni/movimenti, scegli tutto l’anno ed esporta in CSV.'
+              : 'No specific steps for this bank yet — open your online banking, go to transactions/activity, select the whole year, and export as CSV.'}
+          </p>
+        )}
+        {guide && (
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+            <p className="text-xs font-semibold text-emerald-900">
+              {it ? `Come scaricare il CSV da ${guide.name}:` : `How to download the CSV from ${guide.name}:`}
+            </p>
+            <ol className="mt-1 list-decimal pl-4 space-y-0.5 text-xs leading-relaxed text-emerald-900/90">
+              {gSteps.map((s, i) => <li key={i}>{s}</li>)}
+            </ol>
+            {gNote && <p className="mt-1.5 text-[11px] text-emerald-800/80">{gNote}</p>}
+          </div>
+        )}
+      </div>
+
+      <p className="text-xs text-gray-500">
+        {it
+          ? 'Hai solo un PDF? Scarica comunque il CSV dalla tua banca: è il modo più affidabile e veloce. Caricherai i file nello step finale.'
+          : 'Only have a PDF? Please still download the CSV from your bank — it’s the most reliable and fastest option. You’ll upload the files in the final step.'}
+      </p>
+    </div>
+  )
+}
+
 export function WizardClient({
   wizardType,
   entityType,
@@ -646,6 +711,7 @@ export function WizardClient({
   const stepId = steps[currentStep].id
   const stepFields = fields[stepId] || []
   const isMembersStep = stepId === 'members'
+  const isPrepareStep = stepId === 'prepare'
 
   return (
     <WizardShell
@@ -699,7 +765,9 @@ export function WizardClient({
         </div>
       )}
 
-      {isMembersStep ? (
+      {isPrepareStep ? (
+        <PrepareCsvStep locale={locale} bankGuides={bankGuides} />
+      ) : isMembersStep ? (
         /* Members repeater — add/remove members */
         <div className="space-y-6">
           {Array.from({ length: memberCount }).map((_, idx) => (

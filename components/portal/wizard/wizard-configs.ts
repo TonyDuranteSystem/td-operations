@@ -456,6 +456,11 @@ export const TAX_MMLLC_STEPS: WizardStep[] = [
   // filling the form IS one of the members — their card is pre-filled from
   // the CRM in the members step. Email/phone are already on file (portal
   // login + contact record); the home-country tax ID moved to the member card.
+  // "Before You Start" — sets the expectation up front that we need a CSV of the
+  // year's transactions (cheap + reliable to parse) and shows per-bank download
+  // steps. Info-only step (no fields) → always passable. Rendered by
+  // PrepareCsvStep in wizard-client.tsx.
+  { id: 'prepare', title: 'Before You Start', titleIt: 'Prima di Iniziare', description: 'Get your bank transactions ready as a CSV', descriptionIt: 'Prepara le transazioni della tua banca in CSV' },
   { id: 'members', title: 'Members & Ownership', titleIt: 'Soci e Quote', description: 'Every member of the LLC, including you — check what we have on file', descriptionIt: 'Tutti i soci della LLC, incluso te — controlla i dati che abbiamo' },
   { id: 'company', title: 'Company', titleIt: 'Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
   { id: 'us_activity', title: 'Activity in the US', titleIt: 'Attività negli USA', description: 'Five questions about physical US presence', descriptionIt: 'Cinque domande sulla presenza fisica negli USA' },
