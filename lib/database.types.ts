@@ -12525,7 +12525,7 @@ export type Database = {
         | "Offboarding"
         | "Cancelled"
         | "Closed"
-      agent_message_party: "hermes" | "claude" | "worker"
+      agent_message_party: "hermes" | "claude" | "worker" | "slack" | "code_runner"
       agent_message_status:
         | "pending"
         | "processing"
