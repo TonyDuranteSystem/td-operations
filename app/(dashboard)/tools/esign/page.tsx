@@ -62,8 +62,12 @@ export default async function EsignLandingPage() {
             </thead>
             <tbody>
               {rows.map(e => (
-                <tr key={e.id} className="border-b last:border-0">
-                  <td className="px-4 py-2.5 font-medium text-zinc-800">{e.document_name}</td>
+                <tr key={e.id} className="border-b last:border-0 hover:bg-zinc-50">
+                  <td className="px-4 py-2.5 font-medium">
+                    <Link href={`/tools/esign/${e.id}`} className="text-zinc-800 hover:text-blue-700 hover:underline">
+                      {e.document_name}
+                    </Link>
+                  </td>
                   <td className="px-4 py-2.5">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[e.status] ?? "bg-zinc-100 text-zinc-600"}`}>
                       {String(e.status).replace("_", " ")}
