@@ -1,12 +1,13 @@
 # E-Sign (internal e-signature engine)
-_Last verified against code: 2026-06-27 — Claude (built Phases 0–4 + in-portal signing on branch `claude/exciting-archimedes-28b4c7`; sandbox only, NOT yet on production)_
+_Last verified against code: 2026-06-27b — Claude (**SHIPPED TO PRODUCTION** — schema migration applied on prod (7 tables + `increment_esign_signed_count` + 7 RLS policies) and code merged to `main` @ `f398ee24`. Smoke-tested live: signer page 200, signer API queries `esign_signers` cleanly, worker asset served, staff editor auth-gated. TD-first (`origin='staff'`) is the only live flow; the client product is still Phase 5.)_
+_Prior: 2026-06-27 — Claude (built Phases 0–4 + in-portal signing on branch `claude/exciting-archimedes-28b4c7`; sandbox)_
 
 ## What it is
 An in-house e-signature system (Dropbox Sign / DocuSign class), **built internally — no external signing provider**. Staff upload a PDF in the CRM (**Tools → E-Sign**), visually place fields (signature / initials / date / text / checkbox), name one or more signers, and send. Each signer gets a unique link, signs in the browser, and when the last required signer signs the server flattens the values into the PDF, appends a Certificate of Completion, and files the signed PDF into the owning account's documents.
 
 It is built **multi-tenant from day one** (`owner_account_id` + `origin` on every envelope) so the same engine can later power a **portal client product** (clients send e-sign to their own third parties). **Today only `origin='staff'` (TD-first) flows are live.** The client product (per-account sender settings, SES, quotas, adversarial isolation tests, cohort ramp) is **Phase 5 — not built**.
 
-> **Status:** sandbox only. The schema migration `scripts/migrations/20260626-1500-esign-schema.sql` has **not** been promoted to production (prod DDL is run by Antonio in the Supabase SQL editor — see `reference_prod_ddl_via_supabase_dashboard`). Do not assume the `esign_*` tables exist on prod.
+> **Status:** LIVE on production (2026-06-27). The schema migration `scripts/migrations/20260626-1500-esign-schema.sql` was applied to prod via the Supabase SQL editor (prod DDL through `execute_sql` is blocked by R105 — confirmed again at ship time; see `reference_prod_ddl_via_supabase_dashboard`), and the code is on `main`. Only TD-staff (`origin='staff'`) flows are live; the portal client product remains Phase 5 (gated by `esign_account_settings.esign_enabled`, default false).
 
 ## Business rules
 - **Build internally, no external provider** (explicit decision — full control, no per-envelope fees, no client data leaving the stack).
