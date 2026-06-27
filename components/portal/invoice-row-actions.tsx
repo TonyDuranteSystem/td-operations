@@ -1,24 +1,23 @@
 'use client'
 
 /**
- * Per-row action menu for the client portal Fatture (Invoices) Sales list.
+ * Per-row INLINE action icons for the client portal Fatture (Invoices) Sales
+ * list. The actions sit directly on the row (next to the status) so the client
+ * sees them without opening a menu. Reuses the EXISTING backend:
+ *   • Download PDF → GET  /api/portal/invoices/[id]/pdf   (any status)
+ *   • Edit         → /portal/invoices/[id]/edit
+ *   • Send         → POST /api/portal/invoices/[id]/send  (Draft only)
+ *   • Reminder     → POST /api/portal/invoices/[id]/remind (Sent/Overdue)
+ *   • Void         → voidInvoice() server action (confirm dialog)
  *
- * Brings Send / Reminder / Edit / Void inline so the client doesn't have to
- * open the detail page. Reuses the EXISTING backend:
- *   • Send   → POST /api/portal/invoices/[id]/send
- *   • Remind → POST /api/portal/invoices/[id]/remind
- *   • Edit   → /portal/invoices/[id]/edit
- *   • Void   → voidInvoice() server action
- *
- * Visibility is gated by availableInvoiceActions(status). Same 3-dot +
- * createPortal flip-above pattern as the CRM PaymentRowActions / LeadRowActions.
+ * View (the eye) is rendered by the list row itself. Which status-dependent
+ * actions appear is gated by availableInvoiceActions(status).
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, useTransition } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { MoreVertical, Eye, Download, Pencil, Send, Bell, Ban, Loader2, X } from 'lucide-react'
+import { Download, Pencil, Send, Bell, Ban, Loader2, X } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { availableInvoiceActions } from '@/lib/portal/invoice-row-actions-policy'
 import { voidInvoice } from '@/app/portal/invoices/actions'
@@ -34,72 +33,13 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
   const { t } = useLocale()
   const [isPending, startTransition] = useTransition()
   const [busy, setBusy] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [voidOpen, setVoidOpen] = useState(false)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
 
   const actions = availableInvoiceActions(invoice.status)
-
-  // Close on outside click.
-  useEffect(() => {
-    if (!menuOpen) return
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (buttonRef.current?.contains(target)) return
-      if (menuRef.current?.contains(target)) return
-      setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [menuOpen])
-
-  const positionMenu = () => {
-    if (!buttonRef.current) return
-    const btn = buttonRef.current.getBoundingClientRect()
-    const menuWidth = 200
-    const menuHeight = Math.max(menuRef.current?.offsetHeight ?? 0, 200)
-    const gap = 4
-    const margin = 8
-
-    let top = btn.bottom + gap
-    let left = btn.right - menuWidth
-
-    if (top + menuHeight + margin > window.innerHeight) {
-      const flippedTop = btn.top - menuHeight - gap
-      top = flippedTop >= margin ? flippedTop : Math.max(margin, window.innerHeight - menuHeight - margin)
-    }
-    if (left + menuWidth + margin > window.innerWidth) {
-      left = window.innerWidth - menuWidth - margin
-    }
-    if (left < margin) left = margin
-
-    setMenuPos({ top, left })
-  }
-
-  useLayoutEffect(() => {
-    if (!menuOpen) return
-    positionMenu()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs
-  }, [menuOpen])
-
-  useEffect(() => {
-    if (!menuOpen) return
-    const handler = () => positionMenu()
-    window.addEventListener('scroll', handler, true)
-    window.addEventListener('resize', handler)
-    return () => {
-      window.removeEventListener('scroll', handler, true)
-      window.removeEventListener('resize', handler)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- handler stable enough
-  }, [menuOpen])
-
-  // --- Action handlers ---
+  const disabled = busy || isPending
+  const iconBtn = 'p-1.5 rounded-lg transition-colors disabled:opacity-40'
 
   const postAction = async (path: 'send' | 'remind') => {
-    setMenuOpen(false)
     setBusy(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoice.id}/${path}`, { method: 'POST' })
@@ -117,7 +57,6 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
   }
 
   const handleDownloadPdf = async () => {
-    setMenuOpen(false)
     setBusy(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoice.id}/pdf`)
@@ -154,98 +93,77 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
     })
   }
 
-  const itemClass = 'flex items-center gap-2 w-full px-3 py-2 text-sm text-left'
-
-  const menuPortal = menuOpen && typeof document !== 'undefined'
-    ? createPortal(
-        <div
-          ref={menuRef}
-          style={menuPos
-            ? { position: 'fixed', top: menuPos.top, left: menuPos.left, visibility: 'visible' }
-            : { position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' }}
-          className="z-[100] w-[200px] bg-white border rounded-lg shadow-lg overflow-hidden"
-          role="menu"
-        >
-          <button
-            type="button"
-            onClick={() => { setMenuOpen(false); router.push(`/portal/invoices/${invoice.id}`) }}
-            className={`${itemClass} text-zinc-700 hover:bg-zinc-50`}
-          >
-            <Eye className="h-4 w-4" /> {t('invoices.view')}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleDownloadPdf}
-            className={`${itemClass} text-zinc-700 hover:bg-zinc-50`}
-          >
-            <Download className="h-4 w-4" /> {t('invoices.downloadPdf')}
-          </button>
-
-          {actions.includes('edit') && (
-            <button
-              type="button"
-              onClick={() => { setMenuOpen(false); router.push(`/portal/invoices/${invoice.id}/edit`) }}
-              className={`${itemClass} text-zinc-700 hover:bg-zinc-50`}
-            >
-              <Pencil className="h-4 w-4" /> {t('invoices.edit')}
-            </button>
-          )}
-
-          {actions.includes('send') && (
-            <button
-              type="button"
-              onClick={() => postAction('send')}
-              className={`${itemClass} text-blue-700 hover:bg-blue-50`}
-            >
-              <Send className="h-4 w-4" /> {t('invoices.send')}
-            </button>
-          )}
-
-          {actions.includes('remind') && (
-            <button
-              type="button"
-              onClick={() => postAction('remind')}
-              className={`${itemClass} text-amber-700 hover:bg-amber-50`}
-            >
-              <Bell className="h-4 w-4" /> {t('invoices.remind')}
-            </button>
-          )}
-
-          {actions.includes('void') && (
-            <button
-              type="button"
-              onClick={() => { setMenuOpen(false); setVoidOpen(true) }}
-              className={`${itemClass} text-red-600 hover:bg-red-50 border-t`}
-            >
-              <Ban className="h-4 w-4" /> {t('invoices.void')}
-            </button>
-          )}
-        </div>,
-        document.body,
-      )
-    : null
-
   return (
-    <>
+    <div className="flex items-center justify-end gap-0.5">
+      {/* Download PDF — every status */}
       <button
-        ref={buttonRef}
         type="button"
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o) }}
-        disabled={busy || isPending}
-        className="p-1.5 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors disabled:opacity-50"
-        title={t('invoices.rowActions')}
-        aria-label={t('invoices.rowActions')}
+        onClick={handleDownloadPdf}
+        disabled={disabled}
+        title={t('invoices.downloadPdf')}
+        aria-label={t('invoices.downloadPdf')}
+        className={`${iconBtn} text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100`}
       >
-        {busy || isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
       </button>
-      {menuPortal}
+
+      {actions.includes('edit') && (
+        <button
+          type="button"
+          onClick={() => router.push(`/portal/invoices/${invoice.id}/edit`)}
+          disabled={disabled}
+          title={t('invoices.edit')}
+          aria-label={t('invoices.edit')}
+          className={`${iconBtn} text-zinc-400 hover:text-blue-600 hover:bg-blue-50`}
+        >
+          <Pencil className="h-4 w-4" />
+        </button>
+      )}
+
+      {actions.includes('send') && (
+        <button
+          type="button"
+          onClick={() => postAction('send')}
+          disabled={disabled}
+          title={t('invoices.send')}
+          aria-label={t('invoices.send')}
+          className={`${iconBtn} text-blue-500 hover:text-blue-700 hover:bg-blue-50`}
+        >
+          <Send className="h-4 w-4" />
+        </button>
+      )}
+
+      {actions.includes('remind') && (
+        <button
+          type="button"
+          onClick={() => postAction('remind')}
+          disabled={disabled}
+          title={t('invoices.remind')}
+          aria-label={t('invoices.remind')}
+          className={`${iconBtn} text-amber-500 hover:text-amber-700 hover:bg-amber-50`}
+        >
+          <Bell className="h-4 w-4" />
+        </button>
+      )}
+
+      {actions.includes('void') && (
+        <button
+          type="button"
+          onClick={() => setVoidOpen(true)}
+          disabled={disabled}
+          title={t('invoices.void')}
+          aria-label={t('invoices.void')}
+          className={`${iconBtn} text-red-400 hover:text-red-600 hover:bg-red-50`}
+        >
+          <Ban className="h-4 w-4" />
+        </button>
+      )}
 
       {/* Void confirmation */}
       {voidOpen && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setVoidOpen(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-red-700">{t('invoices.voidConfirmTitle')}</h3>
               <button onClick={() => setVoidOpen(false)} className="p-1 hover:bg-zinc-100 rounded">
@@ -274,6 +192,6 @@ export function InvoiceRowActions({ invoice }: { invoice: InvoiceRowActionsInput
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }

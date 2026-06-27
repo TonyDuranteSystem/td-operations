@@ -75,7 +75,7 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
 
       {/* Table */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="hidden md:grid md:grid-cols-[1fr,140px,100px,100px,100px,84px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
+        <div className="hidden md:grid md:grid-cols-[1fr,130px,90px,90px,90px,180px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
           <span>Customer</span>
           <span>Invoice #</span>
           <span className="text-right">Amount</span>
@@ -87,7 +87,7 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
           <div className="p-8 text-center text-sm text-zinc-500">No invoices found</div>
         ) : (
           filtered.map(inv => (
-            <div key={inv.id} className="grid grid-cols-1 md:grid-cols-[1fr,140px,100px,100px,100px,84px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
+            <div key={inv.id} className="grid grid-cols-1 md:grid-cols-[1fr,130px,90px,90px,90px,180px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
               <span className="font-medium truncate">{inv.customer_name}</span>
               <span className="text-zinc-600 text-xs">{inv.invoice_number}</span>
               <span className="text-right font-medium">
