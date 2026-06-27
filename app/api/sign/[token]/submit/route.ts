@@ -95,6 +95,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       .eq("envelope_id", signer.envelope_id)
   }
 
+  // Mark this signer's signature/initials fields filled (audit completeness — the
+  // drawn marks aren't sent in `fields`; they flatten from the signer's images).
+  const filledNow = new Date().toISOString()
+  if (signaturePath) {
+    await db.from("esign_fields").update({ filled_at: filledNow, updated_at: filledNow })
+      .eq("envelope_id", signer.envelope_id).eq("signer_id", signer.id).eq("field_type", "signature")
+  }
+  if (initialsPath) {
+    await db.from("esign_fields").update({ filled_at: filledNow, updated_at: filledNow })
+      .eq("envelope_id", signer.envelope_id).eq("signer_id", signer.id).eq("field_type", "initials")
+  }
+
   // Mark signer signed — TOCTOU guard: only if not already signed.
   const now = new Date().toISOString()
   const signedByName = typeof body.signed_by_name === "string" ? body.signed_by_name.trim() : null

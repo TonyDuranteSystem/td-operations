@@ -10,15 +10,19 @@
  *   signed PDF   → signed-documents   / esign/{token}/signed-{ts}.pdf
  */
 
-import { randomBytes } from "crypto"
+import { randomBytes, createHash } from "crypto"
+import { PDFDocument } from "pdf-lib"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
 import { isValidNormalizedRect } from "@/lib/esign/coordinates"
 import { flattenEsignPdf, type FlattenField, type EsignFieldType } from "@/lib/esign/flatten"
+import { appendCertificatePage, type CertificateSigner } from "@/lib/esign/certificate"
 
 const SOURCE_BUCKET = "signature-requests"
 const SIGNED_BUCKET = "signed-documents"
+const DEFAULT_CONSENT_TEXT =
+  "I agree to sign electronically (ESIGN/UETA) and that my electronic signature is legally binding."
 
 // The esign_* tables aren't in the generated DB types until the migration is
 // promoted + types regenerated; access them through an untyped client, matching
@@ -242,7 +246,7 @@ async function downloadMark(path: string | null): Promise<Uint8Array | null> {
 export async function flattenEnvelopeToSignedPdf(envelopeId: string): Promise<{ signedPath: string }> {
   const { data: env, error: envErr } = await db
     .from("esign_envelopes")
-    .select("id, token, pdf_storage_path")
+    .select("id, token, document_name, pdf_storage_path")
     .eq("id", envelopeId)
     .single()
   if (envErr || !env || !env.pdf_storage_path) throw new Error("Envelope or source PDF not found.")
@@ -253,7 +257,7 @@ export async function flattenEnvelopeToSignedPdf(envelopeId: string): Promise<{ 
     .eq("envelope_id", envelopeId)
   const { data: signers } = await db
     .from("esign_signers")
-    .select("id, signature_image_path, initials_image_path")
+    .select("id, name, email, signed_by_name, signed_at, last_ip, last_user_agent, consent_acknowledged, consent_text, signature_image_path, initials_image_path")
     .eq("envelope_id", envelopeId)
 
   const sigById = new Map<string, { signature_image_path: string | null; initials_image_path: string | null }>()
@@ -287,7 +291,46 @@ export async function flattenEnvelopeToSignedPdf(envelopeId: string): Promise<{ 
   }
 
   const source = await downloadSourcePdf(env.pdf_storage_path)
-  const signedBytes = await flattenEsignPdf(new Uint8Array(source), flattenFields)
+  const flattenedBytes = await flattenEsignPdf(new Uint8Array(source), flattenFields)
+
+  // Append the Certificate of Completion (legal artifact) using the audit data.
+  const { data: signedEvents } = await db
+    .from("esign_events")
+    .select("signer_id, metadata")
+    .eq("envelope_id", envelopeId)
+    .eq("event_type", "signed")
+  const hashBySigner = new Map<string, string>()
+  for (const e of (signedEvents ?? []) as Array<{ signer_id: string | null; metadata: { signature_hash?: string } | null }>) {
+    if (e.signer_id && e.metadata?.signature_hash) hashBySigner.set(e.signer_id, e.metadata.signature_hash)
+  }
+  type SignerRow = {
+    id: string; name: string; email: string | null; signed_by_name: string | null; signed_at: string | null
+    last_ip: string | null; last_user_agent: string | null; consent_acknowledged: boolean; consent_text: string | null
+  }
+  const signerRows = (signers ?? []) as SignerRow[]
+  const certSigners: CertificateSigner[] = signerRows.map(s => ({
+    name: s.name,
+    email: s.email,
+    signedByName: s.signed_by_name,
+    signedAt: s.signed_at,
+    ip: s.last_ip,
+    userAgent: s.last_user_agent,
+    consent: !!s.consent_acknowledged,
+    signatureHash: hashBySigner.get(s.id) ?? null,
+  }))
+  const documentSha256 = createHash("sha256").update(Buffer.from(source)).digest("hex")
+  const consentText = signerRows.map(s => s.consent_text).find(Boolean) || DEFAULT_CONSENT_TEXT
+
+  const pdf = await PDFDocument.load(flattenedBytes)
+  await appendCertificatePage(pdf, {
+    envelopeId,
+    documentName: env.document_name,
+    documentSha256,
+    completedAt: new Date().toISOString(),
+    consentText,
+    signers: certSigners,
+  })
+  const signedBytes = await pdf.save()
 
   const signedPath = `esign/${env.token}/signed-${Date.now()}.pdf`
   const { error: upErr } = await supabaseAdmin.storage
