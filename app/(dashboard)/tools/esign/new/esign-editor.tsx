@@ -53,6 +53,30 @@ export function EsignEditor() {
   const [result, setResult] = useState<any>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Optional CRM account link — so the signed doc files into the client's records.
+  const [account, setAccount] = useState<{ id: string; company_name: string } | null>(null)
+  const [acctQuery, setAcctQuery] = useState("")
+  const [acctResults, setAcctResults] = useState<Array<{ id: string; company_name: string }>>([])
+  const acctTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const onAcctQuery = useCallback((q: string) => {
+    setAcctQuery(q)
+    if (acctTimer.current) clearTimeout(acctTimer.current)
+    if (q.trim().length < 2) {
+      setAcctResults([])
+      return
+    }
+    acctTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/accounts?q=${encodeURIComponent(q.trim())}&limit=8`)
+        const data = await res.json().catch(() => ({}))
+        setAcctResults(Array.isArray(data.accounts) ? data.accounts : Array.isArray(data) ? data : [])
+      } catch {
+        setAcctResults([])
+      }
+    }, 250)
+  }, [])
+
   const onPickFile = useCallback(async (f: File) => {
     setError("")
     setResult(null)
@@ -118,6 +142,7 @@ export function EsignEditor() {
     try {
       const payload = {
         document_name: documentName.trim(),
+        owner_account_id: account?.id ?? null,
         routing_order: "sequential",
         signers: signers.map(s => ({ name: s.name.trim(), email: s.email.trim() || null })),
         fields: fields.map(f => ({
@@ -142,7 +167,7 @@ export function EsignEditor() {
     } finally {
       setCreating(false)
     }
-  }, [file, documentName, signers, fields])
+  }, [file, documentName, signers, fields, account])
 
   if (result) {
     return (
@@ -197,6 +222,38 @@ export function EsignEditor() {
             placeholder="Document name"
             className="mt-2 h-9 w-full rounded-md border px-3 text-sm focus:ring-2 focus:ring-blue-500"
           />
+
+          {/* Optional: link to a CRM account so the signed doc files into their records. */}
+          <div className="relative mt-2">
+            {account ? (
+              <div className="flex items-center justify-between rounded-md border bg-blue-50 px-3 py-1.5 text-sm">
+                <span className="truncate text-blue-800">{account.company_name}</span>
+                <button onClick={() => { setAccount(null); setAcctQuery(""); setAcctResults([]) }} className="text-xs text-zinc-400 hover:text-red-500">✕</button>
+              </div>
+            ) : (
+              <>
+                <input
+                  value={acctQuery}
+                  onChange={e => onAcctQuery(e.target.value)}
+                  placeholder="Link to client account (optional)"
+                  className="h-9 w-full rounded-md border px-3 text-sm focus:ring-2 focus:ring-blue-500"
+                />
+                {acctResults.length > 0 && (
+                  <div className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border bg-white shadow-lg">
+                    {acctResults.map(a => (
+                      <button
+                        key={a.id}
+                        onClick={() => { setAccount({ id: a.id, company_name: a.company_name }); setAcctResults([]); setAcctQuery("") }}
+                        className="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-blue-50"
+                      >
+                        {a.company_name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         <div>

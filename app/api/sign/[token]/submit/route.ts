@@ -22,7 +22,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { flattenEnvelopeToSignedPdf } from "@/lib/operations/esign"
+import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -157,8 +157,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       .eq("id", env.id)
     await db.from("esign_events").insert({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath } })
     completed = true
-    // Phase 2: fire the completion webhook (Drive upload, documents row, support
-    // email, task, flow advance, completion certificate). Server-side trigger.
+    // Post-completion side-effects: file the signed PDF into the client's
+    // documents + notify support. Best-effort (never throws), so it can't break
+    // the signer's response.
+    await finalizeEsignCompletion(env.id)
   } else {
     await db.from("esign_envelopes").update({ status: "in_progress", updated_at: new Date().toISOString() }).eq("id", env.id)
     // Phase 3 (sequential): queue the invite for the next signer.

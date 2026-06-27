@@ -340,3 +340,90 @@ export async function flattenEnvelopeToSignedPdf(envelopeId: string): Promise<{ 
 
   return { signedPath }
 }
+
+/**
+ * Post-completion side-effects (best-effort — never throws, so it can't break the
+ * signer's submit). For an account-linked envelope, files the signed PDF (with
+ * certificate) into the client's documents, portal-visible, served from storage
+ * (uniform sandbox/prod). Always sends a support notification (no-op in sandbox).
+ * Idempotent: skips the documents row if it already exists.
+ */
+export async function finalizeEsignCompletion(envelopeId: string): Promise<void> {
+  try {
+    const { data: env } = await db
+      .from("esign_envelopes")
+      .select("id, token, document_name, owner_account_id, contact_id, signed_pdf_path")
+      .eq("id", envelopeId)
+      .maybeSingle()
+    if (!env) return
+
+    // 1. File the signed PDF into the client's documents (account-linked only).
+    if (env.signed_pdf_path && env.owner_account_id) {
+      try {
+        const fileName = `${env.document_name} - Signed.pdf`
+        const driveRef = `storage:${SIGNED_BUCKET}/${env.signed_pdf_path}`
+        const { data: existing } = await db
+          .from("documents")
+          .select("id")
+          .eq("account_id", env.owner_account_id)
+          .eq("drive_file_id", driveRef)
+          .maybeSingle()
+        if (!existing) {
+          const { data: signed } = await supabaseAdmin.storage
+            .from(SIGNED_BUCKET)
+            .createSignedUrl(env.signed_pdf_path, 60 * 60 * 24 * 365) // 1 year
+          await db.from("documents").insert({
+            account_id: env.owner_account_id,
+            contact_id: env.contact_id,
+            file_name: fileName,
+            document_type_name: env.document_name,
+            category: 5, // Correspondence
+            drive_file_id: driveRef,
+            drive_link: signed?.signedUrl ?? null,
+            status: "classified",
+            confidence: "high", // prod has a CHECK(high|medium|low)
+            portal_visible: true,
+            notify_client: false,
+          })
+        }
+      } catch {
+        /* best-effort filing */
+      }
+    }
+
+    // 2. Notify support (inline; sandbox blocks the actual send).
+    try {
+      let company = ""
+      if (env.owner_account_id) {
+        const { data: account } = await db.from("accounts").select("company_name").eq("id", env.owner_account_id).maybeSingle()
+        company = account?.company_name || ""
+      }
+      const { gmailPost } = await import("@/lib/gmail")
+      const subject = `E-Sign completed: ${env.document_name}${company ? ` — ${company}` : ""}`
+      const encoded = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+      const raw = [
+        `From: support@tonydurante.us`,
+        `To: support@tonydurante.us`,
+        `Subject: ${encoded}`,
+        `Content-Type: text/plain; charset=UTF-8`,
+        ``,
+        `The e-sign envelope "${env.document_name}" is fully signed.`,
+        company ? `Client: ${company}` : ``,
+        `The signed PDF (with Certificate of Completion) is filed${env.owner_account_id ? " in the client's documents" : ""}.`,
+      ].join("\r\n")
+      await gmailPost("/messages/send", { raw: Buffer.from(raw).toString("base64url") })
+    } catch {
+      /* best-effort notification */
+    }
+
+    logAction({
+      action_type: "update",
+      table_name: "esign_envelopes",
+      record_id: envelopeId,
+      account_id: env.owner_account_id ?? undefined,
+      summary: `E-Sign envelope completed: ${env.document_name}`,
+    })
+  } catch {
+    /* never break completion */
+  }
+}
