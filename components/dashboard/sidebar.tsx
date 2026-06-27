@@ -92,7 +92,6 @@ const defaultNavigation: NavItem[] = [
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
   { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
-  { id: 'td-communication', name: 'TD Communication', href: '/td-communication', icon: MessagesSquare, tooltip: 'Planning channel between TD staff and external partners (e.g. Cris). Partners use a dedicated standalone page.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
