@@ -37,3 +37,4 @@ docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,lib/ai-agent/sl
 docs/systems/fax.md|app/api/tools/fax/,app/(dashboard)/tools/fax/,components/flows/fax-irs.tsx
 docs/systems/client-threads.md|scripts/migrations/20260621-1500-create-client-threads.sql,scripts/migrations/20260621-1510-backfill-client-threads-from-conversations.sql,app/(dashboard)/conversations/,components/conversations/
 docs/systems/messaging.md|lib/mcp/tools/messaging.ts,lib/messaging/,app/api/inbox/new-whatsapp/,app/api/inbox/
+docs/systems/esign.md|lib/esign/,lib/operations/esign.ts,lib/jobs/handlers/esign-send-email.ts,app/api/esign/,app/api/sign/,app/(dashboard)/tools/esign/,app/sign/,app/portal/sign/esign/,components/esign/,app/api/cron/esign-reminders/,scripts/migrations/20260626-1500-esign-schema.sql

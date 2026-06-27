@@ -66,8 +66,8 @@ export default async function PortalSignPage() {
     )
   }
 
-  // Query OA, Lease, SS-4, Form 8832, renewal MSA, and generic signature requests in parallel
-  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result, sigReqResult] = await Promise.all([
+  // Query OA, Lease, SS-4, Form 8832, renewal MSA, generic signature requests, and e-sign envelopes in parallel
+  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result, sigReqResult, esignResult] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
       .select('id, token, status, company_name, signed_at, entity_type, total_signers, signed_count')
@@ -112,6 +112,16 @@ export default async function PortalSignPage() {
       .select('token, access_code, status, document_name, signed_at')
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false }),
+    // E-sign envelopes where the logged-in client is an invited signer — matched
+    // by the email TD entered for them (TD-first signers carry email, not
+    // contact_id). Only their turn (sent/viewed); envelope filtered to active below.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
+      .from('esign_signers')
+      .select('token, status, signed_at, esign_envelopes!inner(document_name, status)')
+      .ilike('email', user.email || '__no_match__')
+      .in('status', ['sent', 'viewed'])
+      .order('created_at', { ascending: false }) as Promise<{ data: Array<{ token: string; status: string; signed_at: string | null; esign_envelopes: { document_name: string | null; status: string } }> | null }>,
   ])
 
   const documents: SignableDocument[] = []
@@ -206,6 +216,23 @@ export default async function PortalSignPage() {
         href: `/portal/sign/document?token=${sr.token}`,
         documentName: sr.document_name,
         signedAt: sr.signed_at,
+      })
+    }
+  }
+
+  // E-sign envelopes addressed to this client (matched by login email above).
+  // Surface only those whose envelope is still active and where it's this
+  // signer's turn (status sent/viewed). The embed page re-checks ownership.
+  if (esignResult.data) {
+    for (const s of esignResult.data) {
+      const env = s.esign_envelopes
+      if (!env || !['sent', 'in_progress'].includes(env.status)) continue
+      documents.push({
+        type: 'document',
+        status: 'awaiting',
+        href: `/portal/sign/esign?token=${s.token}`,
+        documentName: env.document_name || 'Document',
+        signedAt: s.signed_at || undefined,
       })
     }
   }
