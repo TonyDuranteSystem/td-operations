@@ -68,6 +68,10 @@ export interface CreateEsignEnvelopeParams {
   created_by?: string
   created_by_contact_id?: string | null
   service_delivery_id?: string | null
+  /** Base URL for the signing links. Defaults to APP_BASE_URL (production). The
+   *  API route passes the request origin on preview/sandbox so QA links stay on
+   *  the same deployment instead of pointing at production. */
+  baseUrl?: string | null
 }
 
 export interface CreateEsignEnvelopeResult {
@@ -100,7 +104,9 @@ export async function createEsignEnvelope(
     created_by = "system",
     created_by_contact_id = null,
     service_delivery_id = null,
+    baseUrl = null,
   } = params
+  const linkBase = baseUrl || APP_BASE_URL
 
   if (!signers.length) throw new Error("At least one signer is required.")
   if (!fields.length) throw new Error("At least one field is required.")
@@ -207,8 +213,8 @@ export async function createEsignEnvelope(
       email: s.email,
       token: s.token,
       access_code: s.access_code,
-      signUrl: `${APP_BASE_URL}/sign/${s.token}/${s.access_code}`,
-      previewUrl: `${APP_BASE_URL}/sign/${s.token}/${s.access_code}?preview=td`,
+      signUrl: `${linkBase}/sign/${s.token}/${s.access_code}`,
+      previewUrl: `${linkBase}/sign/${s.token}/${s.access_code}?preview=td`,
     }))
 
   return { id: env.id, token: env.token, access_code: env.access_code, signers: signerList }

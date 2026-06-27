@@ -68,9 +68,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "The file failed a security scan and was rejected." }, { status: 400 })
   }
 
+  // On production the signing link must use the stable public domain (APP_BASE_URL
+  // = app.tonydurante.us); never the internal CRM host (R005). On preview/sandbox
+  // there is no fixed domain that carries this code, so keep the link on the same
+  // deployment by using the request origin.
+  const proto = req.headers.get("x-forwarded-proto") || "https"
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host")
+  const requestOrigin = host ? `${proto}://${host}` : null
+  const baseUrl = process.env.VERCEL_ENV === "production" ? null : requestOrigin
+
   try {
     const result = await createEsignEnvelope({
       document_name,
+      baseUrl,
       description: typeof payload.description === "string" ? payload.description : null,
       pdfBuffer: Buffer.from(bytes),
       fileName: (file.name || "document.pdf").replace(/[^a-zA-Z0-9._-]/g, "_"),
