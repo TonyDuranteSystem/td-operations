@@ -61,6 +61,10 @@ export default function SignPage() {
   const [consent, setConsent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
+  const [showDecline, setShowDecline] = useState(false)
+  const [declineReason, setDeclineReason] = useState("")
+  const [declining, setDeclining] = useState(false)
+  const [declined, setDeclined] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -138,8 +142,36 @@ export default function SignPage() {
     }
   }, [canSubmit, fields, values, signaturePng, initialsPng, signedByName, consent, code, isPreview, isPortal, token])
 
+  const decline = useCallback(async () => {
+    setDeclining(true)
+    setError("")
+    try {
+      const res = await fetch(`/api/sign/${token}/decline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, preview: isPreview ? "td" : undefined, reason: declineReason.trim() }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "Could not decline. Please try again.")
+      setDeclined(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not decline. Please try again.")
+    } finally {
+      setDeclining(false)
+    }
+  }, [token, code, isPreview, declineReason])
+
   if (loading) return <Centered>Loading…</Centered>
   if (error && !pdfUrl) return <Centered><span className="text-red-500">{error}</span></Centered>
+  if (declined)
+    return (
+      <Centered>
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-zinc-700">Declined</h2>
+          <p className="mt-1 text-sm text-zinc-500">You declined to sign this document. Our team has been notified.</p>
+        </div>
+      </Centered>
+    )
   if (done || alreadySigned)
     return (
       <Centered>
@@ -250,6 +282,31 @@ export default function SignPage() {
         >
           {submitting ? "Submitting…" : "Sign & Submit"}
         </button>
+
+        {/* Decline */}
+        <div className="mt-3 text-center">
+          {showDecline ? (
+            <div className="space-y-2 text-left">
+              <textarea
+                value={declineReason}
+                onChange={e => setDeclineReason(e.target.value)}
+                placeholder="Reason (optional)"
+                rows={2}
+                className="w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:ring-red-400"
+              />
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setShowDecline(false)} className="rounded-md px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-700">Cancel</button>
+                <button onClick={decline} disabled={declining} className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">
+                  {declining ? "Declining…" : "Confirm decline"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setShowDecline(true)} className="text-xs text-zinc-400 hover:text-red-600 hover:underline">
+              Decline to sign
+            </button>
+          )}
+        </div>
       </div>
 
       {padTarget && (

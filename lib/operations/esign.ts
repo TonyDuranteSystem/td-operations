@@ -76,6 +76,8 @@ export interface CreateEsignEnvelopeParams {
    *  API route passes the request origin on preview/sandbox so QA links stay on
    *  the same deployment instead of pointing at production. */
   baseUrl?: string | null
+  /** Envelope expiry window in days (default 14). */
+  expires_in_days?: number
 }
 
 export interface CreateEsignEnvelopeResult {
@@ -109,6 +111,7 @@ export async function createEsignEnvelope(
     created_by_contact_id = null,
     service_delivery_id = null,
     baseUrl = null,
+    expires_in_days = 14,
   } = params
   const linkBase = baseUrl || APP_BASE_URL
 
@@ -152,6 +155,7 @@ export async function createEsignEnvelope(
       routing_order,
       status: "draft",
       total_signers: signers.length,
+      expires_at: new Date(Date.now() + (expires_in_days ?? 14) * 86400000).toISOString(),
     } as never)
     .select("id, token, access_code")
     .single()

@@ -61,6 +61,12 @@ export async function handleEsignSendEmail(job: Job): Promise<JobResult> {
   steps.push({ name: "send_email", status: "ok", detail: signer.email, timestamp: ts() })
 
   const now = ts()
+  if (job.payload.reminder === true) {
+    // Reminder: keep status, just record the nudge.
+    await db.from("esign_events").insert({ envelope_id: signer.envelope_id, signer_id: signer.id, event_type: "reminder_sent" })
+    steps.push({ name: "reminder_sent", status: "ok", timestamp: ts() })
+    return { steps, summary: `Reminder sent to ${signer.email}` }
+  }
   await db
     .from("esign_signers")
     .update({ status: signer.status === "pending" ? "sent" : signer.status, sent_at: now, updated_at: now })
