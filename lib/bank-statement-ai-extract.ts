@@ -169,44 +169,85 @@ export async function aiExtractBankStatement(
   if (!apiKey) return emptyResult(fileName, ["ANTHROPIC_API_KEY not configured — cannot AI-extract statement"])
 
   const doFetch = opts?.fetchImpl || fetch
-  const controller = new AbortController()
-  // A busy statement at the 32k output ceiling can take ~2 min to generate.
-  // 240s keeps a single statement comfortably inside the 300s job-worker
-  // window (one statement per ingest job — see tax-form-setup handler).
-  const timeout = setTimeout(() => controller.abort(), 240_000)
+  const requestBody = JSON.stringify({
+    model: opts?.model || MODEL,
+    max_tokens: MAX_TOKENS,
+    system: SYSTEM_PROMPT,
+    tools: [RECORD_TOOL],
+    tool_choice: { type: "tool", name: "record_statement" },
+    messages: [{ role: "user", content: buildContent(buffer, fileName, mimeType) }],
+  })
 
-  let data: { content?: Array<{ type: string; name?: string; input?: AiStatement }>; stop_reason?: string }
-  try {
-    const res = await doFetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: opts?.model || MODEL,
-        max_tokens: MAX_TOKENS,
-        system: SYSTEM_PROMPT,
-        tools: [RECORD_TOOL],
-        tool_choice: { type: "tool", name: "record_statement" },
-        messages: [{ role: "user", content: buildContent(buffer, fileName, mimeType) }],
-      }),
-      signal: controller.signal,
-    })
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      return emptyResult(fileName, [`Claude API error ${res.status}: ${JSON.stringify(err)}`])
-    }
-    data = await res.json()
-  } catch (e) {
-    return emptyResult(fileName, [`AI extraction request failed: ${e instanceof Error ? e.message : String(e)}`])
-  } finally {
-    clearTimeout(timeout)
+  // RELIABILITY: AI PDF extraction is non-deterministic — the SAME readable
+  // statement can come back with rows on one call and empty ("could not read")
+  // on another (observed on a real Chase PDF: 94 tx one attempt, 0 the next).
+  // So retry on an EMPTY result or a TRANSIENT API error before giving up.
+  // We do NOT retry a truncated (max_tokens) or non-empty result — those are
+  // usable/known — so a successful first call still makes exactly one request.
+  // A global deadline keeps all attempts inside the 300s job-worker window
+  // (one statement per ingest job); per-attempt timeout is the smaller of 240s
+  // and the remaining budget. A genuinely unreadable (e.g. scanned) PDF still
+  // ends empty after the retries and is surfaced for human review.
+  const TRANSIENT = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529])
+  const MAX_ATTEMPTS = 3
+  const GLOBAL_DEADLINE_MS = 250_000
+  const PER_ATTEMPT_MS = 240_000
+  const startedAt = Date.now()
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+  const txCountOf = (d: { content?: Array<{ type: string; name?: string; input?: AiStatement }> } | null) => {
+    const tb = (d?.content || []).find(b => b.type === "tool_use" && b.name === "record_statement")
+    const t = (tb?.input as AiStatement | undefined)?.transactions
+    return Array.isArray(t) ? t.length : 0
   }
 
+  let data: { content?: Array<{ type: string; name?: string; input?: AiStatement }>; stop_reason?: string } | null = null
+  let lastError: string | null = null
+  const retryNotes: string[] = []
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const remaining = GLOBAL_DEADLINE_MS - (Date.now() - startedAt)
+    if (attempt > 1 && remaining < 15_000) break // not enough budget for another real try
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), Math.min(PER_ATTEMPT_MS, Math.max(remaining, 15_000)))
+    try {
+      const res = await doFetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: requestBody,
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        lastError = `Claude API error ${res.status}: ${JSON.stringify(err)}`
+        if (!TRANSIENT.has(res.status)) { data = null; break } // permanent (e.g. 400) — retry won't help
+        retryNotes.push(`attempt ${attempt}: API ${res.status}`)
+      } else {
+        const attemptData = await res.json()
+        // Usable result (has rows) or a truncation we must flag — take it, stop.
+        if (txCountOf(attemptData) > 0 || attemptData.stop_reason === "max_tokens") { data = attemptData; break }
+        // Empty (0 rows, not truncated): keep as fallback, retry the flaky read.
+        data = attemptData
+        lastError = "AI extraction returned no transactions"
+        retryNotes.push(`attempt ${attempt}: 0 transactions`)
+      }
+    } catch (e) {
+      lastError = `AI extraction request failed: ${e instanceof Error ? e.message : String(e)}`
+      retryNotes.push(`attempt ${attempt}: ${e instanceof Error ? e.message : "request error"}`)
+    } finally {
+      clearTimeout(timeout)
+    }
+    if (attempt < MAX_ATTEMPTS && GLOBAL_DEADLINE_MS - (Date.now() - startedAt) > 15_000) {
+      await sleep(1000 * attempt) // 1s, then 2s backoff
+    }
+  }
+
+  if (!data) return emptyResult(fileName, [lastError || "AI extraction failed"])
+
   const errors: string[] = []
+  // Surface that retries happened (helps explain a flaky-but-recovered read).
+  if (retryNotes.length > 0 && txCountOf(data) > 0) {
+    errors.push(`Recovered after retry (${retryNotes.join("; ")}).`)
+  }
   // max_tokens truncation means the transaction list is incomplete — must flag.
   if (data.stop_reason === "max_tokens") {
     errors.push("AI response hit max_tokens — transaction list may be TRUNCATED. Needs human review.")

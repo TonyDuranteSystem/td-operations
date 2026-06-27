@@ -113,6 +113,56 @@ describe('aiExtractBankStatement', () => {
     expect(r.transactions).toHaveLength(0)
     expect(r.errors.join(' ')).toMatch(/ANTHROPIC_API_KEY/)
   })
+
+  // ── Reliability: retry on the non-deterministic empty/transient result ──
+  // Returns a different response per call, in sequence.
+  function makeSeqFetch(responses: Array<{ input?: FakeInput; status?: number; stopReason?: string }>) {
+    const calls = { count: 0 }
+    const fn = (async () => {
+      const r = responses[Math.min(calls.count, responses.length - 1)]
+      calls.count++
+      if (r.status && r.status >= 400) return { ok: false, status: r.status, json: async () => ({ error: 'boom' }) } as Response
+      return { ok: true, status: 200, json: async () => ({ stop_reason: r.stopReason || 'tool_use', content: [{ type: 'tool_use', name: 'record_statement', input: r.input || {} }] }) } as unknown as Response
+    }) as unknown as typeof fetch
+    return { fn, calls }
+  }
+  const TXN = { bank_name: 'Chase', currency: 'USD', opening_balance: 0, closing_balance: 94, transactions: [{ date: '2025-01-02', description: 'x', amount: 94, currency: 'USD' }] }
+
+  it('retries a flaky EMPTY extraction and recovers on the next attempt', async () => {
+    const { fn, calls } = makeSeqFetch([{ input: { transactions: [] } }, { input: TXN }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'chase.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(2)
+    expect(r.transactions).toHaveLength(1)
+    expect(r.errors.join(' ')).toMatch(/Recovered after retry/)
+  })
+
+  it('retries a TRANSIENT API error (529) then succeeds', async () => {
+    const { fn, calls } = makeSeqFetch([{ status: 529 }, { input: TXN }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'chase.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(2)
+    expect(r.transactions).toHaveLength(1)
+  })
+
+  it('does NOT retry a permanent 400 error', async () => {
+    const { fn, calls } = makeSeqFetch([{ status: 400 }, { input: TXN }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'chase.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(1)
+    expect(r.transactions).toHaveLength(0)
+  })
+
+  it('does NOT retry a successful first call (exactly one request)', async () => {
+    const { fn, calls } = makeSeqFetch([{ input: TXN }, { input: TXN }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'chase.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(1)
+    expect(r.transactions).toHaveLength(1)
+  })
+
+  it('gives up after MAX_ATTEMPTS if every attempt is empty (genuinely unreadable)', async () => {
+    const { fn, calls } = makeSeqFetch([{ input: { transactions: [] } }])
+    const r = await aiExtractBankStatement(Buffer.from('x'), 'scanned.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(3)
+    expect(r.transactions).toHaveLength(0)
+  })
 })
 
 describe('parseBankStatement routing', () => {
