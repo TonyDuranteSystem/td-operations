@@ -427,3 +427,121 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
     /* never break completion */
   }
 }
+
+// ───────────────────────────── Templates ─────────────────────────────
+// Reusable doc + field layout. Fields carry signer_role_index (0-based) instead
+// of a concrete signer; instantiation binds roles → real signers in the editor.
+
+const TEMPLATE_PREFIX = "templates"
+
+export interface TemplateFieldInput {
+  field_type: EsignFieldType
+  page_index: number
+  pos_x: number
+  pos_y: number
+  width: number
+  height: number
+  default_required?: boolean
+  placeholder?: string | null
+  font_size?: number | null
+  signer_role_index: number
+}
+
+export interface CreateEsignTemplateParams {
+  name: string
+  description?: string | null
+  pdfBuffer: Buffer
+  fileName: string
+  pageCount: number
+  fields: TemplateFieldInput[]
+  roleCount: number
+  owner_account_id?: string | null
+  created_by?: string
+}
+
+export async function createEsignTemplate(params: CreateEsignTemplateParams): Promise<{ id: string }> {
+  const { name, description = null, pdfBuffer, fileName, pageCount, fields, roleCount, owner_account_id = null, created_by = "system" } = params
+  if (!name.trim()) throw new Error("Template name is required.")
+  if (!fields.length) throw new Error("A template needs at least one field.")
+  if (roleCount < 1) throw new Error("A template needs at least one signer role.")
+  for (const f of fields) {
+    if (!isValidNormalizedRect(f)) throw new Error(`Template field has invalid coordinates (${f.field_type}, page ${f.page_index}).`)
+    if (f.signer_role_index < 0 || f.signer_role_index >= roleCount) {
+      throw new Error(`Field references role ${f.signer_role_index} but the template has ${roleCount} role(s).`)
+    }
+  }
+  for (let r = 0; r < roleCount; r++) {
+    if (!fields.some(f => f.signer_role_index === r)) throw new Error(`Signer role ${r + 1} has no fields.`)
+  }
+
+  const token = randToken(14)
+  const storagePath = `${TEMPLATE_PREFIX}/${token}/${fileName}`
+  const { error: upErr } = await supabaseAdmin.storage
+    .from(SOURCE_BUCKET)
+    .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true })
+  if (upErr) throw new Error(`Could not store the template: ${upErr.message}`)
+
+  const { data: tpl, error: tplErr } = await db
+    .from("esign_templates")
+    .insert({ owner_account_id, name: name.trim(), description, pdf_storage_path: storagePath, page_count: pageCount, status: "active", created_by })
+    .select("id")
+    .single()
+  if (tplErr || !tpl) throw new Error(`Could not create the template: ${tplErr?.message || "unknown"}`)
+
+  const fieldRows = fields.map(f => ({
+    template_id: tpl.id,
+    signer_role_index: f.signer_role_index,
+    field_type: f.field_type,
+    page_index: f.page_index,
+    pos_x: f.pos_x,
+    pos_y: f.pos_y,
+    width: f.width,
+    height: f.height,
+    default_required: f.default_required ?? true,
+    placeholder: f.placeholder ?? null,
+    font_size: f.font_size ?? null,
+  }))
+  const { error: fErr } = await db.from("esign_template_fields").insert(fieldRows)
+  if (fErr) throw new Error(`Could not save template fields: ${fErr.message}`)
+
+  logAction({ action_type: "create", table_name: "esign_templates", record_id: tpl.id, account_id: owner_account_id ?? undefined, summary: `E-Sign template created: ${name}` })
+  return { id: tpl.id }
+}
+
+export async function listEsignTemplates(): Promise<Array<{ id: string; name: string; page_count: number | null; created_at: string }>> {
+  const { data } = await db
+    .from("esign_templates")
+    .select("id, name, page_count, created_at")
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(100)
+  return data ?? []
+}
+
+/** Template detail for instantiation: a 1-year signed URL for the PDF + the fields + role count. */
+export async function getEsignTemplate(id: string): Promise<{
+  id: string
+  name: string
+  description: string | null
+  page_count: number | null
+  pdfUrl: string | null
+  roleCount: number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fields: any[]
+} | null> {
+  const { data: tpl } = await db
+    .from("esign_templates")
+    .select("id, name, description, page_count, pdf_storage_path")
+    .eq("id", id)
+    .maybeSingle()
+  if (!tpl) return null
+  const { data: fields } = await db
+    .from("esign_template_fields")
+    .select("field_type, page_index, pos_x, pos_y, width, height, default_required, placeholder, font_size, signer_role_index")
+    .eq("template_id", id)
+  const { data: signed } = await supabaseAdmin.storage.from(SOURCE_BUCKET).createSignedUrl(tpl.pdf_storage_path, 60 * 60) // 1h is enough to load into the editor
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fieldRows: any[] = fields ?? []
+  const roleCount = fieldRows.reduce((m, f) => Math.max(m, (f.signer_role_index ?? 0) + 1), 1)
+  return { id: tpl.id, name: tpl.name, description: tpl.description, page_count: tpl.page_count, pdfUrl: signed?.signedUrl ?? null, roleCount, fields: fieldRows }
+}

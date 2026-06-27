@@ -9,7 +9,7 @@
  * placement is resolution-independent and the server flatten lands pixel-accurate.
  */
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { PdfViewer, type PdfPageInfo } from "@/components/esign/pdf-viewer"
 import { normalizedToDomBox, clampNormalizedRect, type NormalizedRect } from "@/lib/esign/coordinates"
 
@@ -48,6 +48,11 @@ export function EsignEditor() {
   const [tool, setTool] = useState<FieldType>("signature")
   const [fields, setFields] = useState<PlacedField[]>([])
   const [routingOrder, setRoutingOrder] = useState<"sequential" | "parallel">("sequential")
+  const [templates, setTemplates] = useState<Array<{ id: string; name: string }>>([])
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false)
+  const [templateName, setTemplateName] = useState("")
+  const [templateMsg, setTemplateMsg] = useState("")
+  const [savingTemplate, setSavingTemplate] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState("")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -77,6 +82,79 @@ export function EsignEditor() {
       }
     }, 250)
   }, [])
+
+  // Templates: load the list on mount.
+  const refreshTemplates = useCallback(() => {
+    fetch("/api/esign/templates").then(r => r.json()).then(d => setTemplates(d.templates ?? [])).catch(() => {})
+  }, [])
+  useEffect(() => { refreshTemplates() }, [refreshTemplates])
+
+  // Start from a template: load its PDF + field layout + one empty signer per role.
+  const loadTemplate = useCallback(async (id: string) => {
+    if (!id) return
+    setError("")
+    setTemplateMsg("")
+    try {
+      const res = await fetch(`/api/esign/templates/${id}`)
+      const t = await res.json()
+      if (!res.ok || !t.pdfUrl) throw new Error(t.error || "Could not load the template.")
+      const pdfRes = await fetch(t.pdfUrl)
+      const buf = await pdfRes.arrayBuffer()
+      const safe = (t.name || "template").replace(/[^a-zA-Z0-9._-]/g, "_")
+      setFile(new File([buf], `${safe}.pdf`, { type: "application/pdf" }))
+      setPdfBytes(new Uint8Array(buf.slice(0)))
+      setDocumentName(t.name || "")
+      setResult(null)
+      setAccount(null)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setFields((t.fields ?? []).map((tf: any) => ({
+        id: `f${++fieldSeq}`,
+        field_type: tf.field_type,
+        page_index: tf.page_index,
+        signer_index: tf.signer_role_index ?? 0,
+        pos_x: tf.pos_x, pos_y: tf.pos_y, width: tf.width, height: tf.height,
+      })))
+      const roles = Math.max(1, t.roleCount ?? 1)
+      setSigners(Array.from({ length: roles }, () => ({ name: "", email: "" })))
+      setActiveSigner(0)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load the template.")
+    }
+  }, [])
+
+  // Save the current PDF + field layout as a reusable template.
+  const saveAsTemplate = useCallback(async () => {
+    setTemplateMsg("")
+    if (!file) { setTemplateMsg("Upload a PDF first."); return }
+    if (!fields.length) { setTemplateMsg("Place at least one field first."); return }
+    if (!templateName.trim()) { setTemplateMsg("Name the template."); return }
+    setSavingTemplate(true)
+    try {
+      const payload = {
+        name: templateName.trim(),
+        roleCount: signers.length,
+        fields: fields.map(f => ({
+          field_type: f.field_type, page_index: f.page_index,
+          pos_x: f.pos_x, pos_y: f.pos_y, width: f.width, height: f.height,
+          signer_role_index: f.signer_index,
+        })),
+      }
+      const fd = new FormData()
+      fd.append("pdf", file)
+      fd.append("payload", JSON.stringify(payload))
+      const res = await fetch("/api/esign/templates", { method: "POST", body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "Could not save the template.")
+      setTemplateMsg("Template saved.")
+      setShowSaveTemplate(false)
+      setTemplateName("")
+      refreshTemplates()
+    } catch (err) {
+      setTemplateMsg(err instanceof Error ? err.message : "Could not save the template.")
+    } finally {
+      setSavingTemplate(false)
+    }
+  }, [file, fields, signers, templateName, refreshTemplates])
 
   const onPickFile = useCallback(async (f: File) => {
     setError("")
@@ -208,6 +286,19 @@ export function EsignEditor() {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
       {/* Controls */}
       <div className="space-y-5">
+        {templates.length > 0 && (
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Start from template</label>
+            <select
+              defaultValue=""
+              onChange={e => { loadTemplate(e.target.value); e.target.value = "" }}
+              className="mt-1 h-9 w-full rounded-md border bg-white px-2 text-sm focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="" disabled>Choose a template…</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        )}
         <div>
           <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Document</label>
           <input
@@ -320,6 +411,33 @@ export function EsignEditor() {
         >
           {creating ? "Creating…" : "Create & get signing link"}
         </button>
+
+        {/* Save as template */}
+        {file && fields.length > 0 && (
+          <div className="border-t pt-3">
+            {showSaveTemplate ? (
+              <div className="space-y-2">
+                <input
+                  value={templateName}
+                  onChange={e => setTemplateName(e.target.value)}
+                  placeholder="Template name"
+                  className="h-9 w-full rounded-md border px-3 text-sm focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="flex gap-2">
+                  <button onClick={saveAsTemplate} disabled={savingTemplate} className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-zinc-50 disabled:opacity-50">
+                    {savingTemplate ? "Saving…" : "Save template"}
+                  </button>
+                  <button onClick={() => { setShowSaveTemplate(false); setTemplateMsg("") }} className="rounded-md px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-700">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => { setShowSaveTemplate(true); setTemplateName(documentName) }} className="text-xs text-blue-600 hover:underline">
+                Save this layout as a template
+              </button>
+            )}
+            {templateMsg && <p className="mt-1 text-xs text-zinc-500">{templateMsg}</p>}
+          </div>
+        )}
       </div>
 
       {/* Document */}
