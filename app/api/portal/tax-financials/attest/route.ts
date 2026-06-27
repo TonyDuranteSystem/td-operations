@@ -39,6 +39,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
+    // Server-side guard: never attest while statements are still being read.
+    // The numbers are still changing, and a premature confirmation fires the
+    // handoff (Excel archive + staff task) on incomplete data. The UI disables
+    // the button while ingestPending > 0; this enforces it server-side too.
+    const { countInFlightIngestJobs } = await import('@/lib/tax/ingest-status')
+    if ((await countInFlightIngestJobs(accountId, taxYear)) > 0) {
+      return NextResponse.json(
+        { error: 'Your statements are still being processed. Please wait until they have all been read, then confirm.' },
+        { status: 409 },
+      )
+    }
+
     // The hard gate: every blocking gate must pass right now.
     const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')
     const view = await getFinancialsView(accountId, taxYear)
