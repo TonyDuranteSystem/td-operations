@@ -58,6 +58,61 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
   }
   const buffer = Buffer.from(await blob.arrayBuffer())
 
+  // A .zip is a YEAR of monthly statements. Reading them all in this one job
+  // exceeds the worker's time budget on a big archive (e.g. a 1.5 MB Mercury
+  // zip of 12 statements) → the job is reaped, retried, and eventually fails.
+  // Instead, EXPAND the zip here (cheap: unzip + save, no AI) and enqueue ONE
+  // ingest_bank_statement job per inner statement, so each piece is small
+  // enough to finish. The per-file jobs go through the SAME handler (their
+  // paths are .pdf/.csv, so this branch is skipped for them).
+  if (p.path.toLowerCase().endsWith(".zip")) {
+    const { extractZipStatements } = await import("@/lib/bank-statement-parser")
+    const { saveAndEnqueueStatementUpload } = await import("@/lib/tax/portal-upload-enqueue")
+    let inner: Awaited<ReturnType<typeof extractZipStatements>>
+    try {
+      inner = await extractZipStatements(buffer)
+    } catch (e) {
+      // A corrupt archive won't fix itself on retry — surface it, don't throw.
+      result.steps.push(step("expand_zip", "error", `${fileName}: could not open archive — ${e instanceof Error ? e.message : String(e)}`))
+      result.ok = false
+      result.summary = `Could not open ${fileName}`
+      return result
+    }
+    if (inner.length === 0) {
+      result.steps.push(step("expand_zip", "error", `${fileName}: no PDF/CSV statements found inside the archive`))
+      result.ok = false
+      result.summary = `No statements found in ${fileName}`
+      return result
+    }
+    let enqueued = 0, skipped = 0
+    const failures: string[] = []
+    for (const entry of inner) {
+      try {
+        const r = await saveAndEnqueueStatementUpload({
+          accountId: p.account_id,
+          taxYear: p.tax_year,
+          bankLabel: p.bank_label || "Bank",
+          buffer: Buffer.from(entry.bytes),
+          fileName: entry.name,
+        })
+        if (r.queued) enqueued++
+        else if (r.alreadyQueued) skipped++
+      } catch (e) {
+        failures.push(`${entry.name}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    // A genuine save/enqueue failure IS transient (storage/db) → throw so the
+    // worker retries the whole expansion (idempotent: already-queued inner files
+    // are skipped on the retry).
+    if (enqueued === 0 && skipped === 0 && failures.length > 0) {
+      throw new Error(`Failed to expand ${fileName}: ${failures.join("; ")}`)
+    }
+    result.steps.push(step("expand_zip", "ok",
+      `${fileName}: expanded into ${inner.length} statement(s) — ${enqueued} queued, ${skipped} already queued${failures.length ? `, ${failures.length} failed: ${failures.join("; ")}` : ""}`))
+    result.summary = `Expanded ${fileName} into ${enqueued + skipped} statement job(s)`
+    return result
+  }
+
   const { ingestPortalCsv } = await import("@/lib/tax/portal-csv-ingest")
   const r = await ingestPortalCsv({
     accountId: p.account_id,

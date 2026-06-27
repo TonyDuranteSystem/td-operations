@@ -710,6 +710,38 @@ async function parseZipArchive(zipBuffer: Buffer, zipName: string, opts?: ParseO
   return merged
 }
 
+/** One statement file extracted from a .zip archive. */
+export interface ZipStatementEntry {
+  /** Inner file name (basename, no folder path). */
+  name: string
+  bytes: Uint8Array
+  /** "application/pdf" | "text/csv" */
+  mime: string
+}
+
+/**
+ * Expand a .zip and return each inner PDF/CSV statement (basename + bytes),
+ * skipping directories, __MACOSX junk, and non-statement files. Same filter as
+ * parseZipArchive — but it returns the raw entries instead of parsing inline, so
+ * a caller can ingest each statement as its OWN background job (a big year-of-
+ * statements zip otherwise exceeds one job's time budget). Throws on a corrupt
+ * archive.
+ */
+export async function extractZipStatements(zipBuffer: Buffer): Promise<ZipStatementEntry[]> {
+  const { unzipSync } = await import("fflate")
+  const entries = unzipSync(new Uint8Array(zipBuffer))
+  const out: ZipStatementEntry[] = []
+  for (const [name, bytes] of Object.entries(entries)) {
+    if (name.endsWith("/") || name.includes("__MACOSX/")) continue
+    const lower = name.toLowerCase()
+    const isPdf = lower.endsWith(".pdf")
+    const isCsv = lower.endsWith(".csv")
+    if (!isPdf && !isCsv) continue
+    out.push({ name: name.split("/").pop() || name, bytes, mime: isPdf ? "application/pdf" : "text/csv" })
+  }
+  return out
+}
+
 export async function parseBankStatement(
   fileBuffer: Buffer,
   fileName: string,
