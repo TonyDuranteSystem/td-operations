@@ -77,7 +77,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number }
   enabledFeatures?: string[]
 }
 
@@ -220,6 +220,7 @@ export function Sidebar({
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
+  const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
   const pathnameRef = useRef(pathname)
 
@@ -416,6 +417,7 @@ export function Sidebar({
       if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
+      if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
       return item
     })
     .filter((item): item is NavItem => {

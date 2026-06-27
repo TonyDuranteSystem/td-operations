@@ -18,10 +18,12 @@ import { getUserDisplayName, isDashboardUser } from '@/lib/auth'
 import { getCommPartner } from '@/lib/partner-auth'
 import { messagePreview, normalizeSubject } from './helpers'
 import type {
+  CommAttachment,
   CommConversation,
   CommConversationListItem,
   CommMessage,
   CommParticipant,
+  CommPartyType,
 } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,27 +177,38 @@ export async function createConversation(
   return conv
 }
 
-/** Messages in a conversation (excludes soft-deleted), oldest first. */
-export async function listMessages(conversationId: string): Promise<CommMessage[]> {
-  const { data, error } = await db
+/**
+ * Messages in a conversation, oldest first. A partner NEVER receives
+ * soft-deleted rows (R100 — the body must not leave the server); staff receive
+ * deleted rows so the CRM can render a tombstone for moderation/audit.
+ */
+export async function listMessages(
+  conversationId: string,
+  viewerType: CommPartyType,
+): Promise<CommMessage[]> {
+  let q = db
     .from('comm_messages')
     .select('*')
     .eq('conversation_id', conversationId)
-    .is('deleted_at', null)
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
-    .limit(500)
+    .limit(1000)
+  if (viewerType !== 'staff') q = q.is('deleted_at', null)
+  const { data, error } = await q
   if (error) throw new Error(error.message)
   return (data ?? []) as CommMessage[]
 }
 
-/** Insert a message and bump the conversation's last_message_at. */
+/** Insert a message (text and/or attachments, optional reply) and bump last_message_at. */
 export async function insertMessage(params: {
   conversationId: string
   sender: CommParticipant
   body: string
+  attachments?: CommAttachment[]
+  replyToId?: string | null
 }): Promise<CommMessage> {
   const { conversationId, sender, body } = params
+  const attachments = params.attachments && params.attachments.length ? params.attachments : null
   const { data, error } = await db
     .from('comm_messages')
     .insert({
@@ -204,6 +217,8 @@ export async function insertMessage(params: {
       sender_id: sender.id,
       sender_name: sender.name,
       body,
+      attachments,
+      reply_to_id: params.replyToId ?? null,
     })
     .select('*')
     .single()
@@ -215,6 +230,104 @@ export async function insertMessage(params: {
     .eq('id', conversationId)
 
   return data as CommMessage
+}
+
+/** Fetch a single message (for ownership/access checks). */
+export async function getMessage(id: string): Promise<CommMessage | null> {
+  const { data, error } = await db.from('comm_messages').select('*').eq('id', id).maybeSingle()
+  if (error) throw new Error(error.message)
+  return (data as CommMessage) ?? null
+}
+
+/** True when this participant sent the message. */
+function isOwn(msg: CommMessage, p: CommParticipant): boolean {
+  return msg.sender_type === p.type && msg.sender_id === p.id
+}
+
+/**
+ * Edit a message's text. Only the sender may edit their own message; the
+ * original text is preserved on the first edit and edited_at is stamped.
+ * Returns { changed }. Throws on not-found / not-owner / deleted.
+ */
+export async function editMessage(
+  id: string,
+  editor: CommParticipant,
+  newBody: string,
+): Promise<{ changed: boolean }> {
+  const msg = await getMessage(id)
+  if (!msg) throw new Error('Message not found.')
+  if (msg.deleted_at) throw new Error('Cannot edit a deleted message.')
+  if (!isOwn(msg, editor)) throw new Error('You can only edit your own messages.')
+  if (msg.body === newBody) return { changed: false }
+  const updates: Record<string, unknown> = { body: newBody, edited_at: new Date().toISOString() }
+  if (!msg.original_body) updates.original_body = msg.body
+  const { error } = await db.from('comm_messages').update(updates).eq('id', id)
+  if (error) throw new Error(error.message)
+  return { changed: true }
+}
+
+/**
+ * Soft-delete a message (R100). The sender may delete their own; staff may
+ * delete any (moderation). Body is preserved for audit; partner queries filter
+ * deleted rows out, the realtime UPDATE drops it live.
+ */
+export async function softDeleteMessage(id: string, deleter: CommParticipant): Promise<void> {
+  const msg = await getMessage(id)
+  if (!msg) throw new Error('Message not found.')
+  if (msg.deleted_at) return
+  if (deleter.type !== 'staff' && !isOwn(msg, deleter)) {
+    throw new Error('You can only delete your own messages.')
+  }
+  const { error } = await db
+    .from('comm_messages')
+    .update({ deleted_at: new Date().toISOString(), deleted_by: `${deleter.type}:${deleter.id}` })
+    .eq('id', id)
+    .is('deleted_at', null)
+  if (error) throw new Error(error.message)
+}
+
+/** Pin / unpin a message. Any participant of the conversation may pin. */
+export async function setPinned(id: string, pinned: boolean, by: CommParticipant): Promise<void> {
+  const updates = pinned
+    ? { pinned_at: new Date().toISOString(), pinned_by: by.id, pinned_by_type: by.type }
+    : { pinned_at: null, pinned_by: null, pinned_by_type: null }
+  const { error } = await db.from('comm_messages').update(updates).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+/** Mark / unmark a message as deliberately kept-unread (recipient action). */
+export async function setKeptUnread(id: string, kept: boolean): Promise<void> {
+  const updates: Record<string, unknown> = { kept_unread: kept }
+  // Re-marking unread also clears the read receipt so it counts again.
+  if (kept) updates.read_at = null
+  const { error } = await db.from('comm_messages').update(updates).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Mark every message NOT sent by the reader as read (sets read_at) — drives the
+ * sender's ✓✓ receipt. Skips kept-unread messages so they keep counting.
+ */
+export async function markMessagesRead(conversationId: string, reader: CommParticipant): Promise<void> {
+  await db
+    .from('comm_messages')
+    .update({ read_at: new Date().toISOString() })
+    .eq('conversation_id', conversationId)
+    .is('read_at', null)
+    .eq('kept_unread', false)
+    .not('sender_type', 'eq', reader.type)
+}
+
+/** Staff sidebar badge: count unread partner messages across all conversations. */
+export async function unreadCountForStaff(): Promise<number> {
+  const { count, error } = await db
+    .from('comm_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('sender_type', 'partner')
+    .is('read_at', null)
+    .is('deleted_at', null)
+  if (error) return 0
+  return count ?? 0
 }
 
 /**

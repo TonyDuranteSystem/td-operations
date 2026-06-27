@@ -31,6 +31,14 @@ export interface CommConversation {
   updated_at: string
 }
 
+/** A chat attachment (mirrors the portal chat's ChatAttachment shape). */
+export interface CommAttachment {
+  url: string
+  name: string
+  mime_type?: string
+  size?: number
+}
+
 export interface CommMessage {
   id: string
   conversation_id: string
@@ -38,6 +46,17 @@ export interface CommMessage {
   sender_id: string | null
   sender_name: string | null
   body: string
+  attachment_url: string | null
+  attachment_name: string | null
+  attachments: CommAttachment[] | null
+  read_at: string | null
+  reply_to_id: string | null
+  edited_at: string | null
+  original_body: string | null
+  pinned_at: string | null
+  pinned_by: string | null
+  pinned_by_type: CommPartyType | null
+  kept_unread: boolean
   deleted_at: string | null
   deleted_by: string | null
   created_at: string
