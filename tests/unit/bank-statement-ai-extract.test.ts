@@ -10,8 +10,15 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { zipSync, strToU8 } from 'fflate'
+import { PDFDocument } from 'pdf-lib'
 import { aiExtractBankStatement } from '@/lib/bank-statement-ai-extract'
 import { parseBankStatement } from '@/lib/bank-statement-parser'
+
+async function makePdf(pages: number): Promise<Buffer> {
+  const d = await PDFDocument.create()
+  for (let i = 0; i < pages; i++) d.addPage([300, 300])
+  return Buffer.from(await d.save())
+}
 
 interface FakeInput {
   bank_name?: string
@@ -162,6 +169,39 @@ describe('aiExtractBankStatement', () => {
     const r = await aiExtractBankStatement(Buffer.from('x'), 'scanned.pdf', 'application/pdf', { fetchImpl: fn })
     expect(calls.count).toBe(3)
     expect(r.transactions).toHaveLength(0)
+  })
+
+  // ── Large multi-page PDF chunking ──
+  it('splits a LARGE (>15pp) PDF into page-chunks, extracts each, and merges', async () => {
+    const pdf = await makePdf(20) // 20 pages → 10/chunk → 2 chunks
+    const { fn, calls } = makeSeqFetch([
+      { input: { bank_name: 'Chase', currency: 'USD', opening_balance: 0, closing_balance: 300, transactions: [{ date: '2025-01-01', description: 'c1', amount: 100, currency: 'USD' }] } },
+      { input: { bank_name: 'Chase', currency: 'USD', opening_balance: 0, closing_balance: 300, transactions: [{ date: '2025-07-01', description: 'c2', amount: 200, currency: 'USD' }] } },
+    ])
+    const r = await aiExtractBankStatement(pdf, 'chase_big.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(2) // 2 chunks → 2 extractions
+    expect(r.transactions).toHaveLength(2)
+    expect(r.transactions.map(t => t.amount).sort((a, b) => a - b)).toEqual([100, 200])
+    expect(r.errors.join(' ')).toMatch(/2 page-chunks/)
+    // first chunk opening (0) + Σ(300) == last chunk closing (300)
+    expect(r.reconciliation?.reconciled).toBe(true)
+  })
+
+  it('does NOT chunk a small (<=15pp) PDF — single pass', async () => {
+    const pdf = await makePdf(3)
+    const { fn, calls } = makeSeqFetch([{ input: { bank_name: 'Relay', currency: 'USD', opening_balance: 0, closing_balance: 50, transactions: [{ date: '2025-01-01', description: 'x', amount: 50, currency: 'USD' }] } }])
+    const r = await aiExtractBankStatement(pdf, 'small.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(1)
+    expect(r.transactions).toHaveLength(1)
+    expect(r.errors.join(' ')).not.toMatch(/page-chunks/)
+  })
+
+  it('falls back to single pass when the PDF cannot be parsed for splitting', async () => {
+    // a non-PDF buffer can't be loaded by pdf-lib → splitter returns null → single pass
+    const { fn, calls } = makeSeqFetch([{ input: TXN }])
+    const r = await aiExtractBankStatement(Buffer.from('not a real pdf'), 'weird.pdf', 'application/pdf', { fetchImpl: fn })
+    expect(calls.count).toBe(1)
+    expect(r.transactions).toHaveLength(1)
   })
 })
 

@@ -159,11 +159,11 @@ function reconcile(stmt: AiStatement, txns: ParsedTransaction[]): NonNullable<Pa
  * Returns a ParseResult shaped exactly like the hand-coded parsers, plus
  * `extraction_method: "ai"` and a `reconciliation` verdict.
  */
-export async function aiExtractBankStatement(
+async function extractSinglePass(
   buffer: Buffer,
   fileName: string,
   mimeType: string,
-  opts?: { fetchImpl?: typeof fetch; model?: string },
+  opts?: { fetchImpl?: typeof fetch; model?: string; maxAttempts?: number; budgetMs?: number },
 ): Promise<ParseResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return emptyResult(fileName, ["ANTHROPIC_API_KEY not configured — cannot AI-extract statement"])
@@ -189,8 +189,8 @@ export async function aiExtractBankStatement(
   // and the remaining budget. A genuinely unreadable (e.g. scanned) PDF still
   // ends empty after the retries and is surfaced for human review.
   const TRANSIENT = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529])
-  const MAX_ATTEMPTS = 3
-  const GLOBAL_DEADLINE_MS = 250_000
+  const MAX_ATTEMPTS = opts?.maxAttempts ?? 3
+  const GLOBAL_DEADLINE_MS = opts?.budgetMs ?? 250_000
   const PER_ATTEMPT_MS = 240_000
   const startedAt = Date.now()
   const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
@@ -298,5 +298,107 @@ export async function aiExtractBankStatement(
     errors,
     extraction_method: "ai",
     reconciliation: reconcile(stmt, transactions),
+  }
+}
+
+// ── Large-PDF chunking ──────────────────────────────────────────────────────
+// A full-year statement delivered as ONE big PDF (e.g. a 60-page Chase export)
+// is under-read by a single pass — the model reliably extracts a few pages and
+// drops the rest (observed in real-data QA: 94 of ~521 tx). Split a large PDF
+// into page-windows, extract each, and MERGE. Small statements (≤ threshold
+// pages) are untouched — exactly the proven single pass. Document AI OCR is NOT
+// used: the content is already machine-readable text, and DocAI's sync API caps
+// at 30 pages anyway (Phase-0 finding, 2026-06-27).
+const CHUNK_THRESHOLD_PAGES = 15
+const CHUNK_PAGES = 10
+
+/** Split a PDF into ≤CHUNK_PAGES-page sub-PDFs. Returns null when the PDF has
+ *  ≤ threshold pages OR cannot be parsed → caller falls back to a single pass
+ *  (today's behavior); chunking never makes a readable file worse. */
+async function splitPdfIntoChunks(buffer: Buffer): Promise<Buffer[] | null> {
+  try {
+    const { PDFDocument } = await import("pdf-lib")
+    const src = await PDFDocument.load(buffer, { ignoreEncryption: true })
+    const n = src.getPageCount()
+    if (n <= CHUNK_THRESHOLD_PAGES) return null
+    const chunks: Buffer[] = []
+    for (let start = 0; start < n; start += CHUNK_PAGES) {
+      const out = await PDFDocument.create()
+      const idxs: number[] = []
+      for (let i = start; i < Math.min(start + CHUNK_PAGES, n); i++) idxs.push(i)
+      const pages = await out.copyPages(src, idxs)
+      pages.forEach(p => out.addPage(p))
+      chunks.push(Buffer.from(await out.save()))
+    }
+    return chunks.length > 1 ? chunks : null
+  } catch {
+    return null // unparseable / encrypted / odd PDF → single pass
+  }
+}
+
+/**
+ * Extract transactions from any bank statement (PDF or CSV/text) via Claude.
+ * A LARGE multi-page PDF is split into page-chunks, each extracted, then merged
+ * (chunk fan-out for one oversized file); everything else is a single pass.
+ */
+export async function aiExtractBankStatement(
+  buffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  opts?: { fetchImpl?: typeof fetch; model?: string },
+): Promise<ParseResult> {
+  const isPdf = mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf")
+  const chunks = isPdf ? await splitPdfIntoChunks(buffer) : null
+  if (!chunks) return extractSinglePass(buffer, fileName, mimeType, opts) // proven single pass
+
+  // Keep the whole chunked extraction inside the 300s job window: spread ~220s
+  // across chunks (≥25s each, ceiling not actual), hard-stop at 250s elapsed.
+  const perChunkBudget = Math.max(25_000, Math.floor(220_000 / chunks.length))
+  const maxAttempts = chunks.length <= 4 ? 2 : 1
+  const results: ParseResult[] = []
+  const startedAll = Date.now()
+  let truncatedChunks = 0
+  for (let i = 0; i < chunks.length; i++) {
+    if (Date.now() - startedAll > 250_000) { truncatedChunks = chunks.length - i; break }
+    results.push(await extractSinglePass(chunks[i], `${fileName}#chunk${i + 1}`, "application/pdf",
+      { ...opts, maxAttempts, budgetMs: perChunkBudget }))
+  }
+
+  // Merge: concat, re-dedupe refs across the COMBINED set (page windows don't
+  // overlap, so this only collapses genuinely-identical rows). Reconcile against
+  // the FULL statement: first chunk's opening, last chunk's closing, Σ all.
+  const mergedTx = results.flatMap(r => r.transactions)
+  const combinedRefs = dedupeRefs(mergedTx.map(t => t.transaction_ref))
+  mergedTx.forEach((t, i) => { t.transaction_ref = combinedRefs[i] })
+
+  const opening = results[0]?.reconciliation?.opening_balance ?? null
+  const closing = results[results.length - 1]?.reconciliation?.closing_balance ?? null
+  const currencies = Array.from(new Set(mergedTx.map(t => t.currency).filter(Boolean)))
+  let reconciliation: NonNullable<ParseResult["reconciliation"]>
+  if (currencies.length > 1) {
+    reconciliation = { opening_balance: opening, closing_balance: closing, computed_closing: null, reconciled: null, note: `Multi-currency (${currencies.join(", ")}) across ${chunks.length} page-chunks — reconciliation skipped` }
+  } else if (opening === null || closing === null) {
+    reconciliation = { opening_balance: opening, closing_balance: closing, computed_closing: null, reconciled: null, note: `Multi-page PDF (${chunks.length} chunks): opening/closing not both stated — cannot reconcile` }
+  } else {
+    const sum = mergedTx.reduce((a, t) => a + (Number.isFinite(t.amount) ? t.amount : 0), 0)
+    const computed = Math.round((opening + sum) * 100) / 100
+    const reconciled = Math.abs(computed - closing) <= RECONCILE_TOLERANCE
+    reconciliation = { opening_balance: opening, closing_balance: closing, computed_closing: computed, reconciled, note: reconciled ? `Reconciled across ${chunks.length} page-chunks` : `MISMATCH across ${chunks.length} page-chunks: opening ${opening} + Σ ${Math.round(sum * 100) / 100} = ${computed}, statement closing = ${closing}. Needs human review.` }
+  }
+
+  const errors = Array.from(new Set(results.flatMap(r => r.errors)))
+  errors.unshift(`Large PDF split into ${chunks.length} page-chunks (>${CHUNK_THRESHOLD_PAGES} pages) and merged.`)
+  if (truncatedChunks > 0) errors.push(`Time budget reached — ${truncatedChunks} chunk(s) not processed; figures may be incomplete (see reconciliation).`)
+  if (mergedTx.length === 0) errors.push("AI extraction returned no transactions across any chunk")
+
+  return {
+    transactions: mergedTx,
+    bank_name: results.find(r => r.bank_name && r.bank_name !== "unknown")?.bank_name || "unknown",
+    currency: results[0]?.currency || "USD",
+    account_holder: results.find(r => r.account_holder)?.account_holder || "",
+    period: results.find(r => r.period)?.period || "",
+    errors,
+    extraction_method: "ai",
+    reconciliation,
   }
 }
