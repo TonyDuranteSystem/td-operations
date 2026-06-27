@@ -225,14 +225,15 @@ describe('parseBankStatement routing', () => {
     expect(r.transactions).toHaveLength(1)
   })
 
-  it('unpacks a .zip and merges transactions from inner statements', async () => {
+  it('unpacks a .zip and parses the inner statement (now free via the generic CSV parser, no AI)', async () => {
     const { fn, calls } = makeFetch({
       bank_name: 'Mercury', currency: 'USD', opening_balance: 0, closing_balance: 300,
       transactions: [{ date: '2025-06-01', description: 'Inner', amount: 300, currency: 'USD' }],
     })
     const zip = zipSync({ 'mercury_jan.csv': strToU8('date,amount\n2025-06-01,300\n') })
     const r = await parseBankStatement(Buffer.from(zip), 'mercury_2025.zip', 'application/zip', { fetchImpl: fn })
-    expect(calls.count).toBe(1) // one inner statement → one AI call
+    // The inner "date,amount" CSV now parses deterministically (generic parser) → no AI call.
+    expect(calls.count).toBe(0)
     expect(r.transactions).toHaveLength(1)
     expect(r.transactions[0].amount).toBe(300)
   })

@@ -245,6 +245,150 @@ export function parseRelayCSV(csvContent: string, _fileName: string): ParseResul
   }
 }
 
+// ─── Generic (bank-agnostic) CSV parser ─────────────────────
+// Why: hand-coding a parser per bank means a NEW client on a NEW bank is stuck
+// until we ship code. This parser reads ANY CSV with recognizable date + amount
+// (or debit/credit) columns — free, instant, no AI — so a new bank "just works".
+// It runs AFTER the exact per-bank parsers and BEFORE the AI fallback; an
+// unmappable layout returns 0 rows → caller falls back to AI-CSV extraction.
+
+const G_DATE = ["date completed", "date (utc)", "transaction date", "posted date", "value date", "booking date", "completed date", "date", "timestamp", "data", "date started"]
+const G_AMOUNT = ["total amount", "amount", "importo", "net amount"]
+const G_DEBIT = ["debit", "withdrawal", "withdrawals", "money out", "paid out", "amount out", "addebito", "dare", "out"]
+const G_CREDIT = ["credit", "deposit", "deposits", "money in", "paid in", "amount in", "accredito", "avere", "in"]
+const G_BALANCE = ["running balance", "balance after", "closing balance", "saldo corrente", "saldo", "balance"]
+const G_CURRENCY = ["currency", "ccy", "valuta"]
+const G_DESC = ["description", "details", "narrative", "memo", "reference", "merchant", "payee", "name", "transaction type", "type", "descrizione", "causale", "note", "notes"]
+const G_PARTY = ["payee", "counterparty", "beneficiary", "merchant", "name", "to / from", "to/from"]
+
+/** Find a column index: exact header match first (most reliable), then a
+ *  "contains" match, skipping any header that contains an excluded word. */
+function findCol(header: string[], synonyms: string[], exclude: string[] = []): number {
+  for (const s of synonyms) { const i = header.indexOf(s); if (i !== -1) return i }
+  for (const s of synonyms) {
+    const i = header.findIndex(h => h.includes(s) && !exclude.some(x => h.includes(x)))
+    if (i !== -1) return i
+  }
+  return -1
+}
+
+/** Parse an amount allowing a leading +, currency symbols, and (parentheses)
+ *  = negative (common accounting export style). */
+function parseSignedAmount(raw: string, commaDecimals: boolean): number {
+  const t = (raw || "").trim()
+  if (!t) return NaN
+  const paren = /^\(.*\)$/.test(t)
+  const n = parseAmount(t.replace(/[()]/g, ""), commaDecimals)
+  return paren && !isNaN(n) ? -Math.abs(n) : n
+}
+
+/** Detect M/D/Y vs D/M/Y from the data (ISO dates are unambiguous). */
+function detectDateOrder(samples: string[]): "mdy" | "dmy" {
+  for (const s of samples) {
+    const m = s.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-]\d{2,4}$/)
+    if (!m) continue
+    if (Number(m[1]) > 12) return "dmy"
+    if (Number(m[2]) > 12) return "mdy"
+  }
+  return "mdy" // default US — most clients' banks are US; flagged when ambiguous
+}
+
+function flexibleDateToIso(raw: string, order: "mdy" | "dmy"): string | null {
+  const t = (raw || "").trim()
+  if (!t) return null
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+  const slash = t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/)
+  if (slash) {
+    const a = slash[1], b = slash[2]
+    let y = slash[3]
+    if (y.length === 2) y = `20${y}`
+    const month = order === "mdy" ? Number(a) : Number(b)
+    const day = order === "mdy" ? Number(b) : Number(a)
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null
+    return `${y}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+  }
+  const d = new Date(t) // last resort: "Jan 5, 2025", "5 Jan 2025"
+  if (!isNaN(d.getTime()) && d.getFullYear() > 1990 && d.getFullYear() < 2100) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  }
+  return null
+}
+
+export function parseGenericCSV(csvContent: string, _opts?: { fallbackYear?: number }): ParseResult {
+  const errors: string[] = []
+  const dialect = sniffCsvDialect(csvContent)
+  const rows = parseDelimitedRows(csvContent, dialect.delimiter)
+  if (rows.length < 2) return { transactions: [], bank_name: "unknown", currency: "USD", account_holder: "", period: "", errors: ["Empty CSV"] }
+
+  // Locate the header row (some exports have preamble lines): the first row in
+  // the first 15 that maps a date column AND an amount (or debit/credit) column.
+  let headerIdx = -1, map: { date: number; amount: number; debit: number; credit: number; balance: number; currency: number; party: number; descCols: number[] } | null = null
+  for (let r = 0; r < Math.min(15, rows.length); r++) {
+    const h = rows[r].map(c => c.trim().toLowerCase())
+    const date = findCol(h, G_DATE)
+    const amount = findCol(h, G_AMOUNT, ["balance", "fee", "running"])
+    const debit = findCol(h, G_DEBIT)
+    const credit = findCol(h, G_CREDIT)
+    if (date !== -1 && (amount !== -1 || debit !== -1 || credit !== -1)) {
+      const descCols = G_DESC.map(s => h.indexOf(s)).filter(i => i !== -1)
+      map = { date, amount, debit, credit, balance: findCol(h, G_BALANCE), currency: findCol(h, G_CURRENCY), party: findCol(h, G_PARTY), descCols }
+      headerIdx = r
+      break
+    }
+  }
+  if (!map) return { transactions: [], bank_name: "unknown", currency: "USD", account_holder: "", period: "", errors: ["Generic CSV: could not identify a date + amount (or debit/credit) column"] }
+
+  const body = rows.slice(headerIdx + 1)
+  const order = detectDateOrder(body.map(row => row[map!.date] ?? "").slice(0, 200))
+  const ambiguous = !body.some(row => /^(\d{1,2})[/-](\d{1,2})[/-]/.test((row[map!.date] ?? "").trim()) && (Number((row[map!.date] ?? "").trim().split(/[/-]/)[0]) > 12 || Number((row[map!.date] ?? "").trim().split(/[/-]/)[1]) > 12))
+    && body.some(row => /^(\d{1,2})[/-](\d{1,2})[/-]/.test((row[map!.date] ?? "").trim()))
+  if (ambiguous) errors.push(`Ambiguous date format — assumed ${order === "mdy" ? "M/D/Y (US)" : "D/M/Y"}. Verify before filing.`)
+
+  const transactions: ParsedTransaction[] = []
+  for (const row of body) {
+    const iso = flexibleDateToIso(row[map.date] ?? "", order)
+    if (!iso) continue // skip non-data rows (footers, blanks) silently
+    let amount: number
+    if (map.amount !== -1) amount = parseSignedAmount(row[map.amount] ?? "", dialect.commaDecimals)
+    else {
+      const deb = map.debit !== -1 ? parseSignedAmount(row[map.debit] ?? "", dialect.commaDecimals) : NaN
+      const cre = map.credit !== -1 ? parseSignedAmount(row[map.credit] ?? "", dialect.commaDecimals) : NaN
+      amount = (isNaN(cre) ? 0 : Math.abs(cre)) - (isNaN(deb) ? 0 : Math.abs(deb))
+      if (isNaN(deb) && isNaN(cre)) amount = NaN
+    }
+    if (isNaN(amount)) continue
+    const balanceRaw = map.balance !== -1 ? (row[map.balance] ?? "").trim() : ""
+    const balance = balanceRaw ? parseAmount(balanceRaw, dialect.commaDecimals) : null
+    const party = map.party !== -1 ? (row[map.party] ?? "").trim() : ""
+    const desc = Array.from(new Set(map.descCols.map(i => (row[i] ?? "").trim()).filter(v => v && v.toLowerCase() !== "unknown"))).join(" | ")
+    const currency = (map.currency !== -1 && (row[map.currency] ?? "").trim()) || "USD"
+    transactions.push({
+      transaction_date: iso,
+      description: desc || "Transaction",
+      counterparty: party,
+      amount,
+      currency: currency.toUpperCase(),
+      balance_after: balance !== null && !isNaN(balance) ? balance : null,
+      transaction_ref: stableRowRef([iso, amount, desc || party, balanceRaw]),
+      bank_name: "unknown",
+      account_type: currency.toUpperCase(),
+    })
+  }
+  if (transactions.length === 0) errors.push("Generic CSV: header mapped but no data rows parsed")
+  const refs = dedupeRefs(transactions.map(t => t.transaction_ref))
+  transactions.forEach((t, i) => { t.transaction_ref = refs[i] })
+  const dates = transactions.map(t => t.transaction_date).sort()
+  return {
+    transactions,
+    bank_name: "unknown",
+    currency: transactions[0]?.currency || "USD",
+    account_holder: "",
+    period: dates.length ? `${dates[0]} → ${dates[dates.length - 1]}` : "",
+    errors,
+  }
+}
+
 // ─── Mercury parser ─────────────────────────────────────────
 
 /** MM-DD-YYYY (Mercury/Revolut US exports) or ISO → ISO. Null if unparseable. */

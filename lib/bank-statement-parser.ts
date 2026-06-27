@@ -9,7 +9,7 @@
  * reconciliation guard (lib/bank-statement-ai-extract.ts).
  */
 
-import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, stableRowRef } from "./bank-csv-parsers"
+import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef } from "./bank-csv-parsers"
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ export interface ParseResult {
   period: string
   errors: string[]
   /** How the transactions were extracted. Absent for legacy hand-coded parsers. */
-  extraction_method?: "wise_csv" | "relay_csv" | "mercury_csv" | "revolut_csv" | "slash_csv" | "wise_pdf" | "ai" | "unknown"
+  extraction_method?: "wise_csv" | "relay_csv" | "mercury_csv" | "revolut_csv" | "slash_csv" | "generic_csv" | "wise_pdf" | "ai" | "unknown"
   /**
    * Balance reconciliation guard (set by AI extraction). When a statement
    * reports opening + closing balances, we verify opening + Σamounts ≈ closing.
@@ -791,6 +791,16 @@ export async function parseBankStatement(
       const r = parseWiseCSV(content, fileName)
       r.extraction_method = "wise_csv"
       if (r.transactions.length > 0) return r
+    }
+    // Bank-agnostic generic CSV parser — ANY bank whose CSV has a recognizable
+    // date + amount (or debit/credit) column parses here: free, instant, no AI,
+    // and a brand-new bank "just works" with no per-bank code. ONLY for unknown
+    // layouts (signature === null) — a recognized-but-not-deterministically-
+    // parsed format like wise_transfers (source/target double-count semantics)
+    // must still go to AI below, never the generic parser. Unmappable → AI too.
+    if (signature === null) {
+      const generic = parseGenericCSV(content, { fallbackYear: opts?.taxYear })
+      if (generic.transactions.length > 0) { generic.extraction_method = "generic_csv"; return generic }
     }
   } else if (isPdf && /wise/i.test(lowerName)) {
     const r = await parseWisePDF(fileBuffer, fileName)
