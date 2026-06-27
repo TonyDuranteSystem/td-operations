@@ -71,6 +71,7 @@ echo "▶ env '$NAME'  slot=$SLOT  api_port=$APIPORT  dev_port=$DEVPORT"
 
 # ---- init + patch the stack config (unique ports, analytics off) -----------
 mkdir -p "$STACK_DIR"; echo "$SLOT" > "$STACK_DIR/.slot"
+echo "$WORKTREE" > "$STACK_DIR/.worktree-path"   # used by worktree-stack-sweep.sh to detect orphans
 ( cd "$STACK_DIR" && supabase init --force >/dev/null 2>&1 || supabase init >/dev/null 2>&1 || true )
 CFG="$STACK_DIR/supabase/config.toml"
 sed -i '' "s/^project_id = .*/project_id = \"tdlocal-${NAME}\"/" "$CFG"

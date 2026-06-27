@@ -21,6 +21,14 @@ done0(){ exit 0; }  # fail-soft: always succeed so we never block a session
 
 cd "$WT" 2>/dev/null || { say "auto-isolate: cannot cd $WT — skip"; done0; }
 
+# 0. Reclaim stacks whose worktree was closed (runs for EVERY session, even the main
+#    checkout). Backgrounded so it never delays session start. Backstop to the session's
+#    own "offer to tear down when work ships" — catches worktrees closed without asking.
+if [ -f scripts/worktree-stack-sweep.sh ]; then
+  nohup bash scripts/worktree-stack-sweep.sh >/dev/null 2>&1 < /dev/null &
+  disown 2>/dev/null || true
+fi
+
 # 1. Only linked worktrees (their .git is a FILE; the main checkout's is a DIR).
 [ -f .git ] || { say "auto-isolate: not a linked worktree — skip"; done0; }
 [ -f scripts/env-up.sh ] || { say "auto-isolate: no env-up.sh here — skip"; done0; }
