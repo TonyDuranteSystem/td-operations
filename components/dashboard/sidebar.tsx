@@ -36,6 +36,7 @@ import {
   Tag,
   MapPin,
   LayoutGrid,
+  Radio,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -91,6 +92,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
   { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
+  { id: 'td-communication', name: 'TD Communication', href: '/td-communication', icon: MessagesSquare, tooltip: 'Planning channel between TD staff and external partners (e.g. Cris). Partners use a dedicated standalone page.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
@@ -108,6 +110,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
+  { id: 'td-communication', name: 'TD Communication', href: '/dashboard/td-communication', icon: Radio, tooltip: 'Direct realtime channel between TD staff and managed partners (e.g. Cris). Reply to partner messages here.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },
   // Task Board (/tasks) intentionally NOT in the sidebar — retired in favor of
   // the Notification Center (Portal Chats → What's New / To Do). The workflow

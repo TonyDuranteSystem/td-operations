@@ -215,6 +215,25 @@ export async function middleware(request: NextRequest) {
 
   const role = user.app_metadata?.role
 
+  // --- Partner confinement (external collaborators, e.g. Cris) ---
+  // A partner authenticates as role='partner' (NOT 'client'), so without this
+  // branch they would pass the dashboard guard below and reach the entire CRM.
+  // Confine them strictly to their collaboration surface: the /collab page and
+  // the /api/conversations endpoints. Everything else bounces to /collab.
+  if (role === 'partner') {
+    const partnerAllowed =
+      pathname === '/collab' ||
+      pathname.startsWith('/collab/') ||
+      pathname.startsWith('/api/conversations')
+    if (!partnerAllowed) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/collab'
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+    return supabaseResponse
+  }
+
   // --- Portal paths: require client role ---
   if (isPortalPath(pathname)) {
     if (role !== 'client') {
