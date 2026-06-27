@@ -53,6 +53,12 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       )
     }
+    if (file.size === 0) {
+      return NextResponse.json(
+        { error: 'This file is empty. Please re-export the statement from your bank and upload it again.' },
+        { status: 400 },
+      )
+    }
     if (file.size > MAX_BYTES) {
       return NextResponse.json(
         { error: `This file is ${(file.size / 1024 / 1024).toFixed(1)} MB — larger than the ${MAX_BYTES / 1024 / 1024} MB limit. A bank CSV export should be far smaller; please export CSV (not Excel) directly from your online banking.` },

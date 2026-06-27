@@ -10,6 +10,7 @@ vi.mock("@/lib/bank-statement-parser", async (importOriginal) => {
 const upsertCalls: unknown[] = []
 const existingRows: unknown[] = []
 const jobInserts: unknown[] = []
+let existingSourceCount = 0
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
@@ -17,11 +18,16 @@ vi.mock("@/lib/supabase-admin", () => ({
         return { select: () => ({ eq: () => Promise.resolve({ data: [] }) }) }
       }
       if (table === "bank_transactions") {
-        return {
-          // loadExistingRows path: select().eq().eq()
-          select: () => ({ eq: () => ({ eq: () => Promise.resolve({ data: existingRows, error: null }) }) }),
-          upsert: (row: unknown) => { upsertCalls.push(row); return Promise.resolve({ error: null }) },
-        }
+        // Chainable thenable: serves BOTH the idempotency count query
+        // (select('id',{count,head}).eq().eq().eq() → {count}) and
+        // loadExistingRows (select().eq().eq() → {data}).
+        const chain: Record<string, unknown> = {}
+        chain.select = () => chain
+        chain.eq = () => chain
+        chain.upsert = (row: unknown) => { upsertCalls.push(row); return Promise.resolve({ error: null }) }
+        chain.then = (resolve: (v: unknown) => unknown) =>
+          resolve({ data: existingRows, count: existingSourceCount, error: null })
+        return chain
       }
       if (table === "tax_return_submissions") {
         // resetFinancialsAttestation lookup — no attested submission in these tests
@@ -66,9 +72,22 @@ const INPUT = {
   buffer: Buffer.from("csv-content"), fileName: "export.csv",
 }
 
-beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); jobInserts.length = 0; upsertCalls.length = 0; existingRows.length = 0 })
+beforeEach(() => { parseMock.mockReset(); recatMock.mockClear(); jobInserts.length = 0; upsertCalls.length = 0; existingRows.length = 0; existingSourceCount = 0 })
 
 describe("ingestPortalCsv", () => {
+  it("idempotent: same file content already ingested → ok WITHOUT re-parsing (no flip-to-failed)", async () => {
+    // This exact file's source_file_id already has 94 rows. A non-deterministic
+    // PDF re-extraction must NOT flip it to failed — short-circuit to success.
+    existingSourceCount = 94
+    const r = await ingestPortalCsv(INPUT)
+    expect(r.ok).toBe(true)
+    expect(r.alert).toContain("already processed")
+    expect(r.parsed).toBe(94)
+    expect(r.inserted).toBe(0)
+    expect(parseMock).not.toHaveBeenCalled() // never re-parsed
+    expect(upsertCalls).toHaveLength(0)
+  })
+
   it("unreadable file → guiding error, nothing inserted", async () => {
     parseMock.mockResolvedValue({ transactions: [], bank_name: "unknown", errors: ["Could not find required columns"] })
     const r = await ingestPortalCsv(INPUT)

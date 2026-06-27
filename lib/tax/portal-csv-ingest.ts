@@ -53,6 +53,30 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     ok: false, error, inserted: 0, parsed: 0, months: [], bankDetected: bankLabel, uncategorizedRemaining: 0, sourceFileId,
   })
 
+  // 0. Idempotency short-circuit. If this EXACT file content (source_file_id =
+  //    hash of the bytes) already has rows for this account+year, it was already
+  //    ingested — return success WITHOUT re-parsing. Critical because PDF
+  //    AI-extraction is non-deterministic: a retry of an already-ingested file
+  //    can return 0 transactions ("could not read") and would otherwise flip the
+  //    file to FAILED even though its rows persist (source_file_id dedup) and are
+  //    counted in the P&L — the "failed file whose data is actually in" bug.
+  //    A genuinely new/edited file has different bytes → different source_file_id
+  //    → no rows here → falls through to normal parsing.
+  const { count: existingForSource } = await supabaseAdmin
+    .from("bank_transactions")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .eq("tax_year", taxYear)
+    .eq("source_file_id", sourceFileId)
+  if ((existingForSource ?? 0) > 0) {
+    return {
+      ok: true,
+      alert: `This file was already processed — ${existingForSource} transaction(s) are on file.`,
+      inserted: 0, parsed: existingForSource ?? 0, months: [], bankDetected: bankLabel,
+      uncategorizedRemaining: 0, sourceFileId,
+    }
+  }
+
   // 1. Parse by content signature. Route by the REAL file type so PDFs reach
   //    the AI extractor and CSVs hit the deterministic parsers — never force a
   //    single mime (the old hardcoded "text/csv" made every PDF parse as CSV →
