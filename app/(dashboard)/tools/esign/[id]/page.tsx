@@ -6,6 +6,7 @@ import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
 import { CopyField } from "@/components/esign/copy-field"
+import { SendButton } from "@/components/esign/send-button"
 
 export const dynamic = "force-dynamic"
 
@@ -58,14 +59,19 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
             <span>created {fmt(env.created_at)}</span>
           </div>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <a href={`/api/esign/envelopes/${id}/document?type=source`} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-zinc-50">
-            Download source
-          </a>
-          {env.signed_pdf_path && (
-            <a href={`/api/esign/envelopes/${id}/document?type=signed`} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-              Download signed PDF
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex gap-2">
+            <a href={`/api/esign/envelopes/${id}/document?type=source`} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-zinc-50">
+              Download source
             </a>
+            {env.signed_pdf_path && (
+              <a href={`/api/esign/envelopes/${id}/document?type=signed`} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+                Download signed PDF
+              </a>
+            )}
+          </div>
+          {["draft", "sent", "in_progress"].includes(env.status) && signerRows.some(s => s.email && s.status === "pending") && (
+            <SendButton envelopeId={id} />
           )}
         </div>
       </div>
