@@ -31,6 +31,13 @@ export const supabaseAdmin = new Proxy({} as SupabaseClient<Database>, {
       }
 
       const expectedRef = process.env.EXPECTED_SUPABASE_REF
+      // Local-mode safety (env-up): a local stack URL has no cloud ref, so EXPECTED_SUPABASE_REF
+      // is intentionally empty. Outside Vercel, any NON-local URL MUST still declare its ref —
+      // this closes the hole where an empty ref + a cloud URL would skip the guard entirely.
+      const isLocal = /127\.0\.0\.1|localhost/.test(supabaseUrl)
+      if (!process.env.VERCEL && !isLocal && !expectedRef) {
+        throw new Error('Refusing to start: non-local Supabase URL with no EXPECTED_SUPABASE_REF set. Run dev-setup (sandbox) or env-up (local).')
+      }
       if (expectedRef) {
         const actualRef = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
         if (actualRef !== expectedRef) {
