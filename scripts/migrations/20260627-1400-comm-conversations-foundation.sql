@@ -107,22 +107,46 @@ ALTER TABLE comm_participants  ENABLE ROW LEVEL SECURITY;
 --            contact_id (from the JWT app_metadata).
 ALTER TABLE comm_messages ENABLE ROW LEVEL SECURITY;
 
+-- The participation check must read comm_participants + client_partners, which
+-- are RLS-protected with no authenticated-readable policy. A plain subquery in
+-- the USING clause runs as the `authenticated` role and would see ZERO rows, so
+-- the policy would deny EVERYONE — including realtime postgres_changes delivery
+-- (caught in sandbox QA: Cris's own messages were not delivered). A SECURITY
+-- DEFINER helper runs as the function owner and bypasses RLS on those tables,
+-- which is the supported pattern for cross-table realtime RLS.
+CREATE OR REPLACE FUNCTION public.comm_can_read(conv uuid, uid text, contact text)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM comm_participants p
+    WHERE p.conversation_id = conv
+      AND (
+        (p.participant_type = 'staff' AND p.participant_id = uid)
+        OR
+        (p.participant_type = 'partner' AND EXISTS (
+          SELECT 1 FROM client_partners cp
+          WHERE cp.id::text = p.participant_id
+            AND cp.contact_id::text = contact
+        ))
+      )
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.comm_can_read(uuid, text, text) FROM public;
+GRANT EXECUTE ON FUNCTION public.comm_can_read(uuid, text, text) TO authenticated;
+
 DROP POLICY IF EXISTS comm_messages_participant_select ON comm_messages;
 CREATE POLICY comm_messages_participant_select ON comm_messages
   FOR SELECT TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM comm_participants p
-      WHERE p.conversation_id = comm_messages.conversation_id
-        AND (
-          (p.participant_type = 'staff' AND p.participant_id = auth.uid()::text)
-          OR
-          (p.participant_type = 'partner' AND EXISTS (
-            SELECT 1 FROM client_partners cp
-            WHERE cp.id::text = p.participant_id
-              AND cp.contact_id::text = (auth.jwt() -> 'app_metadata' ->> 'contact_id')
-          ))
-        )
+    public.comm_can_read(
+      comm_messages.conversation_id,
+      auth.uid()::text,
+      (auth.jwt() -> 'app_metadata' ->> 'contact_id')
     )
   );
 
