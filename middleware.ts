@@ -60,6 +60,11 @@ const PUBLIC_PREFIXES = [
   '/contract-template',
   '/ss4',
   '/sign-document',
+  // Generic e-sign signer page + API (per-signer token + access code; no Supabase auth)
+  '/sign/',
+  '/api/sign/',
+  // pdfjs worker (public static asset the signer/editor fetch in the browser)
+  '/esign/pdf.worker.min.mjs',
   // Legacy MMLLC member info collection form (token+code URL auth)
   '/member-info',
   '/api/member-info',
