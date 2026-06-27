@@ -31,20 +31,25 @@ const db = supabaseAdmin as any
 
 /**
  * Resolve the authenticated caller into a TD Communication participant.
- * Staff (admin/team) → { type: 'staff', id: auth uid }.
  * Partner with td_communication scope → { type: 'partner', id: client_partners.id }.
+ * Staff (admin/team) → { type: 'staff', id: auth uid }.
  * Anyone else → null (no access).
+ *
+ * IMPORTANT: partner is checked FIRST. A partner has role='partner', which is
+ * NOT 'client', so isDashboardUser() returns true for them — checking staff
+ * first would misclassify every partner as staff (tagging their messages
+ * sender_type='staff' and showing them the staff/tombstone view).
  */
 export async function resolveCommParticipant(
   user: User | null,
 ): Promise<CommParticipant | null> {
   if (!user) return null
-  if (isDashboardUser(user)) {
-    return { type: 'staff', id: user.id, name: getUserDisplayName(user) }
-  }
   const partner = await getCommPartner(user)
   if (partner) {
     return { type: 'partner', id: partner.id, name: partner.partner_name ?? 'Partner' }
+  }
+  if (isDashboardUser(user)) {
+    return { type: 'staff', id: user.id, name: getUserDisplayName(user) }
   }
   return null
 }
