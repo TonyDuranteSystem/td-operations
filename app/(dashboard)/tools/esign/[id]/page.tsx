@@ -7,6 +7,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
 import { CopyField } from "@/components/esign/copy-field"
 import { SendButton } from "@/components/esign/send-button"
+import { VoidButton } from "@/components/esign/void-button"
 
 export const dynamic = "force-dynamic"
 
@@ -70,8 +71,11 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
               </a>
             )}
           </div>
-          {["draft", "sent", "in_progress"].includes(env.status) && signerRows.some(s => s.status === "pending") && (
-            <SendButton envelopeId={id} />
+          {["draft", "sent", "in_progress"].includes(env.status) && (
+            <div className="flex flex-col items-end gap-2">
+              {signerRows.some(s => s.status === "pending") && <SendButton envelopeId={id} />}
+              <VoidButton envelopeId={id} />
+            </div>
           )}
         </div>
       </div>
