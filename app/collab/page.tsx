@@ -6,18 +6,21 @@ import {
   listConversationsForPartner,
   createConversation,
 } from '@/lib/td-communication/queries'
-import { ConversationChat } from '@/components/td-communication/conversation-chat'
-import type { CommParticipant } from '@/lib/td-communication/types'
+import { listEnrollments } from '@/lib/td-communication/pipeline-queries'
+import { CollabDashboard } from '@/components/td-communication/collab-dashboard'
+import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * Standalone partner view for TD Communication (/collab). Gated by
- * role='partner' + client_partners.partner_scope containing 'td_communication'
- * (getCommPartner). Middleware confines role='partner' users to /collab +
- * /api/conversations; this page does the per-partner authorization.
+ * Partner creative-studio dashboard (/collab). Gated by role='partner' +
+ * client_partners.partner_scope containing 'td_communication' (getCommPartner).
+ * Middleware confines role='partner' users to /collab + /api/conversations +
+ * /api/td-communication; this page does the per-partner authorization.
  *
- * The partner gets a single ongoing channel with TD — get-or-create here.
+ * Phase 2 expands the old single-chat page into a dashboard: a read-only project
+ * pipeline (hero), the existing realtime chat (now one section), and settings.
+ * The partner still gets a single ongoing channel with TD — get-or-create here.
  */
 export default async function PartnerCommunicationPage() {
   const supabase = createClient()
@@ -46,22 +49,23 @@ export default async function PartnerCommunicationPage() {
     name: partner.partner_name ?? 'Partner',
   }
 
-  // Get-or-create the partner's channel.
+  // Get-or-create the partner's channel, and load the pipeline for first paint.
   const existing = await listConversationsForPartner(partner.id)
   const conversation = existing[0] ?? (await createConversation({ creator: viewer }))
 
+  let initialProjects: CommEnrollment[] = []
+  try {
+    initialProjects = await listEnrollments()
+  } catch {
+    initialProjects = []
+  }
+
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-50">
-      <header className="shrink-0 bg-white border-b px-4 py-3 flex items-center gap-2">
-        <MessagesSquare className="h-5 w-5 text-blue-600" />
-        <div>
-          <h1 className="text-base font-bold leading-tight">TD Communication</h1>
-          <p className="text-[11px] text-zinc-500 leading-tight">{partner.partner_name ?? 'Partner'}</p>
-        </div>
-      </header>
-      <main className="flex-1 min-h-0 flex flex-col p-4 max-w-3xl w-full mx-auto">
-        <ConversationChat conversationId={conversation.id} viewer={viewer} />
-      </main>
-    </div>
+    <CollabDashboard
+      viewer={viewer}
+      conversationId={conversation.id}
+      initialProjects={initialProjects}
+      partnerName={partner.partner_name ?? 'Partner'}
+    />
   )
 }
