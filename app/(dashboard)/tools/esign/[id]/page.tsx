@@ -70,7 +70,7 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
               </a>
             )}
           </div>
-          {["draft", "sent", "in_progress"].includes(env.status) && signerRows.some(s => s.email && s.status === "pending") && (
+          {["draft", "sent", "in_progress"].includes(env.status) && signerRows.some(s => s.status === "pending") && (
             <SendButton envelopeId={id} />
           )}
         </div>

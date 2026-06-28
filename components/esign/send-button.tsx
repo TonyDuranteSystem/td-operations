@@ -3,7 +3,8 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 
-/** Staff button: email the signing link to pending signers. */
+/** Staff button: send the document to pending signers (CRM clients with a portal
+ *  login → portal; everyone else → email the signing link). */
 export function SendButton({ envelopeId, label = "Send for signature" }: { envelopeId: string; label?: string }) {
   const router = useRouter()
   const [sending, setSending] = useState(false)
@@ -16,9 +17,17 @@ export function SendButton({ envelopeId, label = "Send for signature" }: { envel
       const res = await fetch(`/api/esign/envelopes/${envelopeId}/send`, { method: "POST" })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || "Could not send.")
-      const parts = [`${data.queued} email${data.queued === 1 ? "" : "s"} queued`]
-      if (data.noEmail) parts.push(`${data.noEmail} signer(s) have no email — copy their link instead`)
-      setMsg({ kind: "ok", text: parts.join(" · ") })
+      // The send route routes each signer by channel: CRM clients with a portal
+      // login → portal; everyone else → email. Response: { emailed, portal, undeliverable }.
+      const emailed = data.emailed ?? 0
+      const portal = data.portal ?? 0
+      const undeliverable = data.undeliverable ?? 0
+      const parts: string[] = []
+      if (emailed) parts.push(`${emailed} emailed`)
+      if (portal) parts.push(`${portal} sent to portal`)
+      if (undeliverable) parts.push(`${undeliverable} undeliverable (no email/portal — copy their link)`)
+      if (!parts.length) parts.push("Nothing to send (no pending signers)")
+      setMsg({ kind: undeliverable ? "err" : "ok", text: parts.join(" · ") })
       router.refresh()
     } catch (err) {
       setMsg({ kind: "err", text: err instanceof Error ? err.message : "Could not send." })

@@ -27,12 +27,15 @@ export async function GET(req: NextRequest) {
   if (q.length < 2) return NextResponse.json({ clients: [] })
   const pattern = `%${q}%`
 
-  // 1) Contacts matched directly by name or email.
-  const { data: byName } = await supabaseAdmin
-    .from("contacts")
-    .select("id, full_name, email")
-    .or(`full_name.ilike.${pattern},email.ilike.${pattern}`)
-    .limit(20)
+  // 1) Contacts matched directly by name or email. Two separate ilike queries
+  //    (NOT a single `.or(...)`) so a comma/parenthesis in the search term can't
+  //    break the PostgREST logic-tree parser — `.ilike` keeps the term as a
+  //    parameterized value, not part of the filter grammar.
+  const [{ data: byFullName }, { data: byEmail }] = await Promise.all([
+    supabaseAdmin.from("contacts").select("id, full_name, email").ilike("full_name", pattern).limit(20),
+    supabaseAdmin.from("contacts").select("id, full_name, email").ilike("email", pattern).limit(20),
+  ])
+  const byName = [...((byFullName ?? []) as ContactRow[]), ...((byEmail ?? []) as ContactRow[])]
 
   // 2) Contacts reached via a company-name match (accounts → account_contacts).
   let byCompany: ContactRow[] = []
