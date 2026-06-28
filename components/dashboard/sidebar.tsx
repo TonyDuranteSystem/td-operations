@@ -36,6 +36,7 @@ import {
   Tag,
   MapPin,
   LayoutGrid,
+  Radio,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -76,7 +77,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number }
   enabledFeatures?: string[]
 }
 
@@ -108,6 +109,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
+  { id: 'td-communication', name: 'TD Communication', href: '/dashboard/td-communication', icon: Radio, tooltip: 'Direct realtime channel between TD staff and managed partners (e.g. Cris). Reply to partner messages here.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },
   // Task Board (/tasks) intentionally NOT in the sidebar — retired in favor of
   // the Notification Center (Portal Chats → What's New / To Do). The workflow
@@ -218,6 +220,7 @@ export function Sidebar({
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
+  const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
   const pathnameRef = useRef(pathname)
 
@@ -414,6 +417,7 @@ export function Sidebar({
       if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
+      if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
       return item
     })
     .filter((item): item is NavItem => {
