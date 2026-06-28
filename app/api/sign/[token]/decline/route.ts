@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: env } = await db.from("esign_envelopes").select("id, status").eq("id", signer.envelope_id).single()
   if (!env) return NextResponse.json({ error: "Document not found." }, { status: 404 })
-  if (env.status === "voided" || env.status === "expired" || env.status === "completed") {
+  if (isTerminalEnvelopeStatus(env.status)) {
     return NextResponse.json({ error: `This document is ${env.status}.` }, { status: 410 })
   }
 

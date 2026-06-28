@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dispatchSignerDelivery } from "@/lib/esign/dispatch-delivery"
+import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     .eq("id", id)
     .maybeSingle()
   if (!env) return NextResponse.json({ error: "Envelope not found" }, { status: 404 })
-  if (env.status === "voided" || env.status === "expired" || env.status === "completed") {
+  if (isTerminalEnvelopeStatus(env.status)) {
     return NextResponse.json({ error: `This envelope is ${env.status} and can't be sent.` }, { status: 400 })
   }
 

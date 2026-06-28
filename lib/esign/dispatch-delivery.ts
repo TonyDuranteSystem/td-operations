@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { enqueueJob } from "@/lib/jobs/queue"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { createPortalNotification } from "@/lib/portal/notifications"
+import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -98,7 +99,7 @@ export async function dispatchSignerDelivery(opts: {
     .select("document_name, owner_account_id, status")
     .eq("id", signer.envelope_id)
     .maybeSingle()
-  if (env && ["voided", "expired", "completed"].includes(env.status)) return "none"
+  if (env && isTerminalEnvelopeStatus(env.status)) return "none"
 
   const now = new Date().toISOString()
   await db

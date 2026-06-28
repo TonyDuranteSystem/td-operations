@@ -27,6 +27,7 @@ import { clientIp, userAgent } from "@/lib/esign/request-meta"
 import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
 import { dispatchSignerDelivery } from "@/lib/esign/dispatch-delivery"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     .eq("id", signer.envelope_id)
     .single()
   if (!env) return NextResponse.json({ error: "Document not found." }, { status: 404 })
-  if (env.status === "voided" || env.status === "expired" || env.status === "completed") {
+  if (isTerminalEnvelopeStatus(env.status)) {
     return NextResponse.json({ error: `This document is ${env.status} and can no longer be signed.` }, { status: 410 })
   }
 
