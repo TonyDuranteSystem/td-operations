@@ -184,11 +184,18 @@ function SignerRow({
   )
 }
 
-export function EsignEditor() {
+export function EsignEditor({ initialAccount = null, initialSigner = null }: {
+  initialAccount?: { id: string; company_name: string } | null
+  initialSigner?: { contact_id: string; full_name: string; email: string | null; company: string | null } | null
+} = {}) {
   const [file, setFile] = useState<File | null>(null)
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null)
   const [documentName, setDocumentName] = useState("")
-  const [signers, setSigners] = useState<Signer[]>([emptySigner()])
+  const [signers, setSigners] = useState<Signer[]>(
+    initialSigner
+      ? [{ kind: "crm", name: initialSigner.full_name, email: initialSigner.email || "", contact_id: initialSigner.contact_id, company: initialSigner.company }]
+      : [emptySigner()],
+  )
   const [activeSigner, setActiveSigner] = useState(0)
   const [tool, setTool] = useState<FieldType>("signature")
   const [fields, setFields] = useState<PlacedField[]>([])
@@ -205,7 +212,7 @@ export function EsignEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Optional CRM account link — so the signed doc files into the client's records.
-  const [account, setAccount] = useState<{ id: string; company_name: string } | null>(null)
+  const [account, setAccount] = useState<{ id: string; company_name: string } | null>(initialAccount)
   const [acctQuery, setAcctQuery] = useState("")
   const [acctResults, setAcctResults] = useState<Array<{ id: string; company_name: string }>>([])
   const acctTimer = useRef<ReturnType<typeof setTimeout> | null>(null)

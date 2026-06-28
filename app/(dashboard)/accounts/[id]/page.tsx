@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
@@ -455,11 +456,15 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   return (
     <div className="p-6 lg:p-8">
-      {canViewAs && primaryContact && (
-        <div className="mb-4 flex justify-end">
-          <ViewAsClientButton contactId={primaryContact.id} />
-        </div>
-      )}
+      <div className="mb-4 flex justify-end gap-2">
+        <Link
+          href={`/tools/esign/new?account=${params.id}${primaryContact ? `&contact=${primaryContact.id}` : ''}`}
+          className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
+        >
+          ✍️ Create e-sign document
+        </Link>
+        {canViewAs && primaryContact && <ViewAsClientButton contactId={primaryContact.id} />}
+      </div>
       {formationSd && (
         <FormationWorkspaceBanner
           serviceDeliveryId={formationSd.id}
