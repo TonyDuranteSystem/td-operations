@@ -15,7 +15,6 @@ import {
   checkLoginRateLimit,
   recordLoginFailure,
   clearLoginFailures,
-  LOGIN_MAX_FAILURES,
 } from '@/lib/portal/rate-limit'
 
 export async function teammateLogin(
@@ -57,9 +56,6 @@ export async function teammateLogin(
   clearLoginFailures(rlKey)
   return { ok: true }
 }
-
-// Surface the constant so callers/tests reference one source of truth.
-export const TEAMMATE_LOGIN_MAX_FAILURES = LOGIN_MAX_FAILURES
 
 /**
  * Login-admission gate for a freshly-authenticated partner. The login page is a
