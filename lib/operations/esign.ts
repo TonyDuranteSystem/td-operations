@@ -402,7 +402,10 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
               await updateDocument({
                 drive_file_id: driveFileId,
                 account_id: env.owner_account_id,
-                patch: { portal_visible: true },
+                // autoSaveDocument sets drive_file_id but not drive_link, leaving
+                // the doc non-clickable in the account Documents tab — populate a
+                // Drive view URL built from the file id so it opens everywhere.
+                patch: { portal_visible: true, drive_link: `https://drive.google.com/file/d/${driveFileId}/view` },
                 actor: "system:esign",
                 summary: `Signed e-sign document filed to Drive + portal: ${env.document_name}`,
               })
