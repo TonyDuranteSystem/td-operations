@@ -356,42 +356,95 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
   try {
     const { data: env } = await db
       .from("esign_envelopes")
-      .select("id, token, document_name, owner_account_id, contact_id, signed_pdf_path")
+      .select("id, token, document_name, owner_account_id, contact_id, signed_pdf_path, signed_pdf_drive_id")
       .eq("id", envelopeId)
       .maybeSingle()
     if (!env) return
 
-    // 1. File the signed PDF into the client's documents (account-linked only).
+    // 1. File the signed PDF into the client's records — their Google Drive folder
+    // AND the documents table (portal-visible). Account-linked only. Mirrors the
+    // legacy signature-request-signed flow. A Drive failure (no drive_folder_id,
+    // API hiccup, or Drive-less env) falls back to a storage-served documents row,
+    // so the signed PDF ALWAYS reaches the client's portal either way.
     if (env.signed_pdf_path && env.owner_account_id) {
+      const fileName = `${env.document_name} - Signed.pdf`
+      let filedToDrive = false
+
+      // 1a. Upload to the client's Google Drive "5. Correspondence" folder.
+      // Idempotent: if signed_pdf_drive_id is already set, the upload already
+      // happened (a re-run via the reconciliation cron) — don't upload again.
+      // Skipped in sandbox (Drive is mocked there): the storage fallback (1b)
+      // gives a real, portal-visible documents row instead.
+      if (env.signed_pdf_drive_id) filedToDrive = true
+      const inSandbox = process.env.SANDBOX_MODE === "1"
       try {
-        const fileName = `${env.document_name} - Signed.pdf`
-        const driveRef = `storage:${SIGNED_BUCKET}/${env.signed_pdf_path}`
-        const { data: existing } = await db
-          .from("documents")
-          .select("id")
-          .eq("account_id", env.owner_account_id)
-          .eq("drive_file_id", driveRef)
-          .maybeSingle()
-        if (!existing) {
-          const { data: signed } = await supabaseAdmin.storage
-            .from(SIGNED_BUCKET)
-            .createSignedUrl(env.signed_pdf_path, 60 * 60 * 24 * 365) // 1 year
-          await db.from("documents").insert({
-            account_id: env.owner_account_id,
-            contact_id: env.contact_id,
-            file_name: fileName,
-            document_type_name: env.document_name,
-            category: 5, // Correspondence
-            drive_file_id: driveRef,
-            drive_link: signed?.signedUrl ?? null,
-            status: "classified",
-            confidence: "high", // prod has a CHECK(high|medium|low)
-            portal_visible: true,
-            notify_client: false,
-          })
+        const { data: account } = (filedToDrive || inSandbox) ? { data: null } : await db.from("accounts").select("drive_folder_id").eq("id", env.owner_account_id).maybeSingle()
+        if (account?.drive_folder_id) {
+          const { data: pdfData } = await supabaseAdmin.storage.from(SIGNED_BUCKET).download(env.signed_pdf_path)
+          if (pdfData) {
+            const buffer = Buffer.from(await pdfData.arrayBuffer())
+            const { uploadBinaryToDrive, listFolder } = await import("@/lib/google-drive")
+            let targetFolderId: string = account.drive_folder_id
+            try {
+              const contents = await listFolder(account.drive_folder_id)
+              const corr = (contents as Array<{ name: string; id: string }>).find(f => f.name.startsWith("5"))
+              if (corr) targetFolderId = corr.id
+            } catch {
+              /* fall back to the account root folder */
+            }
+            const driveResult = await uploadBinaryToDrive(fileName, buffer, "application/pdf", targetFolderId)
+            const driveFileId = (driveResult as { id?: string })?.id
+            if (driveFileId) {
+              const { autoSaveDocument } = await import("@/lib/portal/auto-save-document")
+              await autoSaveDocument({ accountId: env.owner_account_id, fileName, documentType: env.document_name, category: 5, driveFileId })
+              await db.from("esign_envelopes").update({ signed_pdf_drive_id: driveFileId }).eq("id", env.id)
+              const { updateDocument } = await import("@/lib/operations/document")
+              await updateDocument({
+                drive_file_id: driveFileId,
+                account_id: env.owner_account_id,
+                patch: { portal_visible: true },
+                actor: "system:esign",
+                summary: `Signed e-sign document filed to Drive + portal: ${env.document_name}`,
+              })
+              filedToDrive = true
+            }
+          }
         }
       } catch {
-        /* best-effort filing */
+        /* fall through to the storage-served fallback */
+      }
+
+      // 1b. Fallback: storage-served documents row (no Drive folder / Drive down).
+      if (!filedToDrive) {
+        try {
+          const driveRef = `storage:${SIGNED_BUCKET}/${env.signed_pdf_path}`
+          const { data: existing } = await db
+            .from("documents")
+            .select("id")
+            .eq("account_id", env.owner_account_id)
+            .eq("drive_file_id", driveRef)
+            .maybeSingle()
+          if (!existing) {
+            const { data: signed } = await supabaseAdmin.storage
+              .from(SIGNED_BUCKET)
+              .createSignedUrl(env.signed_pdf_path, 60 * 60 * 24 * 365) // 1 year
+            await db.from("documents").insert({
+              account_id: env.owner_account_id,
+              contact_id: env.contact_id,
+              file_name: fileName,
+              document_type_name: env.document_name,
+              category: 5, // Correspondence
+              drive_file_id: driveRef,
+              drive_link: signed?.signedUrl ?? null,
+              status: "classified",
+              confidence: "high", // prod has a CHECK(high|medium|low)
+              portal_visible: true,
+              notify_client: false,
+            })
+          }
+        } catch {
+          /* best-effort filing */
+        }
       }
     }
 
