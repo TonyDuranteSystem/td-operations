@@ -129,3 +129,49 @@ export interface CommEnrollment extends CommEnrollmentRow {
   /** metadata.notes — Cris's private notes. */
   notes: string | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* Phase 3 — Deliverables (td_comm_deliverables)                               */
+/* -------------------------------------------------------------------------- */
+
+/** Category of a creative deliverable. Independent of is_draft (the release state). */
+export type DeliverableType =
+  | 'logo_draft'
+  | 'logo_final'
+  | 'landing_page'
+  | 'brand_guide'
+  | 'business_card'
+  | 'other'
+
+/**
+ * A creative deliverable uploaded against an enrollment. Lives in the private
+ * `td-comm-deliverables` storage bucket; `file_url` is the storage PATH, signed
+ * on read. `preview_url`/`download_url` are NOT columns — the server attaches
+ * short-lived signed URLs when it returns a deliverable to the client.
+ */
+export interface CommDeliverable {
+  id: string
+  enrollment_id: string
+  type: DeliverableType
+  /** Storage path in the private bucket (signed on read). */
+  file_url: string | null
+  drive_file_id: string | null
+  file_name: string
+  file_size: number | null
+  mime_type: string | null
+  /** Draft = watermark + download-block flags (client-side enforcement is future). */
+  is_draft: boolean
+  /** Concept grouping: 1 = A, 2 = B, 3 = C … */
+  concept_number: number
+  /** Revision within a concept: 1 = v1, 2 = v2 … */
+  version_number: number
+  watermark_applied: boolean
+  /** Set when released to the client (null = not yet visible to them). */
+  released_at: string | null
+  released_by: string | null
+  created_at: string
+  /** Signed, short-lived. Inline preview (images). Added by the server on read. */
+  preview_url?: string | null
+  /** Signed, short-lived, forced-attachment download. Added by the server on read. */
+  download_url?: string | null
+}

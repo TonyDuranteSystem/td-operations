@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
-  X, Loader2, Building2, FileText, Paperclip, Clock, MessageCircle, Save, ExternalLink,
+  X, Loader2, Building2, FileText, Paperclip, Clock, MessageCircle, Save, ExternalLink, Package,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -14,8 +14,10 @@ import {
   deadlineLabel,
   slaIndicator,
   SLA_DOT,
+  ENROLLMENT_STATUSES,
 } from '@/lib/td-communication/pipeline'
 import { ConversationChat } from './conversation-chat'
+import { DeliverablesSection } from './deliverables-section'
 import type { CommParticipant } from '@/lib/td-communication/types'
 
 interface TimelineEvent {
@@ -87,16 +89,20 @@ export function ProjectBriefPanel({
   projectId,
   viewer,
   onClose,
+  onChanged,
 }: {
   projectId: string
   viewer: CommParticipant
   onClose: () => void
+  /** Called after a change that affects the board (status / deliverable release). */
+  onChanged?: () => void
 }) {
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  const [savingStatus, setSavingStatus] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -129,6 +135,31 @@ export function ProjectBriefPanel({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const saveStatus = async (status: string) => {
+    if (!project || status === project.status) return
+    const prev = project.status
+    setProject({ ...project, status }) // optimistic
+    setSavingStatus(true)
+    try {
+      const res = await fetch(`/api/td-communication/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not update status.')
+      }
+      toast.success('Status updated')
+      onChanged?.()
+    } catch (err) {
+      setProject((p) => (p ? { ...p, status: prev } : p)) // revert
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not update status.')
+    } finally {
+      setSavingStatus(false)
+    }
+  }
 
   const saveNotes = async () => {
     setSavingNotes(true)
@@ -234,6 +265,23 @@ export function ProjectBriefPanel({
                       <dd className="text-zinc-900 text-right">{project.client_type === 'rebrand' ? 'Rebrand' : 'New brand'}</dd>
                     </div>
                   )}
+                  <div className="flex justify-between gap-4 items-center">
+                    <dt className="text-zinc-500">Status</dt>
+                    <dd className="text-right">
+                      <select
+                        value={project.status}
+                        onChange={(e) => saveStatus(e.target.value)}
+                        disabled={savingStatus}
+                        className="text-sm border border-zinc-200 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
+                      >
+                        {ENROLLMENT_STATUSES.map((s) => (
+                          <option key={s} value={s}>
+                            {STATUS_LABELS[s] ?? s}
+                          </option>
+                        ))}
+                      </select>
+                    </dd>
+                  </div>
                 </dl>
               </Section>
 
@@ -282,6 +330,11 @@ export function ProjectBriefPanel({
                     ))}
                   </ul>
                 )}
+              </Section>
+
+              {/* Deliverables */}
+              <Section title="Deliverables" icon={<Package className="h-3.5 w-3.5" />}>
+                <DeliverablesSection enrollmentId={project.id} onChanged={onChanged} />
               </Section>
 
               {/* Timeline */}

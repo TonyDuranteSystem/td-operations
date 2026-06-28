@@ -60,6 +60,41 @@ export function statusToColumn(status: string): PipelineColumnKey | null {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Status transitions (Phase 3 — deliverables manager owns board advancement)  */
+/* -------------------------------------------------------------------------- */
+
+/** All valid enrollment statuses (for manual-status validation). */
+export const ENROLLMENT_STATUSES: readonly EnrollmentStatus[] = [
+  'enrolled', 'form_submitted', 'in_progress', 'concept_ready',
+  'approved', 'revision', 'delivered', 'cancelled',
+] as const
+
+export function isEnrollmentStatus(v: unknown): v is EnrollmentStatus {
+  return typeof v === 'string' && (ENROLLMENT_STATUSES as readonly string[]).includes(v)
+}
+
+/**
+ * Statuses from which uploading a deliverable nudges the project forward to
+ * 'concept_ready' (Ready for Review). Includes 'revision' — a re-upload after
+ * client-requested changes is a fresh concept ready for review again. Does NOT
+ * fire from concept_ready (already there), approved, delivered, or cancelled.
+ */
+const UPLOAD_NUDGE_FROM: ReadonlySet<EnrollmentStatus> = new Set<EnrollmentStatus>([
+  'enrolled', 'form_submitted', 'in_progress', 'revision',
+])
+
+/** Target status when a deliverable is uploaded, or null to leave it unchanged. */
+export function nextStatusOnUpload(current: string): EnrollmentStatus | null {
+  return UPLOAD_NUDGE_FROM.has(current as EnrollmentStatus) ? 'concept_ready' : null
+}
+
+/** Target status when a final is released, or null to leave it unchanged. */
+export function nextStatusOnReleaseFinal(current: string): EnrollmentStatus | null {
+  if (current === 'cancelled' || current === 'delivered') return null
+  return 'delivered'
+}
+
+/* -------------------------------------------------------------------------- */
 /* SLA / deadline                                                              */
 /* -------------------------------------------------------------------------- */
 

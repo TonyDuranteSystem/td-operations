@@ -13,7 +13,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveSubjectsBatch, resolveSubject, pickSubjectRef, buildSubject } from './subject'
-import type { CommEnrollment, CommEnrollmentRow } from './types'
+import { isEnrollmentStatus } from './pipeline'
+import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -170,4 +171,22 @@ export async function updateEnrollmentNotes(id: string, notes: string): Promise<
     .eq('id', id)
   if (upErr) throw new Error(upErr.message)
   return { notes }
+}
+
+/**
+ * Manual status control (Phase 3): set an enrollment's pipeline status. Validates
+ * against the known status set. Used by the brief-panel status dropdown — board
+ * advancement was deferred to the deliverables manager in Phase 2.
+ */
+export async function setEnrollmentStatus(id: string, status: string): Promise<{ status: EnrollmentStatus }> {
+  if (!isEnrollmentStatus(status)) throw new Error('Invalid status.')
+  const { data, error } = await db
+    .from('td_comm_enrollments')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('id')
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Enrollment not found.')
+  return { status: status as EnrollmentStatus }
 }
