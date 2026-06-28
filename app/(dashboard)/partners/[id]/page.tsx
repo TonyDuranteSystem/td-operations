@@ -202,6 +202,12 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
         }`}>
           {partner.status}
         </span>
+        <Link
+          href={`/tools/esign/new${contact?.id ? `?contact=${contact.id}` : ''}`}
+          className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
+        >
+          ✍️ Create e-sign document
+        </Link>
         {contact?.id && <ViewAsClientButton contactId={contact.id} label="View as partner" />}
         <PartnerHeaderActions partner={partnerData} />
       </div>
