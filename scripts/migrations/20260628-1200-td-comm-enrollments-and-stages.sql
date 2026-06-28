@@ -91,3 +91,19 @@ SELECT * FROM (VALUES
   ('TD Communication', 7, 'Final Delivery',            'Your brand is ready!', true, true, '#10b981', NULL)
 ) AS v(service_type, stage_order, stage_name, client_label, client_visible, board_visible, color, sla_days)
 WHERE NOT EXISTS (SELECT 1 FROM pipeline_stages WHERE service_type = 'TD Communication');
+
+-- 3) Partner display title ---------------------------------------------------
+-- Cosmetic public-facing title for a partner (e.g. "Communication Expert"),
+-- shown in the /collab dashboard header and as the chat sender name. Purely
+-- presentational — it does NOT affect the partner's role or scope-based access.
+ALTER TABLE client_partners
+  ADD COLUMN IF NOT EXISTS display_title text;
+
+COMMENT ON COLUMN client_partners.display_title IS
+  'Cosmetic public-facing title for a partner (e.g. "Communication Expert"), shown in the /collab header + chat sender name. Does NOT affect role or scope.';
+
+-- Seed Cris's title (matched by partner_email so it is a no-op in any
+-- environment where that partner does not exist, e.g. sandbox).
+UPDATE client_partners
+  SET display_title = 'Communication Expert'
+  WHERE partner_email = 'cristian@sirioos.design' AND display_title IS NULL;
