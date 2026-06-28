@@ -11,6 +11,18 @@ describe('wrapText', () => {
   it('returns [""] for empty input', () => {
     expect(wrapText('', 10)).toEqual([''])
   })
+  it('hard-splits a single word longer than the budget (no overflow)', () => {
+    const long = 'x'.repeat(300)
+    const lines = wrapText(long, 40)
+    expect(lines.every(l => l.length <= 40)).toBe(true) // never exceeds the budget
+    expect(lines.join('')).toBe(long)                   // lossless
+    expect(lines.length).toBe(Math.ceil(300 / 40))
+  })
+  it('hard-splits a long token mixed with normal words', () => {
+    const lines = wrapText('hi ' + 'a'.repeat(25) + ' bye', 10)
+    expect(lines.every(l => l.length <= 10)).toBe(true)
+    expect(lines.join(' ').replace(/\s+/g, '')).toContain('a'.repeat(25))
+  })
 })
 
 describe('appendCertificatePage', () => {

@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
+import { accessCodeError } from "@/lib/esign/access-guard"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -28,9 +29,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     .eq("token", token)
     .maybeSingle()
   if (!signer) return NextResponse.json({ error: "Signing link not found." }, { status: 404 })
-  if (!isPreview && signer.access_code !== code) {
-    return NextResponse.json({ error: "Invalid access code." }, { status: 403 })
-  }
+  const codeErr = accessCodeError(req, { token, expected: signer.access_code, provided: code, isPreview })
+  if (codeErr) return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
 
   const { data: env } = await db
     .from("esign_envelopes")

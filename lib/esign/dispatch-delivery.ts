@@ -66,15 +66,29 @@ export async function dispatchSignerDelivery(opts: {
 
   if (channel === "none") return "none"
 
-  // EMAIL — reuse the durable invite-email job (retries, sandbox no-op, marks sent).
+  // EMAIL — reuse the durable invite-email job (retries, sandbox no-op).
+  // Idempotency: atomically claim the signer (pending → sent) BEFORE enqueueing,
+  // and only enqueue if we won the claim. A double "Send" click or a retry then
+  // finds the signer already 'sent' and enqueues NOTHING, so the signer never
+  // gets a duplicate invite email. Reminders use a separate path (not affected).
   if (channel === "email") {
-    await enqueueJob({
-      job_type: "esign_send_email",
-      payload: { signer_id: signer.id, base_url: opts.baseUrl },
-      related_entity_type: "esign_envelope",
-      related_entity_id: signer.envelope_id,
-      created_by: opts.createdBy || "staff",
-    })
+    const now = new Date().toISOString()
+    const { data: claimed } = await db
+      .from("esign_signers")
+      .update({ status: "sent", sent_at: now, updated_at: now })
+      .eq("id", signer.id)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle()
+    if (claimed) {
+      await enqueueJob({
+        job_type: "esign_send_email",
+        payload: { signer_id: signer.id, base_url: opts.baseUrl },
+        related_entity_type: "esign_envelope",
+        related_entity_id: signer.envelope_id,
+        created_by: opts.createdBy || "staff",
+      })
+    }
     return "email"
   }
 

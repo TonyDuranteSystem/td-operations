@@ -30,14 +30,25 @@ export interface CertificateInfo {
   signers: CertificateSigner[]
 }
 
-/** Greedy word-wrap to a character budget (monospace-ish estimate; good enough for the cert). */
+/** Greedy word-wrap to a character budget (monospace-ish estimate; good enough
+ *  for the cert). A single word longer than the budget (e.g. a pathological
+ *  300-char no-space token in a signer name) is HARD-split into chunks so it
+ *  wraps instead of overflowing off the page edge. */
 export function wrapText(text: string, maxChars: number): string[] {
+  const budget = Math.max(1, maxChars)
   const words = (text || "").split(/\s+/).filter(Boolean)
   const lines: string[] = []
   let cur = ""
-  for (const w of words) {
+  for (const raw of words) {
+    let w = raw
+    while (w.length > budget) {
+      if (cur) { lines.push(cur); cur = "" }
+      lines.push(w.slice(0, budget))
+      w = w.slice(budget)
+    }
+    if (!w) continue
     if (!cur) cur = w
-    else if ((cur + " " + w).length <= maxChars) cur += " " + w
+    else if ((cur + " " + w).length <= budget) cur += " " + w
     else {
       lines.push(cur)
       cur = w
