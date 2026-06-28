@@ -279,12 +279,18 @@ export function DeliverablesSection({
       }
       if (anyOk) {
         toast.success(arr.length > 1 ? `Uploaded ${arr.length} files` : `Uploaded ${arr[0].name}`)
-        setDraftConcept(null)
+        // Refresh FIRST so the just-created concept exists in the data, THEN pin
+        // the active tab to it and drop the draft placeholder. Order matters: if
+        // we cleared the draft before the reload landed, the "keep a valid active
+        // concept" effect would briefly see the concept as missing and snap back
+        // to Concept A.
         await load()
+        setActiveConcept(targetConcept)
+        setDraftConcept(null)
         onChanged?.()
       }
     },
-    [uploadOne, load, onChanged],
+    [uploadOne, load, onChanged, targetConcept],
   )
 
   const doAction = useCallback(

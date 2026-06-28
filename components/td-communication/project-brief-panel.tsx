@@ -127,6 +127,27 @@ export function ProjectBriefPanel({
     load()
   }, [load])
 
+  // Silent refetch of just the project (no loading flash, doesn't touch the
+  // notes textarea) — used when a deliverable action may have advanced the
+  // enrollment status, so the header reflects it without reopening the panel.
+  const refreshProject = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/td-communication/projects/${projectId}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data?.project) setProject(data.project)
+    } catch {
+      /* keep the current project view on a transient error */
+    }
+  }, [projectId])
+
+  // Deliverable changes can move the board (status auto-advance) AND the panel's
+  // own header — refresh both.
+  const handleDeliverableChange = useCallback(() => {
+    refreshProject()
+    onChanged?.()
+  }, [refreshProject, onChanged])
+
   // Close on Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -334,7 +355,7 @@ export function ProjectBriefPanel({
 
               {/* Deliverables */}
               <Section title="Deliverables" icon={<Package className="h-3.5 w-3.5" />}>
-                <DeliverablesSection enrollmentId={project.id} onChanged={onChanged} />
+                <DeliverablesSection enrollmentId={project.id} onChanged={handleDeliverableChange} />
               </Section>
 
               {/* Timeline */}
