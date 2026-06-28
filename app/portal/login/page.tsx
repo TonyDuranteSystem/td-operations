@@ -29,14 +29,14 @@ export default function PortalLoginPage() {
     }
   }, [])
 
-  const finishLogin = () => {
+  const finishLogin = (destination = '/portal') => {
     // Audit log login (fire-and-forget)
     fetch('/api/portal/audit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'login' }),
     }).catch(() => {})
-    router.push('/portal')
+    router.push(destination)
     router.refresh()
   }
 
@@ -77,15 +77,19 @@ export default function PortalLoginPage() {
       return
     }
 
-    // Verify user has client role
-    if (data.user?.app_metadata?.role !== 'client') {
+    // Verify the user may use a client-facing surface. Clients use the portal;
+    // partners (role='partner', e.g. Cris) are confined by middleware to /collab
+    // and gated there by their td_communication scope. Any other role has no
+    // client-facing access.
+    const role = data.user?.app_metadata?.role
+    if (role !== 'client' && role !== 'partner') {
       await supabase.auth.signOut()
       setError('This account does not have portal access')
       setLoading(false)
       return
     }
 
-    finishLogin()
+    finishLogin(role === 'partner' ? '/collab' : '/portal')
   }
 
   return (
