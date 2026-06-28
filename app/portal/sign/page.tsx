@@ -114,15 +114,32 @@ export default async function PortalSignPage() {
       .order('created_at', { ascending: false }),
     // E-sign envelopes where the logged-in client is an invited signer — matched
     // by their linked CRM contact (robust — survives login/contact email drift),
-    // OR by the email TD entered (covers signers added before contact linking).
-    // Only their turn (sent/viewed); envelope filtered to active below.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabaseAdmin as any)
-      .from('esign_signers')
-      .select('token, status, signed_at, esign_envelopes!inner(document_name, status)')
-      .or(`contact_id.eq.${contactId},email.ilike.${user.email || '__no_match__'}`)
-      .in('status', ['sent', 'viewed'])
-      .order('created_at', { ascending: false }) as Promise<{ data: Array<{ token: string; status: string; signed_at: string | null; esign_envelopes: { document_name: string | null; status: string } }> | null }>,
+    // OR by the exact login email (covers signers added before contact linking).
+    // Two SEPARATE queries, NOT a single `.or(email.ilike.<email>)`: an email
+    // with a `_`/`%` would act as a LIKE wildcard and surface ANOTHER client's
+    // signer (cross-client leak). The email is matched case-insensitively but
+    // wildcard-escaped so it matches literally only.
+    (async () => {
+      const sel = 'token, status, signed_at, esign_envelopes!inner(document_name, status)'
+      const email = (user.email || '').toLowerCase().trim()
+      const escaped = email.replace(/([%_\\])/g, '\\$1')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adminAny = supabaseAdmin as any
+      const [byContact, byEmail] = await Promise.all([
+        adminAny.from('esign_signers').select(sel).eq('contact_id', contactId).in('status', ['sent', 'viewed']),
+        email
+          ? adminAny.from('esign_signers').select(sel).ilike('email', escaped).in('status', ['sent', 'viewed'])
+          : Promise.resolve({ data: [] }),
+      ])
+      const seen = new Set<string>()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const merged = ([...(byContact.data ?? []), ...(byEmail.data ?? [])] as any[]).filter(r => {
+        if (seen.has(r.token)) return false
+        seen.add(r.token)
+        return true
+      })
+      return { data: merged as Array<{ token: string; status: string; signed_at: string | null; esign_envelopes: { document_name: string | null; status: string } }> }
+    })(),
   ])
 
   const documents: SignableDocument[] = []

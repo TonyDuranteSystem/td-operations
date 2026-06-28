@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: signer } = await db
     .from("esign_signers")
-    .select("id, envelope_id, access_code, status")
+    .select("id, envelope_id, access_code, status, signing_order")
     .eq("token", token)
     .maybeSingle()
   if (!signer) return NextResponse.json({ error: "Signing link not found." }, { status: 404 })
@@ -63,6 +63,53 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   if (!env) return NextResponse.json({ error: "Document not found." }, { status: 404 })
   if (env.status === "voided" || env.status === "expired" || env.status === "completed") {
     return NextResponse.json({ error: `This document is ${env.status} and can no longer be signed.` }, { status: 410 })
+  }
+
+  // Sequential routing: enforce turn order. Every signer's link exists from
+  // creation, so without this a signer holding their link could sign BEFORE it
+  // is their turn, defeating sequential routing. Block until every earlier signer
+  // (lower signing_order) has signed.
+  if (env.routing_order === "sequential" && signer.signing_order != null && !isPreview) {
+    const { data: earlier } = await db
+      .from("esign_signers")
+      .select("id")
+      .eq("envelope_id", env.id)
+      .lt("signing_order", signer.signing_order)
+      .neq("status", "signed")
+      .limit(1)
+    if ((earlier ?? []).length > 0) {
+      return NextResponse.json({ error: "It's not your turn to sign yet — an earlier signer must sign first." }, { status: 403 })
+    }
+  }
+
+  // Required-field enforcement: every required field assigned to THIS signer must
+  // be satisfied, or the flattened PDF would contain blank required boxes (a
+  // signature field with no signature still "completed" the document). Checkboxes
+  // are not enforced (a required checkbox left unticked is a deliberate choice).
+  const fieldVals = Array.isArray(body.fields) ? body.fields : []
+  if (!isPreview) {
+    const valByField = new Map<string, string | null>()
+    for (const fv of fieldVals) if (fv && typeof fv.field_id === "string") valByField.set(fv.field_id, fv.value ?? null)
+    const hasSig = typeof body.signature_png === "string" && body.signature_png.length > 0
+    const hasInitials = typeof body.initials_png === "string" && body.initials_png.length > 0
+    const { data: reqFields } = await db
+      .from("esign_fields")
+      .select("id, field_type, required")
+      .eq("envelope_id", signer.envelope_id)
+      .eq("signer_id", signer.id)
+    const unmet = (reqFields ?? []).some((f: { id: string; field_type: string; required: boolean }) => {
+      if (!f.required) return false
+      if (f.field_type === "signature") return !hasSig
+      if (f.field_type === "initials") return !hasInitials
+      if (f.field_type === "date" || f.field_type === "text") {
+        const v = valByField.get(f.id)
+        return !(typeof v === "string" && v.trim().length > 0)
+      }
+      return false
+    })
+    if (unmet) {
+      return NextResponse.json({ error: "Please complete all required fields before submitting." }, { status: 400 })
+    }
   }
 
   const ip = clientIp(req)
@@ -86,7 +133,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   }
 
   // Field values — scoped to this signer's fields only.
-  const fieldVals = Array.isArray(body.fields) ? body.fields : []
   for (const fv of fieldVals) {
     if (!fv || typeof fv.field_id !== "string") continue
     await db
@@ -153,16 +199,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   let completed = false
   if (Number.isFinite(newCount) && newCount >= totalSigners) {
     const { signedPath } = await flattenEnvelopeToSignedPdf(env.id)
-    await db
+    // Guarded completion claim (WHERE status <> 'completed') so completion can
+    // run at most once even if some other path (the reconciliation cron, a retry)
+    // also reaches the threshold — prevents a double "completed" event + double
+    // filing into the client's documents.
+    const { data: claimed } = await db
       .from("esign_envelopes")
       .update({ signed_pdf_path: signedPath, status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", env.id)
-    await db.from("esign_events").insert({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath } })
+      .neq("status", "completed")
+      .select("id")
+      .maybeSingle()
     completed = true
-    // Post-completion side-effects: file the signed PDF into the client's
-    // documents + notify support. Best-effort (never throws), so it can't break
-    // the signer's response.
-    await finalizeEsignCompletion(env.id)
+    if (claimed) {
+      await db.from("esign_events").insert({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath } })
+      // Post-completion side-effects: file the signed PDF into the client's
+      // documents + notify support. Best-effort (never throws), so it can't break
+      // the signer's response.
+      await finalizeEsignCompletion(env.id)
+    }
   } else {
     await db.from("esign_envelopes").update({ status: "in_progress", updated_at: new Date().toISOString() }).eq("id", env.id)
     // Sequential routing: hand off to the next pending signer through the same

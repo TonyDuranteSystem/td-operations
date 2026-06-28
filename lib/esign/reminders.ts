@@ -11,6 +11,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { enqueueJob } from "@/lib/jobs/queue"
 import { APP_BASE_URL } from "@/lib/config"
+import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -18,7 +19,42 @@ const db = supabaseAdmin as any
 export const REMINDER_AFTER_HOURS = 48
 export const MAX_REMINDERS = 2
 
-export async function runEsignReminders(now: Date = new Date()): Promise<{ expired: number; reminded: number }> {
+export async function runEsignReminders(now: Date = new Date()): Promise<{ expired: number; reminded: number; reconciled: number }> {
+  // 0. Reconcile STUCK completions FIRST (before expiry, so a fully-signed-but-
+  //    stuck envelope completes instead of being wrongly expired). If the last
+  //    signer's flatten threw at submit time (60s cap on a big PDF, storage blip),
+  //    the signer is signed + counted but the envelope never flipped to completed
+  //    and the client never got the signed doc. Re-flatten + complete + finalize,
+  //    idempotently (guarded status claim; retries next run if flatten still fails).
+  let reconciled = 0
+  const { data: maybeStuck } = await db
+    .from("esign_envelopes")
+    .select("id, signed_count, total_signers, signed_pdf_path")
+    .in("status", ["sent", "in_progress"])
+    .gt("signed_count", 0)
+  for (const env of (maybeStuck ?? []) as Array<{ id: string; signed_count: number; total_signers: number; signed_pdf_path: string | null }>) {
+    if ((env.signed_count ?? 0) < (env.total_signers ?? 1)) continue
+    let signedPath = env.signed_pdf_path
+    if (!signedPath) {
+      try {
+        signedPath = (await flattenEnvelopeToSignedPdf(env.id)).signedPath
+      } catch {
+        continue // transient — retry next run
+      }
+    }
+    const { data: claimed } = await db
+      .from("esign_envelopes")
+      .update({ signed_pdf_path: signedPath, status: "completed", completed_at: now.toISOString(), updated_at: now.toISOString() })
+      .eq("id", env.id)
+      .neq("status", "completed")
+      .select("id")
+      .maybeSingle()
+    if (!claimed) continue
+    await db.from("esign_events").insert({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath, via: "reconcile" } })
+    await finalizeEsignCompletion(env.id)
+    reconciled++
+  }
+
   // 1. Expire overdue envelopes.
   const { data: expired } = await db
     .from("esign_envelopes")
@@ -70,5 +106,5 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
     }
   }
 
-  return { expired: (expired ?? []).length, reminded }
+  return { expired: (expired ?? []).length, reminded, reconciled }
 }
