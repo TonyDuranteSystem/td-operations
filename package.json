@@ -17,7 +17,7 @@
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "lint:ci": "eslint . --ext .ts,.tsx",
     "lint:staged": "lint-staged",
-    "gen:types": "npx --yes supabase gen types typescript --project-id ydzipybqeebtpcvsbtvs --schema public | sed '/<claude-code-hint/d' > /tmp/td-db-types.ts && [ -s /tmp/td-db-types.ts ] && head -1 /tmp/td-db-types.ts | grep -q 'export type Json' && mv /tmp/td-db-types.ts lib/database.types.ts && npx tsx scripts/gen-check-types.ts",
+    "gen:types": "npx --yes supabase@2.107.0 gen types typescript --project-id ydzipybqeebtpcvsbtvs --schema public | sed '/<claude-code-hint/d' > /tmp/td-db-types.ts && [ -s /tmp/td-db-types.ts ] && head -1 /tmp/td-db-types.ts | grep -q 'export type Json' && mv /tmp/td-db-types.ts lib/database.types.ts && npx tsx scripts/gen-check-types.ts",
     "import-whatsapp": "npx tsx scripts/import-whatsapp.ts"
   },
   "lint-staged": {
