@@ -67,3 +67,65 @@ export interface CommConversationListItem extends CommConversation {
   partner_name: string | null
   last_message_preview: string | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* Phase 2 — Project pipeline (td_comm_enrollments)                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Lifecycle status of a creative-project enrollment. The board maps these 8
+ * statuses onto 6 columns (see lib/td-communication/pipeline.ts); `cancelled`
+ * is hidden from the board.
+ */
+export type EnrollmentStatus =
+  | 'enrolled'
+  | 'form_submitted'
+  | 'in_progress'
+  | 'concept_ready'
+  | 'approved'
+  | 'revision'
+  | 'delivered'
+  | 'cancelled'
+
+export type EnrollmentClientType = 'new_brand' | 'rebrand'
+
+/**
+ * The "subject" of a project — the client it is for. Polymorphic: an enrollment
+ * hangs on exactly one of account/contact/lead/partner (DB CHECK num_nonnulls >= 1).
+ */
+export type EnrollmentSubjectType = 'account' | 'contact' | 'lead' | 'partner'
+
+/** A resolved subject for display (name + optional email + which actor it is). */
+export interface EnrollmentSubject {
+  type: EnrollmentSubjectType
+  id: string
+  name: string
+  email: string | null
+}
+
+/** Raw td_comm_enrollments row (untyped table — shaped here). */
+export interface CommEnrollmentRow {
+  id: string
+  account_id: string | null
+  contact_id: string | null
+  lead_id: string | null
+  partner_id: string | null
+  service_delivery_id: string | null
+  client_type: EnrollmentClientType | null
+  package_slug: string | null
+  status: EnrollmentStatus
+  form_data: Record<string, unknown>
+  conversation_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+/** An enrollment shaped for the board/list: subject resolved, deadline/notes lifted out of metadata. */
+export interface CommEnrollment extends CommEnrollmentRow {
+  subject: EnrollmentSubject
+  /** metadata.deadline (ISO date) when present. */
+  deadline: string | null
+  /** metadata.notes — Cris's private notes. */
+  notes: string | null
+}

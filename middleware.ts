@@ -223,13 +223,15 @@ export async function middleware(request: NextRequest) {
   // --- Partner confinement (external collaborators, e.g. Cris) ---
   // A partner authenticates as role='partner' (NOT 'client'), so without this
   // branch they would pass the dashboard guard below and reach the entire CRM.
-  // Confine them strictly to their collaboration surface: the /collab page and
-  // the /api/conversations endpoints. Everything else bounces to /collab.
+  // Confine them strictly to their collaboration surface: the /collab page, the
+  // /api/conversations endpoints, and the /api/td-communication project-pipeline
+  // endpoints (Phase 2). Everything else bounces to /collab.
   if (role === 'partner') {
     const partnerAllowed =
       pathname === '/collab' ||
       pathname.startsWith('/collab/') ||
-      pathname.startsWith('/api/conversations')
+      pathname.startsWith('/api/conversations') ||
+      pathname.startsWith('/api/td-communication')
     if (!partnerAllowed) {
       const url = request.nextUrl.clone()
       url.pathname = '/collab'
