@@ -113,13 +113,14 @@ export default async function PortalSignPage() {
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false }),
     // E-sign envelopes where the logged-in client is an invited signer — matched
-    // by the email TD entered for them (TD-first signers carry email, not
-    // contact_id). Only their turn (sent/viewed); envelope filtered to active below.
+    // by their linked CRM contact (robust — survives login/contact email drift),
+    // OR by the email TD entered (covers signers added before contact linking).
+    // Only their turn (sent/viewed); envelope filtered to active below.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (supabaseAdmin as any)
       .from('esign_signers')
       .select('token, status, signed_at, esign_envelopes!inner(document_name, status)')
-      .ilike('email', user.email || '__no_match__')
+      .or(`contact_id.eq.${contactId},email.ilike.${user.email || '__no_match__'}`)
       .in('status', ['sent', 'viewed'])
       .order('created_at', { ascending: false }) as Promise<{ data: Array<{ token: string; status: string; signed_at: string | null; esign_envelopes: { document_name: string | null; status: string } }> | null }>,
   ])

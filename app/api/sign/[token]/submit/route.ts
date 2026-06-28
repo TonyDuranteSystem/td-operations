@@ -25,7 +25,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
 import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
-import { enqueueJob } from "@/lib/jobs/queue"
+import { dispatchSignerDelivery } from "@/lib/esign/dispatch-delivery"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -165,25 +165,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     await finalizeEsignCompletion(env.id)
   } else {
     await db.from("esign_envelopes").update({ status: "in_progress", updated_at: new Date().toISOString() }).eq("id", env.id)
-    // Sequential routing: now email the next pending signer (parallel signers
-    // were all emailed up front). Pick the lowest signing_order still pending.
+    // Sequential routing: hand off to the next pending signer through the same
+    // channel dispatcher used by the initial send (portal client → portal +
+    // nudge; third party / no-portal → email the link). Parallel signers were
+    // all dispatched up front. Pick the lowest signing_order still pending.
     if (env.routing_order === "sequential") {
       const { data: next } = await db
         .from("esign_signers")
-        .select("id, email")
+        .select("id")
         .eq("envelope_id", env.id)
         .eq("status", "pending")
         .order("signing_order", { ascending: true })
         .limit(1)
         .maybeSingle()
-      if (next?.email) {
+      if (next?.id) {
         const base = chooseLinkBase(originFromHeaders(n => req.headers.get(n)), process.env.VERCEL_ENV === "production")
-        await enqueueJob({
-          job_type: "esign_send_email",
-          payload: { signer_id: next.id, base_url: base },
-          related_entity_type: "esign_envelope",
-          related_entity_id: env.id,
-        })
+        await dispatchSignerDelivery({ signerId: next.id, baseUrl: base })
       }
     }
   }

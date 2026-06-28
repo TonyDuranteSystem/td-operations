@@ -58,6 +58,20 @@ export async function POST(req: NextRequest) {
   if (!signers.length) return NextResponse.json({ error: "At least one signer is required." }, { status: 400 })
   if (!fields.length) return NextResponse.json({ error: "Place at least one field before saving." }, { status: 400 })
 
+  // A third-party signer (not linked to a CRM contact) can only be reached by
+  // email, so an email is mandatory for them. CRM-linked signers may omit it
+  // (they're reached via the portal, with an email fallback resolved at send).
+  for (const s of signers) {
+    const hasContact = typeof s.contact_id === "string" && s.contact_id.trim().length > 0
+    const hasEmail = typeof s.email === "string" && s.email.trim().length > 0
+    if (!hasContact && !hasEmail) {
+      return NextResponse.json(
+        { error: `Signer "${(s.name || "").trim() || "(unnamed)"}" needs an email — third-party signers are reached by email.` },
+        { status: 400 },
+      )
+    }
+  }
+
   const bytes = new Uint8Array(await file.arrayBuffer())
 
   const valid = await validatePdfUpload(bytes)

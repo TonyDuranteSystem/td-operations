@@ -39,11 +39,14 @@ export default async function PortalEsignSignPage({ searchParams }: { searchPara
 
   const { data: signer } = await db
     .from("esign_signers")
-    .select("token, access_code, email, status, envelope_id")
+    .select("token, access_code, email, status, envelope_id, contact_id")
     .eq("token", token)
     .maybeSingle()
-  // The signer must be the logged-in client (identified by the email TD entered).
-  if (!signer || (signer.email || "").toLowerCase() !== (user.email || "").toLowerCase()) {
+  // The signer must be the logged-in client — by linked CRM contact (robust) or
+  // by the email TD entered (covers signers added before contact linking).
+  const ownedByContact = !!signer?.contact_id && signer.contact_id === contactId
+  const ownedByEmail = (signer?.email || "").toLowerCase() === (user.email || "").toLowerCase() && !!user.email
+  if (!signer || (!ownedByContact && !ownedByEmail)) {
     return <Message text="Document not found, or it isn't associated with your account." />
   }
 

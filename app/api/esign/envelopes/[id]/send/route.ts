@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { enqueueJob } from "@/lib/jobs/queue"
+import { dispatchSignerDelivery } from "@/lib/esign/dispatch-delivery"
 import { chooseLinkBase, originFromHeaders } from "@/lib/esign/link-base"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { data: signers } = await db
     .from("esign_signers")
-    .select("id, email, status, signer_index")
+    .select("id, email, contact_id, status, signer_index, signing_order")
     .eq("envelope_id", id)
     .order("signer_index")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,26 +44,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const base = chooseLinkBase(originFromHeaders(n => req.headers.get(n)), process.env.VERCEL_ENV === "production")
 
-  // Who to email now: pending signers with an email. Sequential → just the next one.
-  const pending = all.filter(s => s.email && s.status === "pending")
+  // Deliver to pending signers; the channel (portal vs email) is resolved per
+  // signer by the dispatcher. Sequential → only the first pending signer now;
+  // parallel → all pending. The submit route hands off to the next on signing.
+  const pending = all.filter(s => s.status === "pending")
   const targets = env.routing_order === "sequential" ? pending.slice(0, 1) : pending
 
-  let queued = 0
+  let emailed = 0
+  let portal = 0
+  let undeliverable = 0
   for (const s of targets) {
-    await enqueueJob({
-      job_type: "esign_send_email",
-      payload: { signer_id: s.id, base_url: base },
-      related_entity_type: "esign_envelope",
-      related_entity_id: id,
-      created_by: user?.email || "staff",
-    })
-    queued++
+    const channel = await dispatchSignerDelivery({ signerId: s.id, baseUrl: base, createdBy: user?.email || "staff" })
+    if (channel === "email") emailed++
+    else if (channel === "portal") portal++
+    else undeliverable++
   }
 
   if (env.status === "draft") {
     await db.from("esign_envelopes").update({ status: "sent", updated_at: new Date().toISOString() }).eq("id", id)
   }
 
-  const noEmail = all.filter(s => !s.email).length
-  return NextResponse.json({ ok: true, queued, noEmail })
+  return NextResponse.json({ ok: true, emailed, portal, undeliverable })
 }

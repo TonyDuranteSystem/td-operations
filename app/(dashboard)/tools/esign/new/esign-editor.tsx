@@ -33,17 +33,162 @@ interface PlacedField extends NormalizedRect {
 }
 
 interface Signer {
+  kind: "crm" | "third_party"
   name: string
   email: string
+  contact_id: string | null
+  company: string | null
 }
 
+type ClientResult = {
+  contact_id: string
+  full_name: string
+  email: string | null
+  account_id: string | null
+  company_name: string | null
+}
+
+const emptySigner = (): Signer => ({ kind: "crm", name: "", email: "", contact_id: null, company: null })
+
 let fieldSeq = 0
+
+/**
+ * One signer row: toggle between a CRM client (typeahead by name/company →
+ * linked contact) and a third party (manual name + required email). The CRM
+ * search lives here so each row owns its own query/results state.
+ */
+function SignerRow({
+  signer, index, color, active, canRemove, onPatch, onRemove, onActivate, onCrmPick,
+}: {
+  signer: Signer
+  index: number
+  color: string
+  active: boolean
+  canRemove: boolean
+  onPatch: (patch: Partial<Signer>) => void
+  onRemove: () => void
+  onActivate: () => void
+  onCrmPick: (c: ClientResult) => void
+}) {
+  const [q, setQ] = useState("")
+  const [results, setResults] = useState<ClientResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const search = useCallback((val: string) => {
+    setQ(val)
+    if (timer.current) clearTimeout(timer.current)
+    if (val.trim().length < 2) { setResults([]); setSearching(false); return }
+    setSearching(true)
+    timer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/esign/clients-search?q=${encodeURIComponent(val.trim())}`)
+        const data = await res.json().catch(() => ({}))
+        setResults(Array.isArray(data.clients) ? data.clients : [])
+      } catch {
+        setResults([])
+      } finally {
+        setSearching(false)
+      }
+    }, 250)
+  }, [])
+
+  return (
+    <div className={`rounded-md border p-2 ${active ? "ring-2 ring-offset-1" : ""}`} style={{ borderColor: color }}>
+      <div className="flex items-center gap-2">
+        <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color }} />
+        <span className="text-xs font-medium text-zinc-500">Signer {index + 1}</span>
+        <div className="ml-auto inline-flex rounded-md border p-0.5">
+          {(["crm", "third_party"] as const).map(k => (
+            <button
+              key={k}
+              onClick={() => onPatch(k === "crm"
+                ? { kind: "crm", contact_id: null, name: "", email: "", company: null }
+                : { kind: "third_party", contact_id: null, company: null })}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium ${signer.kind === k ? "bg-blue-600 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}
+            >
+              {k === "crm" ? "CRM client" : "Third party"}
+            </button>
+          ))}
+        </div>
+        {canRemove && <button onClick={onRemove} className="text-xs text-zinc-400 hover:text-red-500">✕</button>}
+      </div>
+
+      {signer.kind === "crm" ? (
+        signer.contact_id ? (
+          <div className="mt-1 flex items-center justify-between rounded-md border bg-blue-50 px-2 py-1.5 text-sm">
+            <span className="truncate text-blue-800">
+              {signer.name}{signer.company ? ` · ${signer.company}` : ""}{signer.email ? ` · ${signer.email}` : ""}
+            </span>
+            <button
+              onClick={() => { onPatch({ contact_id: null, name: "", email: "", company: null }); setQ(""); setResults([]) }}
+              className="ml-2 shrink-0 text-xs text-zinc-400 hover:text-red-500"
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <div className="relative mt-1">
+            <input
+              value={q}
+              onChange={e => search(e.target.value)}
+              placeholder="Search client by name or company"
+              className="h-8 w-full rounded border px-2 text-sm"
+            />
+            {(results.length > 0 || searching) && (
+              <div className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-md border bg-white shadow-lg">
+                {searching && results.length === 0 && <div className="px-2 py-1.5 text-xs text-zinc-400">Searching…</div>}
+                {results.map(c => (
+                  <button
+                    key={c.contact_id}
+                    onClick={() => { onCrmPick(c); setQ(""); setResults([]) }}
+                    className="block w-full px-2 py-1.5 text-left text-sm hover:bg-blue-50"
+                  >
+                    <span className="font-medium">{c.full_name || "(no name)"}</span>
+                    {c.company_name ? <span className="text-zinc-500"> · {c.company_name}</span> : null}
+                    {c.email
+                      ? <span className="block text-[11px] text-zinc-400">{c.email}</span>
+                      : <span className="block text-[11px] text-amber-600">no email on file</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="mt-1 text-[11px] text-zinc-400">Signs in their portal (emailed the link if they have no portal login).</p>
+          </div>
+        )
+      ) : (
+        <div className="mt-1 space-y-1">
+          <input
+            value={signer.name}
+            onChange={e => onPatch({ name: e.target.value })}
+            placeholder={`Third party ${index + 1} name`}
+            className="h-8 w-full rounded border px-2 text-sm"
+          />
+          <input
+            value={signer.email}
+            onChange={e => onPatch({ email: e.target.value })}
+            placeholder="email (required)"
+            className="h-8 w-full rounded border px-2 text-sm"
+          />
+          <p className="text-[11px] text-zinc-400">Receives the document by email.</p>
+        </div>
+      )}
+
+      <button
+        onClick={onActivate}
+        className={`mt-1 text-xs ${active ? "font-semibold text-blue-600" : "text-zinc-500 hover:text-blue-600"}`}
+      >
+        {active ? "● placing fields for this signer" : "place fields for this signer"}
+      </button>
+    </div>
+  )
+}
 
 export function EsignEditor() {
   const [file, setFile] = useState<File | null>(null)
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null)
   const [documentName, setDocumentName] = useState("")
-  const [signers, setSigners] = useState<Signer[]>([{ name: "", email: "" }])
+  const [signers, setSigners] = useState<Signer[]>([emptySigner()])
   const [activeSigner, setActiveSigner] = useState(0)
   const [tool, setTool] = useState<FieldType>("signature")
   const [fields, setFields] = useState<PlacedField[]>([])
@@ -115,7 +260,7 @@ export function EsignEditor() {
         pos_x: tf.pos_x, pos_y: tf.pos_y, width: tf.width, height: tf.height,
       })))
       const roles = Math.max(1, t.roleCount ?? 1)
-      setSigners(Array.from({ length: roles }, () => ({ name: "", email: "" })))
+      setSigners(Array.from({ length: roles }, () => (emptySigner())))
       setActiveSigner(0)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the template.")
@@ -194,8 +339,15 @@ export function EsignEditor() {
     setSigners(prev => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
   }, [])
 
+  // Pick a CRM client as a signer: link contact_id + name/email, and auto-file the
+  // signed doc into their account if no filing account is set yet.
+  const onCrmPick = useCallback((i: number, c: ClientResult) => {
+    updateSigner(i, { kind: "crm", contact_id: c.contact_id, name: c.full_name, email: c.email || "", company: c.company_name })
+    setAccount(prev => (prev || !c.account_id ? prev : { id: c.account_id, company_name: c.company_name || "Account" }))
+  }, [updateSigner])
+
   const addSigner = useCallback(() => {
-    setSigners(prev => (prev.length >= SIGNER_COLORS.length ? prev : [...prev, { name: "", email: "" }]))
+    setSigners(prev => (prev.length >= SIGNER_COLORS.length ? prev : [...prev, emptySigner()]))
   }, [])
 
   const removeSigner = useCallback((i: number) => {
@@ -216,6 +368,11 @@ export function EsignEditor() {
         return setError(`Signer "${signers[i].name}" has no fields — place at least one or remove them.`)
       }
     }
+    for (const s of signers) {
+      if (s.name.trim() && s.kind === "third_party" && !s.email.trim()) {
+        return setError(`Third-party signer "${s.name}" needs an email address — that's how they receive the document.`)
+      }
+    }
 
     setCreating(true)
     try {
@@ -223,7 +380,7 @@ export function EsignEditor() {
         document_name: documentName.trim(),
         owner_account_id: account?.id ?? null,
         routing_order: signers.length > 1 ? routingOrder : "sequential",
-        signers: signers.map(s => ({ name: s.name.trim(), email: s.email.trim() || null })),
+        signers: signers.map(s => ({ name: s.name.trim(), email: s.email.trim() || null, contact_id: s.contact_id })),
         fields: fields.map(f => ({
           field_type: f.field_type,
           page_index: f.page_index,
@@ -253,7 +410,7 @@ export function EsignEditor() {
       <div className="max-w-2xl space-y-4">
         <div className="rounded-lg border border-green-200 bg-green-50 p-5">
           <h2 className="text-lg font-semibold text-green-800">Envelope created</h2>
-          <p className="mt-1 text-sm text-green-700">Copy a signing link below. (Email delivery arrives in Phase 2.)</p>
+          <p className="mt-1 text-sm text-green-700">Open the envelope to send invites — CRM clients get it in their portal, third parties by email. You can also copy a direct link below to share manually.</p>
         </div>
         <div className="space-y-3">
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -275,7 +432,7 @@ export function EsignEditor() {
             </div>
           ))}
         </div>
-        <button onClick={() => { setResult(null); setFile(null); setPdfBytes(null); setFields([]); setDocumentName(""); setSigners([{ name: "", email: "" }]) }} className="text-sm text-blue-600 hover:underline">
+        <button onClick={() => { setResult(null); setFile(null); setPdfBytes(null); setFields([]); setDocumentName(""); setSigners([emptySigner()]) }} className="text-sm text-blue-600 hover:underline">
           Create another
         </button>
       </div>
@@ -352,19 +509,18 @@ export function EsignEditor() {
           <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Signers</label>
           <div className="mt-1 space-y-2">
             {signers.map((s, i) => (
-              <div key={i} className={`rounded-md border p-2 ${activeSigner === i ? "ring-2 ring-offset-1" : ""}`} style={{ borderColor: SIGNER_COLORS[i] }}>
-                <div className="flex items-center gap-2">
-                  <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: SIGNER_COLORS[i] }} />
-                  <input value={s.name} onChange={e => updateSigner(i, { name: e.target.value })} placeholder={`Signer ${i + 1} name`} className="h-8 w-full rounded border px-2 text-sm" />
-                  {signers.length > 1 && (
-                    <button onClick={() => removeSigner(i)} className="text-xs text-zinc-400 hover:text-red-500">✕</button>
-                  )}
-                </div>
-                <input value={s.email} onChange={e => updateSigner(i, { email: e.target.value })} placeholder="email (optional)" className="mt-1 h-8 w-full rounded border px-2 text-sm" />
-                <button onClick={() => setActiveSigner(i)} className={`mt-1 text-xs ${activeSigner === i ? "font-semibold text-blue-600" : "text-zinc-500 hover:text-blue-600"}`}>
-                  {activeSigner === i ? "● placing for this signer" : "place fields for this signer"}
-                </button>
-              </div>
+              <SignerRow
+                key={i}
+                signer={s}
+                index={i}
+                color={SIGNER_COLORS[i]}
+                active={activeSigner === i}
+                canRemove={signers.length > 1}
+                onPatch={patch => updateSigner(i, patch)}
+                onRemove={() => removeSigner(i)}
+                onActivate={() => setActiveSigner(i)}
+                onCrmPick={c => onCrmPick(i, c)}
+              />
             ))}
             <button onClick={addSigner} className="text-xs text-blue-600 hover:underline">+ add signer</button>
           </div>
