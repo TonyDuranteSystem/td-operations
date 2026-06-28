@@ -9,6 +9,7 @@
  */
 import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
+import { isPartner, getPartnerForUser, hasAnyPartnerScope } from '@/lib/partner-auth'
 import { resolveAuthEmailForUsername } from '@/lib/portal/team/server'
 import {
   checkLoginRateLimit,
@@ -59,3 +60,20 @@ export async function teammateLogin(
 
 // Surface the constant so callers/tests reference one source of truth.
 export const TEAMMATE_LOGIN_MAX_FAILURES = LOGIN_MAX_FAILURES
+
+/**
+ * Login-admission gate for a freshly-authenticated partner. The login page is a
+ * client component and only sees app_metadata (role, contact_id) — partner_scope
+ * lives in the RLS-protected client_partners table, so the check must run
+ * server-side (service role). Returns true only when the caller is a partner
+ * with a NON-EMPTY scope; a scopeless / unlinked partner is rejected so a rogue
+ * partner account never holds a usable session. Per-surface scope (e.g.
+ * 'td_communication' for /collab) is still enforced separately at each surface.
+ */
+export async function partnerLoginAllowed(): Promise<boolean> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isPartner(user)) return false
+  const partner = await getPartnerForUser(user)
+  return hasAnyPartnerScope(partner?.partner_scope)
+}

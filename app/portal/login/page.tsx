@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { teammateLogin } from './actions'
+import { teammateLogin, partnerLoginAllowed } from './actions'
 import Link from 'next/link'
 
 // Shown both when a suspended client attempts to log in (auth returns
@@ -87,6 +87,19 @@ export default function PortalLoginPage() {
       setError('This account does not have portal access')
       setLoading(false)
       return
+    }
+
+    // A partner must additionally have a non-empty scope. The scope lives in the
+    // RLS-protected client_partners table, so this is a server-side check — a
+    // scopeless / unlinked partner is rejected here so they never hold a session.
+    if (role === 'partner') {
+      const allowed = await partnerLoginAllowed()
+      if (!allowed) {
+        await supabase.auth.signOut()
+        setError('This account does not have portal access')
+        setLoading(false)
+        return
+      }
     }
 
     finishLogin(role === 'partner' ? '/collab' : '/portal')

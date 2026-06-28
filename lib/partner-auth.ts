@@ -22,6 +22,17 @@ export function isPartner(user: User | null): boolean {
   return user.app_metadata?.role === 'partner'
 }
 
+/**
+ * Whether a partner has ANY non-empty scope. Used as the login-admission gate:
+ * a partner account with no / empty scope is rejected at login so a rogue
+ * scopeless partner never gets a session (defense in depth — per-surface scope,
+ * e.g. 'td_communication' for /collab, is still enforced at each surface).
+ * Tolerant of null/undefined/non-array (default-deny).
+ */
+export function hasAnyPartnerScope(scope: unknown): boolean {
+  return Array.isArray(scope) && scope.length > 0
+}
+
 export function getPartnerContactId(user: User): string | null {
   return user.app_metadata?.contact_id ?? null
 }
