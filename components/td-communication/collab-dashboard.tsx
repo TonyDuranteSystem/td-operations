@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ComponentType } from 'react'
+import { useCallback, useState, type ComponentType } from 'react'
 import { LayoutGrid, MessagesSquare, Settings, Bell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ConversationChat } from './conversation-chat'
@@ -29,8 +29,22 @@ export function CollabDashboard({
 }) {
   const [section, setSection] = useState<Section>('projects')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [projects, setProjects] = useState<CommEnrollment[]>(initialProjects)
 
-  const activeCount = initialProjects.filter((p) => p.status !== 'cancelled' && p.status !== 'delivered').length
+  // Board renders from state so status / deliverable changes in the brief panel
+  // reflect immediately (the initial prop is only the first-paint snapshot).
+  const reloadProjects = useCallback(async () => {
+    try {
+      const res = await fetch('/api/td-communication/projects')
+      if (!res.ok) return
+      const data = await res.json()
+      if (Array.isArray(data.projects)) setProjects(data.projects)
+    } catch {
+      /* keep the last good board on a transient fetch error */
+    }
+  }, [])
+
+  const activeCount = projects.filter((p) => p.status !== 'cancelled' && p.status !== 'delivered').length
 
   return (
     <div className="h-screen flex bg-zinc-50 overflow-hidden">
@@ -87,7 +101,7 @@ export function CollabDashboard({
         {/* Content */}
         <main className="flex-1 min-h-0 flex flex-col p-6">
           {section === 'projects' && (
-            <PipelineBoard projects={initialProjects} onSelect={setSelectedId} />
+            <PipelineBoard projects={projects} onSelect={setSelectedId} />
           )}
 
           {section === 'chat' && (
@@ -121,7 +135,12 @@ export function CollabDashboard({
 
       {/* Brief slide-in */}
       {selectedId && (
-        <ProjectBriefPanel projectId={selectedId} viewer={viewer} onClose={() => setSelectedId(null)} />
+        <ProjectBriefPanel
+          projectId={selectedId}
+          viewer={viewer}
+          onClose={() => setSelectedId(null)}
+          onChanged={reloadProjects}
+        />
       )}
     </div>
   )
