@@ -20,6 +20,8 @@
  * the SD past the review block (→ Data Received). Decision 2026-06-09.
  */
 
+import type { Json } from "@/lib/database.types"
+
 export const REVIEW_STATUSES = [
   "submitted",
   "under_review",
@@ -93,6 +95,9 @@ export interface ReviewHistoryEntry {
   by: string
   actor: "client" | "staff"
   note?: string
+  // jsonb-bound: every field above is JSON-serializable, so this index signature
+  // makes the entry assignable to a `Json` column (review_history) without per-site casts.
+  [key: string]: Json | undefined
 }
 
 /** Build one immutable round entry to append to `review_history`. */

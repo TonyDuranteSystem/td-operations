@@ -183,11 +183,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         const digits = extractITINMiddleDigits(String(submitted.owner_itin))
         let middleDigitsExpiring = false
         if (digits) {
-          const { data: expiringRow } = await supabaseAdmin
+          // `as any` breaks a too-deep Supabase type inference (TS2589); result re-typed.
+          const { data: expiringRow } = (await (supabaseAdmin as any)
             .from("itin_expiring_digits")
             .select("middle_digits")
             .eq("year", currentYear)
-            .maybeSingle()
+            .maybeSingle()) as { data: { middle_digits: string[] | null } | null }
           if (expiringRow?.middle_digits?.includes(digits)) {
             middleDigitsExpiring = true
           }

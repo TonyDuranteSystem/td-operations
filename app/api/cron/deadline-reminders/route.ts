@@ -193,11 +193,13 @@ export async function GET(req: NextRequest) {
     if (now.getMonth() === 0) {
       const currentYear = year
 
-      const { data: expiringRow } = await supabaseAdmin
+      // `as any` on the client breaks a too-deep Supabase type inference (TS2589) on this
+      // table; result is re-typed explicitly so downstream usage stays type-checked.
+      const { data: expiringRow } = (await (supabaseAdmin as any)
         .from("itin_expiring_digits")
         .select("middle_digits")
         .eq("year", currentYear)
-        .maybeSingle()
+        .maybeSingle()) as { data: { middle_digits: string[] | null } | null }
 
       const expiringDigits: string[] = expiringRow?.middle_digits ?? []
 
