@@ -46,7 +46,14 @@ export async function resolveCommParticipant(
   if (!user) return null
   const partner = await getCommPartner(user)
   if (partner) {
-    return { type: 'partner', id: partner.id, name: partner.partner_name ?? 'Partner' }
+    // Prefer the cosmetic display_title (e.g. "Communication Expert") as the
+    // partner's chat sender name; this is what gets stamped onto comm_messages
+    // and shown to staff. Falls back to the partner name.
+    return {
+      type: 'partner',
+      id: partner.id,
+      name: partner.display_title ?? partner.partner_name ?? 'Partner',
+    }
   }
   if (isDashboardUser(user)) {
     return { type: 'staff', id: user.id, name: getUserDisplayName(user) }

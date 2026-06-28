@@ -43,10 +43,15 @@ export default async function PartnerCommunicationPage() {
     )
   }
 
+  // Cosmetic display identity: prefer the partner's display_title (e.g.
+  // "Communication Expert") for the header + chat sender name, falling back to
+  // the partner name. Role/scope are unaffected — this is presentation only.
+  const displayName = partner.display_title ?? partner.partner_name ?? 'Partner'
+
   const viewer: CommParticipant = {
     type: 'partner',
     id: partner.id,
-    name: partner.partner_name ?? 'Partner',
+    name: displayName,
   }
 
   // Get-or-create the partner's channel, and load the pipeline for first paint.
@@ -65,7 +70,7 @@ export default async function PartnerCommunicationPage() {
       viewer={viewer}
       conversationId={conversation.id}
       initialProjects={initialProjects}
-      partnerName={partner.partner_name ?? 'Partner'}
+      partnerName={displayName}
     />
   )
 }

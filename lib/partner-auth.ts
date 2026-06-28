@@ -41,31 +41,57 @@ export interface PartnerRecord {
   id: string
   partner_name: string | null
   partner_scope: string[]
+  /** Cosmetic public-facing title (e.g. "Communication Expert"); null when unset. */
+  display_title: string | null
 }
 
 /**
  * Resolve the client_partners record for a partner user via their contact_id.
  * Returns null when the user is not a partner or has no linked partner record.
+ *
+ * partner_scope + display_title were added by the TD Communication migrations and
+ * are not in the generated Supabase types (gen:types reads production). Use an
+ * untyped client, consistent with the td_* table access in queries.ts.
+ *
+ * display_title is read resiliently: if the column hasn't been migrated yet in
+ * this environment the select errors, so we retry WITHOUT it and treat the title
+ * as null. This keeps the login-critical id/scope read working even when the
+ * cosmetic column is missing — no deploy-order coupling to the migration.
  */
 export async function getPartnerForUser(user: User): Promise<PartnerRecord | null> {
   const contactId = getPartnerContactId(user)
   if (!contactId) return null
 
-  // partner_scope was added by the TD Communication migration and is not yet in
-  // the generated Supabase types (gen:types reads production). Use an untyped
-  // client for this select, consistent with the td_* table access in queries.ts.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data } = await (supabaseAdmin as any)
+  const db = supabaseAdmin as any
+  const { data, error } = await db
+    .from('client_partners')
+    .select('id, partner_name, partner_scope, display_title')
+    .eq('contact_id', contactId)
+    .maybeSingle()
+
+  if (!error) {
+    if (!data) return null
+    return {
+      id: data.id as string,
+      partner_name: (data.partner_name as string | null) ?? null,
+      partner_scope: (data.partner_scope as string[] | null) ?? [],
+      display_title: (data.display_title as string | null) ?? null,
+    }
+  }
+
+  // Fallback for environments where display_title isn't migrated yet (cosmetic only).
+  const retry = await db
     .from('client_partners')
     .select('id, partner_name, partner_scope')
     .eq('contact_id', contactId)
     .maybeSingle()
-
-  if (!data) return null
+  if (!retry.data) return null
   return {
-    id: data.id as string,
-    partner_name: (data.partner_name as string | null) ?? null,
-    partner_scope: (data.partner_scope as string[] | null) ?? [],
+    id: retry.data.id as string,
+    partner_name: (retry.data.partner_name as string | null) ?? null,
+    partner_scope: (retry.data.partner_scope as string[] | null) ?? [],
+    display_title: null,
   }
 }
 
