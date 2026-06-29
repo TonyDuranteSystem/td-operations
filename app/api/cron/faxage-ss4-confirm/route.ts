@@ -7,8 +7,8 @@
  *
  * On SUCCESS:
  * 1. Updates ss4_applications.status → 'submitted'
- * 2. Does NOT advance the SD — it stays at 'SS-4 Signed' until the EIN arrives
- *    (7-stage v2 pipeline; staff advance to 'EIN Received' manually)
+ * 2. Does NOT advance the SD — the fax receipt upload already moved it to
+ *    'SS-4 Sent to IRS' (8-stage v2 pipeline); staff advance to 'EIN Received' manually
  * 3. Closes open 'Fax signed SS-4' tasks for the account
  * 4. Logs to action_log (actor='system', action_type='ss4_fax_confirmed')
  *

@@ -6,11 +6,11 @@
  * - /api/crm/admin-actions/contact-actions (manual CRM "Mark Fax as Sent" button)
  *
  * NOTE (2026-06-17, formation workspace v2): the SS-4 fax NO LONGER auto-advances
- * the Company Formation SD. In the 7-stage pipeline the SD is already AT
- * "SS-4 Signed" when the fax is sent, and it must STAY there until the EIN
- * actually arrives — staff advance to "EIN Received" manually. The old
- * advanceToEinSubmitted helper (advanced to the removed "EIN Submitted" stage)
- * has been deleted.
+ * the Company Formation SD. In the 8-stage pipeline the fax receipt upload
+ * auto-advances the SD from "SS-4 Signed" to "SS-4 Sent to IRS" (order 7).
+ * The SD then waits at "SS-4 Sent to IRS" until the EIN arrives — staff advance
+ * to "EIN Received" (order 8) manually. The old advanceToEinSubmitted helper
+ * (advanced to the removed "EIN Submitted" stage) has been deleted.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -53,9 +53,10 @@ export async function markFaxAsSent(
     .eq('id', ss4.id)
   side_effects.push(`SS-4 status → submitted`)
 
-  // 2. The SD intentionally does NOT advance on fax (formation workspace v2).
-  // It stays at "SS-4 Signed" until the EIN arrives; staff advance manually.
-  side_effects.push('SD not advanced (stays at SS-4 Signed until EIN arrives)')
+  // 2. The SD intentionally does NOT advance on fax confirmation.
+  // The upload of the fax receipt at "SS-4 Signed" already auto-advanced the
+  // SD to "SS-4 Sent to IRS" (order 7). This cron only records the confirmation.
+  side_effects.push('SD not advanced (already at SS-4 Sent to IRS after receipt upload)')
 
   if (ss4.account_id) {
     // 3. Close open fax tasks
@@ -87,7 +88,7 @@ export async function markFaxAsSent(
 
   return {
     success: true,
-    detail: `Fax marked as sent for ${ss4.company_name}. SD stays at SS-4 Signed until the EIN arrives.`,
+    detail: `Fax marked as sent for ${ss4.company_name}. SD is at SS-4 Sent to IRS — waiting for EIN.`,
     side_effects,
   }
 }

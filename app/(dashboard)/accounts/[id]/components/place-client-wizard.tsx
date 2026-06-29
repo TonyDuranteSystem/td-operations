@@ -47,8 +47,8 @@ const FORMATION_STAGES = [
   { key: 'just_paid', label: 'Just paid, needs data collection', description: 'Stage 1 — Payment Confirmed', icon: '1' },
   { key: 'data_collected', label: 'Data collected, reviewing details', description: 'Stage 2 — Wizard Submitted', icon: '2' },
   { key: 'llc_formed', label: 'LLC formed (Articles received), waiting for EIN', description: 'Stage 4 — Articles Received', icon: '4' },
-  { key: 'ein_received', label: 'EIN received, needs welcome package', description: 'Stage 7 — EIN Received', icon: '7' },
-  { key: 'everything_done', label: 'Everything done, just needs portal access', description: 'Stage 7 — EIN Received', icon: '7' },
+  { key: 'ein_received', label: 'EIN received, needs welcome package', description: 'Stage 8 — EIN Received', icon: '8' },
+  { key: 'everything_done', label: 'Everything done, just needs portal access', description: 'Stage 8 — EIN Received', icon: '8' },
 ]
 
 const ONBOARDING_STAGES = [
