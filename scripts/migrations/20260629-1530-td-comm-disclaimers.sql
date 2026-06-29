@@ -21,8 +21,17 @@ create table if not exists public.td_comm_disclaimers (
   accepted_at        timestamptz not null default now(),
   ip_address         text,
   method             text not null default 'click' check (method in ('click', 'docusign')),
-  user_agent         text
+  user_agent         text,
+  created_at         timestamptz not null default now()     -- row insert time (audit; matches prod)
 );
+
+-- created_at brings sandbox + this file in line with the production table (it was
+-- added there at promotion time). Idempotent ADD COLUMN so re-running on any
+-- environment — fresh, sandbox (created before this column existed), or prod
+-- (already has it) — converges to the same 9-column shape. NOT NULL is safe: the
+-- default backfills existing rows.
+alter table public.td_comm_disclaimers
+  add column if not exists created_at timestamptz not null default now();
 
 -- Acceptance lookup: "has THIS enrollment accepted THIS version?" (version-keyed).
 create index if not exists idx_td_comm_disclaimers_enrollment
