@@ -22,6 +22,7 @@ import { useEffect, useRef, useState, useCallback } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { supabasePublic } from "@/lib/supabase/public-client"
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
+import { isMeaningfulSignature } from "@/lib/signature-validation"
 
 // Signature position on SS-4 form (PDF coordinates, bottom-up origin)
 // The "Signature" label ends at ~x=110, so signature starts after it.
@@ -48,7 +49,10 @@ export default function SS4SignPage() {
   const [signed, setSigned] = useState(false)
   const [signing, setSigning] = useState(false)
   const [pdfUrl, setPdfUrl] = useState("")
-  const [sigEmpty, setSigEmpty] = useState(true)
+  // A real signature is REQUIRED — a single dot/tap (which leaves isEmpty()
+  // false) must NOT enable Submit. Gated on isMeaningfulSignature (enough
+  // points + large-enough bounding box). See the Numero Uno Social LLC incident.
+  const [sigValid, setSigValid] = useState(false)
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -125,7 +129,7 @@ export default function SS4SignPage() {
       })
 
       pad.addEventListener("endStroke", () => {
-        setSigEmpty(pad.isEmpty())
+        setSigValid(isMeaningfulSignature(pad.toData() as { points: { x: number; y: number }[] }[]))
       })
 
       sigPadRef.current = pad
@@ -138,12 +142,19 @@ export default function SS4SignPage() {
   // Clear signature
   const clearSig = useCallback(() => {
     sigPadRef.current?.clear()
-    setSigEmpty(true)
+    setSigValid(false)
   }, [])
 
   // Sign handler
   const handleSign = useCallback(async () => {
-    if (!ss4 || !sigPadRef.current || sigPadRef.current.isEmpty()) return
+    if (!ss4 || !sigPadRef.current) return
+    // A real signature is REQUIRED — block submit on an empty pad or a single
+    // dot/tap (the Numero Uno Social LLC bug, which left the form effectively
+    // unsigned). The Submit button is also disabled until this passes.
+    if (!isMeaningfulSignature(sigPadRef.current.toData() as { points: { x: number; y: number }[] }[])) {
+      setError("Please draw your full signature in the box before submitting.")
+      return
+    }
     setSigning(true)
 
     try {
@@ -238,7 +249,7 @@ export default function SS4SignPage() {
     } finally {
       setSigning(false)
     }
-  }, [ss4, pdfUrl, token, isPortal])
+  }, [ss4, pdfUrl, token, isPortal, code, isAdmin])
 
   // ─── RENDER ───
 
@@ -332,7 +343,7 @@ export default function SS4SignPage() {
               </button>
               <button
                 onClick={handleSign}
-                disabled={sigEmpty || signing}
+                disabled={!sigValid || signing}
                 className="px-6 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {signing ? "Signing..." : "Sign & Submit"}
