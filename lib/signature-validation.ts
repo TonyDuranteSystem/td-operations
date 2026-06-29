@@ -15,9 +15,18 @@
 export type SignaturePoint = { x: number; y: number }
 export type SignatureStroke = { points: SignaturePoint[] }
 
-/** Minimum total points across all strokes (a dot is 1–2). */
-export const MIN_SIGNATURE_POINTS = 6
-/** Minimum extent (px) of the larger bounding-box dimension (a dot is ~0). */
+/**
+ * Minimum total points across all strokes — just "more than a single point" so a
+ * literal one-point tap is rejected. The real discriminator is the EXTENT below;
+ * keeping this floor low avoids false-rejecting a legitimate FAST signature
+ * (a quick swipe can produce only a handful of points).
+ */
+export const MIN_SIGNATURE_POINTS = 2
+/**
+ * Minimum extent (px) of the larger bounding-box dimension. THIS is what
+ * separates a real mark from a dot/tap: a dot's bounding box is ~0px, any
+ * deliberate stroke spans well beyond 40px.
+ */
 export const MIN_SIGNATURE_EXTENT = 40
 
 /**
