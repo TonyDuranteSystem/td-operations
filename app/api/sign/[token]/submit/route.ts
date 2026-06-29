@@ -160,6 +160,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const now = new Date().toISOString()
   const signedByName = typeof body.signed_by_name === "string" ? body.signed_by_name.trim() : null
   const consent = body.consent === true
+  if (!isPreview && !consent) {
+    return NextResponse.json({ error: "You must agree to sign electronically to submit." }, { status: 400 })
+  }
   const consentText = typeof body.consent_text === "string" ? body.consent_text : null
   const { data: updated } = await db
     .from("esign_signers")

@@ -8,6 +8,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { sendSignerInvite } from "@/lib/esign/send"
+import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 import type { Job, JobResult } from "../queue"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -40,7 +41,7 @@ export async function handleEsignSendEmail(job: Job): Promise<JobResult> {
     .select("document_name, contact_id, status")
     .eq("id", signer.envelope_id)
     .maybeSingle()
-  if (env && (env.status === "voided" || env.status === "expired" || env.status === "completed")) {
+  if (env && isTerminalEnvelopeStatus(env.status)) {
     return { steps: [{ name: "check_envelope", status: "skipped", detail: `envelope ${env.status}`, timestamp: ts() }], summary: "Envelope not sendable" }
   }
 

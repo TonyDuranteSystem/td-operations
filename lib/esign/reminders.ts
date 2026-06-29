@@ -46,7 +46,7 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
       .from("esign_envelopes")
       .update({ signed_pdf_path: signedPath, status: "completed", completed_at: now.toISOString(), updated_at: now.toISOString() })
       .eq("id", env.id)
-      .neq("status", "completed")
+      .in("status", ["sent", "in_progress"])
       .select("id")
       .maybeSingle()
     if (!claimed) continue

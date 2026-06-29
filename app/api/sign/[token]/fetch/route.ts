@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     .eq("envelope_id", signer.envelope_id)
     .eq("signer_id", signer.id)
 
-  if (!isPreview && signer.status !== "signed") {
+  if (!isPreview && signer.status !== "signed" && !isTerminalEnvelopeStatus(env.status)) {
     const now = new Date().toISOString()
     await db
       .from("esign_signers")
