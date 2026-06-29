@@ -217,7 +217,9 @@ function PlacedFieldBox({
 
   const onBodyDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
-    if ((e.target as HTMLElement).dataset.rh) return
+    const target = e.target as HTMLElement
+    if (target.dataset.rh) return           // resize handle
+    if (target.closest("button")) return    // delete button — don't capture, let click through
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = {
