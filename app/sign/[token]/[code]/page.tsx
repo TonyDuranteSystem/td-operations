@@ -134,7 +134,7 @@ export default function SignPage() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || "Could not submit. Please try again.")
       setDone(true)
-      if (isPortal && window.parent !== window) window.parent.postMessage({ type: "document-signed", token }, "*")
+      if (isPortal && window.parent !== window) window.parent.postMessage({ type: "document-signed", token }, "https://portal.tonydurante.us")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not submit. Please try again.")
     } finally {

@@ -97,7 +97,7 @@ export default async function EsignEnvelopeDetailPage({ params }: { params: Prom
                   ? `Signed ${fmt(s.signed_at)} · IP ${s.last_ip ?? "—"} · consent ${s.consent_acknowledged ? "accepted" : "—"}`
                   : `Viewed ${s.viewed_at ? fmt(s.viewed_at) : "never"}`}
               </div>
-              {s.status !== "signed" && s.status !== "declined" && (
+              {["draft", "sent", "in_progress"].includes(env.status) && s.status !== "signed" && s.status !== "declined" && (
                 <CopyField value={`${base}/sign/${s.token}/${s.access_code}`} label="Copy link" />
               )}
             </div>

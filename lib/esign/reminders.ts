@@ -80,6 +80,7 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
       .select("id, email, sent_at, signing_order")
       .eq("envelope_id", env.id)
       .in("status", ["sent", "viewed"])
+      .neq("delivery_channel", "portal")
       .order("signing_order", { ascending: true })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const list: any[] = signers ?? []

@@ -430,7 +430,7 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
           if (!existing) {
             const { data: signed } = await supabaseAdmin.storage
               .from(SIGNED_BUCKET)
-              .createSignedUrl(env.signed_pdf_path, 60 * 60 * 24 * 365) // 1 year
+              .createSignedUrl(env.signed_pdf_path, 60 * 60 * 24 * 365 * 10) // 10 years
             await db.from("documents").insert({
               account_id: env.owner_account_id,
               contact_id: env.contact_id,

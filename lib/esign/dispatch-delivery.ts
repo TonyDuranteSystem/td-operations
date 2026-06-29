@@ -76,7 +76,7 @@ export async function dispatchSignerDelivery(opts: {
     const now = new Date().toISOString()
     const { data: claimed } = await db
       .from("esign_signers")
-      .update({ status: "sent", sent_at: now, updated_at: now })
+      .update({ status: "sent", sent_at: now, updated_at: now, delivery_channel: "email" })
       .eq("id", signer.id)
       .eq("status", "pending")
       .select("id")
@@ -104,7 +104,7 @@ export async function dispatchSignerDelivery(opts: {
   const now = new Date().toISOString()
   await db
     .from("esign_signers")
-    .update({ status: signer.status === "pending" ? "sent" : signer.status, sent_at: now, updated_at: now })
+    .update({ status: signer.status === "pending" ? "sent" : signer.status, sent_at: now, updated_at: now, delivery_channel: "portal" })
     .eq("id", signer.id)
   await db.from("esign_events").insert({
     envelope_id: signer.envelope_id,
