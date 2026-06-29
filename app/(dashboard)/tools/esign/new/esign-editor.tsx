@@ -2,11 +2,11 @@
 
 /**
  * E-Sign editor (staff). Upload a PDF → pick a field type → click on the page to
- * place it for the active signer → create the envelope → copy the signing link.
+ * place it for the active signer → create the envelope → send invites automatically.
  *
- * Click-to-place + delete (drag-to-reposition is a fast follow once placement is
- * QA-confirmed). Coordinates are stored normalized (lib/esign/coordinates), so
- * placement is resolution-independent and the server flatten lands pixel-accurate.
+ * Fields are draggable (move after placement) and resizable (4 corner handles).
+ * Coordinates are stored normalized (lib/esign/coordinates), so placement is
+ * resolution-independent and the server flatten lands pixel-accurate.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -184,6 +184,136 @@ function SignerRow({
   )
 }
 
+const RESIZE_HANDLES: Array<{ dir: string; cursor: string; style: React.CSSProperties }> = [
+  { dir: "nw", cursor: "nwse-resize", style: { left: -5, top: -5 } },
+  { dir: "ne", cursor: "nesw-resize", style: { right: -5, top: -5 } },
+  { dir: "se", cursor: "nwse-resize", style: { right: -5, bottom: -5 } },
+  { dir: "sw", cursor: "nesw-resize", style: { left: -5, bottom: -5 } },
+]
+
+/**
+ * A placed field box: draggable (body) + resizable (4 corner handles).
+ * Uses pointer capture so drags work even when the cursor leaves the element.
+ */
+function PlacedFieldBox({
+  field,
+  color,
+  pageWidthCss,
+  pageHeightCss,
+  onUpdate,
+  onRemove,
+}: {
+  field: PlacedField
+  color: string
+  pageWidthCss: number
+  pageHeightCss: number
+  onUpdate: (id: string, rect: NormalizedRect) => void
+  onRemove: (id: string) => void
+}) {
+  const dragRef = useRef<{ startX: number; startY: number; origRect: NormalizedRect } | null>(null)
+  const resizeRef = useRef<{ dir: string; startX: number; startY: number; origRect: NormalizedRect } | null>(null)
+
+  const box = normalizedToDomBox(field, pageWidthCss, pageHeightCss)
+
+  const onBodyDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    if ((e.target as HTMLElement).dataset.rh) return
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = {
+      startX: e.clientX, startY: e.clientY,
+      origRect: { pos_x: field.pos_x, pos_y: field.pos_y, width: field.width, height: field.height },
+    }
+  }
+  const onBodyMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    const dx = (e.clientX - dragRef.current.startX) / pageWidthCss
+    const dy = (e.clientY - dragRef.current.startY) / pageHeightCss
+    onUpdate(field.id, clampNormalizedRect({
+      pos_x: dragRef.current.origRect.pos_x + dx,
+      pos_y: dragRef.current.origRect.pos_y + dy,
+      width: dragRef.current.origRect.width,
+      height: dragRef.current.origRect.height,
+    }))
+  }
+  const onBodyUp = () => { dragRef.current = null }
+
+  const onHandleDown = (e: React.PointerEvent<HTMLDivElement>, dir: string) => {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    resizeRef.current = {
+      dir, startX: e.clientX, startY: e.clientY,
+      origRect: { pos_x: field.pos_x, pos_y: field.pos_y, width: field.width, height: field.height },
+    }
+  }
+  const onHandleMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeRef.current) return
+    const { dir, startX, startY, origRect } = resizeRef.current
+    const dx = (e.clientX - startX) / pageWidthCss
+    const dy = (e.clientY - startY) / pageHeightCss
+    const MIN_W = 0.02
+    const MIN_H = 0.01
+    let { pos_x, pos_y, width, height } = origRect
+
+    if (dir === "se") {
+      width = Math.max(MIN_W, origRect.width + dx)
+      height = Math.max(MIN_H, origRect.height + dy)
+    } else if (dir === "nw") {
+      const nw = Math.max(MIN_W, origRect.width - dx)
+      const nh = Math.max(MIN_H, origRect.height - dy)
+      pos_x = origRect.pos_x + origRect.width - nw
+      pos_y = origRect.pos_y + origRect.height - nh
+      width = nw; height = nh
+    } else if (dir === "ne") {
+      width = Math.max(MIN_W, origRect.width + dx)
+      const nh = Math.max(MIN_H, origRect.height - dy)
+      pos_y = origRect.pos_y + origRect.height - nh
+      height = nh
+    } else if (dir === "sw") {
+      const nw = Math.max(MIN_W, origRect.width - dx)
+      pos_x = origRect.pos_x + origRect.width - nw
+      width = nw
+      height = Math.max(MIN_H, origRect.height + dy)
+    }
+
+    onUpdate(field.id, clampNormalizedRect({ pos_x, pos_y, width, height }))
+  }
+  const onHandleUp = () => { resizeRef.current = null }
+
+  return (
+    <div
+      className="absolute flex items-center justify-center rounded-sm border-2 text-[10px] font-medium select-none"
+      style={{
+        left: box.left, top: box.top, width: box.width, height: box.height,
+        borderColor: color, background: `${color}1a`, color, cursor: "move", touchAction: "none",
+      }}
+      onPointerDown={onBodyDown}
+      onPointerMove={onBodyMove}
+      onPointerUp={onBodyUp}
+    >
+      <span className="pointer-events-none truncate px-1">{FIELD_DEFAULTS[field.field_type].label}</span>
+      <button
+        onClick={() => onRemove(field.id)}
+        onPointerDown={e => e.stopPropagation()}
+        className="absolute -right-2 -top-2 flex h-4 w-4 items-center justify-center rounded-full bg-white text-[10px] text-red-500 shadow"
+      >
+        ✕
+      </button>
+      {RESIZE_HANDLES.map(h => (
+        <div
+          key={h.dir}
+          data-rh="1"
+          className="absolute h-3 w-3 rounded-sm border border-current bg-white"
+          style={{ ...h.style, cursor: h.cursor, touchAction: "none" }}
+          onPointerDown={e => onHandleDown(e, h.dir)}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+        />
+      ))}
+    </div>
+  )
+}
+
 export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   initialAccount?: { id: string; company_name: string } | null
   initialSigner?: { contact_id: string; full_name: string; email: string | null; company: string | null } | null
@@ -342,6 +472,10 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
     setFields(prev => prev.filter(f => f.id !== id))
   }, [])
 
+  const updateField = useCallback((id: string, rect: NormalizedRect) => {
+    setFields(prev => prev.map(f => f.id === id ? { ...f, ...rect } : f))
+  }, [])
+
   const updateSigner = useCallback((i: number, patch: Partial<Signer>) => {
     setSigners(prev => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
   }, [])
@@ -404,7 +538,19 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
       const res = await fetch("/api/esign/envelopes", { method: "POST", body: form })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || "Could not create the envelope.")
-      setResult(data)
+
+      // Auto-send: dispatch invites immediately after creation (best-effort).
+      // If this fails the envelope is still created as a draft — user can send
+      // manually from the envelope list.
+      let sentResult: { ok: boolean; emailed: number; portal: number; undeliverable: number } | null = null
+      try {
+        const sendRes = await fetch(`/api/esign/envelopes/${data.id}/send`, { method: "POST" })
+        if (sendRes.ok) sentResult = await sendRes.json().catch(() => null)
+      } catch {
+        // non-fatal
+      }
+
+      setResult({ ...data, sentResult })
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : "Could not create the envelope.")
     } finally {
@@ -413,11 +559,24 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   }, [file, documentName, signers, fields, account, routingOrder])
 
   if (result) {
+    const sent = result.sentResult
     return (
       <div className="max-w-2xl space-y-4">
-        <div className="rounded-lg border border-green-200 bg-green-50 p-5">
-          <h2 className="text-lg font-semibold text-green-800">Envelope created</h2>
-          <p className="mt-1 text-sm text-green-700">Open the envelope to send invites — CRM clients get it in their portal, third parties by email. You can also copy a direct link below to share manually.</p>
+        <div className={`rounded-lg border p-5 ${sent ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`}>
+          <h2 className={`text-lg font-semibold ${sent ? "text-green-800" : "text-amber-800"}`}>
+            {sent ? "Envelope created & sent" : "Envelope created"}
+          </h2>
+          {sent ? (
+            <p className="mt-1 text-sm text-green-700">
+              Invites dispatched
+              {sent.portal > 0 ? ` — ${sent.portal} client${sent.portal !== 1 ? "s" : ""} notified via portal` : ""}
+              {sent.emailed > 0 ? `${sent.portal > 0 ? "," : " —"} ${sent.emailed} sent by email` : ""}
+              {sent.undeliverable > 0 ? `. ${sent.undeliverable} couldn't be reached — check their email address.` : "."}
+              {" "}You can also copy a direct signing link below.
+            </p>
+          ) : (
+            <p className="mt-1 text-sm text-amber-700">The envelope was saved but invites could not be sent automatically. Open it from the list to send manually.</p>
+          )}
         </div>
         <div className="space-y-3">
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -562,7 +721,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
               </button>
             ))}
           </div>
-          <p className="mt-2 text-xs text-zinc-500">Click on the document to drop a {FIELD_DEFAULTS[tool].label.toLowerCase()} field.</p>
+          <p className="mt-2 text-xs text-zinc-500">Click to place. Drag to move. Drag a corner handle to resize.</p>
         </div>
 
         {error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
@@ -572,7 +731,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
           disabled={creating || !file}
           className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
-          {creating ? "Creating…" : "Create & get signing link"}
+          {creating ? "Creating & sending…" : "Create & send"}
         </button>
 
         {/* Save as template */}
@@ -618,26 +777,17 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
               >
                 {fields
                   .filter(f => f.page_index === page.index)
-                  .map(f => {
-                    const box = normalizedToDomBox(f, page.widthCss, page.heightCss)
-                    const color = SIGNER_COLORS[f.signer_index] ?? "#2563eb"
-                    return (
-                      <div
-                        key={f.id}
-                        className="absolute flex items-center justify-center rounded-sm border-2 text-[10px] font-medium"
-                        style={{ left: box.left, top: box.top, width: box.width, height: box.height, borderColor: color, background: `${color}1a`, color }}
-                        onPointerDown={e => e.stopPropagation()}
-                      >
-                        {FIELD_DEFAULTS[f.field_type].label}
-                        <button
-                          onClick={() => removeField(f.id)}
-                          className="absolute -right-2 -top-2 flex h-4 w-4 items-center justify-center rounded-full bg-white text-[10px] text-red-500 shadow"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    )
-                  })}
+                  .map(f => (
+                    <PlacedFieldBox
+                      key={f.id}
+                      field={f}
+                      color={SIGNER_COLORS[f.signer_index] ?? "#2563eb"}
+                      pageWidthCss={page.widthCss}
+                      pageHeightCss={page.heightCss}
+                      onUpdate={updateField}
+                      onRemove={removeField}
+                    />
+                  ))}
               </div>
             )}
           />
