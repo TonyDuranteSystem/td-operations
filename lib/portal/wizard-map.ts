@@ -28,6 +28,7 @@ export const VALID_WIZARD_TYPES = [
   "itin",
   "tax",
   "company_info",
+  "td_communication",
 ] as const
 
 export type WizardType = (typeof VALID_WIZARD_TYPES)[number]
@@ -48,6 +49,24 @@ export type BankingInlineType = (typeof BANKING_INLINE_TYPES)[number]
 
 export function isBankingInlineType(type: string): type is BankingInlineType {
   return BANKING_INLINE_TYPES.includes(type as BankingInlineType)
+}
+
+/**
+ * TD Communication brand-audit wizard — handled inline by
+ * wizard-submit/route.ts (no submission table, no background job). The
+ * canonical record is the `td_comm_enrollments` row, which the inline
+ * branch finds/creates, fills with `form_data`, advances to
+ * `form_submitted`, and announces in the project's collaboration chat.
+ * Counted as "covered" by the exhaustiveness check (same role as
+ * BANKING_INLINE_TYPES). Kept separate from banking so each allowlist
+ * stays an exact, independently-asserted set.
+ */
+export const TD_COMM_INLINE_TYPES = ["td_communication"] as const
+
+export type TdCommInlineType = (typeof TD_COMM_INLINE_TYPES)[number]
+
+export function isTdCommInlineType(type: string): type is TdCommInlineType {
+  return TD_COMM_INLINE_TYPES.includes(type as TdCommInlineType)
 }
 
 /**
@@ -180,14 +199,15 @@ export function getJobType(wizardType: string): string | null {
 /**
  * Exhaustiveness predicate used by the characterization test. A wizard
  * type is "covered" when it has a submission-table row, is in the
- * banking-inline allowlist, or is a UI-only route that never reaches
- * wizard-submit. Anything uncovered would be silently dropped by
- * wizard-submit/route.ts — the class of bug the P0.5 ITIN fix
- * addressed.
+ * banking-inline allowlist, is in the TD-Communication inline allowlist,
+ * or is a UI-only route that never reaches wizard-submit. Anything
+ * uncovered would be silently dropped by wizard-submit/route.ts — the
+ * class of bug the P0.5 ITIN fix addressed.
  */
 export function isWizardTypeCovered(type: string): boolean {
   return (
     isBankingInlineType(type) ||
+    isTdCommInlineType(type) ||
     isUIOnlyType(type) ||
     getSubmissionTable(type) !== null
   )

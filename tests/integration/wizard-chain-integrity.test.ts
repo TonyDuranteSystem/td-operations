@@ -28,6 +28,7 @@ import {
   getJobType,
   getSubmissionTable,
   isBankingInlineType,
+  isTdCommInlineType,
   isUIOnlyType,
 } from "@/lib/portal/wizard-map"
 import { getJobHandler, getRegisteredJobTypes } from "@/lib/jobs/registry"
@@ -57,6 +58,7 @@ describe("wizard-chain integrity — wizard_type → job_type → registry handl
     const orphaned: string[] = []
     for (const wizardType of VALID_WIZARD_TYPES) {
       if (isBankingInlineType(wizardType)) continue
+      if (isTdCommInlineType(wizardType)) continue
       if (isUIOnlyType(wizardType)) continue
       if (KNOWN_MANUAL_TYPES.has(wizardType)) continue
       const jobType = getJobType(wizardType)
