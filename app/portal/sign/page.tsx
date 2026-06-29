@@ -66,8 +66,8 @@ export default async function PortalSignPage() {
     )
   }
 
-  // Query OA, Lease, SS-4, Form 8832, renewal MSA, and generic signature requests in parallel
-  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result, sigReqResult] = await Promise.all([
+  // Query OA, Lease, SS-4, Form 8832, renewal MSA, generic signature requests, and e-sign envelopes in parallel
+  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result, sigReqResult, esignResult] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
       .select('id, token, status, company_name, signed_at, entity_type, total_signers, signed_count')
@@ -112,6 +112,34 @@ export default async function PortalSignPage() {
       .select('token, access_code, status, document_name, signed_at')
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false }),
+    // E-sign envelopes where the logged-in client is an invited signer — matched
+    // by their linked CRM contact (robust — survives login/contact email drift),
+    // OR by the exact login email (covers signers added before contact linking).
+    // Two SEPARATE queries, NOT a single `.or(email.ilike.<email>)`: an email
+    // with a `_`/`%` would act as a LIKE wildcard and surface ANOTHER client's
+    // signer (cross-client leak). The email is matched case-insensitively but
+    // wildcard-escaped so it matches literally only.
+    (async () => {
+      const sel = 'token, status, signed_at, esign_envelopes!inner(document_name, status)'
+      const email = (user.email || '').toLowerCase().trim()
+      const escaped = email.replace(/([%_\\])/g, '\\$1')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adminAny = supabaseAdmin as any
+      const [byContact, byEmail] = await Promise.all([
+        adminAny.from('esign_signers').select(sel).eq('contact_id', contactId).in('status', ['sent', 'viewed']),
+        email
+          ? adminAny.from('esign_signers').select(sel).ilike('email', escaped).in('status', ['sent', 'viewed'])
+          : Promise.resolve({ data: [] }),
+      ])
+      const seen = new Set<string>()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const merged = ([...(byContact.data ?? []), ...(byEmail.data ?? [])] as any[]).filter(r => {
+        if (seen.has(r.token)) return false
+        seen.add(r.token)
+        return true
+      })
+      return { data: merged as Array<{ token: string; status: string; signed_at: string | null; esign_envelopes: { document_name: string | null; status: string } }> }
+    })(),
   ])
 
   const documents: SignableDocument[] = []
@@ -206,6 +234,23 @@ export default async function PortalSignPage() {
         href: `/portal/sign/document?token=${sr.token}`,
         documentName: sr.document_name,
         signedAt: sr.signed_at,
+      })
+    }
+  }
+
+  // E-sign envelopes addressed to this client (matched by login email above).
+  // Surface only those whose envelope is still active and where it's this
+  // signer's turn (status sent/viewed). The embed page re-checks ownership.
+  if (esignResult.data) {
+    for (const s of esignResult.data) {
+      const env = s.esign_envelopes
+      if (!env || !['sent', 'in_progress'].includes(env.status)) continue
+      documents.push({
+        type: 'document',
+        status: 'awaiting',
+        href: `/portal/sign/esign?token=${s.token}`,
+        documentName: env.document_name || 'Document',
+        signedAt: s.signed_at || undefined,
       })
     }
   }

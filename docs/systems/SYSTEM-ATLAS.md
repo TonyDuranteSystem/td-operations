@@ -21,6 +21,9 @@ This is the single map of the whole system: every feature, where it lives, the r
 - **Lease & Operating Agreement** — Lease + OA generation, send, e-signature via safeSend.
   - Lives in: `lib/mcp/tools/lease*, oa*, lib/mcp/safe-send.ts, app/lease, app/oa`
   - Rules: R037 · Deep doc: ✅ DONE → [lease-oa.md](lease-oa.md)
+- **E-Sign (internal e-signature engine)** — In-house DocuSign-class engine: visual field placement, multi-signer, templates, server flatten + Certificate of Completion. Multi-tenant schema (`owner_account_id`/`origin`); TD-first live, client product is Phase 5. **LIVE on production (2026-06-27).**
+  - Lives in: `lib/esign, lib/operations/esign.ts, app/(dashboard)/tools/esign, app/sign, app/portal/sign/esign`
+  - Rules: R005, R037, R041, R107 · Deep doc: ✅ DONE → [esign.md](esign.md)
 
 ### Finance
 - **Banking & bank-feed** — Bank applications + transaction feed reconciliation / invoice matching.

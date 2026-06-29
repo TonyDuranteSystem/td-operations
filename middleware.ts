@@ -60,6 +60,11 @@ const PUBLIC_PREFIXES = [
   '/contract-template',
   '/ss4',
   '/sign-document',
+  // Generic e-sign signer page + API (per-signer token + access code; no Supabase auth)
+  '/sign/',
+  '/api/sign/',
+  // pdfjs worker (public static asset the signer/editor fetch in the browser)
+  '/esign/pdf.worker.min.mjs',
   // Legacy MMLLC member info collection form (token+code URL auth)
   '/member-info',
   '/api/member-info',
@@ -214,6 +219,27 @@ export async function middleware(request: NextRequest) {
   }
 
   const role = user.app_metadata?.role
+
+  // --- Partner confinement (external collaborators, e.g. Cris) ---
+  // A partner authenticates as role='partner' (NOT 'client'), so without this
+  // branch they would pass the dashboard guard below and reach the entire CRM.
+  // Confine them strictly to their collaboration surface: the /collab page, the
+  // /api/conversations endpoints, and the /api/td-communication project-pipeline
+  // endpoints (Phase 2). Everything else bounces to /collab.
+  if (role === 'partner') {
+    const partnerAllowed =
+      pathname === '/collab' ||
+      pathname.startsWith('/collab/') ||
+      pathname.startsWith('/api/conversations') ||
+      pathname.startsWith('/api/td-communication')
+    if (!partnerAllowed) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/collab'
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+    return supabaseResponse
+  }
 
   // --- Portal paths: require client role ---
   if (isPortalPath(pathname)) {

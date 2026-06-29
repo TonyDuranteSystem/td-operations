@@ -121,6 +121,11 @@
           },
           {
             "type": "command",
+            "command": "bash scripts/worktree-auto-isolate.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
             "command": "bash .claude/hooks/system-docs-index.sh",
             "timeout": 5
           },

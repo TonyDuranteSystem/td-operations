@@ -40,10 +40,20 @@ export interface FormationTrackerStep {
    * transition) or for every other step.
    */
   filedAt?: string | null
+  /**
+   * ISO timestamp of when the SS-4 fax receipt was uploaded (SD advanced to
+   * "SS-4 Sent to IRS") — set ONLY on that step, once reached. The renderer
+   * appends "· Faxed <date>" to the label. Null/absent when unknown or for
+   * every other step.
+   */
+  faxedAt?: string | null
 }
 
 /** The stage whose label carries the "· Filed <date>" suffix. */
 const FILED_STAGE = 'Filed with State'
+
+/** The stage whose label carries the "· Faxed <date>" suffix. */
+const FAX_STAGE = 'SS-4 Sent to IRS'
 
 /** Stage name → the client action required while sitting at that stage. */
 const ACTION_STAGES: Record<string, FormationClientAction> = {
@@ -67,6 +77,7 @@ export function buildFormationTrackerSteps(
   currentStage: string | null | undefined,
   locale: 'en' | 'it',
   filedAt?: string | null,
+  faxedAt?: string | null,
 ): FormationTrackerStep[] {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order)
   const currentRow = currentStage
@@ -92,6 +103,10 @@ export function buildFormationTrackerSteps(
       // it's reached (completed/current) — an upcoming step shows no date.
       ...(s.stage_name === FILED_STAGE && filedAt && status !== 'upcoming'
         ? { filedAt }
+        : {}),
+      // Carry the fax date only on the SS-4 Sent to IRS step, once reached.
+      ...(s.stage_name === FAX_STAGE && faxedAt && status !== 'upcoming'
+        ? { faxedAt }
         : {}),
     }
   })

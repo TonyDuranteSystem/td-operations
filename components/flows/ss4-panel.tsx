@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { FileText, Loader2, CheckCircle2, AlertCircle, Clock, ExternalLink } from 'lucide-react'
+import { FileText, Loader2, CheckCircle2, AlertCircle, Clock, ExternalLink, RotateCcw } from 'lucide-react'
 
 interface Ss4PanelProps {
   serviceDeliveryId: string
@@ -83,6 +83,23 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
     }
   }
 
+  async function resend() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/resend-ss4`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not re-send the SS-4 for signature.')
+      }
+      setSs4((prev) => (prev ? { ...prev, status: data.status || 'awaiting_signature', signed_at: null } : prev))
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not re-send the SS-4.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function formatDate(d?: string | null): string {
     if (!d) return ''
     try {
@@ -124,9 +141,23 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
         </div>
       ) : ss4.status === 'signed' || ss4.status === 'submitted' ? (
         // ── Signed ──
-        <div className="flex items-start gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>Signed by client{ss4.signed_at ? ` on ${formatDate(ss4.signed_at)}` : ''}.</span>
+        <div className="space-y-3">
+          <div className="flex items-start gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>Signed by client{ss4.signed_at ? ` on ${formatDate(ss4.signed_at)}` : ''}.</span>
+          </div>
+          {/* Re-open for re-signature when the signature is bad/missing (e.g. the
+              client tapped a single dot). Clears the signature and drops back to
+              awaiting; the client re-signs on the same link. */}
+          <button
+            onClick={resend}
+            disabled={busy}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+            Re-send for Signature
+          </button>
+          {error && <p className="text-sm text-red-600">{error}</p>}
         </div>
       ) : ss4.status === 'awaiting_signature' ? (
         // ── Awaiting signature ──

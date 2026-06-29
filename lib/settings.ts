@@ -23,6 +23,7 @@ export type AppSettingKey =
   | "new_document_alert_enabled" // boolean — when true (default), making a document client-visible alerts the client (in-portal notification + push; digest email for non-push users) and shows it as "New" until opened. Global kill switch for the new-document alert feature; consumed in lib/portal/document-alerts.ts.
   | "new_document_chat_message_enabled" // boolean — when true (default, Antonio 2026-06-11), the new-document alert ALSO posts a portal chat message ("A new document has been added to your folder: <name>", localized EN/IT). Unified across all share paths (toggle, process-and-share, uploads, signature webhook); consumed in lib/portal/document-alerts.ts. Set false for notification-only alerts.
   | "portal_digest_type_labels" // object — per-notification-type display overrides for the digest email, merged over code defaults in lib/portal/digest-render.ts. Shape: { "<type>": { icon?: string, label_en?: string, label_it?: string, show_body?: boolean } }. Lets ops rename sections / toggle item detail lines without a deploy.
+  | "td_communication_settings" // object — TD Communication admin panel system settings. Shape: { enabled: boolean (portal tab visibility), disclaimer_en/it: string, default_sla_days: number }. Read/written via lib/td-communication/comm-settings.ts; edited in the CRM TD Communication → Settings tab.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,

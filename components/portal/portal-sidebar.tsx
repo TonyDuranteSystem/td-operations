@@ -26,6 +26,7 @@ import {
   Mail,
   MapPin,
   Landmark,
+  Palette,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -152,6 +153,11 @@ const companyItems: NavItem[] = [
   // clients because the whole Companies section is hidden then.
   { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
   { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
+  // TD Communication — client-facing teaser for the upcoming branding service
+  // (logos, landing pages, brand identity). Static "Coming Soon" page for now.
+  // Active-tier only (formed companies); leads/onboarding don't see it. Gated
+  // via tierOnly through the generic isItemVisible path — no special case.
+  { key: 'nav.tdCommunication', href: '/portal/td-communication', icon: Palette, tierOnly: ['active'] },
 ]
 
 // Partner-portal items shown only when isPartnerPortal(portalRole). Flat list,

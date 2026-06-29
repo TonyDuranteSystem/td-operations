@@ -50,9 +50,12 @@ if (supabaseUrl.includes(PROD_REF) || dbUrl.includes(PROD_REF)) {
   process.exit(2)
 }
 
-if (!supabaseUrl.includes(SANDBOX_REF) && !dbUrl.includes(SANDBOX_REF)) {
-  console.error('⛔ REFUSED: Cannot confirm sandbox ref. Expected ' + SANDBOX_REF)
-  console.error('Fix: bash scripts/dev-setup.sh')
+// Allow an isolated LOCAL stack target (env-up) in addition to the cloud sandbox.
+// The PRODUCTION block above is unchanged — localhost never contains the prod ref.
+const isLocal = /127\.0\.0\.1|localhost/.test(supabaseUrl) || /127\.0\.0\.1|localhost/.test(dbUrl)
+if (!isLocal && !supabaseUrl.includes(SANDBOX_REF) && !dbUrl.includes(SANDBOX_REF)) {
+  console.error('⛔ REFUSED: not the sandbox or a local stack. Expected ' + SANDBOX_REF + ' or a localhost stack.')
+  console.error('Fix: bash scripts/dev-setup.sh (sandbox) or bash scripts/env-up.sh (local)')
   process.exit(2)
 }
 

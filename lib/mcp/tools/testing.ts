@@ -312,7 +312,7 @@ async function scenarioFormationStage4(): Promise<TestScenarioResult> {
     contactId,
     serviceType: 'Company Formation',
     stage: 'EIN Received',
-    stageOrder: 7,
+    stageOrder: 8,
   })
   const paymentId = await createPayment({ accountId, contactId, amount: 3250, description: 'TEST - Formation fee' })
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
@@ -327,7 +327,7 @@ async function scenarioFormationStage4(): Promise<TestScenarioResult> {
       'Lead: Converted',
       'Contact: TEST - Mario Rossi (portal_tier: active)',
       'Account: TEST - Rossi LLC (Active, EIN: 00-0000001)',
-      'SD: Company Formation - stage 7 (EIN Received)',
+      'SD: Company Formation - stage 8 (EIN Received)',
       'Ready to test: Welcome package, OA, Lease, Banking forms',
     ],
   }

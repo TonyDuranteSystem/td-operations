@@ -41,9 +41,12 @@ const TOOLS: ToolTile[] = [
   {
     name: 'E-Sign',
     href: '/tools/esign',
-    description: 'Send documents for client e-signature.',
+    description: 'Send documents for e-signature — upload a PDF, place fields, send, track.',
     icon: PenLine,
-    comingSoon: true,
+    links: [
+      { label: 'New Envelope', href: '/tools/esign/new' },
+      { label: 'Envelopes', href: '/tools/esign' },
+    ],
   },
   {
     name: 'System Health',

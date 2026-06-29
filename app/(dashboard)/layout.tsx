@@ -84,9 +84,23 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       reconciliationReview = reconReviewResult.value.count ?? 0
     }
 
-    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, overdueInvoices, reconciliationReview }
+    // TD Communication: unread partner messages. comm_messages is not in the
+    // generated Supabase types yet, so go through an untyped client.
+    let commUnread = 0
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count } = await (supabaseAdmin as any)
+        .from('comm_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('sender_type', 'partner')
+        .is('read_at', null)
+        .is('deleted_at', null)
+      commUnread = count ?? 0
+    } catch { /* ignore */ }
+
+    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, overdueInvoices, reconciliationReview, commUnread }
   } catch {
-    return { inbox: 0, tasks: 0, portalChats: 0, reconciliationReview: 0 }
+    return { inbox: 0, tasks: 0, portalChats: 0, reconciliationReview: 0, commUnread: 0 }
   }
 }
 

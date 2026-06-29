@@ -2,7 +2,7 @@
  * formation.confirm_ein_received — formation_progress action.
  *
  * Records the EIN received from IRS on the account, then advances the SD
- * stage from SS-4 Signed → EIN Received (the final stage of the 7-stage v2
+ * stage from SS-4 Sent to IRS → EIN Received (the final stage of the 8-stage v2
  * pipeline). Formation is then closed via the separate "Mark Formation
  * Complete" action (sd.mark_complete), which spawns the RA Renewal + Annual
  * Report SDs.
@@ -18,7 +18,7 @@
  *
  * Idempotency: if account.ein_number is already set to the submitted value,
  * the helper skips the update (logs as no-op). SD advance is gated by stage
- * (advanceStage refuses if not at SS-4 Signed).
+ * (advanceStage accepts any source stage; guard is by SD status, not stage name).
  */
 
 import { updateAccount } from "@/lib/operations/account"
@@ -81,9 +81,9 @@ export const formationConfirmEinReceived: WorkflowHandler = async (
       success: true,
       side_effects: [
         { kind: "account.field_preview", detail: `accounts.ein_number → ${ein}` },
-        { kind: "sd.advance.preview", detail: `SS-4 Signed → ${TARGET_STAGE}` },
+        { kind: "sd.advance.preview", detail: `→ ${TARGET_STAGE}` },
       ],
-      preview: { sd_stage_change: `SS-4 Signed → ${TARGET_STAGE}` },
+      preview: { sd_stage_change: `→ ${TARGET_STAGE}` },
     }
   }
 

@@ -25,6 +25,11 @@ const FILED_LABEL: Record<'en' | 'it', string> = {
   it: 'Depositata',
 }
 
+const FAXED_LABEL: Record<'en' | 'it', string> = {
+  en: 'Faxed',
+  it: 'Inviato',
+}
+
 /** Compact, locale-aware filing date, e.g. "Jun 18, 2026" / "18 giu 2026". */
 function formatFiledDate(iso: string, locale: 'en' | 'it'): string | null {
   const d = new Date(iso)
@@ -51,6 +56,7 @@ export function FormationProgressTracker({ steps, locale, wizardHref, signHref, 
           const href = step.action === 'wizard' ? wizardHref : step.action === 'sign' ? signHref : null
           const clickable = step.isActionRequired && href
           const filedDate = step.filedAt ? formatFiledDate(step.filedAt, locale) : null
+          const faxedDate = step.faxedAt ? formatFiledDate(step.faxedAt, locale) : null
           const body = (
             <div
               className={cn(
@@ -86,6 +92,9 @@ export function FormationProgressTracker({ steps, locale, wizardHref, signHref, 
                   {step.label}
                   {filedDate && (
                     <span className="text-zinc-500 font-normal"> · {FILED_LABEL[locale]} {filedDate}</span>
+                  )}
+                  {faxedDate && (
+                    <span className="text-zinc-500 font-normal"> · {FAXED_LABEL[locale]} {faxedDate}</span>
                   )}
                 </p>
                 {step.isActionRequired && (

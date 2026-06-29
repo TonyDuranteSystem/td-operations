@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
@@ -247,11 +248,15 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
 
   return (
     <div className="p-6 lg:p-8">
-      {canViewAs && (
-        <div className="mb-4 flex justify-end">
-          <ViewAsClientButton contactId={contact.id} />
-        </div>
-      )}
+      <div className="mb-4 flex justify-end gap-2">
+        <Link
+          href={`/tools/esign/new?contact=${contact.id}${accounts[0]?.id ? `&account=${accounts[0].id}` : ''}`}
+          className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
+        >
+          ✍️ Create e-sign document
+        </Link>
+        {canViewAs && <ViewAsClientButton contactId={contact.id} />}
+      </div>
       {formationFlow?.service_delivery_id && (
         <FormationWorkspaceBanner
           serviceDeliveryId={formationFlow.service_delivery_id}

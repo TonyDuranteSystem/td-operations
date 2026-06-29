@@ -54,6 +54,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/slack-claude-worker": "*/2 * * * *",
   "/api/cron/memory-digest": "0 9 * * 0",
   "/api/cron/memory-decay": "0 9 1 * *",
+  "/api/cron/esign-reminders": "0 */6 * * *",
 }
 
 /**

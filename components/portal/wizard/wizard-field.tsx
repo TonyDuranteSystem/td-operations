@@ -8,7 +8,7 @@ export interface FieldConfig {
   name: string
   label: string
   labelIt?: string
-  type: 'text' | 'email' | 'tel' | 'date' | 'textarea' | 'select' | 'number' | 'file' | 'checkbox' | 'country' | 'repeater'
+  type: 'text' | 'email' | 'tel' | 'date' | 'textarea' | 'select' | 'number' | 'file' | 'checkbox' | 'country' | 'repeater' | 'multiselect'
   required?: boolean
   placeholder?: string
   placeholderIt?: string
@@ -36,6 +36,11 @@ export interface FieldConfig {
    *  Display always ends up in canonical XX-XXXXXXX regardless of what the
    *  user pastes. Phase E2. */
   format?: 'ein'
+  /** Render a non-functional "✨ Generate" placeholder button beside a
+   *  `textarea` (TD Communication brand-audit description). The AI wiring is a
+   *  later phase — the button is disabled and only signals the intent. Ignored
+   *  on non-textarea fields. */
+  aiAssist?: boolean
 }
 
 /** Live-normalize an EIN-like input. Accepts any input, returns at most 9
@@ -126,13 +131,62 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
       )}
 
       {field.type === 'textarea' ? (
-        <textarea
-          value={String(value ?? '')}
-          onChange={e => onChange(field.name, e.target.value)}
-          placeholder={placeholder}
-          rows={3}
-          className={cn(inputClass, 'resize-none')}
-        />
+        <div className="relative">
+          <textarea
+            value={String(value ?? '')}
+            onChange={e => onChange(field.name, e.target.value)}
+            placeholder={placeholder}
+            rows={3}
+            className={cn(inputClass, 'resize-none', field.aiAssist && 'pr-28')}
+          />
+          {field.aiAssist && (
+            <button
+              type="button"
+              disabled
+              title={locale === 'it' ? 'Generazione AI — in arrivo' : 'AI generation — coming soon'}
+              className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-400 cursor-not-allowed"
+            >
+              ✨ {locale === 'it' ? 'Genera' : 'Generate'}
+            </button>
+          )}
+        </div>
+      ) : field.type === 'multiselect' ? (
+        (() => {
+          // Multi-select stores a string[] of chosen option values. Legacy/empty
+          // values coerce to []. Toggling adds/removes the option value.
+          const selected: string[] = Array.isArray(value)
+            ? value.map(String)
+            : (value ? [String(value)] : [])
+          return (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {field.options?.map(opt => {
+                const checked = selected.includes(opt.value)
+                return (
+                  <label
+                    key={opt.value}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm cursor-pointer transition-colors',
+                      checked ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-zinc-200 text-zinc-600 hover:border-zinc-300',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = checked
+                          ? selected.filter(v => v !== opt.value)
+                          : [...selected, opt.value]
+                        onChange(field.name, next)
+                      }}
+                      className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="truncate">{locale === 'it' && opt.labelIt ? opt.labelIt : opt.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+          )
+        })()
       ) : field.type === 'select' ? (
         <select
           value={String(value ?? '')}

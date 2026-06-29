@@ -21,6 +21,10 @@ platform-credentials.md
 claude-gmail-connector-*.json
 .mcp.json
 
+# local-stack auto-isolation per-worktree state (never commit)
+.auto-isolate.status
+.auto-isolate.log
+
 # internal docs — not for git
 CRM-Data-Schema.md
 SOP-Business-Rules.md

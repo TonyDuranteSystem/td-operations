@@ -7,15 +7,16 @@ const STAGES: FormationStageRow[] = [
   { stage_name: 'Filed with State', stage_order: 3, client_label: 'Filing with the state', client_label_it: 'Registrazione presso lo stato' },
   { stage_name: 'Articles Received', stage_order: 4, client_label: 'Articles received', client_label_it: 'Atto costitutivo ricevuto' },
   { stage_name: 'SS-4 Prepared', stage_order: 5, client_label: 'Sign your SS-4', client_label_it: 'Firma il modulo SS-4' },
-  { stage_name: 'SS-4 Signed', stage_order: 6, client_label: 'SS-4 sent to IRS', client_label_it: "SS-4 inviato all'IRS" },
-  { stage_name: 'EIN Received', stage_order: 7, client_label: 'EIN received — all set!', client_label_it: 'EIN ricevuto — tutto fatto!' },
+  { stage_name: 'SS-4 Signed', stage_order: 6, client_label: 'SS-4 signed', client_label_it: 'SS-4 firmato' },
+  { stage_name: 'SS-4 Sent to IRS', stage_order: 7, client_label: 'SS-4 Faxed to IRS – Waiting for EIN', client_label_it: "SS-4 Inviato all'IRS – In attesa del Codice Fiscale" },
+  { stage_name: 'EIN Received', stage_order: 8, client_label: 'EIN received — all set!', client_label_it: 'EIN ricevuto — tutto fatto!' },
 ]
 
 describe('buildFormationTrackerSteps', () => {
   it('marks completed / current / upcoming relative to the current stage', () => {
     const steps = buildFormationTrackerSteps(STAGES, 'Filed with State', 'en')
     expect(steps.map((s) => s.status)).toEqual([
-      'completed', 'completed', 'current', 'upcoming', 'upcoming', 'upcoming', 'upcoming',
+      'completed', 'completed', 'current', 'upcoming', 'upcoming', 'upcoming', 'upcoming', 'upcoming',
     ])
   })
 
@@ -57,7 +58,7 @@ describe('buildFormationTrackerSteps', () => {
   })
 
   it('sorts by stage_order regardless of input order', () => {
-    const shuffled = [STAGES[3], STAGES[0], STAGES[6], STAGES[1]]
+    const shuffled = [STAGES[3], STAGES[0], STAGES[7], STAGES[1]]
     const steps = buildFormationTrackerSteps(shuffled, 'Payment Confirmed', 'en')
     expect(steps.map((s) => s.stageName)).toEqual([
       'Payment Confirmed', 'Wizard Submitted', 'Articles Received', 'EIN Received',
@@ -103,6 +104,42 @@ describe('buildFormationTrackerSteps', () => {
     it('omits filedAt entirely when no date is provided', () => {
       const steps = buildFormationTrackerSteps(STAGES, 'Filed with State', 'en')
       expect(steps.every((s) => s.filedAt == null)).toBe(true)
+    })
+  })
+
+  describe('faxedAt (fax date on the SS-4-Sent-to-IRS step)', () => {
+    const FAXED_AT = '2026-06-29T17:43:11.743Z'
+
+    it('attaches faxedAt to the SS-4-Sent-to-IRS step while AT that stage', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'SS-4 Sent to IRS', 'en', undefined, FAXED_AT)
+      const fax = steps.find((s) => s.stageName === 'SS-4 Sent to IRS')!
+      expect(fax.status).toBe('current')
+      expect(fax.faxedAt).toBe(FAXED_AT)
+    })
+
+    it('keeps faxedAt once the SD has advanced PAST SS-4 Sent to IRS', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'EIN Received', 'en', undefined, FAXED_AT)
+      const fax = steps.find((s) => s.stageName === 'SS-4 Sent to IRS')!
+      expect(fax.status).toBe('completed')
+      expect(fax.faxedAt).toBe(FAXED_AT)
+    })
+
+    it('does NOT attach faxedAt while SS-4 Sent to IRS is still upcoming', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'Payment Confirmed', 'en', undefined, FAXED_AT)
+      const fax = steps.find((s) => s.stageName === 'SS-4 Sent to IRS')!
+      expect(fax.status).toBe('upcoming')
+      expect(fax.faxedAt).toBeUndefined()
+    })
+
+    it('attaches faxedAt to NO other step', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'EIN Received', 'en', undefined, FAXED_AT)
+      const withDate = steps.filter((s) => s.faxedAt)
+      expect(withDate.map((s) => s.stageName)).toEqual(['SS-4 Sent to IRS'])
+    })
+
+    it('omits faxedAt entirely when no date is provided', () => {
+      const steps = buildFormationTrackerSteps(STAGES, 'SS-4 Sent to IRS', 'en')
+      expect(steps.every((s) => s.faxedAt == null)).toBe(true)
     })
   })
 })

@@ -147,7 +147,7 @@ export default async function PortalDashboardPage() {
       const ctx = await getFormationContext(contactId)
       const tracker = await getFormationTracker({ sdId: selectedFormation.sdId })
       const trackerSteps = tracker?.currentStage
-        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
         : null
       const itinFlows = await loadItinFlows()
       return (
@@ -242,7 +242,7 @@ export default async function PortalDashboardPage() {
     // delivery. The auth-metadata tier is unreliable here — it can be stale
     // (e.g. left at 'active' after a prior formation completed) or never set —
     // whereas the formation SD exists from "Payment Confirmed" onward, so it's
-    // the reliable signal that drives the 7-stage tracker at ANY stage. Reuses
+    // the reliable signal that drives the 8-stage tracker at ANY stage. Reuses
     // getInProgressFormations (1 query when there's no formation SD, so it's
     // free for ordinary leads/onboarding clients). Short-circuits the lookup
     // when the tier already says formation.
@@ -298,7 +298,7 @@ export default async function PortalDashboardPage() {
         ])
         const tracker = await getFormationTracker({ accountId: formationAccount.id, contactId })
         const trackerSteps = tracker?.currentStage
-          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
+          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
           : null
         const itinFlows = await loadItinFlows()
         return (
@@ -329,7 +329,7 @@ export default async function PortalDashboardPage() {
       const ctx = await getFormationContext(contactId)
       const tracker = await getFormationTracker({ contactId })
       const trackerSteps = tracker?.currentStage
-        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
         : null
       const itinFlows = await loadItinFlows()
       return (
@@ -468,7 +468,7 @@ export default async function PortalDashboardPage() {
     ])
     const tracker = await getFormationTracker({ accountId: selectedAccountId, contactId })
     const trackerSteps = tracker?.currentStage
-      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt)
+      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
       : null
     const itinFlows = await loadItinFlows()
     return (

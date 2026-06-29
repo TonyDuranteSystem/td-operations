@@ -581,6 +581,28 @@ export default async function WizardPage({
   // breaking member-add for every multi-member client. See normalizeEntityType.
   entityType = normalizeEntityType(entityType)
 
+  // TD Communication brand audit: the New-Brand (3-step) vs Rebrand (2-step)
+  // path is chosen by the client's active enrollment.client_type. Resolve it by
+  // the WHOLE identity (contact OR any owned account) and pass it through as
+  // entityType — getWizardConfig reads entityType as the client_type for this
+  // type. Defaults to new_brand when no enrollment is found (direct-URL case).
+  if (wizardType === 'td_communication') {
+    const ownedAccountIds: string[] = []
+    if (accountId) ownedAccountIds.push(accountId)
+    if (contactId) {
+      const { data: acLinks } = await supabaseAdmin
+        .from('account_contacts')
+        .select('account_id')
+        .eq('contact_id', contactId)
+      for (const l of acLinks ?? []) {
+        if (l.account_id && !ownedAccountIds.includes(l.account_id)) ownedAccountIds.push(l.account_id)
+      }
+    }
+    const { getClientActiveEnrollment } = await import('@/lib/td-communication/brand-audit')
+    const enrollment = await getClientActiveEnrollment(contactId || null, ownedAccountIds)
+    entityType = enrollment?.client_type === 'rebrand' ? 'rebrand' : 'new_brand'
+  }
+
   // Build wizard list with submission status for the selector
   // Query all wizard progress for this account to know which are submitted
   let allSubmittedTypes = new Set<string>()

@@ -826,13 +826,13 @@ export async function GET(req: NextRequest) {
 
       const hasEIN = !!acct.ein_number
 
-      // Stage thresholds for the 7-stage v2 Company Formation pipeline:
+      // Stage thresholds for the 8-stage v2 Company Formation pipeline:
       //   Articles Received = 4 (company is real once Articles arrive),
       //   SS-4 Prepared = 5 (the SS-4 should exist from here on),
-      //   EIN Received = 7 (final stage).
+      //   EIN Received = 8 (final stage; SS-4 Sent to IRS = 7 is the waiting stage).
       const STAGE_ARTICLES_RECEIVED = 4
       const STAGE_SS4_PREPARED = 5
-      const STAGE_EIN_RECEIVED = 7
+      const STAGE_EIN_RECEIVED = 8
 
       // ── Pipeline position indicator ──
       if (formationSD) {
@@ -849,7 +849,7 @@ export async function GET(req: NextRequest) {
           acctChecks.push({
             id: `pipeline_${acct.id.slice(0, 8)}`,
             category: "Formation Pipeline",
-            label: `Stage ${formationStageOrder} of 7 — ${formationStage} ⚠️ BEHIND`,
+            label: `Stage ${formationStageOrder} of 8 — ${formationStage} ⚠️ BEHIND`,
             status: "error",
             detail: `${hasFormationDate ? `Articles received (${acct.formation_date})` : ""}${hasEIN ? `, EIN: ${acct.ein_number}` : ""} — but SD is still at Stage ${formationStageOrder}. Should be at ${expectedLabel}.`,
             fix: {
@@ -869,7 +869,7 @@ export async function GET(req: NextRequest) {
           acctChecks.push({
             id: `pipeline_${acct.id.slice(0, 8)}`,
             category: "Formation Pipeline",
-            label: `Stage ${formationStageOrder} of 7 — ${formationStage}`,
+            label: `Stage ${formationStageOrder} of 8 — ${formationStage}`,
             status: "info",
             detail: `Company Formation is in progress. Current stage determines which checks are relevant below.`,
           })

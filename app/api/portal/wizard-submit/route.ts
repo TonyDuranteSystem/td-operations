@@ -139,8 +139,12 @@ export async function POST(req: NextRequest) {
 
     // ─── 2. MARK WIZARD_PROGRESS AS SUBMITTED ───
     // For company_info: deferred until AFTER job enqueue succeeds (scoped reorder).
+    // For td_communication: deferred until AFTER the enrollment write succeeds
+    //   (step 4c) — so a transient enrollment failure leaves wizard_progress
+    //   in_progress and the client's retry actually re-runs the work instead of
+    //   short-circuiting at the step-1 dedup.
     // All other wizard types: mark submitted immediately (existing behavior).
-    if (wizard_type !== 'company_info') {
+    if (wizard_type !== 'company_info' && wizard_type !== 'td_communication') {
       if (progress_id) {
         await supabaseAdmin
           .from('wizard_progress')
@@ -480,6 +484,81 @@ export async function POST(req: NextRequest) {
 
       // Return success immediately — data is already persisted in wizard_progress (step 2)
       return NextResponse.json({ success: true, provider: wizard_type })
+    }
+
+    // ─── 4c. TD COMMUNICATION BRAND AUDIT — inline, return immediately ───
+    // No submission table / no background job: the td_comm_enrollments row IS
+    // the canonical record. Find-or-create it by the client's identity, store
+    // the answers, advance status → form_submitted, and announce in the project
+    // chat. Done SYNCHRONOUSLY (unlike banking) because this write is the whole
+    // point of the submission — a failure must surface to the client (R099),
+    // not be lost to a fire-and-forget. wizard_progress is marked submitted only
+    // AFTER this succeeds (deferred in step 2) so a retry re-runs cleanly.
+    if (wizard_type === 'td_communication') {
+      const accountIds =
+        identity.kind === 'contact'
+          ? identity.accountIds
+          : identity.kind === 'teammate'
+            ? [identity.accountId]
+            : []
+      const {
+        submitBrandAudit,
+        normalizeClientType,
+        businessNameFromFormData,
+      } = await import('@/lib/td-communication/brand-audit')
+      const clientType = normalizeClientType(entity_type)
+      try {
+        const { enrollmentId } = await submitBrandAudit({
+          contactId: contact_id || (identity.kind === 'contact' ? identity.contactId : null),
+          subjectAccountId: account_id || null,
+          accountIds,
+          clientType,
+          formData: data as Record<string, unknown>,
+        })
+
+        // Enrollment write succeeded → now mark wizard_progress submitted.
+        if (progress_id) {
+          await supabaseAdmin
+            .from('wizard_progress')
+            .update({ data, status: 'submitted', updated_at: new Date().toISOString() })
+            .eq('id', progress_id)
+        } else {
+          await supabaseAdmin
+            .from('wizard_progress')
+            .insert({
+              wizard_type,
+              data,
+              account_id: account_id || null,
+              contact_id: contact_id || null,
+              lead_id: lead_id || null,
+              status: 'submitted',
+              current_step: 99,
+            })
+        }
+
+        // action_log for the CRM Recent Activity feed (mirror banking).
+        try {
+          await supabaseAdmin.from('action_log').insert({
+            actor: 'portal_wizard',
+            action_type: 'form_submitted',
+            table_name: 'td_comm_enrollments',
+            record_id: enrollmentId,
+            account_id: account_id || null,
+            summary: `Brand audit submitted: ${businessNameFromFormData(data as Record<string, unknown>)}`,
+            details: { wizard_type, client_type: clientType },
+          })
+        } catch (e) {
+          console.error('[wizard-submit] Brand audit action_log error:', e)
+        }
+
+        return NextResponse.json({ success: true, enrollment_id: enrollmentId })
+      } catch (e) {
+        console.error('[wizard-submit] Brand audit submit failed:', e instanceof Error ? e.message : e)
+        return NextResponse.json(
+          { error: e instanceof Error ? e.message : 'Brand audit submit failed' },
+          { status: 500 },
+        )
+      }
     }
 
     // ─── 5. ENQUEUE BACKGROUND JOB (Auto-Chain) ───

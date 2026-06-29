@@ -211,7 +211,7 @@ export async function getFormationContext(contactId: string) {
 
 /**
  * Data for the client-facing Company Formation progress tracker: the formation
- * SD's current stage + the 7 Company Formation pipeline stages (client labels).
+ * SD's current stage + the 8 Company Formation pipeline stages (client labels).
  * The tracker is driven entirely by this (SD stage + pipeline_stages), not by
  * separate signals. Resolves the SD by, in priority: explicit sdId → active SD
  * for accountId → contact-scoped (account_id NULL) active SD for contactId.
@@ -221,7 +221,7 @@ export async function getFormationTracker(opts: {
   sdId?: string | null
   contactId?: string | null
   accountId?: string | null
-}): Promise<{ currentStage: string | null; stages: FormationStageRow[]; filedAt: string | null } | null> {
+}): Promise<{ currentStage: string | null; stages: FormationStageRow[]; filedAt: string | null; faxedAt: string | null } | null> {
   // Resolve the formation SD's current stage, cascading through the locators in
   // priority order and stopping at the first hit (an account-scoped lookup falls
   // back to the contact-scoped SD for not-yet-materialized formations). We also
@@ -274,6 +274,12 @@ export async function getFormationTracker(opts: {
   const filedAt =
     filedFromHistory ?? (currentStage === 'Filed with State' ? (sdRow?.stage_entered_at ?? null) : null)
 
+  // Fax date: when the SD advanced to "SS-4 Sent to IRS" (same pattern as filedAt).
+  const faxedFromHistory =
+    normalizeStageHistory(sdRow?.stage_history).find((e) => e.to_stage === 'SS-4 Sent to IRS')?.advanced_at ?? null
+  const faxedAt =
+    faxedFromHistory ?? (currentStage === 'SS-4 Sent to IRS' ? (sdRow?.stage_entered_at ?? null) : null)
+
   const { data: stageRows } = await supabaseAdmin
     .from('pipeline_stages')
     .select('stage_name, stage_order, client_label, client_label_it')
@@ -281,7 +287,7 @@ export async function getFormationTracker(opts: {
     .order('stage_order', { ascending: true })
 
   if (!stageRows || stageRows.length === 0) return null
-  return { currentStage, stages: stageRows as unknown as FormationStageRow[], filedAt }
+  return { currentStage, stages: stageRows as unknown as FormationStageRow[], filedAt, faxedAt }
 }
 
 export interface InProgressFormation {
