@@ -64,7 +64,7 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
     .lt("expires_at", now.toISOString())
     .select("id")
   for (const e of (expired ?? []) as Array<{ id: string }>) {
-    await db.from("esign_events").insert({ envelope_id: e.id, event_type: "voided", metadata: { reason: "expired" } })
+    await db.from("esign_events").insert({ envelope_id: e.id, event_type: "expired", metadata: { reason: "expired" } })
   }
 
   // 2. Reminders.

@@ -208,10 +208,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       .from("esign_envelopes")
       .update({ signed_pdf_path: signedPath, status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", env.id)
-      .neq("status", "completed")
+      .in("status", ["sent", "in_progress"])
       .select("id")
       .maybeSingle()
-    completed = true
+    completed = !!claimed
     if (claimed) {
       await db.from("esign_events").insert({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath } })
       // Post-completion side-effects: file the signed PDF into the client's

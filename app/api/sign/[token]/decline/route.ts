@@ -50,7 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     .update({ status: "declined", declined_at: now, decline_reason: reason || null, last_ip: ip, last_user_agent: ua, updated_at: now })
     .eq("id", signer.id)
     .neq("status", "declined")
-  await db.from("esign_envelopes").update({ status: "declined", updated_at: now }).eq("id", env.id)
+  await db.from("esign_envelopes").update({ status: "declined", updated_at: now }).eq("id", env.id).in("status", ["sent", "in_progress"])
   await db.from("esign_events").insert({ envelope_id: env.id, signer_id: signer.id, event_type: "declined", ip, user_agent: ua, metadata: { reason } })
 
   // Best-effort support notification (no-op in sandbox).
