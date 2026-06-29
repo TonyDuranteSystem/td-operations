@@ -94,6 +94,17 @@ export function nextStatusOnReleaseFinal(current: string): EnrollmentStatus | nu
   return 'delivered'
 }
 
+/**
+ * Target status when a deliverable is RELEASED TO CLIENT, or null to leave it
+ * unchanged. Releasing a draft makes it visible to the client (triggering the
+ * Phase 7 disclaimer + reveal), so the project is now Ready for Review. Same
+ * nudge set as an upload: fires from enrolled/form_submitted/in_progress/revision,
+ * never downgrades concept_ready (already there), approved, delivered, or cancelled.
+ */
+export function nextStatusOnRelease(current: string): EnrollmentStatus | null {
+  return UPLOAD_NUDGE_FROM.has(current as EnrollmentStatus) ? 'concept_ready' : null
+}
+
 /* -------------------------------------------------------------------------- */
 /* SLA / deadline                                                              */
 /* -------------------------------------------------------------------------- */

@@ -18,7 +18,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { nextStatusOnUpload, nextStatusOnReleaseFinal } from './pipeline'
+import { nextStatusOnUpload, nextStatusOnReleaseFinal, nextStatusOnRelease } from './pipeline'
 import { nextVersionForConcept } from './deliverables'
 import type { CommDeliverable, DeliverableType } from './types'
 
@@ -240,6 +240,11 @@ export async function updateDeliverable(
 
   if (patch.action === 'release_final') {
     await advanceStatus(current.enrollment_id, nextStatusOnReleaseFinal)
+  } else if (patch.action === 'release') {
+    // Releasing a draft to the client triggers the Phase 7 disclaimer + reveal,
+    // so the project is now Ready for Review (concept_ready). Forward-only, never
+    // throws (same optimistic helper as upload / release_final).
+    await advanceStatus(current.enrollment_id, nextStatusOnRelease)
   }
 
   const [signed] = await withSignedUrls([shape(data)])
