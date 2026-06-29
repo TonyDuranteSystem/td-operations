@@ -94,24 +94,76 @@ type BankGuide = { name: string; matchTerms: string[]; stepsEn: string[]; stepsI
 /** "Before You Start" step: tells the client to upload their transactions as a
  *  CSV and gives a bank-name lookup with the exact CSV-download steps. The P&L /
  *  Balance Sheet we build from it is a gift — but only if they bring clean data. */
-function PrepareCsvStep({ locale, bankGuides }: { locale: string; bankGuides: BankGuide[] }) {
+type FetchedGuide = { name: string; steps: string[]; note: string }
+
+function PrepareCsvStep({ locale, bankGuides, acknowledged, onAcknowledge }: { locale: string; bankGuides: BankGuide[]; acknowledged: boolean; onAcknowledge: (v: boolean) => void }) {
   const [bank, setBank] = useState('')
+  const [fetched, setFetched] = useState<FetchedGuide | null>(null)
+  const [loading, setLoading] = useState(false)
   const it = locale === 'it'
   const q = bank.toLowerCase().trim()
-  const guide = q.length >= 3 ? bankGuides.find(g => g.matchTerms.some(t => q.includes(t))) : null
-  const gSteps = guide ? (it && guide.stepsIt.length > 0 ? guide.stepsIt : guide.stepsEn) : []
-  const gNote = guide ? (it && guide.noteIt ? guide.noteIt : guide.noteEn) : ''
+  const localGuide = q.length >= 3 ? bankGuides.find(g => g.matchTerms.some(t => q.includes(t))) : null
+  // A locally-matched (curated) guide always wins. Otherwise show whatever the
+  // server returned for the bank the client looked up.
+  const guide = localGuide
+    ? {
+        name: localGuide.name,
+        steps: it && localGuide.stepsIt.length > 0 ? localGuide.stepsIt : localGuide.stepsEn,
+        note: it && localGuide.noteIt ? localGuide.noteIt : localGuide.noteEn,
+      }
+    : fetched
+  const gSteps = guide ? guide.steps : []
+  const gNote = guide ? guide.note : ''
+
+  // When the client looks up a bank we don't already have curated steps for,
+  // ask the server (catalog → AI → generic). Never throws to the user.
+  async function lookup() {
+    const term = bank.trim()
+    if (term.length < 2 || loading) return
+    setLoading(true)
+    setFetched(null)
+    try {
+      const res = await fetch('/api/portal/bank-guide', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bank: term, locale: it ? 'it' : 'en' }),
+      })
+      const data = await res.json().catch(() => null)
+      if (data?.guide?.steps?.length) setFetched(data.guide as FetchedGuide)
+    } catch {
+      /* generic guidance is shown via the empty-state hint */
+    } finally {
+      setLoading(false)
+    }
+  }
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4">
-        <p className="text-base font-semibold text-blue-900">
-          {it ? '📄 Prima di iniziare: prepara le transazioni della tua banca in CSV' : '📄 Before you start: get your bank transactions as a CSV file'}
+      <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+        <p className="text-lg font-bold text-amber-900">
+          {it ? '⚠️ Leggi attentamente prima di iniziare' : '⚠️ Read this carefully before you start'}
         </p>
-        <p className="mt-2 text-sm leading-relaxed text-blue-900/90">
-          {it
-            ? "Per preparare il tuo Conto Economico e lo Stato Patrimoniale ci servono TUTTE le transazioni dell'anno, per ogni conto, in formato CSV. Quasi tutte le banche permettono di scaricarlo in pochi clic — molto più veloce e preciso del PDF. Scarica il CSV ora, prima di proseguire."
-            : 'To prepare your Profit & Loss and Balance Sheet, we need ALL of the year’s transactions, for each account, as a CSV file. Almost every bank lets you download one in a few clicks — far faster and more accurate than a PDF. Download your CSV now, before you continue.'}
-        </p>
+        <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-amber-950">
+          <p>
+            {it
+              ? 'Come parte della tua dichiarazione, prepariamo NOI per te il Conto Economico (P&L) e lo Stato Patrimoniale (Balance Sheet) della tua azienda.'
+              : 'As part of your tax return, WE prepare your Profit & Loss (P&L) and Balance Sheet for you — the complete financial picture of your company.'}
+          </p>
+          <p>
+            {it
+              ? 'Questi documenti vengono costruiti direttamente dai tuoi estratti conto bancari, quindi devono essere il più accurati e completi possibile. Se mancano dei movimenti, il tuo P&L, lo Stato Patrimoniale e la tua dichiarazione saranno errati.'
+              : 'These are built directly from your bank statements, so they must be as accurate and complete as possible. If any transactions are missing, your P&L, Balance Sheet and tax return will be wrong.'}
+          </p>
+          <p className="font-semibold">
+            {it
+              ? '👉 Prima di iniziare il questionario, scarica TUTTI i tuoi estratti conto dell’intero anno — per ogni banca e ogni valuta — e salvali sul tuo dispositivo. Li caricherai durante questa procedura.'
+              : '👉 Before you start the questionnaire, download ALL of your bank statements for the full year — for every bank and every currency — and save them on your device. You will upload them during this process.'}
+          </p>
+          <p className="text-xs text-amber-800">
+            {it
+              ? 'Suggerimento: il formato CSV è il più affidabile. Usa la ricerca qui sotto per sapere come scaricarlo dalla tua banca.'
+              : 'Tip: CSV is the most reliable format. Use the lookup below to see exactly how to download it from your bank.'}
+          </p>
+        </div>
       </div>
 
       <div>
@@ -121,16 +173,24 @@ function PrepareCsvStep({ locale, bankGuides }: { locale: string; bankGuides: Ba
         <input
           type="text"
           value={bank}
-          onChange={e => setBank(e.target.value)}
+          onChange={e => { setBank(e.target.value); setFetched(null) }}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); lookup() } }}
           placeholder={it ? 'Scrivi il nome della banca…' : 'Type your bank name…'}
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
-        {q.length >= 3 && !guide && (
-          <p className="mt-2 text-xs text-gray-500">
-            {it
-              ? 'Non abbiamo istruzioni specifiche per questa banca — apri la tua banca online, vai su transazioni/movimenti, scegli tutto l’anno ed esporta in CSV.'
-              : 'No specific steps for this bank yet — open your online banking, go to transactions/activity, select the whole year, and export as CSV.'}
-          </p>
+        {q.length >= 2 && !guide && (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={lookup}
+              disabled={loading}
+              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {loading
+                ? (it ? 'Cerco le istruzioni…' : 'Finding instructions…')
+                : (it ? 'Mostra come scaricare il CSV' : 'Show me how to download the CSV')}
+            </button>
+          </div>
         )}
         {guide && (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
@@ -150,6 +210,21 @@ function PrepareCsvStep({ locale, bankGuides }: { locale: string; bankGuides: Ba
           ? 'Hai solo un PDF? Scarica comunque il CSV dalla tua banca: è il modo più affidabile e veloce. Caricherai i file nello step finale.'
           : 'Only have a PDF? Please still download the CSV from your bank — it’s the most reliable and fastest option. You’ll upload the files in the final step.'}
       </p>
+
+      {/* Required acknowledgement — gates the Next button (validateStep). */}
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-amber-300 bg-white p-4 shadow-sm">
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          onChange={e => onAcknowledge(e.target.checked)}
+          className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-gray-400 text-amber-600 focus:ring-amber-500"
+        />
+        <span className="text-sm font-semibold text-amber-950">
+          {it
+            ? 'Ho letto quanto sopra e ho scaricato tutti i miei estratti conto bancari dell’intero anno.'
+            : 'I have read the above and I have downloaded all my bank statements for the full year.'}
+        </span>
+      </label>
     </div>
   )
 }
@@ -345,6 +420,10 @@ export function WizardClient({
     const stepId = steps[currentStep].id
     const stepFields = fields[stepId] || []
 
+    // "Before You Start": the client must tick the acknowledgement checkbox
+    // (they prepared/downloaded all bank statements) before they can proceed.
+    if (stepId === 'prepare') return formData['prepare_acknowledged'] === true
+
     // Members step: every field lives under an indexed key (member_{idx}_{name}),
     // so validate each of the memberCount members against the indexed keys.
     // The generic loop below checks bare field.name keys (which are always empty
@@ -363,6 +442,16 @@ export function WizardClient({
           }
           if (field.required && isEmptyValue(formData[`member_${idx}_${field.name}`])) return false
         }
+      }
+      // Tax MMLLC: members are the full roster — ownership must total 100%
+      // before they can leave this step (early gate, not a surprise at Submit).
+      if (wizardType === 'tax' && isMMLLC) {
+        let pctSum = 0
+        for (let idx = 0; idx < memberCount; idx++) {
+          const v = Number(formData[`member_${idx}_member_ownership_pct`])
+          if (!Number.isNaN(v)) pctSum += v
+        }
+        if (Math.abs(pctSum - 100) > 0.5) return false
       }
       return true
     }
@@ -390,7 +479,7 @@ export function WizardClient({
       if (field.required && isEmptyValue(formData[field.name])) return false
     }
     return true
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts])
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC])
 
   // Save progress to wizard_progress table. `silent` = autosave mode: no
   // toasts (a failed autosave just stays dirty and retries on the next edit;
@@ -501,7 +590,22 @@ export function WizardClient({
         const v = Number(formData[`member_${i}_member_ownership_pct`])
         if (!Number.isNaN(v)) pctSum += v
       }
-      if (!(pctSum > 0 && pctSum < 100)) {
+      if (wizardType === 'tax') {
+        // Tax MMLLC: the members list is the FULL roster — the person filling
+        // the form is one of the members (no separate owner step). Every member
+        // is on a K-1, so the shares must add up to exactly 100%. A 0.5 epsilon
+        // absorbs thirds (33.33×3 = 99.99).
+        if (Math.abs(pctSum - 100) > 0.5) {
+          toast.error(
+            locale === 'it'
+              ? `Le quote di tutti i soci devono fare 100% (attuale: ${pctSum}%). Ricordati di includere anche te stesso tra i soci.`
+              : `All members' ownership must total 100% (currently ${pctSum}%). Remember to include yourself as a member.`,
+          )
+          return
+        }
+      } else if (!(pctSum > 0 && pctSum < 100)) {
+        // Formation MMLLC: separate owner step; additional members < 100%, the
+        // owner takes the remaining share at materialization.
         toast.error(
           locale === 'it'
             ? `La somma delle quote dei membri aggiuntivi deve essere maggiore di 0% e minore di 100% (attuale: ${pctSum}%). Il titolare riceve la quota rimanente.`
@@ -766,7 +870,12 @@ export function WizardClient({
       )}
 
       {isPrepareStep ? (
-        <PrepareCsvStep locale={locale} bankGuides={bankGuides} />
+        <PrepareCsvStep
+          locale={locale}
+          bankGuides={bankGuides}
+          acknowledged={formData['prepare_acknowledged'] === true}
+          onAcknowledge={v => handleFieldChange('prepare_acknowledged', v)}
+        />
       ) : isMembersStep ? (
         /* Members repeater — add/remove members */
         <div className="space-y-6">
@@ -860,6 +969,26 @@ export function WizardClient({
             <Plus className="h-4 w-4" />
             {locale === 'it' ? 'Aggiungi membro' : 'Add member'}
           </button>
+
+          {/* Live ownership total — tax MMLLC requires every member (including
+              the person filling the form) to total exactly 100%. */}
+          {wizardType === 'tax' && (() => {
+            let pctSum = 0
+            for (let i = 0; i < memberCount; i++) {
+              const v = Number(formData[`member_${i}_member_ownership_pct`])
+              if (!Number.isNaN(v)) pctSum += v
+            }
+            const ok = Math.abs(pctSum - 100) <= 0.5
+            return (
+              <div className={`rounded-lg border px-3 py-2.5 text-sm font-medium ${ok ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+                {ok
+                  ? (locale === 'it' ? `✓ Quote totali: ${pctSum}%` : `✓ Total ownership: ${pctSum}%`)
+                  : (locale === 'it'
+                      ? `Quote totali: ${pctSum}% — devono fare 100%. Includi tutti i soci, te compreso.`
+                      : `Total ownership: ${pctSum}% — must equal 100%. Include every member, including yourself.`)}
+              </div>
+            )
+          })()}
         </div>
       ) : (
         <>
