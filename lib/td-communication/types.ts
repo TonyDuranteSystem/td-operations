@@ -175,3 +175,77 @@ export interface CommDeliverable {
   /** Signed, short-lived, forced-attachment download. Added by the server on read. */
   download_url?: string | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* Phase 8 — Admin panel (td_comm_packages, td_comm_questions, settings)        */
+/* -------------------------------------------------------------------------- */
+
+/** When the client pays for a package. */
+export type PackagePaymentTiming = 'upfront' | 'on_approval'
+
+/** A purchasable TD Communication branding package (td_comm_packages row). */
+export interface TdCommPackage {
+  /** Stable identifier; matches enrollments.package_slug + PACKAGE_LABELS keys. Immutable after create. */
+  slug: string
+  name_en: string
+  name_it: string | null
+  description_en: string | null
+  description_it: string | null
+  price_usd: number | null
+  delivery_days: number | null
+  max_revisions: number
+  payment_timing: PackagePaymentTiming
+  /** "Most Popular" badge. */
+  highlighted: boolean
+  /** Soft-delete flag — false = retired (hidden from active lists). */
+  active: boolean
+  sort_order: number
+  /** Bullet list of what's included. */
+  includes: string[]
+  /** Slugs this package can be upsold from. */
+  upsell_from: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type QuestionFieldType = 'text' | 'textarea' | 'select' | 'number' | 'file'
+export type QuestionAudience = 'new_brand' | 'rebrand' | 'both'
+
+/** A brand-audit question (td_comm_questions row), operator-editable. */
+export interface TdCommQuestion {
+  id: string
+  /** form_data key the answer is stored under (consumed by groupBrief). */
+  key: string
+  label_en: string
+  label_it: string | null
+  type: QuestionFieldType
+  required: boolean
+  /** Wizard step grouping (1-based). */
+  step: number
+  /** Which enrollment type the question applies to. */
+  audience: QuestionAudience
+  /** Option values, used when type='select'. */
+  options: string[]
+  active: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+/** System settings for TD Communication (stored in app_settings under key 'td_communication_settings'). */
+export interface TdCommSettings {
+  /** Whether the client-facing portal TD Communication tab is shown. */
+  enabled: boolean
+  disclaimer_en: string
+  disclaimer_it: string
+  /** Fallback SLA when a package has no delivery_days. */
+  default_sla_days: number
+}
+
+/** Aggregate stats for the enrollments admin tab. */
+export interface EnrollmentStats {
+  total: number
+  byStatus: Record<string, number>
+  /** Average days from enrollment to delivery, over enrollments with a delivered_at; null when none. */
+  avgDeliveryDays: number | null
+}

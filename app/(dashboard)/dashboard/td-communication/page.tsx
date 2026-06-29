@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { isAdmin } from '@/lib/auth'
 import { resolveCommParticipant, listConversationsForStaff } from '@/lib/td-communication/queries'
 import { listEnrollments } from '@/lib/td-communication/pipeline-queries'
 import { CrmCommunicationDashboard } from '@/components/td-communication/crm-communication-dashboard'
@@ -50,6 +51,7 @@ export default async function TdCommunicationPage() {
       initialProjects={initialProjects}
       conversations={conversations}
       partners={partners}
+      isAdmin={isAdmin(user)}
     />
   )
 }

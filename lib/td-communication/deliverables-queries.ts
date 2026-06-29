@@ -245,15 +245,22 @@ async function advanceStatus(
   try {
     const { data: enr } = await db
       .from('td_comm_enrollments')
-      .select('status')
+      .select('status, metadata')
       .eq('id', enrollmentId)
       .maybeSingle()
     if (!enr) return
     const target = decide(enr.status)
     if (!target || target === enr.status) return
+    const update: Record<string, unknown> = { status: target, updated_at: new Date().toISOString() }
+    // First time we land on 'delivered', stamp metadata.delivered_at (merge,
+    // idempotent) so the admin avg-delivery stat is real.
+    if (target === 'delivered') {
+      const meta = (enr.metadata ?? {}) as Record<string, unknown>
+      if (!meta.delivered_at) update.metadata = { ...meta, delivered_at: new Date().toISOString() }
+    }
     await db
       .from('td_comm_enrollments')
-      .update({ status: target, updated_at: new Date().toISOString() })
+      .update(update)
       .eq('id', enrollmentId)
       .eq('status', enr.status)
   } catch (err) {

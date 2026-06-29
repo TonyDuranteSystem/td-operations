@@ -180,9 +180,18 @@ export async function updateEnrollmentNotes(id: string, notes: string): Promise<
  */
 export async function setEnrollmentStatus(id: string, status: string): Promise<{ status: EnrollmentStatus }> {
   if (!isEnrollmentStatus(status)) throw new Error('Invalid status.')
+  const patch: Record<string, unknown> = { status, updated_at: new Date().toISOString() }
+  // Stamp metadata.delivered_at the first time an enrollment reaches 'delivered'
+  // so the admin Enrollments tab can compute a real avg-delivery time. Merge to
+  // avoid clobbering other metadata keys; idempotent (only set if unset).
+  if (status === 'delivered') {
+    const { data: cur } = await db.from('td_comm_enrollments').select('metadata').eq('id', id).maybeSingle()
+    const meta = (cur?.metadata ?? {}) as Record<string, unknown>
+    if (!meta.delivered_at) patch.metadata = { ...meta, delivered_at: new Date().toISOString() }
+  }
   const { data, error } = await db
     .from('td_comm_enrollments')
-    .update({ status, updated_at: new Date().toISOString() })
+    .update(patch)
     .eq('id', id)
     .select('id')
     .maybeSingle()
