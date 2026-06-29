@@ -46,7 +46,11 @@ export function PdfViewer({ src, renderOverlay, onLoaded, maxWidth = 800 }: Prop
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const pdfjs: any = await import("pdfjs-dist")
         pdfjs.GlobalWorkerOptions.workerSrc = "/esign/pdf.worker.min.mjs"
-        const params = typeof src === "string" ? { url: src } : { data: src }
+        // Slice a fresh copy so pdfjs can transfer the buffer to its worker without
+        // detaching the original — React 18 StrictMode re-runs effects with the same
+        // src reference; the first run would detach src.buffer, breaking the second.
+        const data = src instanceof Uint8Array ? src.slice() : undefined
+        const params = typeof src === "string" ? { url: src } : { data }
         const doc = await pdfjs.getDocument(params).promise
         if (cancelled) return
         docRef.current = doc
