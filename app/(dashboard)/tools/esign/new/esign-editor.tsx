@@ -294,13 +294,6 @@ function PlacedFieldBox({
       onPointerUp={onBodyUp}
     >
       <span className="pointer-events-none truncate px-1">{FIELD_DEFAULTS[field.field_type].label}</span>
-      <button
-        onClick={() => onRemove(field.id)}
-        onPointerDown={e => e.stopPropagation()}
-        className="absolute -right-2 -top-2 flex h-4 w-4 items-center justify-center rounded-full bg-white text-[10px] text-red-500 shadow"
-      >
-        ✕
-      </button>
       {RESIZE_HANDLES.map(h => (
         <div
           key={h.dir}
@@ -312,6 +305,14 @@ function PlacedFieldBox({
           onPointerUp={onHandleUp}
         />
       ))}
+      {/* Rendered after resize handles so it sits on top of the NE handle, which overlaps at the same corner */}
+      <button
+        onClick={() => onRemove(field.id)}
+        onPointerDown={e => e.stopPropagation()}
+        className="absolute -right-2 -top-2 flex h-4 w-4 items-center justify-center rounded-full bg-white text-[10px] text-red-500 shadow"
+      >
+        ✕
+      </button>
     </div>
   )
 }
