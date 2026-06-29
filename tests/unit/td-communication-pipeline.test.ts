@@ -8,12 +8,35 @@ import {
   packageLabel,
   subjectTypeLabel,
   groupBrief,
+  nextStatusOnRelease,
 } from '@/lib/td-communication/pipeline'
 import {
   pickSubjectRef,
   buildSubject,
   type SubjectNameMaps,
 } from '@/lib/td-communication/subject'
+
+/* --------------------------- nextStatusOnRelease -------------------------- */
+
+describe('nextStatusOnRelease', () => {
+  it('nudges pre-review statuses to concept_ready', () => {
+    expect(nextStatusOnRelease('enrolled')).toBe('concept_ready')
+    expect(nextStatusOnRelease('form_submitted')).toBe('concept_ready')
+    expect(nextStatusOnRelease('in_progress')).toBe('concept_ready')
+    expect(nextStatusOnRelease('revision')).toBe('concept_ready')
+  })
+
+  it('never downgrades concept_ready/approved/delivered/cancelled', () => {
+    expect(nextStatusOnRelease('concept_ready')).toBeNull()
+    expect(nextStatusOnRelease('approved')).toBeNull()
+    expect(nextStatusOnRelease('delivered')).toBeNull()
+    expect(nextStatusOnRelease('cancelled')).toBeNull()
+  })
+
+  it('returns null for an unknown status', () => {
+    expect(nextStatusOnRelease('bogus')).toBeNull()
+  })
+})
 
 /* ------------------------------ columns ---------------------------------- */
 

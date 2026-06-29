@@ -26,7 +26,12 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientActiveEnrollment } from '@/lib/td-communication/brand-audit'
 import { getPublishedLanding, listLandingPackages } from '@/lib/td-communication/landing'
+import { getCommSettings } from '@/lib/td-communication/comm-settings'
+import { resolveDisclaimerText, currentDisclaimerVersion, canRevealConcept } from '@/lib/td-communication/disclaimer'
+import { hasAcceptedDisclaimer } from '@/lib/td-communication/disclaimer-queries'
+import { resolveSubject } from '@/lib/td-communication/subject'
 import { TdCommLanding } from '@/components/td-communication/td-comm-landing'
+import { ConceptReveal } from '@/components/td-communication/concept-reveal'
 import { BellRing, ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -62,6 +67,28 @@ export default async function TdCommunicationPage() {
   const enrollment = (contactId || ownedAccountIds.length > 0)
     ? await getClientActiveEnrollment(contactId, ownedAccountIds)
     : null
+  // Phase 7 — once the concept is ready (or already approved), this page becomes
+  // the disclaimer gate + cinematic logo reveal instead of the marketing landing
+  // (the client is past marketing). No image URLs are passed to the client here —
+  // the reveal fetches them from the API only after the disclaimer is accepted.
+  if (enrollment && canRevealConcept(enrollment.status)) {
+    const settings = await getCommSettings()
+    const version = currentDisclaimerVersion(settings)
+    const [accepted, subject] = await Promise.all([
+      hasAcceptedDisclaimer(enrollment.id, version),
+      resolveSubject(enrollment),
+    ])
+    return (
+      <ConceptReveal
+        initialStatus={enrollment.status}
+        disclaimerAccepted={accepted}
+        disclaimerText={resolveDisclaimerText(settings, locale)}
+        companyName={subject.name}
+        locale={isIt ? 'it' : 'en'}
+      />
+    )
+  }
+
   const hasEnrollment = !!enrollment
   const formSubmitted = !!enrollment?.metadata?.form_submitted_at
 
