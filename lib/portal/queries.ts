@@ -211,7 +211,7 @@ export async function getFormationContext(contactId: string) {
 
 /**
  * Data for the client-facing Company Formation progress tracker: the formation
- * SD's current stage + the 7 Company Formation pipeline stages (client labels).
+ * SD's current stage + the 8 Company Formation pipeline stages (client labels).
  * The tracker is driven entirely by this (SD stage + pipeline_stages), not by
  * separate signals. Resolves the SD by, in priority: explicit sdId → active SD
  * for accountId → contact-scoped (account_id NULL) active SD for contactId.

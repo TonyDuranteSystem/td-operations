@@ -1118,11 +1118,11 @@ function deriveJourneySteps({
   )
   const hasActiveServices = serviceDeliveries.some(sd => sd.status === 'active')
 
-  // Formation stage ordering (7-stage v2 pipeline) for the "beyond the initial
+  // Formation stage ordering (8-stage v2 pipeline) for the "beyond the initial
   // data/review phase" check (i.e. the company is actually being filed onward).
   const FORMATION_STAGE_ORDER = [
     'Payment Confirmed', 'Wizard Submitted', 'Filed with State', 'Articles Received',
-    'SS-4 Prepared', 'SS-4 Signed', 'EIN Received',
+    'SS-4 Prepared', 'SS-4 Signed', 'SS-4 Sent to IRS', 'EIN Received',
   ]
 
   const formationBeyondDataCollection = formationSds.some(sd => {

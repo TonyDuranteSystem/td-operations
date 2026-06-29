@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { Users, CheckCircle2, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// 7-stage v2 Company Formation pipeline (migration 20260617-formation-workspace-v2.sql).
+// 8-stage v2 Company Formation pipeline (migration 20260629-1000-ss4-sent-to-irs-stage.sql).
 const FORMATION_STAGES = [
   'Payment Confirmed',
   'Wizard Submitted',
@@ -13,6 +13,7 @@ const FORMATION_STAGES = [
   'Articles Received',
   'SS-4 Prepared',
   'SS-4 Signed',
+  'SS-4 Sent to IRS',
   'EIN Received',
 ]
 
@@ -183,7 +184,7 @@ export function ActiveOnboardingsCard() {
       // In-service items in early formation stages
       for (const acct of data.pipeline.in_service) {
         for (const svc of acct.services) {
-          const isEarlyFormation = FORMATION_STAGES.slice(0, 7).includes(svc.stage ?? '')
+          const isEarlyFormation = FORMATION_STAGES.includes(svc.stage ?? '')
           if (!isEarlyFormation) continue
 
           const info = getStageInfo(svc.stage, 'formation')

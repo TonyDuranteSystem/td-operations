@@ -568,7 +568,7 @@ export async function POST(req: NextRequest) {
         einSideEffects.push("SS-4 status → done")
 
         // 3. Advance Company Formation pipeline to "EIN Received" (final stage of
-        // the 7-stage v2 pipeline; replaced the removed "Post-Formation + Banking").
+        // the 8-stage v2 pipeline; stage 8).
         const { data: formationSds } = await supabaseAdmin
           .from("service_deliveries")
           .select("id")

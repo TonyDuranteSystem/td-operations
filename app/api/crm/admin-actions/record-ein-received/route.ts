@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
     const bankingSdId: string | null = null
 
     // 3. Advance Company Formation SD to "EIN Received" (final stage of the
-    // 7-stage v2 pipeline; replaced the removed "Post-Formation + Banking").
+    // 8-stage v2 pipeline; stage 8).
     const EIN_TARGET_STAGE = 'EIN Received'
     const advanceResult = await advanceStage({
       delivery_id: formationSD.id,

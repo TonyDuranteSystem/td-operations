@@ -51,8 +51,9 @@ interface StepResult {
 // ─── Stage presets — maps user selection to pipeline data ───
 
 const STAGE_PRESETS: Record<string, { service_type: string; stage_name: string; stage_order: number; portal_tier: string }> = {
-  // Company Formation — mapped to the 7-stage v2 pipeline
-  // (migration 20260617-formation-workspace-v2.sql). stage_order must match the
+  // Company Formation — mapped to the 8-stage v2 pipeline
+  // (migration 20260629-1000-ss4-sent-to-irs-stage.sql adds SS-4 Sent to IRS at
+  // order 7; EIN Received moved to order 8). stage_order must match the
   // catalog row's order so createServiceDelivery resolves the right auto_tasks.
   just_paid: {
     service_type: "Company Formation",
@@ -75,13 +76,13 @@ const STAGE_PRESETS: Record<string, { service_type: string; stage_name: string; 
   ein_received: {
     service_type: "Company Formation",
     stage_name: "EIN Received",
-    stage_order: 7,
+    stage_order: 8,
     portal_tier: "active",
   },
   everything_done: {
     service_type: "Company Formation",
     stage_name: "EIN Received",
-    stage_order: 7,
+    stage_order: 8,
     portal_tier: "active",
   },
   onboarding_data_collection: {
