@@ -825,6 +825,110 @@ export const COMPANY_INFO_FIELDS: Record<string, FieldConfig[]> = {
   ],
 }
 
+// ─── TD COMMUNICATION (Brand Audit) ───────────────────────
+// Client intake for the branding service. Two question paths chosen by the
+// enrollment's client_type (passed in as `entityType`): 'new_brand' (3 steps)
+// or 'rebrand' (2 steps). These are PLACEHOLDER questions — Cris will replace
+// the wording later; the wiring is what matters. All copy bilingual EN/IT.
+
+// Shared "Brand Preferences" block — identical in both paths.
+const TD_COMM_PREFERENCE_FIELDS: FieldConfig[] = [
+  { name: 'brand_personality', label: 'Brand personality', labelIt: 'Personalità del brand', type: 'select', required: true, options: [
+    { value: 'Professional', label: 'Professional', labelIt: 'Professionale' },
+    { value: 'Creative', label: 'Creative', labelIt: 'Creativo' },
+    { value: 'Bold', label: 'Bold', labelIt: 'Audace' },
+    { value: 'Minimalist', label: 'Minimalist', labelIt: 'Minimalista' },
+    { value: 'Luxurious', label: 'Luxurious', labelIt: 'Lussuoso' },
+    { value: 'Friendly', label: 'Friendly', labelIt: 'Amichevole' },
+    { value: 'Technical', label: 'Technical', labelIt: 'Tecnico' },
+    { value: 'Playful', label: 'Playful', labelIt: 'Giocoso' },
+  ]},
+  { name: 'color_preferences', label: 'Color preferences', labelIt: 'Colori preferiti', type: 'multiselect', required: false, hint: 'Pick any colors you would like to see in your brand', hintIt: 'Scegli i colori che vorresti vedere nel tuo brand', options: [
+    { value: 'Red', label: 'Red', labelIt: 'Rosso' },
+    { value: 'Blue', label: 'Blue', labelIt: 'Blu' },
+    { value: 'Green', label: 'Green', labelIt: 'Verde' },
+    { value: 'Yellow', label: 'Yellow', labelIt: 'Giallo' },
+    { value: 'Orange', label: 'Orange', labelIt: 'Arancione' },
+    { value: 'Purple', label: 'Purple', labelIt: 'Viola' },
+    { value: 'Black', label: 'Black', labelIt: 'Nero' },
+    { value: 'White', label: 'White', labelIt: 'Bianco' },
+    { value: 'Gold', label: 'Gold', labelIt: 'Oro' },
+    { value: 'Silver', label: 'Silver', labelIt: 'Argento' },
+  ]},
+  { name: 'style_preference', label: 'Style preference', labelIt: 'Stile preferito', type: 'select', required: true, options: [
+    { value: 'Modern', label: 'Modern', labelIt: 'Moderno' },
+    { value: 'Classic', label: 'Classic', labelIt: 'Classico' },
+    { value: 'Playful', label: 'Playful', labelIt: 'Giocoso' },
+    { value: 'Corporate', label: 'Corporate', labelIt: 'Aziendale' },
+    { value: 'Artistic', label: 'Artistic', labelIt: 'Artistico' },
+    { value: 'Minimalist', label: 'Minimalist', labelIt: 'Minimalista' },
+  ]},
+  { name: 'admired_brands', label: 'Companies whose branding you admire', labelIt: 'Aziende il cui branding ammiri', type: 'textarea', required: false, hint: 'Names or links — what do you like about them?', hintIt: 'Nomi o link — cosa ti piace di loro?' },
+]
+
+const TD_COMM_DISCLAIMER_FIELD: FieldConfig = {
+  name: 'disclaimer_accepted',
+  label: 'I confirm this information is accurate',
+  labelIt: 'Confermo che queste informazioni sono corrette',
+  type: 'checkbox',
+  required: true,
+}
+
+const TD_COMM_INDUSTRY_OPTIONS = [
+  { value: 'Consulting', label: 'Consulting', labelIt: 'Consulenza' },
+  { value: 'E-commerce', label: 'E-commerce', labelIt: 'E-commerce' },
+  { value: 'Tech', label: 'Tech', labelIt: 'Tecnologia' },
+  { value: 'Food & Beverage', label: 'Food & Beverage', labelIt: 'Food & Beverage' },
+  { value: 'Fashion', label: 'Fashion', labelIt: 'Moda' },
+  { value: 'Real Estate', label: 'Real Estate', labelIt: 'Immobiliare' },
+  { value: 'Finance', label: 'Finance', labelIt: 'Finanza' },
+  { value: 'Health', label: 'Health', labelIt: 'Salute' },
+  { value: 'Education', label: 'Education', labelIt: 'Istruzione' },
+  { value: 'Other', label: 'Other', labelIt: 'Altro' },
+]
+
+// ── New Brand path (3 steps) ──
+export const TD_COMM_NEW_BRAND_STEPS: WizardStep[] = [
+  { id: 'business', title: 'Business Information', titleIt: 'Informazioni Aziendali', description: 'Tell us about your business', descriptionIt: 'Raccontaci della tua attività' },
+  { id: 'preferences', title: 'Brand Preferences', titleIt: 'Preferenze di Brand', description: 'Your style and aesthetic', descriptionIt: 'Il tuo stile e la tua estetica' },
+  { id: 'details', title: 'Details & Review', titleIt: 'Dettagli e Revisione', description: 'Final details and materials', descriptionIt: 'Dettagli finali e materiali' },
+]
+
+export const TD_COMM_NEW_BRAND_FIELDS: Record<string, FieldConfig[]> = {
+  business: [
+    { name: 'business_name', label: 'Business name', labelIt: 'Nome dell\'attività', type: 'text', required: true },
+    { name: 'business_description', label: 'Business description', labelIt: 'Descrizione dell\'attività', type: 'textarea', required: true, aiAssist: true, hint: 'What does your business do? (you can generate a draft)', hintIt: 'Di cosa si occupa la tua attività? (puoi generare una bozza)' },
+    { name: 'industry', label: 'Industry', labelIt: 'Settore', type: 'select', required: true, options: TD_COMM_INDUSTRY_OPTIONS },
+    { name: 'target_audience', label: 'Target audience', labelIt: 'Pubblico di riferimento', type: 'textarea', required: true, hint: 'Who are your ideal customers?', hintIt: 'Chi sono i tuoi clienti ideali?' },
+  ],
+  preferences: TD_COMM_PREFERENCE_FIELDS,
+  details: [
+    { name: 'slogan', label: 'Slogan or tagline', labelIt: 'Slogan o motto', type: 'text', required: false },
+    { name: 'symbols_imagery', label: 'Specific symbols or imagery', labelIt: 'Simboli o immagini specifiche', type: 'textarea', required: false, hint: 'Anything you want represented in the logo', hintIt: 'Qualcosa che vuoi rappresentare nel logo' },
+    { name: 'anything_else', label: 'Anything else we should know', labelIt: 'Altro che dovremmo sapere', type: 'textarea', required: false },
+    { name: 'materials', label: 'Upload existing materials', labelIt: 'Carica materiali esistenti', type: 'file', required: false, hint: 'Logos, inspiration images, references', hintIt: 'Loghi, immagini di ispirazione, riferimenti' },
+    TD_COMM_DISCLAIMER_FIELD,
+  ],
+}
+
+// ── Rebrand path (2 steps) ──
+export const TD_COMM_REBRAND_STEPS: WizardStep[] = [
+  { id: 'current', title: 'Current Brand', titleIt: 'Brand Attuale', description: 'Your existing brand', descriptionIt: 'Il tuo brand esistente' },
+  { id: 'direction', title: 'New Direction', titleIt: 'Nuova Direzione', description: 'Where you want to go', descriptionIt: 'Dove vuoi andare' },
+]
+
+export const TD_COMM_REBRAND_FIELDS: Record<string, FieldConfig[]> = {
+  current: [
+    { name: 'business_name', label: 'Business name', labelIt: 'Nome dell\'attività', type: 'text', required: true },
+    { name: 'rebrand_reason', label: 'What do you want to change about your current brand?', labelIt: 'Cosa vuoi cambiare del tuo brand attuale?', type: 'textarea', required: true },
+    { name: 'current_materials', label: 'Upload current logo and brand materials', labelIt: 'Carica il logo attuale e i materiali del brand', type: 'file', required: true, hint: 'Your current logo, guidelines, anything we should see', hintIt: 'Il logo attuale, le linee guida, tutto ciò che dovremmo vedere' },
+  ],
+  direction: [
+    ...TD_COMM_PREFERENCE_FIELDS,
+    TD_COMM_DISCLAIMER_FIELD,
+  ],
+}
+
 /**
  * Get the correct steps and fields based on wizard type and entity type.
  */
@@ -884,6 +988,12 @@ export function getWizardConfig(wizardType: string, entityType?: string, banking
         steps: CLOSURE_STEPS,
         fields: CLOSURE_FIELDS,
       }
+    case 'td_communication':
+      // For this type `entityType` carries the enrollment's client_type
+      // ('new_brand' | 'rebrand'); the wizard page sets it from the enrollment.
+      return entityType === 'rebrand'
+        ? { steps: TD_COMM_REBRAND_STEPS, fields: TD_COMM_REBRAND_FIELDS }
+        : { steps: TD_COMM_NEW_BRAND_STEPS, fields: TD_COMM_NEW_BRAND_FIELDS }
     default:
       return {
         steps: FORMATION_STEPS,
