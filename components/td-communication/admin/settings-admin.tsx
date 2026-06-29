@@ -107,11 +107,11 @@ export function SettingsAdmin({ isAdmin }: { isAdmin: boolean }) {
           <p className="text-[11px] text-zinc-400 mt-1">Fallback used when a package has no delivery days set.</p>
         </div>
 
-        {/* Phase 9 placeholder */}
+        {/* Landing page editor (Phase 9) — lives in its own tab. */}
         <div className="border rounded-lg bg-white p-4">
           <h4 className="text-sm font-medium text-zinc-900 mb-1">Landing page content</h4>
-          <span className="inline-flex items-center gap-1.5 text-sm text-zinc-400 cursor-not-allowed">
-            <ExternalLink className="w-4 h-4" /> Landing page editor (coming in Phase 9)
+          <span className="inline-flex items-center gap-1.5 text-sm text-zinc-500">
+            <ExternalLink className="w-4 h-4" /> Edit the client landing page in the <strong className="font-medium">Landing Page</strong> tab.
           </span>
         </div>
 
