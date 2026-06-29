@@ -156,7 +156,7 @@ Body: ${e.body.slice(0, 400)}`
           'content-type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1500,
           system: `You are an email triage AI for Tony Durante LLC, a US business formation and tax consulting company.
 

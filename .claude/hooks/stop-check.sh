@@ -37,6 +37,13 @@ if [ "$HAS_CHANGES" = true ]; then
   fi
   echo "---"
   echo "SAVE_NEEDED=true"
+
+  # Recommend /clear when work was pushed and working tree is clean — signals task boundary
+  if [ -n "$RECENT_COMMITS" ] && [ -z "$DIRTY_FILES" ]; then
+    echo "💡 CONTEXT TIP: Recent commits landed and working tree is clean — task boundary detected."
+    echo "   Consider running /clear before the next task to prevent context accumulation."
+    echo "   (This is a recommendation only — /clear is never run automatically.)"
+  fi
 else
   echo "SAVE_NEEDED=false"
 fi
