@@ -2928,12 +2928,15 @@ export default function PortalChatsPage() {
                         )}
                         {/* Quoted reply */}
                         {replyRef && (
-                          <div className={cn(
-                            'px-2.5 py-1.5 rounded-lg text-xs mb-1.5 border-l-2',
-                            isAdmin
-                              ? 'bg-blue-500/30 border-blue-300 text-blue-100'
-                              : 'bg-zinc-200 border-zinc-400 text-zinc-600'
-                          )}>
+                          <div
+                            className={cn(
+                              'px-2.5 py-1.5 rounded-lg text-xs mb-1.5 border-l-2 cursor-pointer',
+                              isAdmin
+                                ? 'bg-blue-500/30 border-blue-300 text-blue-100 hover:bg-blue-500/40'
+                                : 'bg-zinc-200 border-zinc-400 text-zinc-600 hover:bg-zinc-300'
+                            )}
+                            onClick={() => scrollToMessage(replyRef.id)}
+                          >
                             <p className="font-medium text-[10px] mb-0.5">
                               {replyRef.sender_type === 'admin' ? 'You' : (replyRef.sender_name || 'Client')}
                             </p>

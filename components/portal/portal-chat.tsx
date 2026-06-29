@@ -765,12 +765,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     )}
                     {/* Quoted reply */}
                     {replyMsg && (
-                      <div className={cn(
-                        'px-2.5 py-1.5 rounded-lg text-xs mb-1.5 border-l-2',
-                        isOwn
-                          ? 'bg-blue-500/30 border-blue-300 text-blue-100'
-                          : 'bg-zinc-200 border-zinc-400 text-zinc-600'
-                      )}>
+                      <div
+                        className={cn(
+                          'px-2.5 py-1.5 rounded-lg text-xs mb-1.5 border-l-2 cursor-pointer',
+                          isOwn
+                            ? 'bg-blue-500/30 border-blue-300 text-blue-100 hover:bg-blue-500/40'
+                            : 'bg-zinc-200 border-zinc-400 text-zinc-600 hover:bg-zinc-300'
+                        )}
+                        onClick={() => scrollToPinned(replyMsg.id)}
+                      >
                         <p className="font-medium text-[10px] mb-0.5">
                           {replyMsg.sender_type === 'admin' ? t('chat.team') : (replyMsg.sender_name || t('chat.you'))}
                         </p>
