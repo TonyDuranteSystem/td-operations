@@ -96,6 +96,30 @@ export async function listDeliverables(enrollmentId: string): Promise<CommDelive
   return withSignedUrls(rows)
 }
 
+/**
+ * Released IMAGE deliverables across all enrollments, newest first, with signed
+ * preview URLs — backs the landing editor's "Add from deliverables" picker
+ * (Phase 9). Only released, non-deleted image files; capped for the picker.
+ */
+export async function listReleasedImageDeliverables(limit = 60): Promise<CommDeliverable[]> {
+  const { data, error } = await db
+    .from('td_comm_deliverables')
+    .select(DELIVERABLE_COLUMNS)
+    .not('released_at', 'is', null)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) throw new Error(error.message)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data ?? []).map((r: any) => shape(r))
+  const images = rows.filter((r: CommDeliverable) => {
+    const mime = (r.mime_type ?? '').toLowerCase()
+    const ext = (r.file_name?.split('.').pop() ?? '').toLowerCase()
+    return mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)
+  })
+  return withSignedUrls(images)
+}
+
 /** A single active deliverable (for ownership checks / re-signing). */
 export async function getDeliverable(delivId: string): Promise<CommDeliverable | null> {
   const { data, error } = await db

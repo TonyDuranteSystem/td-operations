@@ -1,18 +1,20 @@
 'use client'
 
 import { useCallback, useState, type ComponentType } from 'react'
-import { LayoutGrid, MessagesSquare, Settings, Bell } from 'lucide-react'
+import { LayoutGrid, MessagesSquare, Settings, Bell, LayoutTemplate } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ConversationChat } from './conversation-chat'
 import { PipelineBoard } from './pipeline-board'
 import { ProjectBriefPanel } from './project-brief-panel'
+import { LandingEditor } from './landing-editor'
 import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
 
-type Section = 'projects' | 'chat' | 'settings'
+type Section = 'projects' | 'chat' | 'landing' | 'settings'
 
 const NAV: { key: Section; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
+  { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
   { key: 'settings', label: 'Settings', icon: Settings },
 ]
 
@@ -88,7 +90,7 @@ export function CollabDashboard({
         {/* Top bar */}
         <header className="shrink-0 h-14 bg-white border-b border-zinc-200 flex items-center justify-between px-6">
           <h1 className="text-base font-semibold text-zinc-900">
-            {section === 'projects' ? 'Project Pipeline' : section === 'chat' ? 'Chat with TD' : 'Settings'}
+            {section === 'projects' ? 'Project Pipeline' : section === 'chat' ? 'Chat with TD' : section === 'landing' ? 'Landing Page' : 'Settings'}
           </h1>
           <button className="relative p-2 rounded-md hover:bg-zinc-100 text-zinc-500" aria-label="Notifications">
             <Bell className="h-4.5 w-4.5" />
@@ -109,6 +111,8 @@ export function CollabDashboard({
               <ConversationChat conversationId={conversationId} viewer={viewer} />
             </div>
           )}
+
+          {section === 'landing' && <LandingEditor canEdit />}
 
           {section === 'settings' && (
             <div className="max-w-lg">

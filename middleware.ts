@@ -75,6 +75,10 @@ const PUBLIC_PREFIXES = [
   '/welcome',
   // Portal announcements — public read for the client portal banner
   '/api/portal/announcements',
+  // TD Communication landing page content — public read (GET serves published
+  // marketing copy). The PATCH/POST/DELETE + upload sub-routes self-authenticate
+  // via resolveLandingAccess, so the startsWith match is safe.
+  '/api/td-communication/landing',
   // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session
   // and 302s the client to the checkout URL. Token-gated, no Supabase auth.
   '/pay',

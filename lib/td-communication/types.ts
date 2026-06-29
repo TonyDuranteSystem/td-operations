@@ -249,3 +249,56 @@ export interface EnrollmentStats {
   /** Average days from enrollment to delivery, over enrollments with a delivered_at; null when none. */
   avgDeliveryDays: number | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* Phase 9 — Landing page content editor (td_communication_landing setting)    */
+/* -------------------------------------------------------------------------- */
+
+/** A single portfolio showcase item on the public landing page. */
+export interface PortfolioItem {
+  /** Public image URL (uploaded to the `assets` bucket or pasted). */
+  image_url: string
+  client_name: string
+  description_en: string
+  description_it: string
+}
+
+/**
+ * The editable content of the TD Communication landing page. The layout is
+ * fixed (hero → problem → packages → portfolio → CTA); only this content is
+ * editable. `coming_soon` toggles the teaser variant vs the full landing page.
+ * Bilingual EN/IT from day one (IT falls back to EN at render when blank).
+ */
+export interface LandingContent {
+  hero_headline_en: string
+  hero_headline_it: string
+  hero_subheadline_en: string
+  hero_subheadline_it: string
+  problem_body_en: string
+  problem_body_it: string
+  cta_text_en: string
+  cta_text_it: string
+  portfolio_items: PortfolioItem[]
+  /** When true the page shows the "Coming Soon" teaser; when false, the full landing. */
+  coming_soon: boolean
+}
+
+/**
+ * The full stored state in app_settings under key 'td_communication_landing'.
+ * Two snapshots: `draft` is the editor workspace, `published` is what clients
+ * see. Publish promotes draft → published. (Mirrors the /workflows Draft/Publish
+ * model; stored as one JSONB blob like td_communication_settings.)
+ */
+export interface TdCommLandingState {
+  draft: LandingContent
+  published: LandingContent
+  published_at: string | null
+  published_by: string | null
+  updated_at: string | null
+  updated_by: string | null
+}
+
+/** What the editor reads: both snapshots + whether the draft has unpublished changes. */
+export interface LandingEditorState extends TdCommLandingState {
+  hasUnpublishedChanges: boolean
+}

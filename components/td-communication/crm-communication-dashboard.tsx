@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useState, type ComponentType } from 'react'
-import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings } from 'lucide-react'
+import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   packageLabel,
@@ -18,6 +18,7 @@ import { PackagesAdmin } from './admin/packages-admin'
 import { QuestionsAdmin } from './admin/questions-admin'
 import { EnrollmentsAdmin } from './admin/enrollments-admin'
 import { SettingsAdmin } from './admin/settings-admin'
+import { LandingEditor } from './landing-editor'
 import type {
   CommEnrollment,
   CommConversationListItem,
@@ -29,12 +30,13 @@ interface PartnerOption {
   partner_name: string | null
 }
 
-type Tab = 'projects' | 'deliverables' | 'chat' | 'enrollments' | 'packages' | 'questions' | 'settings'
+type Tab = 'projects' | 'deliverables' | 'chat' | 'landing' | 'enrollments' | 'packages' | 'questions' | 'settings'
 
 const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
   { key: 'deliverables', label: 'Deliverables', icon: Package },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
+  { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
   { key: 'enrollments', label: 'Enrollments', icon: ClipboardList },
   { key: 'packages', label: 'Packages', icon: Boxes },
   { key: 'questions', label: 'Questions', icon: HelpCircle },
@@ -199,6 +201,10 @@ export function CrmCommunicationDashboard({
           initialConversations={conversations}
           partners={partners}
         />
+      )}
+
+      {tab === 'landing' && (
+        <LandingEditor canEdit={isAdmin} />
       )}
 
       {tab === 'enrollments' && (
