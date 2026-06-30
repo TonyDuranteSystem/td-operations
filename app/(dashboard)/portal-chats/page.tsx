@@ -19,6 +19,8 @@ import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
+import { MessageReactions } from '@/components/chat/message-reactions'
+import type { MessageReaction } from '@/lib/portal/reactions'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { HelpDot } from '@/components/help/help-dot'
@@ -117,6 +119,7 @@ interface ChatMessage {
   edited_at?: string | null
   pinned_at?: string | null
   pinned_by_type?: 'client' | 'staff' | null
+  reactions?: MessageReaction[] | null
 }
 
 interface MessageAction {
@@ -235,6 +238,14 @@ export default function PortalChatsPage() {
   const [aiPanelInput, setAiPanelInput] = useState('')
   const [aiPanelLoading, setAiPanelLoading] = useState(false)
   const aiPanelEndRef = useRef<HTMLDivElement>(null)
+  // Current staff user id — used to highlight the staff member's OWN reactions
+  // (staff reactions are stored with reactor_id = auth uid). Cosmetic: if null,
+  // pills just aren't highlighted; toggling still works (server resolves identity).
+  const [meId, setMeId] = useState<string | null>(null)
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient()
+    supabase.auth.getUser().then(({ data }) => setMeId(data.user?.id ?? null)).catch(() => {})
+  }, [])
   // Emoji picker
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showInternalEmojiPicker, setShowInternalEmojiPicker] = useState(false)
@@ -2881,7 +2892,8 @@ export default function PortalChatsPage() {
                   )
 
                   return (
-                    <div key={msg.id} id={`pc-msg-${msg.id}`} className={cn('flex items-end gap-1 scroll-mt-4', isAdmin ? 'justify-end' : 'justify-start')}>
+                    <div key={msg.id} id={`pc-msg-${msg.id}`} className={cn('scroll-mt-4 flex flex-col gap-0.5', isAdmin ? 'items-end' : 'items-start')}>
+                      <div className={cn('flex items-end gap-1 max-w-full', isAdmin ? 'justify-end' : 'justify-start')}>
                       {isAdmin && actionButton}
                       <div
                         className={cn(
@@ -3044,6 +3056,16 @@ export default function PortalChatsPage() {
                         })()}
                       </div>
                       {!isAdmin && actionButton}
+                      </div>
+                      <div className={cn('px-1', isAdmin ? 'self-end' : 'self-start')}>
+                        <MessageReactions
+                          messageId={msg.id}
+                          reactions={msg.reactions}
+                          viewerReactorId={meId}
+                          align={isAdmin ? 'right' : 'left'}
+                          staffLabel="Team"
+                        />
+                      </div>
                     </div>
                   )
                 })}

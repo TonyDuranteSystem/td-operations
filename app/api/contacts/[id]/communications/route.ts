@@ -49,7 +49,7 @@ export async function GET(
     queries.push(
       supabaseAdmin
         .from("portal_messages")
-        .select("id, account_id, contact_id, sender_type, sender_id, message, attachment_url, attachment_name, read_at, reply_to_id, created_at")
+        .select("id, account_id, contact_id, sender_type, sender_id, message, attachment_url, attachment_name, read_at, reply_to_id, created_at, reactions")
         .eq("contact_id", contactId)
         .is("account_id", null)
         .order("created_at", { ascending: false })
@@ -61,7 +61,7 @@ export async function GET(
       queries.push(
         supabaseAdmin
           .from("portal_messages")
-          .select("id, account_id, contact_id, sender_type, sender_id, message, attachment_url, attachment_name, read_at, reply_to_id, created_at")
+          .select("id, account_id, contact_id, sender_type, sender_id, message, attachment_url, attachment_name, read_at, reply_to_id, created_at, reactions")
           .in("account_id", accountIds)
           .order("created_at", { ascending: false })
           .limit(100)

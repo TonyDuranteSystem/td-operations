@@ -185,7 +185,12 @@ export async function GET(request: NextRequest) {
           : await pushQuery.eq('contact_id', id)
         hasPush = !!count && count > 0
       }
-      const emailNotifs = notifications.filter(n => !(n.type === 'new_document' && hasPush))
+      // 'reaction' notifications are push/in-app ONLY (Antonio 2026-06-30) — never
+      // emailed, regardless of push state. new_document is skipped only when the
+      // client already got the publish-time push.
+      const emailNotifs = notifications.filter(n =>
+        n.type !== 'reaction' && !(n.type === 'new_document' && hasPush)
+      )
 
       // Build per-type sections (pure helper — lib/portal/digest-render.ts).
       // Types with show_body (documents) render the file name under the title.

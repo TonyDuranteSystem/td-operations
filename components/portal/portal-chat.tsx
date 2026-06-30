@@ -9,6 +9,7 @@ import { usePortalChat, type ChatScope } from '@/lib/hooks/use-portal-chat'
 import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { MessageReactions } from '@/components/chat/message-reactions'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
@@ -887,6 +888,22 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     </>
                   )}
                 </div>
+                {/* Emoji reactions strip — under the bubble, aligned to the message side.
+                    Skipped for system messages (e.g. the office-closed auto-reply): the CRM
+                    renders those as centered pills with no reaction strip, so allowing a
+                    reaction here would be invisible to staff. */}
+                {msg.sender_type !== 'system' && (
+                  <div className={cn('px-1 mb-1', isOwn ? 'flex justify-end' : 'flex justify-start')}>
+                    <MessageReactions
+                      messageId={msg.id}
+                      reactions={msg.reactions}
+                      viewerReactorId={contactId || userId}
+                      locale={locale}
+                      align={isOwn ? 'right' : 'left'}
+                      staffLabel={t('chat.team')}
+                    />
+                  </div>
+                )}
               </div>
             )
           })}

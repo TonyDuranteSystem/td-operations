@@ -10218,6 +10218,7 @@ export type Database = {
           pinned_at: string | null
           pinned_by: string | null
           pinned_by_type: string | null
+          reactions: Json
           read_at: string | null
           reply_to_id: string | null
           sender_context: string | null
@@ -10246,6 +10247,7 @@ export type Database = {
           pinned_at?: string | null
           pinned_by?: string | null
           pinned_by_type?: string | null
+          reactions?: Json
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -10274,6 +10276,7 @@ export type Database = {
           pinned_at?: string | null
           pinned_by?: string | null
           pinned_by_type?: string | null
+          reactions?: Json
           read_at?: string | null
           reply_to_id?: string | null
           sender_context?: string | null
@@ -13718,6 +13721,16 @@ export type Database = {
       }
     }
     Functions: {
+      toggle_message_reaction: {
+        Args: {
+          p_message_id: string
+          p_emoji: string
+          p_reactor_id: string
+          p_reactor_type: string
+          p_reactor_name: string | null
+        }
+        Returns: Json
+      }
       calculate_client_health: {
         Args: never
         Returns: {

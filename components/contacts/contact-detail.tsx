@@ -22,6 +22,8 @@ import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
+import { MessageReactions } from '@/components/chat/message-reactions'
+import type { MessageReaction } from '@/lib/portal/reactions'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
@@ -1611,6 +1613,7 @@ interface ChatMessage {
   read_at: string | null
   created_at: string
   source: string
+  reactions?: MessageReaction[] | null
 }
 
 interface GmailThread {
@@ -1877,6 +1880,16 @@ function ChatTab({
                         <p className="text-[10px] text-zinc-400 mt-1">
                           {formatDateTime(msg.created_at)}
                         </p>
+                        <div className="mt-1">
+                          <MessageReactions
+                            messageId={msg.id}
+                            reactions={msg.reactions}
+                            viewerReactorId={null}
+                            align={msg.sender_type === 'admin' ? 'right' : 'left'}
+                            staffLabel="Team"
+                            onReacted={fetchMessages}
+                          />
+                        </div>
                       </div>
                     </div>
                   )

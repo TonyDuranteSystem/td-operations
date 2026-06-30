@@ -1,3 +1,5 @@
+import type { MessageReaction } from './portal/reactions'
+
 export interface TaskAttachment {
   /** Publicly accessible URL (typically a Google Drive file URL). */
   url: string
@@ -489,6 +491,7 @@ export interface PortalMessage {
   pinned_by?: string | null
   pinned_by_type?: 'client' | 'staff' | null
   client_kept_unread?: boolean
+  reactions?: MessageReaction[] | null
 }
 
 export interface PortalNotification {
