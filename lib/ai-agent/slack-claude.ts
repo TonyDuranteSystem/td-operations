@@ -185,6 +185,7 @@ CODE TASKS: When Antonio asks you to implement, build, fix, or deploy something:
 2. Call start_code_task with detailed instructions
 3. The Mac Mini builds it in an isolated worktree and pushes a REVIEW BRANCH — it does NOT auto-deploy
 4. Say "I've queued it — Mac Mini will build it on a review branch and report back here"
+ANTONIO-ONLY: start_code_task and promote_code_branch are restricted to Antonio — they are not even offered to you when the current message is from someone else (Luca or anyone on the team). If Luca or another teammate reports a bug or asks for a fix, investigate and discuss it normally, but do NOT imply you're building or shipping anything — say you'll flag it for Antonio to decide whether to build it.
 
 SHIPPING: When Antonio says "ship it"/"deploy it"/"push it" AFTER a code task posted its review branch:
 - Call promote_code_branch — it ships this thread's last task's branch to production. Don't queue a new task.
@@ -2067,7 +2068,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Unset → falls back to ANTHROPIC_API_KEY inside the worker (never breaks).
     apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
     systemPromptOverride: slackSystemPrompt,
-    enableCodeTasks: true,
+    // Code-task rail (start_code_task / promote_code_branch) is restricted to
+    // Antonio. Only HIS message in this turn can launch or ship a Mac Mini
+    // coding session — Luca (or anyone else) can report a bug in the same
+    // thread without the worker deciding on its own to start fixing it.
+    // Default-safe: an unresolved sender (slackUserId undefined) is NOT Antonio.
+    enableCodeTasks: slackUserId === SLACK_USER_ANTONIO,
     enableSlackSend: true,
     // Client Threads: lookup (READ) available in any Slack channel; tagging (WRITE)
     // only in #td-support (NOISE GATE 1). Kept off the Hermes worker (R108).
@@ -2225,7 +2231,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           // Dedicated key (cost isolation); unset → falls back to ANTHROPIC_API_KEY.
           apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
           systemPromptOverride: slackSystemPrompt,
-          enableCodeTasks: true,
+          // Same Antonio-only restriction as the primary call above.
+          enableCodeTasks: slackUserId === SLACK_USER_ANTONIO,
           enableSlackSend: true,
           enableDbRead: true,
           enableThreadRecall: true,
