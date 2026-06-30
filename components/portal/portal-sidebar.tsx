@@ -452,8 +452,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   return (
     <>
-      {/* Mobile header */}
-      <div className="fixed top-0 left-0 right-0 z-40 h-14 bg-white border-b flex items-center px-4 lg:hidden">
+      {/* Mobile header. `top` is offset by --portal-vb-h (the View-as banner's
+          measured height, 0 when not in View-as) so the bar sits BELOW the
+          banner instead of being covered by it on phones. See view-as-banner.tsx. */}
+      <div
+        className="fixed left-0 right-0 z-40 h-14 bg-white border-b flex items-center px-4 lg:hidden"
+        style={{ top: 'var(--portal-vb-h, 0px)' }}
+      >
         <button
           onClick={() => setMobileOpen(true)}
           className="p-2 -ml-2 rounded-md hover:bg-zinc-100"

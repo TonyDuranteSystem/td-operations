@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { summarizeOverdue, type OverduePaymentRow, type OverdueSummary } from '@/lib/billing/overdue'
 import { NextResponse } from 'next/server'
 
 /**
@@ -122,6 +123,47 @@ export async function GET() {
     }
 
 
+    // Step 5: overdue-invoice rollup. Staff chatting with a client must see at a
+    // glance whether that client is behind on what they owe Tony Durante LLC —
+    // per company they own (A2, via account_contacts → companies on the thread)
+    // and for any contact-direct individual invoice (A6). Source of truth is the
+    // `payments` table (TD receivables); never client_invoices. We narrow to
+    // potentially-overdue statuses server-side, then summarizeOverdue() applies
+    // the exact rule (Overdue/Delinquent or Pending-past-due, excl. test rows).
+    const now = new Date()
+    const companyAccountIds = rawThreads.flatMap(r => (r.companies ?? []).map(c => c.id))
+    const overdueAccountIds = Array.from(new Set([...allAccountIds, ...companyAccountIds]))
+    const overdueByAccount: Record<string, OverdueSummary> = {}
+    const overdueByContact: Record<string, OverdueSummary> = {}
+    if (overdueAccountIds.length > 0 || contactIds.length > 0) {
+      const payOr: string[] = []
+      if (overdueAccountIds.length > 0) payOr.push(`account_id.in.(${overdueAccountIds.join(',')})`)
+      if (contactIds.length > 0) payOr.push(`contact_id.in.(${contactIds.join(',')})`)
+      const { data: payRows } = await supabaseAdmin
+        .from('payments')
+        .select('account_id, contact_id, status, due_date, amount_due, amount, total, is_test')
+        .or(payOr.join(','))
+        .in('status', ['Overdue', 'Delinquent', 'Pending'])
+      // Account-scoped invoices group by account_id; contact-direct invoices
+      // (no account_id) group by contact_id so they surface on the name, not a
+      // company pill. A row with both set counts once, under its account.
+      const rowsByAccount: Record<string, OverduePaymentRow[]> = {}
+      const rowsByContactDirect: Record<string, OverduePaymentRow[]> = {}
+      for (const raw of payRows ?? []) {
+        const p = raw as OverduePaymentRow & { account_id: string | null; contact_id: string | null }
+        if (p.account_id) (rowsByAccount[p.account_id] ??= []).push(p)
+        else if (p.contact_id) (rowsByContactDirect[p.contact_id] ??= []).push(p)
+      }
+      for (const [aid, rows] of Object.entries(rowsByAccount)) {
+        const s = summarizeOverdue(rows, now)
+        if (s) overdueByAccount[aid] = s
+      }
+      for (const [cid, rows] of Object.entries(rowsByContactDirect)) {
+        const s = summarizeOverdue(rows, now)
+        if (s) overdueByContact[cid] = s
+      }
+    }
+
     // Manually pinned conversations (staff, shared). Small table — fetch all.
     // New table — not in generated types until prod promotion; cast per codebase pattern.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -140,7 +182,8 @@ export async function GET() {
       contact_id: r.contact_id ?? null,
       company_name: r.contact_name,
       contact_name: r.contact_name,
-      companies: r.companies ?? [],
+      // Per-company overdue badge: enrich each company with its own rollup.
+      companies: (r.companies ?? []).map(c => ({ ...c, overdue: overdueByAccount[c.id] ?? null })),
       members: r.members ?? [],
       last_message: r.last_message ?? '',
       last_message_at: r.last_message_at ?? '',
@@ -148,6 +191,12 @@ export async function GET() {
       is_pinned: (!!r.account_id && pinnedAccounts.has(r.account_id)) ||
         (!!r.contact_id && pinnedContacts.has(r.contact_id)),
       active_services: resolveActiveServices(r),
+      // Name-level overdue badge: account-level threads (companies=[]) show their
+      // own account's overdue; contact-level threads show contact-direct invoices
+      // (individual A6 work). Per-company debt rides on the company pills above.
+      overdue: (r.account_id
+        ? (overdueByAccount[r.account_id] ?? null)
+        : (r.contact_id ? (overdueByContact[r.contact_id] ?? null) : null)) as OverdueSummary | null,
     }))
 
     return NextResponse.json(threads)

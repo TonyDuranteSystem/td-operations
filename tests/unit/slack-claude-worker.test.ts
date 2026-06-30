@@ -440,6 +440,9 @@ describe("processSlackEvent", () => {
         slack_channel_id: "C0BAB08DSDN",
         slack_thread_ts: "1234567890.000100",
         slack_event_ts: "1234567890.000200",
+        // Antonio is the sender — code-task tools are restricted to him (see the
+        // "restricts code tasks to Antonio's messages only" test below).
+        slack_user_id: "U0BAALR4Y4Q",
       },
     }
 
@@ -474,6 +477,88 @@ describe("processSlackEvent", () => {
     expect(mockFetch).toHaveBeenCalledWith(
       expect.stringContaining("chat.postMessage"),
       expect.objectContaining({ method: "POST" }),
+    )
+  })
+
+  it("restricts code tasks to Antonio's messages only — Luca's message gets enableCodeTasks: false", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reply: "I'll flag this for Antonio.",
+      toolsUsed: [],
+    })
+
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, ts: "1234567890.000300" }),
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn((t: string) => {
+      if (t === "client_threads") {
+        const c = makeProcessChain()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(c as any).maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }))
+        return c
+      }
+      return makeProcessChain()
+    })
+
+    const row = {
+      id: "row-id-luca-001",
+      body: "the delete button still doesn't work",
+      thread_id: "thread-luca-001",
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_thread_ts: "1234567890.000200",
+        slack_event_ts: "1234567890.000200",
+        slack_user_id: "U0B9ZUE2Q75", // Luca, not Antonio
+      },
+    }
+
+    await processSlackEvent(row)
+
+    expect(callWorker).toHaveBeenCalledWith(
+      "the delete button still doesn't work",
+      expect.objectContaining({ enableCodeTasks: false }),
+    )
+  })
+
+  it("restricts code tasks when the sender is unresolved (default-safe = false)", async () => {
+    ;(callWorker as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reply: "Noted.",
+      toolsUsed: [],
+    })
+
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, ts: "1234567890.000400" }),
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabaseAdmin as any).from = vi.fn((t: string) => {
+      if (t === "client_threads") {
+        const c = makeProcessChain()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(c as any).maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }))
+        return c
+      }
+      return makeProcessChain()
+    })
+
+    const row = {
+      id: "row-id-unknown-001",
+      body: "some message",
+      thread_id: "thread-unknown-001",
+      context_json: {
+        slack_channel_id: "C0BAB08DSDN",
+        slack_thread_ts: "1234567890.000300",
+        slack_event_ts: "1234567890.000300",
+        // no slack_user_id at all
+      },
+    }
+
+    await processSlackEvent(row)
+
+    expect(callWorker).toHaveBeenCalledWith(
+      "some message",
+      expect.objectContaining({ enableCodeTasks: false }),
     )
   })
 
