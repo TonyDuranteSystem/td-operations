@@ -611,9 +611,15 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   }
 
   return (
-    <div className="flex flex-col gap-6 lg:flex-row lg:h-[calc(100vh-8rem)] lg:overflow-hidden">
-      {/* Controls */}
-      <div className="lg:w-[280px] lg:shrink-0 lg:overflow-y-auto lg:pr-1 space-y-5">
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      {/* Controls — sticky within the dashboard's own scroll container (<main>), not a
+          guessed-height overflow box. position:sticky pins it to the nearest scrolling
+          ancestor without needing to know the page's title-block/padding height (a
+          calc(100vh-Xrem) box above this component overflowed <main> by ~76px on a
+          1440x900 desktop viewport because it couldn't see that height — measured via
+          a live Playwright check, not assumed). top-14 clears the dashboard header
+          (h-14, same scroll container) so the sidebar tucks in just below it. */}
+      <div className="lg:w-[280px] lg:shrink-0 lg:sticky lg:top-14 lg:self-start lg:max-h-[calc(100vh-4.5rem)] lg:overflow-y-auto lg:pr-1 space-y-5">
         {templates.length > 0 && (
           <div>
             <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Start from template</label>
@@ -767,8 +773,10 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
         )}
       </div>
 
-      {/* Document */}
-      <div className="flex-1 min-h-[400px] lg:overflow-y-auto rounded-lg border bg-zinc-100 p-4">
+      {/* Document — no longer height-clamped/overflow-boxed; it flows at its natural
+          height and the page (<main>) scrolls normally, which is what lets the sticky
+          sidebar above actually stay pinned while you scroll through it. */}
+      <div className="flex-1 min-h-[400px] rounded-lg border bg-zinc-100 p-4">
         {pdfBytes ? (
           <PdfViewer
             src={pdfBytes}
