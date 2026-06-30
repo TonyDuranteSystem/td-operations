@@ -96,10 +96,11 @@ describe('daysRemaining / slaIndicator / deadlineLabel', () => {
   })
 
   it('labels the countdown', () => {
-    expect(deadlineLabel('2026-06-26', now)).toBe('Overdue 2d')
+    expect(deadlineLabel('2026-06-26', now)).toBe('Overdue by 2 days')
+    expect(deadlineLabel('2026-06-27', now)).toBe('Overdue by 1 day')
     expect(deadlineLabel('2026-06-28', now)).toBe('Due today')
     expect(deadlineLabel('2026-06-29', now)).toBe('Due tomorrow')
-    expect(deadlineLabel('2026-07-03', now)).toBe('Due in 5d')
+    expect(deadlineLabel('2026-07-03', now)).toBe('Due in 5 days')
   })
 })
 

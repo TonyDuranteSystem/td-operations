@@ -117,6 +117,8 @@ export interface CommEnrollmentRow {
   form_data: Record<string, unknown>
   conversation_id: string | null
   metadata: Record<string, unknown>
+  /** Automatic SLA deadline = base + package.delivery_days (Phase 10). Null until set. */
+  deadline_at: string | null
   created_at: string
   updated_at: string
 }
@@ -124,7 +126,7 @@ export interface CommEnrollmentRow {
 /** An enrollment shaped for the board/list: subject resolved, deadline/notes lifted out of metadata. */
 export interface CommEnrollment extends CommEnrollmentRow {
   subject: EnrollmentSubject
-  /** metadata.deadline (ISO date) when present. */
+  /** Effective deadline: deadline_at (Phase 10) when set, else legacy metadata.deadline. */
   deadline: string | null
   /** metadata.notes — Cris's private notes. */
   notes: string | null
@@ -248,6 +250,10 @@ export interface EnrollmentStats {
   byStatus: Record<string, number>
   /** Average days from enrollment to delivery, over enrollments with a delivered_at; null when none. */
   avgDeliveryDays: number | null
+  /** SLA compliance % = delivered-on-time / delivered-with-a-deadline-and-delivered_at × 100; null when none qualify (Phase 10). */
+  slaCompliancePct: number | null
+  /** Count of SLA-tracked (non-terminal) enrollments currently past their deadline (Phase 10). */
+  overdueCount: number
 }
 
 /* -------------------------------------------------------------------------- */

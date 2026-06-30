@@ -30,6 +30,21 @@ import type {
 const db = supabaseAdmin as any
 
 /**
+ * The system "staff" identity used to open project conversations and post
+ * automated notices (brand-audit received, concept approved, SLA overdue).
+ * Staff-typed because comm_messages.sender_type only allows 'staff' | 'partner'
+ * (no 'system'); the sentinel id is safe — there is no FK on comm_messages
+ * sender ids / comm_participants.participant_id. Lives here (the neutral data
+ * hub) rather than in a feature module so any module can post as the system
+ * without an import cycle; re-exported from ./brand-audit for back-compat.
+ */
+export const SYSTEM_STAFF: CommParticipant = {
+  type: 'staff',
+  id: '00000000-0000-0000-0000-000000000000',
+  name: 'TD Communication',
+}
+
+/**
  * Resolve the authenticated caller into a TD Communication participant.
  * Partner with td_communication scope → { type: 'partner', id: client_partners.id }.
  * Staff (admin/team) → { type: 'staff', id: auth uid }.

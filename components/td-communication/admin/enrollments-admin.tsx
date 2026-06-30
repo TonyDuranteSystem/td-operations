@@ -3,8 +3,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2, ClipboardList } from 'lucide-react'
-import { packageLabel, subjectTypeLabel } from '@/lib/td-communication/pipeline'
+import { packageLabel, subjectTypeLabel, slaIndicator, isSlaTracked } from '@/lib/td-communication/pipeline'
 import type { CommEnrollment, EnrollmentStats, EnrollmentStatus } from '@/lib/td-communication/types'
+
+/** Color tone for the SLA compliance chip: green >90, amber 70–90, red <70. */
+function complianceTone(pct: number | null | undefined): StatTone {
+  if (pct == null) return 'zinc'
+  if (pct > 90) return 'green'
+  if (pct >= 70) return 'amber'
+  return 'red'
+}
 
 const STATUS_LABELS: Record<string, string> = {
   enrolled: 'Package Selected',
@@ -52,11 +60,23 @@ export function EnrollmentsAdmin({ onSelect }: { onSelect: (id: string) => void 
 
   useEffect(() => { void load(status) }, [load, status])
 
+  const now = new Date()
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* Stats */}
       <div className="flex flex-wrap items-center gap-2 mb-3 shrink-0">
         <StatChip label="Total" value={stats ? String(stats.total) : '—'} tone="zinc" />
+        <StatChip
+          label="SLA on-time"
+          value={stats?.slaCompliancePct != null ? `${stats.slaCompliancePct}%` : '—'}
+          tone={complianceTone(stats?.slaCompliancePct)}
+        />
+        <StatChip
+          label="Overdue"
+          value={stats ? String(stats.overdueCount) : '—'}
+          tone={stats && stats.overdueCount > 0 ? 'red' : 'zinc'}
+        />
         <StatChip
           label="Avg delivery"
           value={stats?.avgDeliveryDays != null ? `${stats.avgDeliveryDays}d` : '—'}
@@ -99,8 +119,14 @@ export function EnrollmentsAdmin({ onSelect }: { onSelect: (id: string) => void 
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {enrollments.map((e) => (
-                <tr key={e.id} onClick={() => onSelect(e.id)} className="hover:bg-blue-50 cursor-pointer">
+              {enrollments.map((e) => {
+                const overdue = isSlaTracked(e.status) && slaIndicator(e.deadline, now) === 'red'
+                return (
+                <tr
+                  key={e.id}
+                  onClick={() => onSelect(e.id)}
+                  className={overdue ? 'bg-red-50 hover:bg-red-100 cursor-pointer' : 'hover:bg-blue-50 cursor-pointer'}
+                >
                   <td className="px-3 py-2">
                     <span className="font-medium text-zinc-900">{e.subject.name}</span>
                     <span className="ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded border bg-zinc-50 text-zinc-600 border-zinc-200">
@@ -112,7 +138,8 @@ export function EnrollmentsAdmin({ onSelect }: { onSelect: (id: string) => void 
                   <td className="px-3 py-2 text-zinc-700">{fmtDate(e.created_at)}</td>
                   <td className="px-3 py-2 text-zinc-700">{fmtDate(e.deadline)}</td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -121,10 +148,19 @@ export function EnrollmentsAdmin({ onSelect }: { onSelect: (id: string) => void 
   )
 }
 
-function StatChip({ label, value, tone }: { label: string; value: string; tone: 'zinc' | 'blue' }) {
-  const toneClass = tone === 'blue' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-zinc-700 border-zinc-200'
+type StatTone = 'zinc' | 'blue' | 'green' | 'amber' | 'red'
+
+const STAT_TONE: Record<StatTone, string> = {
+  zinc: 'bg-white text-zinc-700 border-zinc-200',
+  blue: 'bg-blue-50 text-blue-700 border-blue-200',
+  green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  amber: 'bg-amber-50 text-amber-700 border-amber-200',
+  red: 'bg-red-50 text-red-700 border-red-200',
+}
+
+function StatChip({ label, value, tone }: { label: string; value: string; tone: StatTone }) {
   return (
-    <div className={`inline-flex items-baseline gap-1.5 rounded-lg border px-2.5 py-1 ${toneClass}`}>
+    <div className={`inline-flex items-baseline gap-1.5 rounded-lg border px-2.5 py-1 ${STAT_TONE[tone]}`}>
       <span className="text-sm font-semibold">{value}</span>
       <span className="text-[11px] text-zinc-500">{label}</span>
     </div>

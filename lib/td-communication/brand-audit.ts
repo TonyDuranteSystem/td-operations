@@ -17,8 +17,13 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { createConversation, insertMessage } from './queries'
-import type { CommEnrollmentRow, CommParticipant, EnrollmentClientType } from './types'
+import { createConversation, insertMessage, SYSTEM_STAFF } from './queries'
+import { ensureDeadlineAt } from './sla'
+import type { CommEnrollmentRow, EnrollmentClientType } from './types'
+
+// SYSTEM_STAFF moved to ./queries (the neutral hub) to avoid an import cycle with
+// ./sla; re-exported here so existing importers (e.g. concept-actions) still resolve it.
+export { SYSTEM_STAFF } from './queries'
 
 // ── Pure helpers (no DB — unit-tested) ──────────────────────────────────────
 
@@ -68,17 +73,7 @@ export function pickActiveClientEnrollment(
 const db = supabaseAdmin as any
 
 const ENROLLMENT_COLUMNS =
-  'id, account_id, contact_id, lead_id, partner_id, service_delivery_id, client_type, package_slug, status, form_data, conversation_id, metadata, created_at, updated_at'
-
-/** The system "staff" identity used to open the project conversation and post
- *  the submission notice. Staff-typed because comm_messages.sender_type only
- *  allows 'staff' | 'partner' (no 'system'); the sentinel id is safe — there is
- *  no FK on comm_messages.sender_id / comm_participants.participant_id. */
-export const SYSTEM_STAFF: CommParticipant = {
-  type: 'staff',
-  id: '00000000-0000-0000-0000-000000000000',
-  name: 'TD Communication',
-}
+  'id, account_id, contact_id, lead_id, partner_id, service_delivery_id, client_type, package_slug, status, form_data, conversation_id, metadata, deadline_at, created_at, updated_at'
 
 /**
  * The client's active (non-terminal) brand-audit enrollment, looked up by the
@@ -165,9 +160,10 @@ export async function submitBrandAudit(
   }
 
   // 3. Store the answers, advance status, stamp form_submitted_at, link convo.
+  const formSubmittedAt = new Date().toISOString()
   const mergedMetadata = {
     ...(enrollment.metadata ?? {}),
-    form_submitted_at: new Date().toISOString(),
+    form_submitted_at: formSubmittedAt,
   }
   const { error: updateErr } = await db
     .from('td_comm_enrollments')
@@ -176,10 +172,14 @@ export async function submitBrandAudit(
       status: 'form_submitted',
       conversation_id: conversationId,
       metadata: mergedMetadata,
-      updated_at: new Date().toISOString(),
+      updated_at: formSubmittedAt,
     })
     .eq('id', enrollment.id)
   if (updateErr) throw new Error(updateErr.message)
+
+  // 3b. Set the SLA deadline (= form_submitted_at + package.delivery_days) the
+  // first time the audit is submitted. Idempotent + never throws (Phase 10).
+  await ensureDeadlineAt(enrollment.id, formSubmittedAt)
 
   // 4. Announce the submission in the project chat.
   await insertMessage({

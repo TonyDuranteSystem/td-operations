@@ -9,7 +9,7 @@
  * Communication') is the separate client-facing label set for a linked SD.
  */
 
-import type { EnrollmentStatus, EnrollmentSubjectType } from './types'
+import type { CommEnrollment, EnrollmentStatus, EnrollmentSubjectType } from './types'
 
 /* -------------------------------------------------------------------------- */
 /* Columns                                                                     */
@@ -152,14 +152,63 @@ export const SLA_DOT: Record<SlaLevel, string> = {
   red: 'bg-red-500',
 }
 
-/** Human countdown label, e.g. "Due in 5d" / "Due tomorrow" / "Overdue 2d". */
+/** Human countdown label, e.g. "Due in 5 days" / "Due tomorrow" / "Overdue by 2 days". */
 export function deadlineLabel(deadlineISO: string | null | undefined, now: Date): string | null {
   const days = daysRemaining(deadlineISO, now)
   if (days === null) return null
-  if (days < 0) return `Overdue ${Math.abs(days)}d`
+  if (days < 0) {
+    const n = Math.abs(days)
+    return `Overdue by ${n} ${n === 1 ? 'day' : 'days'}`
+  }
   if (days === 0) return 'Due today'
   if (days === 1) return 'Due tomorrow'
-  return `Due in ${days}d`
+  return `Due in ${days} days`
+}
+
+/**
+ * Terminal statuses are NOT SLA-tracked: a delivered project is finished and a
+ * cancelled one is dead, so neither should show an overdue indicator, count
+ * toward the on-time/overdue summary, or fire an overdue alert. Everything else
+ * (enrolled → approved) is in-flight and still answerable to its deadline.
+ */
+export function isSlaTracked(status: string): boolean {
+  return status !== 'delivered' && status !== 'cancelled'
+}
+
+/**
+ * Compute an SLA deadline = `baseISO` + `deliveryDays` whole days, as an ISO
+ * timestamp. Returns null on a bad base date or a non-finite/negative day count
+ * so a missing package can never produce a NaN deadline.
+ */
+export function computeDeadlineAt(
+  baseISO: string | null | undefined,
+  deliveryDays: number | null | undefined,
+): string | null {
+  if (!baseISO || typeof baseISO !== 'string') return null
+  const base = new Date(baseISO)
+  if (isNaN(base.getTime())) return null
+  if (typeof deliveryDays !== 'number' || !Number.isFinite(deliveryDays) || deliveryDays < 0) return null
+  return new Date(base.getTime() + Math.round(deliveryDays) * 86_400_000).toISOString()
+}
+
+/**
+ * On-time / overdue counts over the SLA-tracked enrollments that have a deadline.
+ * Powers the board summary ("X on time · Y overdue"). Deterministic given `now`.
+ */
+export function slaSummary(
+  enrollments: CommEnrollment[],
+  now: Date,
+): { onTime: number; overdue: number } {
+  let onTime = 0
+  let overdue = 0
+  for (const e of enrollments) {
+    if (!isSlaTracked(e.status)) continue
+    const level = slaIndicator(e.deadline, now)
+    if (level === null) continue
+    if (level === 'red') overdue++
+    else onTime++
+  }
+  return { onTime, overdue }
 }
 
 /* -------------------------------------------------------------------------- */

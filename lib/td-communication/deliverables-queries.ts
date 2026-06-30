@@ -18,7 +18,8 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { nextStatusOnUpload, nextStatusOnReleaseFinal, nextStatusOnRelease } from './pipeline'
+import { nextStatusOnUpload, nextStatusOnReleaseFinal, nextStatusOnRelease, isSlaTracked } from './pipeline'
+import { ensureDeadlineAt } from './sla'
 import { nextVersionForConcept } from './deliverables'
 import type { CommDeliverable, DeliverableType } from './types'
 
@@ -292,6 +293,13 @@ async function advanceStatus(
       .update(update)
       .eq('id', enrollmentId)
       .eq('status', enr.status)
+
+    // Phase 10: a deliverable can be the first thing that moves a project out of
+    // 'enrolled' (staff who never ran the wizard). Give it an SLA deadline if it
+    // doesn't have one yet. Skips terminal targets; idempotent; never throws.
+    if (target !== 'enrolled' && isSlaTracked(target)) {
+      await ensureDeadlineAt(enrollmentId, new Date().toISOString())
+    }
   } catch (err) {
     console.warn('[deliverables] status auto-advance failed:', err)
   }

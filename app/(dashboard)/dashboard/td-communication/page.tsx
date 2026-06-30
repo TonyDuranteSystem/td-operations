@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { resolveCommParticipant, listConversationsForStaff } from '@/lib/td-communication/queries'
 import { listEnrollments } from '@/lib/td-communication/pipeline-queries'
+import { postOverdueAlerts } from '@/lib/td-communication/sla'
 import { CrmCommunicationDashboard } from '@/components/td-communication/crm-communication-dashboard'
 import type { CommEnrollment } from '@/lib/td-communication/types'
 
@@ -39,6 +40,10 @@ export default async function TdCommunicationPage() {
   } catch {
     initialProjects = []
   }
+
+  // Phase 10: post a one-time overdue notice in the chat for any project past
+  // its deadline that hasn't been alerted yet (no cron — checked on render).
+  await postOverdueAlerts(initialProjects)
 
   const partners = (partnersRes.data ?? []).map((p) => ({
     id: p.id as string,

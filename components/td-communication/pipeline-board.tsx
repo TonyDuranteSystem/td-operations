@@ -8,6 +8,8 @@ import {
   PIPELINE_COLUMNS,
   statusToColumn,
   slaIndicator,
+  isSlaTracked,
+  slaSummary,
   SLA_DOT,
   deadlineLabel,
   packageLabel,
@@ -41,13 +43,22 @@ function ProjectCard({
   now: Date
   onSelect: (id: string) => void
 }) {
-  const sla = slaIndicator(project.deadline, now)
-  const countdown = deadlineLabel(project.deadline, now)
+  // Terminal projects (delivered / cancelled) aren't answerable to a deadline,
+  // so they show no SLA dot, no countdown, and never an overdue tint (Phase 10).
+  const tracked = isSlaTracked(project.status)
+  const sla = tracked ? slaIndicator(project.deadline, now) : null
+  const countdown = tracked ? deadlineLabel(project.deadline, now) : null
+  const overdue = sla === 'red'
   return (
     <button
       type="button"
       onClick={() => onSelect(project.id)}
-      className="w-full text-left bg-white rounded-lg border border-zinc-200 p-3 shadow-sm hover:shadow-md hover:border-zinc-300 transition-all"
+      className={cn(
+        'w-full text-left rounded-lg border p-3 shadow-sm hover:shadow-md transition-all',
+        overdue
+          ? 'bg-red-50 border-red-300 hover:border-red-400'
+          : 'bg-white border-zinc-200 hover:border-zinc-300',
+      )}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <span className="text-sm font-semibold text-zinc-900 leading-snug line-clamp-2">
@@ -110,6 +121,8 @@ export function PipelineBoard({
   }, [projects])
 
   const visibleCount = projects.filter((p) => statusToColumn(p.status)).length
+  const summary = useMemo(() => slaSummary(projects, now), [projects, now])
+  const hasSla = summary.onTime + summary.overdue > 0
 
   if (visibleCount === 0) {
     return (
@@ -124,8 +137,26 @@ export function PipelineBoard({
   }
 
   return (
-    <div className="flex-1 overflow-x-auto">
-      <div className="flex gap-4 h-full min-w-max pb-2">
+    <div className="flex-1 min-h-0 flex flex-col">
+      {hasSla && (
+        <div className="shrink-0 mb-3 flex items-center gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 font-medium text-zinc-600">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            {summary.onTime} on time
+          </span>
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 font-medium',
+              summary.overdue > 0 ? 'text-red-600' : 'text-zinc-400',
+            )}
+          >
+            <span className={cn('h-2 w-2 rounded-full', summary.overdue > 0 ? 'bg-red-500' : 'bg-zinc-300')} />
+            {summary.overdue} overdue
+          </span>
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-x-auto">
+        <div className="flex gap-4 h-full min-w-max pb-2">
         {PIPELINE_COLUMNS.map((col) => {
           const items = byColumn[col.key]
           return (
@@ -146,6 +177,7 @@ export function PipelineBoard({
             </div>
           )
         })}
+        </div>
       </div>
     </div>
   )

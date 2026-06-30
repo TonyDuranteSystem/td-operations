@@ -13,14 +13,15 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveSubjectsBatch, resolveSubject, pickSubjectRef, buildSubject } from './subject'
-import { isEnrollmentStatus } from './pipeline'
+import { isEnrollmentStatus, isSlaTracked } from './pipeline'
+import { ensureDeadlineAt } from './sla'
 import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
 const ENROLLMENT_COLUMNS =
-  'id, account_id, contact_id, lead_id, partner_id, service_delivery_id, client_type, package_slug, status, form_data, conversation_id, metadata, created_at, updated_at'
+  'id, account_id, contact_id, lead_id, partner_id, service_delivery_id, client_type, package_slug, status, form_data, conversation_id, metadata, deadline_at, created_at, updated_at'
 
 export interface TimelineEvent {
   label: string
@@ -59,6 +60,7 @@ function shapeRow(row: any): CommEnrollmentRow {
     form_data: asObject(row.form_data),
     conversation_id: row.conversation_id ?? null,
     metadata: asObject(row.metadata),
+    deadline_at: row.deadline_at ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -78,7 +80,9 @@ function withDerived(row: CommEnrollmentRow, subject: CommEnrollment['subject'])
   return {
     ...row,
     subject,
-    deadline: deadlineOf(row.metadata),
+    // Phase 10: the real deadline_at column wins; metadata.deadline is the
+    // legacy fallback for seed rows that predate the column.
+    deadline: row.deadline_at ?? deadlineOf(row.metadata),
     notes: notesOf(row.metadata),
   }
 }
@@ -197,5 +201,13 @@ export async function setEnrollmentStatus(id: string, status: string): Promise<{
     .maybeSingle()
   if (error) throw new Error(error.message)
   if (!data) throw new Error('Enrollment not found.')
+
+  // Phase 10: the first time a project leaves 'enrolled' into an in-flight
+  // status, give it an SLA deadline. Idempotent + never throws (won't overwrite
+  // a set deadline, won't fail the status change). Skips terminal statuses.
+  if (status !== 'enrolled' && isSlaTracked(status)) {
+    await ensureDeadlineAt(id, new Date().toISOString())
+  }
+
   return { status: status as EnrollmentStatus }
 }

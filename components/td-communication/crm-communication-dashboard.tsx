@@ -8,6 +8,7 @@ import {
   subjectTypeLabel,
   deadlineLabel,
   slaIndicator,
+  isSlaTracked,
   statusToColumn,
   SLA_DOT,
 } from '@/lib/td-communication/pipeline'
@@ -154,8 +155,9 @@ export function CrmCommunicationDashboard({
             <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-0.5">
               {listProjects.map((p) => {
                 const now = new Date()
-                const sla = slaIndicator(p.deadline, now)
-                const countdown = deadlineLabel(p.deadline, now)
+                const tracked = isSlaTracked(p.status)
+                const sla = tracked ? slaIndicator(p.deadline, now) : null
+                const countdown = tracked ? deadlineLabel(p.deadline, now) : null
                 return (
                   <button
                     key={p.id}

@@ -7,6 +7,7 @@ import {
   createConversation,
 } from '@/lib/td-communication/queries'
 import { listEnrollments } from '@/lib/td-communication/pipeline-queries'
+import { postOverdueAlerts } from '@/lib/td-communication/sla'
 import { CollabDashboard } from '@/components/td-communication/collab-dashboard'
 import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
 
@@ -64,6 +65,10 @@ export default async function PartnerCommunicationPage() {
   } catch {
     initialProjects = []
   }
+
+  // Phase 10: post a one-time overdue notice in the chat for any project past
+  // its deadline that hasn't been alerted yet (no cron — checked on render).
+  await postOverdueAlerts(initialProjects)
 
   return (
     <CollabDashboard

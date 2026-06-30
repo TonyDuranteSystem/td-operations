@@ -13,6 +13,7 @@ import {
   subjectTypeLabel,
   deadlineLabel,
   slaIndicator,
+  isSlaTracked,
   SLA_DOT,
   ENROLLMENT_STATUSES,
 } from '@/lib/td-communication/pipeline'
@@ -204,8 +205,9 @@ export function ProjectBriefPanel({
 
   const now = new Date()
   const brief = project ? groupBrief(project.form_data) : { sections: [], uploads: [] }
-  const sla = project ? slaIndicator(project.deadline, now) : null
-  const countdown = project ? deadlineLabel(project.deadline, now) : null
+  const tracked = project ? isSlaTracked(project.status) : false
+  const sla = project && tracked ? slaIndicator(project.deadline, now) : null
+  const countdown = project && tracked ? deadlineLabel(project.deadline, now) : null
 
   return (
     <>

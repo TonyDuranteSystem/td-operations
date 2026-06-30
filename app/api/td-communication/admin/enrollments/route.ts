@@ -21,7 +21,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const all = await listEnrollments()
     const status = req.nextUrl.searchParams.get('status')
     const enrollments = filterByStatus(all, status)
-    const stats = computeEnrollmentStats(all)
+    const stats = computeEnrollmentStats(all, new Date())
     return NextResponse.json({ enrollments, stats })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load enrollments.'
