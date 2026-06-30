@@ -219,7 +219,7 @@ function PlacedFieldBox({
     if (e.button !== 0) return
     const target = e.target as HTMLElement
     if (target.dataset.rh) return           // resize handle
-    if (target.closest("button")) return    // delete button — don't capture, let click through
+    if (target.closest("button")) { e.stopPropagation(); return }    // delete button — don't capture, let click through
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = {
@@ -307,8 +307,10 @@ function PlacedFieldBox({
       ))}
       {/* Rendered after resize handles so it sits on top of the NE handle, which overlaps at the same corner */}
       <button
-        onClick={() => onRemove(field.id)}
-        onPointerDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); onRemove(field.id) }}
+        onPointerDown={e => { e.stopPropagation(); e.preventDefault() }}
+        onPointerUp={e => e.stopPropagation()}
+        style={{ zIndex: 20 }}
         className="absolute -right-2 -top-2 flex h-4 w-4 items-center justify-center rounded-full bg-white text-[10px] text-red-500 shadow"
       >
         ✕
@@ -609,9 +611,9 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
+    <div className="flex flex-col gap-6 lg:flex-row lg:h-[calc(100vh-8rem)] lg:overflow-hidden">
       {/* Controls */}
-      <div className="space-y-5">
+      <div className="lg:w-[280px] lg:shrink-0 lg:overflow-y-auto lg:pr-1 space-y-5">
         {templates.length > 0 && (
           <div>
             <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Start from template</label>
@@ -766,7 +768,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
       </div>
 
       {/* Document */}
-      <div className="min-h-[400px] rounded-lg border bg-zinc-100 p-4">
+      <div className="flex-1 min-h-[400px] lg:overflow-y-auto rounded-lg border bg-zinc-100 p-4">
         {pdfBytes ? (
           <PdfViewer
             src={pdfBytes}
@@ -775,6 +777,8 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
                 className="absolute inset-0 cursor-crosshair"
                 onPointerDown={e => {
                   if (e.target !== e.currentTarget) return // a field handles its own clicks
+                  const target = e.target as HTMLElement
+                  if (target.closest("button")) return // delete button click
                   placeField(page, e.clientX, e.clientY, e.currentTarget as HTMLElement)
                 }}
               >
