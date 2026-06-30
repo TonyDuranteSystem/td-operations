@@ -74,12 +74,19 @@ const ICON_REGISTRY: Record<string, React.ComponentType<{ className?: string }>>
   MessageCircle,
 }
 
+/** Overdue-invoice rollup for an account or contact (TD receivables). */
+interface OverdueSummary {
+  count: number
+  maxDays: number
+  totalDue: number
+}
+
 interface ChatThread {
   account_id: string | null
   contact_id: string | null
   company_name: string
   contact_name: string | null
-  companies: { id: string; name: string }[]
+  companies: { id: string; name: string; overdue?: OverdueSummary | null }[]
   /** Non-empty for account-level threads (multi-member LLCs) — list of member contacts */
   members: { id: string; name: string }[]
   last_message: string
@@ -89,6 +96,26 @@ interface ChatThread {
   is_pinned?: boolean
   /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
   active_services: { service_type: string; stage: string | null }[]
+  /** Overdue invoices owed to TD — account-level thread's account, or contact-direct invoices. */
+  overdue?: OverdueSummary | null
+}
+
+/** Red pill shown next to a contact name / company when invoices are overdue. */
+function OverdueBadge({ summary, className }: { summary: OverdueSummary; className?: string }) {
+  const { count, maxDays } = summary
+  const label = `${count} invoice${count === 1 ? '' : 's'}${maxDays > 0 ? ` · ${maxDays}d` : ''}`
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700',
+        className,
+      )}
+      title={`${count} overdue invoice${count === 1 ? '' : 's'}${maxDays > 0 ? ` — oldest ${maxDays} day${maxDays === 1 ? '' : 's'} past due` : ''}`}
+    >
+      <AlertCircle className="h-2.5 w-2.5 shrink-0" />
+      {label}
+    </span>
+  )
 }
 
 interface ChatAttachment {
@@ -186,7 +213,7 @@ export default function PortalChatsPage() {
   const didScrollToTargetRef = useRef(false)
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
-  const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string }[]>([])
+  const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string; overdue?: OverdueSummary | null }[]>([])
   /** Non-empty when selected thread is an account-level (multi-member LLC) thread */
   const [selectedThreadMembers, setSelectedThreadMembers] = useState<{ id: string; name: string }[]>([])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
@@ -1704,14 +1731,17 @@ export default function PortalChatsPage() {
                   <div className="flex items-center gap-2 min-w-0">
                     <User className="h-4 w-4 text-zinc-400 shrink-0" />
                     <div className="min-w-0">
-                      {thread.account_id && (thread.members ?? []).length > 0 ? (
-                        // Account-level thread: show company name linked to account
-                        <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
-                      ) : thread.contact_id ? (
-                        <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
-                      ) : (
-                        <span className="text-sm font-medium text-zinc-900 truncate block">{thread.contact_name || thread.company_name}</span>
-                      )}
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {thread.account_id && (thread.members ?? []).length > 0 ? (
+                          // Account-level thread: show company name linked to account
+                          <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
+                        ) : thread.contact_id ? (
+                          <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
+                        ) : (
+                          <span className="text-sm font-medium text-zinc-900 truncate">{thread.contact_name || thread.company_name}</span>
+                        )}
+                        {thread.overdue && <OverdueBadge summary={thread.overdue} className="shrink-0" />}
+                      </div>
                       {/* Account-level: show member names as pills */}
                       {(thread.members ?? []).length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-0.5">
@@ -1722,9 +1752,12 @@ export default function PortalChatsPage() {
                       )}
                       {/* Contact-level: show company pills */}
                       {(thread.members ?? []).length === 0 && thread.companies?.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
                           {thread.companies.map(c => (
-                            <Link key={c.id} href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
+                            <span key={c.id} className="inline-flex items-center gap-1">
+                              <Link href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
+                              {c.overdue && <OverdueBadge summary={c.overdue} className="shrink-0" />}
+                            </span>
                           ))}
                         </div>
                       )}
@@ -2252,21 +2285,27 @@ export default function PortalChatsPage() {
                 return (
                   <div className="flex items-center justify-between">
                     <div className="min-w-0">
-                      {selectedContactId ? (
-                        <Link href={`/contacts/${selectedContactId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
-                          {displayName}
-                        </Link>
-                      ) : selectedAccountId ? (
-                        <Link href={`/accounts/${selectedAccountId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
-                          {displayName}
-                        </Link>
-                      ) : (
-                        <p className="text-sm font-semibold text-zinc-900">{displayName}</p>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {selectedContactId ? (
+                          <Link href={`/contacts/${selectedContactId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
+                            {displayName}
+                          </Link>
+                        ) : selectedAccountId ? (
+                          <Link href={`/accounts/${selectedAccountId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
+                            {displayName}
+                          </Link>
+                        ) : (
+                          <p className="text-sm font-semibold text-zinc-900">{displayName}</p>
+                        )}
+                        {currentThread?.overdue && <OverdueBadge summary={currentThread.overdue} />}
+                      </div>
                       {companies.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
                           {companies.map(c => (
-                            <Link key={c.id} href={`/accounts/${c.id}`} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors">{c.name}</Link>
+                            <span key={c.id} className="inline-flex items-center gap-1">
+                              <Link href={`/accounts/${c.id}`} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors">{c.name}</Link>
+                              {c.overdue && <OverdueBadge summary={c.overdue} />}
+                            </span>
                           ))}
                         </div>
                       )}
