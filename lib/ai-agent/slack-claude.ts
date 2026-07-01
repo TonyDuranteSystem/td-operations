@@ -1610,7 +1610,8 @@ export async function detectAndSaveCorrection(params: {
   if (!botSaid?.trim()) return
 
   try {
-    // Ask Haiku to extract the business lesson (cheap, fast, JSON-only).
+    // Ask Sonnet to extract the business lesson (JSON-only). Policy: Sonnet/Opus
+    // only across all AI features — no Haiku, no GPT.
     const { text } = await callAI({
       systemPrompt:
         "Antonio (CEO of Tony Durante LLC) may be correcting a prior bot proposal. " +
@@ -1620,7 +1621,7 @@ export async function detectAndSaveCorrection(params: {
       userPrompt: `PRIOR BOT PROPOSAL:\n${botSaid.slice(0, 1000)}\n\nTHREAD CONTEXT:\n${(situation || "").slice(-1500)}\n\nANTONIO'S MESSAGE:\n${currentMessage.trim()}`,
       maxTokens: 300,
       temperature: 0,
-      model: "haiku",
+      model: "sonnet",
     })
 
     // Tolerant parse: strip code fences and grab the first {...} block.

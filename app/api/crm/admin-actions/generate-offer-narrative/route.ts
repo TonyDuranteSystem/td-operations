@@ -5,6 +5,11 @@ import { validateNarrative, renderCallForOffer } from '@/lib/offer-narrative'
 import { callAI } from '@/lib/portal/ai-provider'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
+// A rich ~4096-token Sonnet narrative runs well past the default function
+// window; give it room (proven value already used elsewhere in this codebase)
+// so the request isn't killed mid-generation.
+export const maxDuration = 300
+
 /**
  * Fetch the most recent call's notes + full transcript for this lead/account
  * from call_summaries, rendered as a context block for the offer-narrative AI.
@@ -157,11 +162,18 @@ export async function POST(req: NextRequest) {
         maxTokens: 4096,
         temperature: 0.7,
         model: 'sonnet',
+        // Large narrative generation is slow — the old 30s default silently
+        // timed this out. 90s per attempt (Sonnet → Opus fallback) fits inside
+        // the 300s maxDuration above.
+        timeoutMs: 90_000,
       })
       rawText = ai.text
     } catch (err) {
-      console.error('[generate-offer-narrative] AI generation failed:', err instanceof Error ? err.message : err)
-      return NextResponse.json({ error: 'AI generation failed' }, { status: 502 })
+      // Surface the real cause (admin-only route) instead of a generic message,
+      // so a future failure is diagnosable from the toast (R099).
+      const message = err instanceof Error ? err.message : 'AI generation failed'
+      console.error('[generate-offer-narrative] AI generation failed:', message)
+      return NextResponse.json({ error: message }, { status: 502 })
     }
 
     if (!rawText) {

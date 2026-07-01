@@ -1,49 +1,90 @@
+/**
+ * Shared AI provider for all in-app AI features.
+ *
+ * POLICY (2026-06-30, Antonio's directive): Sonnet or Opus ONLY. No Haiku, no
+ * GPT/OpenAI. Client-facing and internal AI content must come from a top-tier
+ * Anthropic model. Failover is Anthropic-internal: primary model → the other
+ * Anthropic model (Sonnet ⇄ Opus). There is intentionally no cross-provider
+ * (OpenAI) fallback anymore.
+ *
+ * TEMPERATURE SHAPING (critical): Opus 4.7+ REJECTS the `temperature` sampling
+ * parameter with a 400. Sonnet 4.6 accepts it. So `temperature` is sent only to
+ * models in MODELS_ACCEPTING_TEMPERATURE — never to Opus.
+ *
+ * TIMEOUTS: callers generating large outputs (e.g. the offer narrative, ~4096
+ * tokens) must pass an explicit `timeoutMs` AND set a matching route
+ * `maxDuration`, because a big Sonnet generation runs well past the small
+ * default. The default was too short and silently timed the offer narrative out.
+ */
+
 export interface AIRequest {
   systemPrompt: string
   userPrompt: string
   maxTokens: number
   temperature: number
   /**
-   * Which Anthropic model to use for the primary call. Defaults to 'haiku'
-   * to preserve existing behavior for all callers that don't specify it.
-   * 'sonnet' = deeper knowledge / more accurate technical answers (slower).
+   * Primary Anthropic model. Defaults to 'sonnet'. Only 'sonnet' | 'opus' are
+   * allowed — Haiku is intentionally not an option (policy above).
    */
-  model?: 'haiku' | 'sonnet'
+  model?: 'sonnet' | 'opus'
+  /**
+   * Optional per-call timeout for EACH Anthropic attempt (primary and fallback),
+   * in ms. Omit for the default. Large-output callers should raise this and set
+   * a matching route `maxDuration`.
+   */
+  timeoutMs?: number
 }
 
 export interface AIResult {
   text: string
-  provider: 'anthropic' | 'openai'
+  provider: 'anthropic'
+  /** Which Anthropic model actually produced the text. */
+  model: 'sonnet' | 'opus'
 }
 
 // Anthropic model IDs keyed by the friendly name passed in AIRequest.model.
 const ANTHROPIC_MODELS = {
-  haiku: 'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-8',
 } as const
 
-// Haiku is fast (5s is plenty). Sonnet is materially slower, especially with a
-// larger max_tokens — a 5s abort would make every Sonnet call silently fall
-// back to OpenAI, so it gets a generous timeout (still well under Vercel's 60s).
-const ANTHROPIC_TIMEOUT_MS: Record<'haiku' | 'sonnet', number> = {
-  haiku: 5_000,
-  sonnet: 30_000,
+type ModelKey = keyof typeof ANTHROPIC_MODELS
+
+// Default per-attempt timeout. Kept moderate for the frequent small-output
+// callers (chat polish, suggestions — they finish in a few seconds). Large-output
+// callers override via req.timeoutMs.
+const DEFAULT_TIMEOUT_MS = 30_000
+
+// Models that accept the `temperature` sampling parameter. Opus 4.7+ 400s on it.
+const MODELS_ACCEPTING_TEMPERATURE: ReadonlySet<ModelKey> = new Set<ModelKey>(['sonnet'])
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
 }
-const OPENAI_TIMEOUT_MS = 20_000
 
 /**
- * Call Claude (primary). Model selected by req.model (default Haiku).
- * Throws on error or timeout.
+ * Call one Anthropic model. Throws on error or timeout.
+ * `temperature` is included only for models that accept it (never Opus).
  */
-async function callAnthropic(req: AIRequest): Promise<string> {
+async function callAnthropic(req: AIRequest, modelKey: ModelKey): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
-  const modelKey = req.model ?? 'haiku'
   const modelId = ANTHROPIC_MODELS[modelKey]
+  const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS
+
+  const body: Record<string, unknown> = {
+    model: modelId,
+    max_tokens: req.maxTokens,
+    system: req.systemPrompt,
+    messages: [{ role: 'user', content: req.userPrompt }],
+  }
+  if (MODELS_ACCEPTING_TEMPERATURE.has(modelKey)) {
+    body.temperature = req.temperature
+  }
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS[modelKey])
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -53,91 +94,53 @@ async function callAnthropic(req: AIRequest): Promise<string> {
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: modelId,
-        max_tokens: req.maxTokens,
-        system: req.systemPrompt,
-        messages: [{ role: 'user', content: req.userPrompt }],
-        temperature: req.temperature,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     })
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(`Anthropic API error ${res.status}: ${JSON.stringify(err)}`)
+      throw new Error(`Anthropic API error ${res.status} (${modelId}): ${JSON.stringify(err)}`)
     }
 
     const data = await res.json()
     const text = data.content?.[0]?.text?.trim()
-    if (!text) throw new Error('Empty response from Anthropic')
+    if (!text) throw new Error(`Empty response from Anthropic (${modelId})`)
     return text
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-/**
- * Call GPT-4o-mini (fallback). Throws on error or timeout.
- */
-async function callOpenAI(req: AIRequest): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS)
-
-  try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: req.systemPrompt },
-          { role: 'user', content: req.userPrompt },
-        ],
-        max_tokens: req.maxTokens,
-        temperature: req.temperature,
-      }),
-      signal: controller.signal,
-    })
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(`OpenAI API error ${res.status}: ${JSON.stringify(err)}`)
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') {
+      throw new Error(`Anthropic timed out after ${timeoutMs}ms (${modelId})`)
     }
-
-    const data = await res.json()
-    const text = data.choices?.[0]?.message?.content?.trim()
-    if (!text) throw new Error('Empty response from OpenAI')
-    return text
+    throw e
   } finally {
     clearTimeout(timeout)
   }
 }
 
 /**
- * Call AI with automatic failover: Claude Haiku (primary) → GPT-4o-mini (fallback).
- * Logs which provider was used for monitoring.
+ * Call AI with Anthropic-internal failover: primary model → the other model.
+ * Sonnet ⇄ Opus only. No Haiku, no OpenAI. On total failure, throws an error
+ * whose message carries BOTH underlying causes so the caller can surface it
+ * (no more opaque "AI generation failed").
  */
 export async function callAI(req: AIRequest): Promise<AIResult> {
+  const primary: ModelKey = req.model ?? 'sonnet'
+  const fallback: ModelKey = primary === 'sonnet' ? 'opus' : 'sonnet'
+
   try {
-    const text = await callAnthropic(req)
-    console.warn(`[ai-provider] Used: anthropic/${ANTHROPIC_MODELS[req.model ?? 'haiku']}`)
-    return { text, provider: 'anthropic' }
+    const text = await callAnthropic(req, primary)
+    console.warn(`[ai-provider] Used: anthropic/${ANTHROPIC_MODELS[primary]}`)
+    return { text, provider: 'anthropic', model: primary }
   } catch (primaryErr) {
-    console.error('[ai-provider] Anthropic failed, falling back to OpenAI:', primaryErr instanceof Error ? primaryErr.message : primaryErr)
+    console.error(`[ai-provider] ${primary} failed, falling back to ${fallback}:`, errMsg(primaryErr))
     try {
-      const text = await callOpenAI(req)
-      console.warn('[ai-provider] Used: openai/gpt-4o-mini (fallback)')
-      return { text, provider: 'openai' }
+      const text = await callAnthropic(req, fallback)
+      console.warn(`[ai-provider] Used: anthropic/${ANTHROPIC_MODELS[fallback]} (fallback)`)
+      return { text, provider: 'anthropic', model: fallback }
     } catch (fallbackErr) {
-      console.error('[ai-provider] Both providers failed. OpenAI error:', fallbackErr instanceof Error ? fallbackErr.message : fallbackErr)
-      throw new Error('All AI providers failed')
+      const detail = `${primary}: ${errMsg(primaryErr)} | ${fallback}: ${errMsg(fallbackErr)}`
+      console.error('[ai-provider] Both Anthropic models failed:', detail)
+      throw new Error(`All AI models failed — ${detail}`)
     }
   }
 }
