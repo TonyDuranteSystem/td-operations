@@ -345,10 +345,9 @@ export function registerBankStatementTools(server: McpServer) {
           return rate === 1 ? amount : amount / rate
         }
 
-        // Category detail rows for the sheets
-        const income = transactions.filter(t => t.category === "income")
+        // Category groupings used by the text summary below (the workbook's own
+        // groupings live in the shared engine now).
         const cogs = transactions.filter(t => t.category === "cogs")
-        const expenses = transactions.filter(t => ["expense", "fee", "refund"].includes(t.category))
         const distributions = transactions.filter(t => t.category === "distribution")
         const uncategorized = transactions.filter(t => t.category === "uncategorized")
 
@@ -377,270 +376,31 @@ export function registerBankStatementTools(server: McpServer) {
           }
         }
 
-        // Generate Excel
-        const ExcelJS = (await import("exceljs")).default
-        const workbook = new ExcelJS.Workbook()
-
-        // ── Sheet 1: P&L Statement ──
-        const plSheet = workbook.addWorksheet("P&L Statement")
-
-        // Header
-        plSheet.columns = [
-          { header: "", key: "label", width: 40 },
-          { header: primaryCurrency, key: "original", width: 18 },
-          { header: "USD", key: "usd", width: 18 },
-        ]
-        plSheet.getRow(1).font = { bold: true }
-
-        const addPlRow = (label: string, amount: number, bold = false, indent = 0) => {
-          const prefix = "  ".repeat(indent)
-          const row = plSheet.addRow({
-            label: `${prefix}${label}`,
-            original: amount,
-            usd: toUSD(amount, primaryCurrency),
-          })
-          if (bold) row.font = { bold: true }
-          row.getCell("original").numFmt = "#,##0.00"
-          row.getCell("usd").numFmt = "$#,##0.00"
-          return row
-        }
-
-        plSheet.addRow({ label: `${ctx.companyName}` }).font = { bold: true, size: 14 }
-        plSheet.addRow({ label: `Profit & Loss Statement — Tax Year ${tax_year}` }).font = { bold: true }
-        plSheet.addRow({ label: `IRS Exchange Rate: 1 ${primaryCurrency} / ${irsRate} = USD` })
-        plSheet.addRow({})
-
-        // Revenue breakdown by subcategory
-        addPlRow("REVENUE", 0, true)
-        const incomeBySubcat: Record<string, number> = {}
-        for (const t of income) {
-          const sub = t.subcategory || "other"
-          incomeBySubcat[sub] = (incomeBySubcat[sub] || 0) + Number(t.amount)
-        }
-        for (const [sub, amt] of Object.entries(incomeBySubcat)) {
-          addPlRow(sub.replace(/_/g, " "), amt, false, 1)
-        }
-        addPlRow("Total Revenue", totalIncome, true)
-        plSheet.addRow({})
-
-        // COGS
-        if (cogs.length > 0) {
-          addPlRow("COST OF SERVICES", 0, true)
-          const cogsBySubcat: Record<string, number> = {}
-          for (const t of cogs) {
-            const sub = t.subcategory || "other"
-            cogsBySubcat[sub] = (cogsBySubcat[sub] || 0) + Math.abs(Number(t.amount))
-          }
-          for (const [sub, amt] of Object.entries(cogsBySubcat)) {
-            addPlRow(sub.replace(/_/g, " "), -amt, false, 1)
-          }
-          addPlRow("Total COGS", -totalCogs, true)
-          plSheet.addRow({})
-        }
-
-        addPlRow("GROSS PROFIT", grossProfit, true)
-        plSheet.addRow({})
-
-        // Operating expenses
-        addPlRow("OPERATING EXPENSES", 0, true)
-        const expBySubcat: Record<string, number> = {}
-        for (const t of expenses) {
-          const sub = t.subcategory || "other"
-          expBySubcat[sub] = (expBySubcat[sub] || 0) + Math.abs(Number(t.amount))
-        }
-        for (const [sub, amt] of Object.entries(expBySubcat)) {
-          addPlRow(sub.replace(/_/g, " "), -amt, false, 1)
-        }
-        addPlRow("Total Operating Expenses", -totalExpenses, true)
-        plSheet.addRow({})
-
-        addPlRow("NET INCOME", netIncome, true)
-        plSheet.addRow({})
-        plSheet.addRow({})
-
-        // K-1 Allocation
-        addPlRow("K-1 ALLOCATION", 0, true)
-        for (const member of ctx.members) {
-          const pct = member.ownership_pct / 100
-          addPlRow(`${member.name} (${member.ownership_pct}%)`, netIncome * pct, false, 1)
-        }
-        plSheet.addRow({})
-
-        // Distributions
-        addPlRow("DISTRIBUTIONS", 0, true)
+        // distByMember — the year's distributions grouped by member. Kept here
+        // because the text summary below reports it; the workbook itself is built
+        // by the ONE shared engine, not in this file.
         const distByMember: Record<string, number> = {}
         for (const t of distributions) {
           const name = t.counterparty || "Unknown"
           distByMember[name] = (distByMember[name] || 0) + Math.abs(Number(t.amount))
         }
-        for (const [name, amt] of Object.entries(distByMember)) {
-          addPlRow(name, -amt, false, 1)
-        }
-        addPlRow("Total Distributions", -totalDistributions, true)
 
-        // ── Sheet 2: Balance Sheet ──
-        const bsSheet = workbook.addWorksheet("Balance Sheet")
-        bsSheet.columns = [
-          { header: "", key: "label", width: 40 },
-          { header: primaryCurrency, key: "original", width: 18 },
-          { header: "USD", key: "usd", width: 18 },
-        ]
-        bsSheet.getRow(1).font = { bold: true }
-
-        const addBsRow = (label: string, amount: number, bold = false, indent = 0) => {
-          const prefix = "  ".repeat(indent)
-          const row = bsSheet.addRow({
-            label: `${prefix}${label}`,
-            original: amount,
-            usd: toUSD(amount, primaryCurrency),
-          })
-          if (bold) row.font = { bold: true }
-          row.getCell("original").numFmt = "#,##0.00"
-          row.getCell("usd").numFmt = "$#,##0.00"
-          return row
-        }
-
-        bsSheet.addRow({ label: `${ctx.companyName} — Balance Sheet as of 12/31/${tax_year}` }).font = { bold: true, size: 14 }
-        bsSheet.addRow({ label: "Schedule L (Form 1065)" }).font = { bold: true }
-        bsSheet.addRow({})
-
-        // Assets
-        addBsRow("ASSETS", 0, true)
-        let totalAssets = 0
-        for (const [acct, bal] of Object.entries(accountBalances)) {
-          addBsRow(`Cash — ${acct}`, bal, false, 1)
-          totalAssets += bal
-        }
-        addBsRow("Total Assets", totalAssets, true)
-        bsSheet.addRow({})
-
-        // Liabilities
-        addBsRow("LIABILITIES", 0, true)
-        addBsRow("Total Liabilities", 0, true)
-        bsSheet.addRow({})
-
-        // Partners' Equity
-        const equity = totalAssets // Assets = Liabilities + Equity
-        addBsRow("PARTNERS' EQUITY", 0, true)
-        addBsRow("Net Income", netIncome, false, 1)
-        addBsRow("Less: Distributions", -totalDistributions, false, 1)
-        const fxAdjustment = equity - netIncome + totalDistributions
-        if (Math.abs(fxAdjustment) > 0.01) {
-          addBsRow("Beginning Capital + FX Adjustment", fxAdjustment, false, 1)
-        }
-        addBsRow("Total Partners' Equity", equity, true)
-        bsSheet.addRow({})
-
-        // Check formula
-        const check = totalAssets - 0 - equity
-        addBsRow("CHECK: Assets - Liabilities - Equity", check, true)
-
-        // ── Sheet 3: Income Detail ──
-        const incSheet = workbook.addWorksheet("Income Detail")
-        incSheet.columns = [
-          { header: "Date", key: "date", width: 12 },
-          { header: "Description", key: "desc", width: 45 },
-          { header: "Counterparty", key: "cp", width: 25 },
-          { header: "Subcategory", key: "sub", width: 18 },
-          { header: primaryCurrency, key: "original", width: 15 },
-          { header: "USD", key: "usd", width: 15 },
-          { header: "Related Party", key: "rp", width: 12 },
-          { header: "Reference", key: "ref", width: 20 },
-        ]
-        incSheet.getRow(1).font = { bold: true }
-
-        for (const t of income) {
-          const row = incSheet.addRow({
-            date: t.transaction_date,
-            desc: t.description,
-            cp: t.counterparty,
-            sub: t.subcategory,
-            original: Number(t.amount),
-            usd: toUSD(Number(t.amount), t.currency),
-            rp: t.is_related_party ? "Yes" : "",
-            ref: t.transaction_ref,
-          })
-          row.getCell("original").numFmt = "#,##0.00"
-          row.getCell("usd").numFmt = "$#,##0.00"
-        }
-        // Total row
-        const incTotal = incSheet.addRow({
-          desc: "TOTAL",
-          original: totalIncome,
-          usd: toUSD(totalIncome, primaryCurrency),
-        })
-        incTotal.font = { bold: true }
-        incTotal.getCell("original").numFmt = "#,##0.00"
-        incTotal.getCell("usd").numFmt = "$#,##0.00"
-
-        // ── Sheet 4: Expense Detail ──
-        const expSheet = workbook.addWorksheet("Expense Detail")
-        expSheet.columns = [
-          { header: "Date", key: "date", width: 12 },
-          { header: "Description", key: "desc", width: 45 },
-          { header: "Counterparty", key: "cp", width: 25 },
-          { header: "Category", key: "cat", width: 15 },
-          { header: "Subcategory", key: "sub", width: 18 },
-          { header: primaryCurrency, key: "original", width: 15 },
-          { header: "USD", key: "usd", width: 15 },
-          { header: "Related Party", key: "rp", width: 12 },
-          { header: "Reference", key: "ref", width: 20 },
-        ]
-        expSheet.getRow(1).font = { bold: true }
-
-        const allExpenses = [...cogs, ...expenses]
-        for (const t of allExpenses) {
-          const amt = Number(t.amount)
-          const row = expSheet.addRow({
-            date: t.transaction_date,
-            desc: t.description,
-            cp: t.counterparty,
-            cat: t.category,
-            sub: t.subcategory,
-            original: amt,
-            usd: toUSD(amt, t.currency),
-            rp: t.is_related_party ? "Yes" : "",
-            ref: t.transaction_ref,
-          })
-          row.getCell("original").numFmt = "#,##0.00"
-          row.getCell("usd").numFmt = "$#,##0.00"
-        }
-
-        // ── Sheet 5: Distributions ──
-        const distSheet = workbook.addWorksheet("Distributions")
-        distSheet.columns = [
-          { header: "Date", key: "date", width: 12 },
-          { header: "Member", key: "member", width: 30 },
-          { header: "Description", key: "desc", width: 40 },
-          { header: primaryCurrency, key: "original", width: 15 },
-          { header: "USD", key: "usd", width: 15 },
-          { header: "Reference", key: "ref", width: 20 },
-        ]
-        distSheet.getRow(1).font = { bold: true }
-
-        for (const t of distributions) {
-          const amt = Number(t.amount)
-          const row = distSheet.addRow({
-            date: t.transaction_date,
-            member: t.counterparty,
-            desc: t.description,
-            original: amt,
-            usd: toUSD(amt, t.currency),
-            ref: t.transaction_ref,
-          })
-          row.getCell("original").numFmt = "#,##0.00"
-          row.getCell("usd").numFmt = "$#,##0.00"
-        }
-
-        // Write to buffer
-        const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
+        // ── SINGLE ENGINE ── build the 5-sheet P&L / Balance Sheet workbook via
+        // generatePnlExcel, the SAME hardened engine the tax wizard uses
+        // (comparative Schedule M-2 balance sheet, signed contra-expense,
+        // multi-currency). This tool previously hand-rolled its own ExcelJS
+        // workbook — an older copy that had drifted to a single-year balance
+        // sheet with an FX-adjustment plug (flagged by Antonio as inaccurate).
+        // Delegating removes that duplicate so the manual and automatic P&L
+        // paths always produce the identical file.
+        const { generatePnlExcel } = await import("@/lib/pnl-generator")
+        const { buffer, fileName } = await generatePnlExcel(account_id, tax_year)
 
         // Upload to Drive
         let driveLink = ""
         if (upload_to_drive && ctx.driveFolderId) {
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)
           const targetFolder = taxFolderId || ctx.driveFolderId
-          const fileName = `${ctx.companyName} - PnL ${tax_year}.xlsx`
 
           const uploaded = (await uploadBinaryToDrive(
             fileName, buffer,

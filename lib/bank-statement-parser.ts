@@ -644,6 +644,11 @@ export interface ParseOptions {
   /** Tax year being processed — the year anchor for exports whose dates
    *  carry no year (Slash: "Dec 30"). */
   taxYear?: number
+  /** Hard-disable the AI extraction fallback for THIS call — deterministic CSV
+   *  parsers only, no network, no timeout risk. An unrecognized layout returns
+   *  an empty result instead of invoking the model. Used by the SYNCHRONOUS
+   *  /tools/pnl external mode, which must never run AI inside the request. */
+  disableAi?: boolean
 }
 
 const aiDisabled = () => process.env.BANK_STATEMENT_AI_DISABLED === "true"
@@ -811,10 +816,11 @@ export async function parseBankStatement(
   // Everything else (Mercury/Relay/Chase/unknown bank) OR a Wise parse that found
   // 0 rows → bank-agnostic AI extraction with reconciliation guard.
   if (isCsv || isPdf) {
-    if (aiDisabled()) {
+    if (aiDisabled() || opts?.disableAi) {
+      const reason = opts?.disableAi ? "AI extraction disabled for this call" : "AI extraction disabled (BANK_STATEMENT_AI_DISABLED)"
       return {
         transactions: [], bank_name: "unknown", currency: "USD", account_holder: "", period: "",
-        errors: [`No transactions parsed and AI extraction disabled (BANK_STATEMENT_AI_DISABLED) for ${fileName}`],
+        errors: [`No transactions parsed and ${reason} for ${fileName}`],
         extraction_method: "unknown",
       }
     }

@@ -35,6 +35,7 @@ docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/
 docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/,lib/ai-agent/thread-summaries.ts,lib/ai-agent/thread-routing.ts,lib/ai-agent/thread-context.ts,lib/ai-agent/thread-recall.ts,lib/mcp/tools/agent-threads.ts,lib/ai-agent/approval-env.ts,lib/ai-agent/approval-executor.ts,lib/mcp/tools/agent-approvals.ts,lib/ai-agent/telegram-notify.ts
 docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,lib/ai-agent/slack-file-reader.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/,app/(dashboard)/code-tasks/,app/api/code-tasks/,lib/code-tasks/,scripts/mac-mini/
 docs/systems/fax.md|app/api/tools/fax/,app/(dashboard)/tools/fax/,components/flows/fax-irs.tsx
+docs/systems/pnl-engine.md|lib/pnl-generator.ts,lib/pnl-external.ts,app/api/tools/pnl/,app/(dashboard)/tools/pnl/
 docs/systems/client-threads.md|scripts/migrations/20260621-1500-create-client-threads.sql,scripts/migrations/20260621-1510-backfill-client-threads-from-conversations.sql,app/(dashboard)/conversations/,components/conversations/
 docs/systems/messaging.md|lib/mcp/tools/messaging.ts,lib/messaging/,app/api/inbox/new-whatsapp/,app/api/inbox/
 docs/systems/esign.md|lib/esign/,lib/operations/esign.ts,lib/jobs/handlers/esign-send-email.ts,app/api/esign/,app/api/sign/,app/(dashboard)/tools/esign/,app/sign/,app/portal/sign/esign/,components/esign/,app/api/cron/esign-reminders/,scripts/migrations/20260626-1500-esign-schema.sql

@@ -12,6 +12,7 @@ import {
   Wrench,
   Printer,
   PenLine,
+  FileSpreadsheet,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -47,6 +48,12 @@ const TOOLS: ToolTile[] = [
       { label: 'New Envelope', href: '/tools/esign/new' },
       { label: 'Envelopes', href: '/tools/esign' },
     ],
+  },
+  {
+    name: 'Generate P&L',
+    href: '/tools/pnl',
+    description: 'Build a P&L + Balance Sheet — for an existing client from their bank data, or for any company from uploaded bank CSVs.',
+    icon: FileSpreadsheet,
   },
   {
     name: 'System Health',

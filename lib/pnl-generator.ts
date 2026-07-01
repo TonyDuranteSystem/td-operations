@@ -38,8 +38,24 @@ interface PnlResult {
   uncategorizedCount: number
 }
 
+/**
+ * Input to the pure workbook builder. `transactions` / `priorTransactions` are
+ * the `bank_transactions` row shape today (CRM path); the external /tools/pnl
+ * path (M3) maps its in-memory parsed transactions into the same shape so both
+ * callers feed one engine.
+ */
+export interface BuildPnlWorkbookInput {
+  companyName: string
+  members: MemberInfo[]
+  taxYear: number
+  transactions: BankTxRow[]
+  priorTransactions: BankTxRow[]
+  rates: Record<string, number>
+  priorRates: Record<string, number>
+}
+
 /** Get IRS exchange rate for a currency/year */
-async function getIrsRate(currency: string, taxYear: number): Promise<number> {
+export async function getIrsRate(currency: string, taxYear: number): Promise<number> {
   if (currency === "USD") return 1
   const { data } = await supabaseAdmin
     .from("irs_exchange_rates")
@@ -219,6 +235,33 @@ export async function generatePnlExcel(
     }
   }
 
+  return buildPnlWorkbook({
+    companyName: ctx.companyName,
+    members: ctx.members,
+    taxYear,
+    transactions,
+    priorTransactions,
+    rates,
+    priorRates,
+  })
+}
+
+/**
+ * Pure workbook builder — NO DB access. Given a company's identity + members
+ * and its already-fetched current + prior year transactions plus the IRS rates,
+ * produce the 5-sheet P&L / Balance Sheet workbook. This is THE single engine:
+ * generatePnlExcel (the CRM path) and the standalone /tools/pnl external path
+ * both call it, so identical inputs always yield identical output.
+ */
+export async function buildPnlWorkbook(input: BuildPnlWorkbookInput): Promise<PnlResult> {
+  const { companyName, members, taxYear, transactions, priorTransactions, rates, priorRates } = input
+
+  if (transactions.length === 0) {
+    throw new Error("No transactions provided to buildPnlWorkbook.")
+  }
+
+  const hasPriorYear = (priorTransactions?.length || 0) > 0
+
   const toUSD = (amount: number, currency: string) => {
     const rate = rates[currency] || 1
     return rate === 1 ? amount : amount / rate
@@ -293,7 +336,7 @@ export async function generatePnlExcel(
       ]
   plSheet.getRow(1).font = { bold: true }
 
-  plSheet.addRow({ label: ctx.companyName }).font = { bold: true, size: 14 }
+  plSheet.addRow({ label: companyName }).font = { bold: true, size: 14 }
   plSheet.addRow({ label: `Profit & Loss Statement -- Tax Year ${taxYear}` }).font = { bold: true }
   if (isMultiCurrency) plSheet.addRow({ label: `IRS Exchange Rate: 1 ${primaryCurrency} / ${irsRate} = USD` })
   plSheet.addRow({})
@@ -340,7 +383,7 @@ export async function generatePnlExcel(
 
   // K-1 Allocation
   addRow(plSheet, "K-1 ALLOCATION", 0, true)
-  for (const member of ctx.members) addRow(plSheet, `${member.name} (${member.ownership_pct}%)`, netIncome * member.ownership_pct / 100, false, 1)
+  for (const member of members) addRow(plSheet, `${member.name} (${member.ownership_pct}%)`, netIncome * member.ownership_pct / 100, false, 1)
   plSheet.addRow({})
 
   // Distributions
@@ -381,7 +424,7 @@ export async function generatePnlExcel(
         { header: `${taxYear} USD`, key: "curr_usd", width: 18 },
       ]
   bsSheet.getRow(1).font = { bold: true }
-  bsSheet.addRow({ label: `${ctx.companyName} -- Comparative Balance Sheet` }).font = { bold: true, size: 14 }
+  bsSheet.addRow({ label: `${companyName} -- Comparative Balance Sheet` }).font = { bold: true, size: 14 }
   bsSheet.addRow({ label: `As of 12/31/${taxYear - 1} vs 12/31/${taxYear}` }).font = { italic: true }
   if (!hasPriorYear) bsSheet.addRow({ label: `Note: No prior year (${taxYear - 1}) data available` }).font = { italic: true, color: { argb: "FF888888" } }
   bsSheet.addRow({})
@@ -504,7 +547,7 @@ export async function generatePnlExcel(
 
   // Write buffer
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
-  const fileName = `${ctx.companyName} - PnL ${taxYear}.xlsx`
+  const fileName = `${companyName} - PnL ${taxYear}.xlsx`
 
   const summary = [
     `Revenue: ${primaryCurrency} ${totalIncome.toFixed(2)} ($${toUSD(totalIncome, primaryCurrency).toFixed(2)})`,
