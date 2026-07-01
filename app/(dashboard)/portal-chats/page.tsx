@@ -86,7 +86,10 @@ interface ChatThread {
   contact_id: string | null
   company_name: string
   contact_name: string | null
-  companies: { id: string; name: string; overdue?: OverdueSummary | null }[]
+  companies: { id: string; name: string; overdue?: OverdueSummary | null; closed?: boolean }[]
+  /** True when this is an account-level thread whose own account is Closed/Cancelled
+   *  (hidden from the client portal — messages sent here never reach the client). */
+  account_closed?: boolean
   /** Non-empty for account-level threads (multi-member LLCs) — list of member contacts */
   members: { id: string; name: string }[]
   last_message: string
@@ -213,7 +216,7 @@ export default function PortalChatsPage() {
   const didScrollToTargetRef = useRef(false)
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
-  const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string; overdue?: OverdueSummary | null }[]>([])
+  const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string; overdue?: OverdueSummary | null; closed?: boolean }[]>([])
   /** Non-empty when selected thread is an account-level (multi-member LLC) thread */
   const [selectedThreadMembers, setSelectedThreadMembers] = useState<{ id: string; name: string }[]>([])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
@@ -1443,8 +1446,30 @@ export default function PortalChatsPage() {
     Array.from(e.dataTransfer.files).forEach(file => handleAdminFileSelect(file))
   }
 
+  // ─── Closed-account send guard ──────────────────────────────────────────────
+  // The client portal hides Closed/Cancelled/Delinquent/Pending-Formation accounts
+  // (lib/portal/queries.ts getPortalAccounts → status IN Active/Suspended). A staff
+  // message tagged to such an account (account_id = closed) is therefore NEVER seen
+  // by the client. Detect when the current send target is a closed account and block
+  // it: for a contact thread the target is the selected "Send as" company; for an
+  // account-level (multi-member LLC) thread it's the thread's own account.
+  const currentThreadForGuard = threads?.find(t =>
+    selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId,
+  )
+  const selectedClosedCompany = selectedThreadCompanies.find(c => c.id === selectedCompanyId && c.closed)
+  const sendingToClosedAccount = selectedAccountId
+    ? !!currentThreadForGuard?.account_closed
+    : !!selectedClosedCompany
+  const closedTargetName = selectedAccountId
+    ? (currentThreadForGuard?.company_name ?? 'This company')
+    : (selectedClosedCompany?.name ?? 'This company')
+
   const handleSend = async () => {
     if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
+    if (sendingToClosedAccount) {
+      toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "No tag".`)
+      return
+    }
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
 
@@ -1717,7 +1742,13 @@ export default function PortalChatsPage() {
                     setSelectedThreadContactId(thread.contact_id)
                     setSelectedThreadMembers([])
                     setSelectedThreadCompanies(companies)
-                    setSelectedCompanyId(companies[0]?.id ?? null)
+                    // Default the send target to the first ACTIVE company. A closed
+                    // account is hidden from the client portal, so defaulting to it
+                    // (e.g. when it sorts first alphabetically) would silently send
+                    // into a thread the client can't see. If every company is closed,
+                    // default to null ("No tag") — an untagged message still reaches
+                    // the client's personal view.
+                    setSelectedCompanyId(companies.find(c => !c.closed)?.id ?? null)
                   }
                   setSidebarView('chats')
                 }}
@@ -2303,7 +2334,20 @@ export default function PortalChatsPage() {
                         <div className="flex flex-wrap items-center gap-1 mt-0.5">
                           {companies.map(c => (
                             <span key={c.id} className="inline-flex items-center gap-1">
-                              <Link href={`/accounts/${c.id}`} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors">{c.name}</Link>
+                              <Link
+                                href={`/accounts/${c.id}`}
+                                className={cn(
+                                  'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded transition-colors',
+                                  c.closed
+                                    ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                    : 'bg-zinc-100 text-zinc-500 hover:bg-blue-50 hover:text-blue-600',
+                                )}
+                                title={c.closed ? `${c.name} — CLOSED company. The client can't see messages sent here.` : c.name}
+                              >
+                                {c.closed && <XCircle className="h-2.5 w-2.5 shrink-0" />}
+                                {c.name}
+                                {c.closed && <span className="font-semibold uppercase tracking-wide">Closed</span>}
+                              </Link>
                               {c.overdue && <OverdueBadge summary={c.overdue} />}
                             </span>
                           ))}
@@ -3269,14 +3313,20 @@ export default function PortalChatsPage() {
                       type="button"
                       onClick={() => setSelectedCompanyId(c.id)}
                       className={cn(
-                        'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[180px] truncate',
-                        selectedCompanyId === c.id
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-white border text-zinc-600 hover:bg-zinc-100'
+                        'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[200px] truncate inline-flex items-center gap-1',
+                        c.closed
+                          ? (selectedCompanyId === c.id
+                              ? 'bg-red-600 text-white'
+                              : 'bg-white border border-red-200 text-red-600 hover:bg-red-50')
+                          : (selectedCompanyId === c.id
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-white border text-zinc-600 hover:bg-zinc-100')
                       )}
-                      title={c.name}
+                      title={c.closed ? `${c.name} — CLOSED company. The client cannot see messages sent here.` : c.name}
                     >
-                      {c.name}
+                      {c.closed && <XCircle className="h-3 w-3 shrink-0" />}
+                      <span className="truncate">{c.name}</span>
+                      {c.closed && <span className="text-[9px] font-semibold uppercase tracking-wide shrink-0">Closed</span>}
                     </button>
                   ))}
                   <button
@@ -3292,6 +3342,21 @@ export default function PortalChatsPage() {
                     No tag
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Closed-account warning — the selected send target is a closed account
+                the client can't see in their portal. Sending is blocked. */}
+            {sendingToClosedAccount && (
+              <div className="px-3 py-2 border-t bg-red-50 flex items-start gap-2 shrink-0">
+                <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+                <p className="text-[12px] text-red-700 leading-snug">
+                  <span className="font-semibold">{closedTargetName}</span> is a closed company — the client
+                  can&apos;t see messages sent here.{' '}
+                  {selectedAccountId
+                    ? 'This conversation is archived.'
+                    : 'Pick an active company above, or “No tag”, to reach the client.'}
+                </p>
               </div>
             )}
 
@@ -3403,8 +3468,12 @@ export default function PortalChatsPage() {
                 ) : (replyText.trim() || pendingAdminFiles.length > 0) ? (
                   <button
                     onClick={handleSend}
-                    disabled={uploadingAdminFile}
-                    className="w-12 h-12 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors"
+                    disabled={uploadingAdminFile || sendingToClosedAccount}
+                    title={sendingToClosedAccount ? `${closedTargetName} is closed — the client can't see messages here.` : undefined}
+                    className={cn(
+                      'w-12 h-12 rounded-full text-white disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors',
+                      sendingToClosedAccount ? 'bg-red-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700',
+                    )}
                   >
                     <Send className="h-5 w-5" />
                   </button>

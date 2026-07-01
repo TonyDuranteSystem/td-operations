@@ -177,13 +177,35 @@ export async function GET() {
       (pinnedRows ?? []).map(r => r.contact_id).filter((x): x is string => !!x)
     )
 
+    // Closed-account flags. The client portal hides Closed/Cancelled/Delinquent/
+    // Pending-Formation accounts (lib/portal/queries.ts getPortalAccounts →
+    // status IN Active/Suspended), so a staff message tagged to such an account
+    // never reaches the client. Flag them so the inbox can warn + block sending
+    // into a dead thread (per-company on contact threads, per-account on
+    // account-level multi-member threads).
+    const statusAccountIds = Array.from(new Set([...allAccountIds, ...companyAccountIds]))
+    const closedAccountIds = new Set<string>()
+    if (statusAccountIds.length > 0) {
+      const { data: statusRows } = await supabaseAdmin
+        .from('accounts')
+        .select('id, status')
+        .in('id', statusAccountIds)
+      for (const row of statusRows ?? []) {
+        const s = (row.status as string | null) ?? ''
+        if (s !== 'Active' && s !== 'Suspended') closedAccountIds.add(row.id as string)
+      }
+    }
+
     const threads = rawThreads.map(r => ({
       account_id: r.account_id ?? null,
       contact_id: r.contact_id ?? null,
       company_name: r.contact_name,
       contact_name: r.contact_name,
       // Per-company overdue badge: enrich each company with its own rollup.
-      companies: (r.companies ?? []).map(c => ({ ...c, overdue: overdueByAccount[c.id] ?? null })),
+      // `closed` = client portal can't see this company's thread (see above).
+      companies: (r.companies ?? []).map(c => ({ ...c, overdue: overdueByAccount[c.id] ?? null, closed: closedAccountIds.has(c.id) })),
+      // Account-level (multi-member) thread whose own account is closed.
+      account_closed: !!r.account_id && closedAccountIds.has(r.account_id),
       members: r.members ?? [],
       last_message: r.last_message ?? '',
       last_message_at: r.last_message_at ?? '',
