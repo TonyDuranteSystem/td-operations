@@ -1,9 +1,52 @@
 'use client'
 
 import { useState } from 'react'
-import { Building2 } from 'lucide-react'
+import { Building2, Upload, Loader2 } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { TaxFinancialsReview } from '@/components/portal/tax-financials-review'
+
+/** Staff-only prior-year-return upload — feeds the beginning-balance carry-forward. */
+function PriorReturnUpload({ accountId, taxYear, onDone }: { accountId: string; taxYear: number; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function upload(file: File) {
+    setBusy(true); setMsg(null)
+    try {
+      const fd = new FormData()
+      fd.set('account_id', accountId)
+      fd.set('tax_year', String(taxYear))
+      fd.set('file', file)
+      const res = await fetch('/api/portal/tax-financials/prior-return', { method: 'POST', body: fd })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Upload failed.')
+      setMsg({ ok: d.status !== 'failed', text: d.message || 'Uploaded.' })
+      if (d.status !== 'failed') onDone()
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Upload failed.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-white px-4 py-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm">
+          <span className="font-medium text-zinc-800">Prior-year return ({taxYear - 1})</span>
+          <span className="text-xs text-zinc-500 ml-2">carries the beginning balances forward</span>
+        </div>
+        <label className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-blue-300 hover:bg-blue-50 cursor-pointer">
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          Upload PDF
+          <input type="file" accept=".pdf,application/pdf" className="hidden" disabled={busy}
+            onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = '' }} />
+        </label>
+      </div>
+      {msg && <p className={`text-xs ${msg.ok ? 'text-green-700' : 'text-red-700'}`}>{msg.text}</p>}
+    </div>
+  )
+}
 
 /**
  * Staff standalone entry to the existing tax-financials system. Pick any client
@@ -18,6 +61,7 @@ export function StaffFinancials({ defaultYear }: { defaultYear: number }) {
   const [accountName, setAccountName] = useState<string | undefined>()
   const [year, setYear] = useState(String(defaultYear))
   const [open, setOpen] = useState<{ accountId: string; accountName: string; taxYear: number } | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   if (open) {
     return (
@@ -36,7 +80,8 @@ export function StaffFinancials({ defaultYear }: { defaultYear: number }) {
             Change client / year
           </button>
         </div>
-        <TaxFinancialsReview accountId={open.accountId} taxYear={open.taxYear} locale="en" mode="staff" />
+        <PriorReturnUpload accountId={open.accountId} taxYear={open.taxYear} onDone={() => setRefreshKey(k => k + 1)} />
+        <TaxFinancialsReview key={refreshKey} accountId={open.accountId} taxYear={open.taxYear} locale="en" mode="staff" />
       </div>
     )
   }
