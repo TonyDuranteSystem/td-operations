@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json()
-  const { account_id, contact_id, service_type, notes } = body
+  const { account_id, contact_id, service_type, notes, skip_invoice } = body
 
   if (!service_type) {
     return NextResponse.json({ error: 'service_type is required' }, { status: 400 })
@@ -109,13 +109,22 @@ export async function POST(request: NextRequest) {
     // Auto-create the TD invoice (per Antonio 2026-05-18). Fire-and-forget —
     // SD remains canonical; invoice is convenience. Client sees the invoice
     // in their portal TD Billing section (R092 — no email with pay link).
-    const invoice = await createAutoInvoiceForSD({
-      sdId: data.id,
-      serviceType: service_type,
-      serviceName,
-      accountId: data.account_id ?? null,
-      contactId: data.contact_id ?? null,
-    })
+    //
+    // `skip_invoice` (2026-07-01): staff opt-out for services that were ALREADY
+    // paid — e.g. an ITIN bundled into a formation offer and paid in full, then
+    // provisioned manually later. The auto-invoice has no way to know the
+    // service was pre-paid (bundle prices live in a single line/description, or
+    // predate the offer system entirely — Danilo Belliggiano incident), so
+    // adding it here would double-bill. When the box is ticked we skip the draft.
+    const invoice = skip_invoice
+      ? { ok: false as const, reason: 'skipped: staff marked service already paid' }
+      : await createAutoInvoiceForSD({
+          sdId: data.id,
+          serviceType: service_type,
+          serviceName,
+          accountId: data.account_id ?? null,
+          contactId: data.contact_id ?? null,
+        })
 
     return NextResponse.json({ success: true, data, invoice })
   } catch (e) {

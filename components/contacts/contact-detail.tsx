@@ -2188,6 +2188,7 @@ function ContactAddServiceDialog({ open, onClose, contactId, existingTypes }: {
   const [serviceType, setServiceType] = useState('')
   const [notes, setNotes] = useState('')
   const [creating, setCreating] = useState(false)
+  const [skipInvoice, setSkipInvoice] = useState(false)
   const [options, setOptions] = useState<ContactServiceOption[]>([])
   const [loadingOptions, setLoadingOptions] = useState(false)
 
@@ -2219,14 +2220,17 @@ function ContactAddServiceDialog({ open, onClose, contactId, existingTypes }: {
     const res = await fetch('/api/crm/admin-actions/create-service', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contact_id: contactId, service_type: serviceType, notes: notes.trim() || undefined }),
+      body: JSON.stringify({ contact_id: contactId, service_type: serviceType, notes: notes.trim() || undefined, skip_invoice: skipInvoice }),
     })
     const data = await res.json()
     setCreating(false)
     if (data.success) {
-      toast.success(`${serviceType} created — workflow + topic auto-spawned in portal-chats`)
+      toast.success(skipInvoice
+        ? `${serviceType} created (no invoice) — workflow + topic auto-spawned in portal-chats`
+        : `${serviceType} created — workflow + topic auto-spawned in portal-chats`)
       setServiceType('')
       setNotes('')
+      setSkipInvoice(false)
       onClose()
       router.refresh()
     } else {
@@ -2234,7 +2238,7 @@ function ContactAddServiceDialog({ open, onClose, contactId, existingTypes }: {
     }
   }
 
-  const handleClose = () => { setServiceType(''); setNotes(''); onClose() }
+  const handleClose = () => { setServiceType(''); setNotes(''); setSkipInvoice(false); onClose() }
 
   return (
     <>
@@ -2277,6 +2281,14 @@ function ContactAddServiceDialog({ open, onClose, contactId, existingTypes }: {
                 placeholder="Optional notes…"
                 className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
             </div>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={skipInvoice} onChange={e => setSkipInvoice(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-zinc-300" />
+              <span>
+                Already paid — don&apos;t create an invoice
+                <span className="block text-xs text-muted-foreground">Tick this when the service was already paid (e.g. ITIN bundled into a formation offer). Otherwise a draft invoice is auto-created.</span>
+              </span>
+            </label>
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={handleClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">Cancel</button>
               <button onClick={handleCreate} disabled={creating || !serviceType}
