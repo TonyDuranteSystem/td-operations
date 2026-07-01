@@ -541,6 +541,38 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         </section>
       )}
 
+      {/* Some statements already landed but MORE are still processing — the P&L
+          below is INCOMPLETE. The multi-bank case: the old condition
+          (transactionCount === 0) hid this signal the moment the first file
+          landed, so a partial P&L looked final and a just-uploaded file looked
+          like it "didn't run" (B&P multi-bank, 2026-07-01). Keep the signal
+          visible whenever anything is in flight, and offer a manual refresh so
+          staff aren't blind between the 20s poll / the safety-net cron. */}
+      {view && view.ingestPending > 0 && view.transactionCount > 0 && (
+        <section className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-900">
+              {it
+                ? `${view.ingestPending} estratto/i ancora in elaborazione — il prospetto qui sotto è INCOMPLETO`
+                : `${view.ingestPending} more statement(s) still processing — the P&L below is INCOMPLETE`}
+            </p>
+            <p className="text-xs text-amber-800 mt-1 max-w-xl">
+              {it
+                ? 'Carica tutti gli estratti conto (ogni banca) prima di scaricare o confermare, e aspetta che finiscano. La pagina si aggiorna da sola ogni 20 secondi.'
+                : 'Upload all the bank statements (every bank) before you download or confirm, and wait for them to finish. This page refreshes on its own every 20 seconds.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={busy !== null}
+            className="shrink-0 inline-flex items-center rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {it ? 'Aggiorna' : 'Check now'}
+          </button>
+        </section>
+      )}
+
       {/* No statements yet (and nothing processing) — show an empty state with
           the uploader instead of a misleading all-zeros P&L. This is the case
           a client hits right after the form is submitted but before any
