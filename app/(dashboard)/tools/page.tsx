@@ -50,9 +50,9 @@ const TOOLS: ToolTile[] = [
     ],
   },
   {
-    name: 'Generate P&L',
+    name: 'P&L / Balance Sheet',
     href: '/tools/pnl',
-    description: 'Build a P&L + Balance Sheet — for an existing client from their bank data, or for any company from uploaded bank CSVs.',
+    description: 'Run the tax-financials review for any client — upload statements + prior-year return, review, and download the P&L and Balance Sheet.',
     icon: FileSpreadsheet,
   },
   {

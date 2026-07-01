@@ -76,8 +76,13 @@ const activeAnswerOf = (g: QuestionGroup) => CATEGORY_TO_ANSWER[g.current_catego
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId: string; taxYear: number; locale: string }) {
+export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client' }: { accountId: string; taxYear: number; locale: string; mode?: 'staff' | 'client' }) {
   const it = locale === 'it'
+  // Staff mode (standalone /tools/pnl): same review + categorization + gates +
+  // Excel, but the client-only affordances are hidden — the client attestation
+  // (staff aren't the client attesting) and the portal-wizard "edit my info"
+  // link. Defaults to 'client' so the portal screen is unchanged.
+  const isStaff = mode === 'staff'
   const [view, setView] = useState<View | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -498,13 +503,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
             ? 'Preparati da noi sui tuoi estratti conto — controlla, rispondi alle domande rimaste e conferma.'
             : 'Prepared by us from your bank statements — check them, answer what remains, and confirm.'}
         </p>
-        <p className="text-xs text-zinc-500 mt-2">
-          {it ? 'Hai sbagliato qualcosa che hai inserito? ' : 'Made a mistake in something you entered? '}
-          <a href="/portal/wizard?type=tax" className="font-semibold text-blue-700 underline hover:text-blue-900">
-            {it ? 'Modifica le tue informazioni' : 'Edit my information'}
-          </a>
-          {it ? '. Le tue risposte e le categorie già scelte restano salvate.' : '. Your answers and the categories you already chose stay saved.'}
-        </p>
+        {!isStaff && (
+          <p className="text-xs text-zinc-500 mt-2">
+            {it ? 'Hai sbagliato qualcosa che hai inserito? ' : 'Made a mistake in something you entered? '}
+            <a href="/portal/wizard?type=tax" className="font-semibold text-blue-700 underline hover:text-blue-900">
+              {it ? 'Modifica le tue informazioni' : 'Edit my information'}
+            </a>
+            {it ? '. Le tue risposte e le categorie già scelte restano salvate.' : '. Your answers and the categories you already chose stay saved.'}
+          </p>
+        )}
       </div>
 
       {error && (
@@ -926,7 +933,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
               {it ? 'Scarica Excel (P&L + Stato Patrimoniale)' : 'Download Excel (P&L + Balance Sheet)'}
             </a>
 
-            {attested ? (
+            {!isStaff && (attested ? (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
                 {it ? 'Confermato — grazie. Procediamo noi da qui.' : 'Confirmed — thank you. We take it from here.'}
               </div>
@@ -983,7 +990,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale }: { accountId:
                   </p>
                 )}
               </div>
-            )}
+            ))}
           </section>
         </>
       )}
