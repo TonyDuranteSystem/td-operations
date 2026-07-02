@@ -15,6 +15,7 @@ import { handleInvoiceReminder } from "./handlers/invoice-reminder"
 import { handleIngestBankStatement } from "./handlers/ingest-bank-statement"
 import { handleIngestWorkspaceStatement } from "./handlers/ingest-workspace-statement"
 import { handleRecategorizeAi } from "./handlers/recategorize-ai"
+import { handleRecategorizeWorkspaceAi } from "./handlers/recategorize-workspace-ai"
 import { handleEsignSendEmail } from "./handlers/esign-send-email"
 
 type JobHandler = (job: Job) => Promise<JobResult>
@@ -43,6 +44,9 @@ const handlers: Record<string, JobHandler> = {
   // got the Vercel function torn down → upload returned a 500 to the client
   // even though ingestion succeeded. Now awaited inside the worker.
   recategorize_ai: handleRecategorizeAi,
+  // Added 2026-07-02 — workspace twin of recategorize_ai, enqueued by the
+  // Generate P&L action (one AI pass per generation, never on a partial set).
+  recategorize_workspace_ai: handleRecategorizeWorkspaceAi,
   // Added 2026-06-27 — e-sign signer-invite emails (durable, retried).
   esign_send_email: handleEsignSendEmail,
 }

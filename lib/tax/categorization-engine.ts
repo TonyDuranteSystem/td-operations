@@ -25,7 +25,7 @@ import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 const db = supabaseAdmin as any
 import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, detectOwnEntityTransfers, type TransferCandidate } from "./transfer-matcher"
-import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions } from "./ai-categorizer"
+import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion } from "./ai-categorizer"
 import { getExpenseBuckets } from "./expense-buckets"
 
 export interface CategorizationRule {
@@ -222,6 +222,27 @@ export function computeRecategorizationUpdates(
  * - rules may recategorize an AI-tagged row (rule wins, "ai:" tag cleared),
  *   but a re-run never downgrades an AI-categorized row back to uncategorized
  */
+/**
+ * PURE (workspace AI parity, 2026-07-02): decide what ONE AI suggestion does to
+ * a row. The policy — high-confidence suggestions apply a category ONLY to
+ * still-uncategorized rows (tagged "ai:high"); every suggestion's lean/bucket
+ * is recorded as an advisory hint; anything else is a no-op. Shared by the
+ * client path (below) and the workspace AI pass so the policy can never drift.
+ */
+export function decideAiSuggestion(
+  s: AiSuggestion,
+  effectiveCategory: string | undefined,
+): { applied: boolean; update: { category?: CategorizedTransaction["category"]; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string } | null } {
+  const hint: { ai_lean?: string; ai_bucket?: string } = {}
+  if (s.lean) hint.ai_lean = s.lean
+  if (s.bucket) hint.ai_bucket = s.bucket
+  if (s.confidence === "high" && effectiveCategory === "uncategorized") {
+    return { applied: true, update: { category: s.category, subcategory: s.subcategory, notes: "ai:high", ...hint } }
+  }
+  if (hint.ai_lean || hint.ai_bucket) return { applied: false, update: hint }
+  return { applied: false, update: null }
+}
+
 export async function recategorizeAccountYear(
   accountId: string,
   taxYear: number,
@@ -319,23 +340,14 @@ export async function recategorizeAccountYear(
       )
       aiErrors = ai.errors
       for (const s of ai.suggestions) {
-        // ADVISORY review hints (#2): recorded for EVERY suggestion (any
-        // confidence) so the client review can pre-sort by bucket + pre-tag the
-        // business/personal lean. They NEVER change the bookkeeping category.
-        const hint: { ai_lean?: string; ai_bucket?: string } = {}
-        if (s.lean) hint.ai_lean = s.lean
-        if (s.bucket) hint.ai_bucket = s.bucket
-        // Category is APPLIED only when the row is still uncategorized — a rule or
-        // the AI must never re-categorize a row the deterministic pass already
-        // booked (and never auto-decide personal: that's the owner's call). For
-        // already-booked rows we record the advisory hints only.
+        // Shared pure policy (decideAiSuggestion): high-confidence applies a
+        // category only to still-uncategorized rows (tagged "ai:high"); every
+        // suggestion's lean/bucket lands as an advisory hint; hints never
+        // change the bookkeeping category of an already-booked row.
         const effCat = updates.get(s.id)?.category ?? catById.get(s.id)
-        if (s.confidence === "high" && effCat === "uncategorized") {
-          updates.set(s.id, { ...updates.get(s.id), category: s.category, subcategory: s.subcategory, notes: "ai:high", ...hint })
-          aiCategorized++
-        } else if (hint.ai_lean || hint.ai_bucket) {
-          updates.set(s.id, { ...updates.get(s.id), ...hint })
-        }
+        const d = decideAiSuggestion(s, effCat)
+        if (d.update) updates.set(s.id, { ...updates.get(s.id), ...d.update })
+        if (d.applied) aiCategorized++
       }
     }
   }

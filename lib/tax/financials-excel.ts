@@ -133,6 +133,14 @@ export async function buildFinancialsWorkbook(input: FinancialsExcelInput): Prom
   addRow(bs, "Net Income", draft.pnl.netIncome, false, 1)
   addRow(bs, "Less: Distributions", -draft.pnl.totalDistributions, false, 1)
   addRow(bs, "Total Partners' Equity (ending capital)", draft.ending_capital_total, true)
+  // Reconciling line (2026-07-02): uncategorized rows move cash (they're inside
+  // ending_cash) but not equity (excluded from netIncome) — so the sheet is out
+  // of balance by EXACTLY their net. Name the gap instead of leaving a mystery
+  // CHECK failure.
+  if (draft.pnl.uncategorizedCount > 0) {
+    const recon = addRow(bs, `⚠ Unclassified cash movement (${draft.pnl.uncategorizedCount} uncategorized transactions — categorize to balance)`, draft.pnl.uncategorizedTotal, false, 1)
+    recon.font = { bold: true, color: { argb: "FFCC0000" } }
+  }
   const checkRow = addRow(bs, "CHECK: Assets − Liabilities − Equity", draft.total_assets - draft.total_liabilities - draft.ending_capital_total, true)
   if (Math.abs(draft.total_assets - draft.total_liabilities - draft.ending_capital_total) > 1) {
     checkRow.font = { bold: true, color: { argb: "FFCC0000" } }

@@ -117,6 +117,37 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       else if (e.failed) ingestFailed++
     }
 
+    // Smart-categorization job still running? The UI keeps polling and shows
+    // "AI is categorizing…" instead of a final-looking question list.
+    const { count: aiPendingCount } = await supabaseAdmin
+      .from('job_queue')
+      .select('id', { count: 'exact', head: true })
+      .eq('job_type', 'recategorize_workspace_ai')
+      .eq('related_entity_id', workspaceId)
+      .in('status', ['pending', 'processing'])
+
+    // Generate stage (Antonio, 2026-07-02): NULL generated_at = upload mode —
+    // the UI shows the statement manager and a "Generate P&L" button, no
+    // totals. `stale` = statements were ingested AFTER the last generation, so
+    // the rendered totals no longer match the data → the UI asks to Regenerate.
+    const { data: wsRow } = await db
+      .from('pnl_workspaces')
+      .select('generated_at')
+      .eq('id', workspaceId)
+      .maybeSingle()
+    const generatedAt = (wsRow?.generated_at as string | null) ?? null
+    let stale = false
+    if (generatedAt) {
+      const { data: newest } = await db
+        .from('pnl_workspace_transactions')
+        .select('created_at')
+        .eq('workspace_id', workspaceId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      stale = !!newest?.created_at && String(newest.created_at) > generatedAt
+    }
+
     return NextResponse.json({
       ...view,
       questions,
@@ -128,6 +159,9 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ingestFailed,
       attested: false, // workspaces have no attestation
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
+      generated_at: generatedAt,
+      stale,
+      aiPending: aiPendingCount ?? 0,
     })
   } catch (err) {
     console.error('[tools/pnl] view failed:', err)

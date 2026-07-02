@@ -151,9 +151,20 @@ export function computePnlTotals(
   const uncategorizedCount = opts.defaultUncategorizedBySign ? 0 : uncategorized.length
   const uncategorizedTotal = opts.defaultUncategorizedBySign ? 0 : uncategorized.reduce((s, t) => s + Number(t.amount), 0)
 
+  // Folded-visibility fields (2026-07-02, B&P $594k incident): under the by-sign
+  // policy the totals LOOK complete (uncategorizedCount is forced to 0 for gate 6)
+  // while unclassified money is silently inside income/expenses. These additive
+  // fields expose what was folded so a surface can WARN instead of pretending
+  // completeness. Zero when folding is off (nothing was folded — the rows sit in
+  // the visible uncategorized bucket instead).
+  const foldedUncategorizedCount = opts.defaultUncategorizedBySign ? uncategorized.length : 0
+  const foldedUncategorizedIncome = opts.defaultUncategorizedBySign ? uncatIncome.reduce((s, t) => s + Number(t.amount), 0) : 0
+  const foldedUncategorizedExpense = opts.defaultUncategorizedBySign ? -uncatExpense.reduce((s, t) => s + Number(t.amount), 0) : 0
+
   return {
     totalIncome, totalCogs, grossProfit, totalExpenses, netIncome,
     totalDistributions, totalContributions, uncategorizedCount, uncategorizedTotal,
+    foldedUncategorizedCount, foldedUncategorizedIncome, foldedUncategorizedExpense,
   }
 }
 

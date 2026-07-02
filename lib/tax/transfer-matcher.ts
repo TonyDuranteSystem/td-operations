@@ -72,6 +72,24 @@ export function normalizeEntityName(s: string): string {
     .trim()
 }
 
+/** Collapse runs of single-letter tokens into one word: "b p international" →
+ *  "bp international". Banks routinely drop the "&"/dots that produced the
+ *  split ("B&P International" appears as "BP International" in wire text), so
+ *  self-reference matching must recognize both spellings. Exported for tests. */
+export function nameVariants(normalized: string): string[] {
+  const toks = normalized.split(" ").filter(Boolean)
+  const merged: string[] = []
+  let run = ""
+  for (const t of toks) {
+    if (t.length === 1) { run += t; continue }
+    if (run) { merged.push(run); run = "" }
+    merged.push(t)
+  }
+  if (run) merged.push(run)
+  const collapsed = merged.join(" ")
+  return collapsed !== normalized ? [normalized, collapsed] : [normalized]
+}
+
 export interface OwnEntityRow {
   id: string
   description?: string | null
@@ -82,10 +100,12 @@ export interface OwnEntityRow {
 export interface OwnEntityOptions {
   /** The company's own legal name(s) / own-account labels. */
   ownNames: string[]
-  /** Categories a mis-booked self-transfer could be sitting in. Deliberately
-   *  EXCLUDES distribution/contribution (owner equity — member-name precedence)
-   *  and income/cogs/conversion, so this never reclassifies a real sale, an
-   *  owner draw, or an already-matched transfer. */
+  /** Categories a mis-booked self-transfer could be sitting in (contains-match
+   *  path). Deliberately EXCLUDES distribution/contribution (owner equity —
+   *  member-name precedence) and cogs/conversion. `income` is NOT part of this
+   *  set either — income rows are handled by a separate, STRICTER path inside
+   *  the detector (exact counterparty == own name), so a real sale can never
+   *  be swallowed by a contains-match. */
   matchableCategories?: string[]
 }
 
@@ -104,10 +124,23 @@ const OWN_ENTITY_MATCHABLE = ["uncategorized", "expense", "fee"]
  */
 export function detectOwnEntityTransfers(rows: OwnEntityRow[], opts: OwnEntityOptions): string[] {
   const matchable = new Set(opts.matchableCategories ?? OWN_ENTITY_MATCHABLE)
-  const names = Array.from(new Set(opts.ownNames.map(normalizeEntityName))).filter(n => n.length >= 5)
+  const names = Array.from(new Set(opts.ownNames.map(normalizeEntityName).flatMap(nameVariants))).filter(n => n.length >= 5)
   if (names.length === 0) return []
   const hits: string[] = []
   for (const r of rows) {
+    // INCOME self-payments (2026-07-02, B&P €29,269 incident): the Wise
+    // built-in books "Received money from <own company> — BUSINESS EXPENSES"
+    // as income BEFORE this pass runs, and income was untouchable — so the
+    // company's own Chase→Wise moves stayed inside revenue. Income rows get a
+    // STRICTER path than the contains-match below: reclassify only when the
+    // normalized COUNTERPARTY *equals* an own-name (money whose payer IS the
+    // company itself is never revenue). A real customer with a merely similar
+    // name ("B&P International Consulting GmbH") can never be swallowed.
+    if (r.category === "income") {
+      const cp = normalizeEntityName(r.counterparty ?? "")
+      if (cp && nameVariants(cp).some(v => names.includes(v))) hits.push(r.id)
+      continue
+    }
     if (!matchable.has(r.category)) continue
     const hay = normalizeEntityName(`${r.description ?? ""} ${r.counterparty ?? ""}`)
     if (!hay) continue

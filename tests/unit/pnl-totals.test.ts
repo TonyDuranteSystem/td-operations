@@ -128,6 +128,53 @@ describe('computePnlTotals', () => {
   })
 })
 
+describe('computePnlTotals — folded-visibility fields (2026-07-02, B&P $594k incident)', () => {
+  // Under the by-sign policy the totals LOOK complete (uncategorizedCount forced
+  // to 0 for gate 6) while unclassified money silently sits inside income and
+  // expenses. The folded* fields expose exactly what was folded so a surface
+  // can WARN. They must be additive: every pre-existing field stays identical.
+
+  it('ON: folded fields report what was silently absorbed', () => {
+    const t = computePnlTotals(
+      [tx('income', 1000), tx('uncategorized', 500), tx('uncategorized', 250), tx('uncategorized', -300)],
+      { defaultUncategorizedBySign: true },
+    )
+    expect(t.foldedUncategorizedCount).toBe(3)
+    expect(t.foldedUncategorizedIncome).toBe(750) // inflows absorbed into revenue
+    expect(t.foldedUncategorizedExpense).toBe(300) // outflows absorbed into expenses (positive magnitude)
+    // Pre-existing behavior byte-identical: totals include the folded money,
+    // pending counters still report 0 (gate 6 unchanged).
+    expect(t.totalIncome).toBe(1750)
+    expect(t.totalExpenses).toBe(300)
+    expect(t.uncategorizedCount).toBe(0)
+    expect(t.uncategorizedTotal).toBe(0)
+  })
+
+  it('OFF: nothing was folded — folded fields are zero, visible bucket carries the rows', () => {
+    const t = computePnlTotals([tx('income', 1000), tx('uncategorized', 500), tx('uncategorized', -300)])
+    expect(t.foldedUncategorizedCount).toBe(0)
+    expect(t.foldedUncategorizedIncome).toBe(0)
+    expect(t.foldedUncategorizedExpense).toBe(0)
+    expect(t.uncategorizedCount).toBe(2)
+    expect(t.uncategorizedTotal).toBe(200) // net of +500 −300 — the exact balance-sheet gap
+    // And the unknown money is OUT of the P&L (staff workspace policy).
+    expect(t.totalIncome).toBe(1000)
+    expect(t.totalExpenses).toBe(0)
+    expect(t.netIncome).toBe(1000)
+  })
+
+  it('OFF: uncategorizedTotal equals the assets-vs-equity gap the BS reconciling line must name', () => {
+    // Cash moves by ALL transactions; equity only by categorized ones. The
+    // difference is exactly uncategorizedTotal — asserted here so the Excel/UI
+    // reconciling line stays mathematically honest.
+    const rows = [tx('income', 1000), tx('expense', -400), tx('uncategorized', 700), tx('uncategorized', -100)]
+    const t = computePnlTotals(rows)
+    const cashMovement = rows.reduce((s, r) => s + r.amount, 0) // 1200
+    const equityMovement = t.netIncome // 600 (income − expenses; no dist/contrib here)
+    expect(cashMovement - equityMovement).toBe(t.uncategorizedTotal) // 600 = +700 −100
+  })
+})
+
 describe('categorizeTransaction — contribution rule (F3)', () => {
   const base: ParsedTransaction = {
     transaction_date: '2025-03-01',

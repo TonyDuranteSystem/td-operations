@@ -68,8 +68,10 @@ export default async function PnlToolPage() {
           <section className="space-y-1">
             <h3 className="font-semibold text-zinc-900">What you can do in a workspace</h3>
             <ul className="list-disc pl-5 space-y-1">
-              <li>Upload bank statements (CSV or PDF) — the system reads and categorizes them automatically.</li>
-              <li>Review the P&amp;L and Balance Sheet; answer the categorization questions to clean up anything uncertain.</li>
+              <li><strong>Upload first, generate second:</strong> upload ALL the bank statements (every bank, every account — CSV preferred), then press <strong>Generate P&amp;L</strong>. No numbers are shown until you generate, so a partial upload can never look like a finished P&amp;L.</li>
+              <li>Categorization runs in three layers: bank-vocabulary rules (editable in the database, no deploy), internal-transfer detection (money between the company&apos;s own accounts is never revenue), and an AI pass that reads each remaining transaction&apos;s full description.</li>
+              <li><strong>Anything the system can&apos;t understand is flagged, never guessed:</strong> unclassified transactions are EXCLUDED from the totals and shown in a red banner until you answer the categorization questions.</li>
+              <li>Add more statements later — the totals are marked OUT OF DATE until you Regenerate.</li>
               <li>Drill into any expense category to see the transactions behind it.</li>
               <li>Download the Excel (P&amp;L + Balance Sheet + per-member K-1 capital + detail sheets).</li>
               <li>Delete a workspace when you&apos;re done — it removes the copy and its uploaded files.</li>

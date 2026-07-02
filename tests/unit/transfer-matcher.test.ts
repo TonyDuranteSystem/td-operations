@@ -9,6 +9,7 @@ import {
   matchTransferPairs,
   detectOwnEntityTransfers,
   normalizeEntityName,
+  nameVariants,
   type TransferCandidate,
   type OwnEntityRow,
 } from '@/lib/tax/transfer-matcher'
@@ -126,16 +127,59 @@ describe('detectOwnEntityTransfers', () => {
     expect(hits).toEqual(['c1'])
   })
 
-  it('never touches distribution/contribution/income/cogs/conversion (member + sale precedence)', () => {
+  it('never touches distribution/contribution/cogs/conversion; income needs the strict counterparty path', () => {
     const hits = detectOwnEntityTransfers(
       [
         row('d1', 'sent money to Dynamiq SR LLC', 'distribution'),
+        // income with the own name only in the DESCRIPTION (no counterparty):
+        // the strict income path requires counterparty == own name, so this
+        // stays income — a contains-match can never swallow a sale.
         row('n1', 'sent money to Dynamiq SR LLC', 'income'),
         row('k1', 'sent money to Dynamiq SR LLC', 'conversion'),
       ],
       { ownNames: ['Dynamiq SR LLC'] },
     )
     expect(hits).toEqual([])
+  })
+
+  // ── Income self-payments (2026-07-02, B&P €29,269 incident) ──
+  // Wise's built-in books "Received money from <own company>" as income before
+  // the engine's passes run; these are the company's own Chase→Wise moves.
+
+  it('reclassifies an income row whose COUNTERPARTY is exactly the company itself', () => {
+    const hits = detectOwnEntityTransfers(
+      [row('w1', 'Received money from B&P INTERNATIONAL LLC with reference BUSINESS EXPENSES', 'income', { counterparty: 'B&P INTERNATIONAL LLC' })],
+      { ownNames: ['B&P International LLC'] },
+    )
+    expect(hits).toEqual(['w1'])
+  })
+
+  it('income: recognizes the &-dropped bank spelling ("BP International") via name variants', () => {
+    const hits = detectOwnEntityTransfers(
+      [row('w2', 'Received money', 'income', { counterparty: 'BP International LLC' })],
+      { ownNames: ['B&P International LLC'] },
+    )
+    expect(hits).toEqual(['w2'])
+  })
+
+  it('income: a merely SIMILAR customer name is never swallowed (exact equality required)', () => {
+    const hits = detectOwnEntityTransfers(
+      [
+        row('c1', 'Received money', 'income', { counterparty: 'B&P International Consulting GmbH' }),
+        row('c2', 'Received money', 'income', { counterparty: 'CHELTON AB' }),
+      ],
+      { ownNames: ['B&P International LLC'] },
+    )
+    expect(hits).toEqual([])
+  })
+
+  it('uncategorized: the Chase RTP line naming the own company via Wise matches through the variant', () => {
+    // Real B&P line shape: the bank writes "BP" where the legal name is "B&P".
+    const hits = detectOwnEntityTransfers(
+      [row('r1', 'REAL TIME TRANSFER RECD FROM ABA/CONTR BNK-021000021  FROM: BNF-BP International LLC Via WISE REF: 1173713684-B P I', 'uncategorized')],
+      { ownNames: ['B&P International LLC'] },
+    )
+    expect(hits).toEqual(['r1'])
   })
 
   it('does NOT fire when the normalized own-name is too short/generic (avoids blanket vendor matches)', () => {
@@ -158,5 +202,17 @@ describe('detectOwnEntityTransfers', () => {
   it('returns nothing when no own name is provided', () => {
     expect(detectOwnEntityTransfers([row('o1', 'sent money to Dynamiq SR LLC')], { ownNames: [] })).toEqual([])
     expect(detectOwnEntityTransfers([row('o1', 'sent money to Dynamiq SR LLC')], { ownNames: [''] })).toEqual([])
+  })
+})
+
+describe('nameVariants', () => {
+  it('collapses runs of single-letter tokens ("b p international" → "bp international")', () => {
+    expect(nameVariants('b p international')).toEqual(['b p international', 'bp international'])
+  })
+  it('returns just the input when there is nothing to collapse', () => {
+    expect(nameVariants('dynamiq sr')).toEqual(['dynamiq sr'])
+  })
+  it('collapses a full single-letter run ("a b c") into one token', () => {
+    expect(nameVariants('a b c')).toEqual(['a b c', 'abc'])
   })
 })

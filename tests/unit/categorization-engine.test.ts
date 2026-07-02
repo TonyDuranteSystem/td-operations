@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { applyRules, computeRecategorizationUpdates, type CategorizationRule } from '@/lib/tax/categorization-engine'
+import { applyRules, computeRecategorizationUpdates, decideAiSuggestion, type CategorizationRule } from '@/lib/tax/categorization-engine'
+import type { AiSuggestion } from '@/lib/tax/ai-categorizer'
 import type { ParsedTransaction } from '@/lib/bank-statement-parser'
 
 const tx = (description: string, amount: number, over: Partial<ParsedTransaction> = {}): ParsedTransaction => ({
@@ -68,6 +69,35 @@ describe('applyRules', () => {
     expect(applyRules(tx('Inbound Ach Transfer | Incoming ACH credit from CLIENT LLC', 15000), seeds).category).toBe('income')
     expect(applyRules(tx('Loan Transaction | Daily Credit Card Payment', -270.77), seeds).category).toBe('expense')
     expect(applyRules(tx('Deposit User Funds | ACH deposit from CHECKING (•••• 0000)', 8000), seeds).category).toBe('contribution')
+  })
+
+  // ── Chase vocabulary seeds (migration 20260702-2000, B&P $594k incident) ──
+  // Line shapes are verbatim from the real B&P Chase export as the generic
+  // parser stores them ("Description | Details | Type").
+  it('the verified Chase vocabulary categorizes via the 20260702-2000 seed shapes', () => {
+    const seeds: CategorizationRule[] = [
+      rule({ pattern: 'ACCT_XFER', category: 'conversion', subcategory: 'internal_transfer', direction: 'any', priority: 90 }),
+      rule({ pattern: 'Online Transfer (to|from) (MMA|CHK|SAV)\\s?\\.\\.\\..*transaction#', match_type: 'regex', category: 'conversion', subcategory: 'internal_transfer', direction: 'any', priority: 95 }),
+      rule({ pattern: 'FEE_TRANSACTION', category: 'fee', subcategory: 'bank_fee', direction: 'out', priority: 100 }),
+      rule({ pattern: 'SERVICE CHARGES FOR THE MONTH', category: 'fee', subcategory: 'bank_fee', direction: 'out', priority: 100 }),
+      rule({ pattern: 'INTEREST PAYMENT', category: 'income', subcategory: 'interest_income', direction: 'in', priority: 100 }),
+    ]
+    // Internal transfers between the company's own Chase accounts — both directions.
+    expect(applyRules(tx('Online Transfer to MMA ...2131 transaction#: 27277515768 12/10 | DEBIT | ACCT_XFER', -6500), seeds).category).toBe('conversion')
+    expect(applyRules(tx('Online Transfer from MMA ...3326 transaction#: 27013472533 | CREDIT | ACCT_XFER', 7000), seeds).category).toBe('conversion')
+    // Fees.
+    expect(applyRules(tx('SERVICE CHARGES FOR THE MONTH OF NOVEMBER | DEBIT | FEE_TRANSACTION', -55), seeds).category).toBe('fee')
+    expect(applyRules(tx('FOREIGN EXCHANGE RATE ADJUSTMENT FEE         07/19CapCut SI | DEBIT | FEE_TRANSACTION', -0.32), seeds).category).toBe('fee')
+    // Savings interest is income.
+    expect(applyRules(tx('INTEREST PAYMENT | CREDIT | MISC_CREDIT', 2.38), seeds).category).toBe('income')
+    // NEGATIVE cases — real customer wires must stay untouched by the seeds
+    // (they carry no seeded token): AXI and Chelton remain for own-entity/AI.
+    expect(applyRules(tx('BOOK TRANSFER CREDIT B/O: NATIONAL WESTMINSTER BANK PLC LONDON GB ORG: AXI FINANCIAL SERVICES (UK)LTD REF: AXI FINANCIAL SERV/OCMT/USD25850,/ | CREDIT | WIRE_INCOMING', 25850), seeds).category).toBe('uncategorized')
+    expect(applyRules(tx('BOOK TRANSFER CREDIT B/O: SVENSKA HANDELSBANKEN AB PUBL STOCKHOLM SE ORG: CHELTON AB | CREDIT | WIRE_INCOMING', 14029), seeds).category).toBe('uncategorized')
+    // Zelle stays flagged for human review — no seed matches QUICKPAY lines.
+    expect(applyRules(tx('Zelle payment to Antonio Durante 23929233474 | DEBIT | QUICKPAY_DEBIT', -275), seeds).category).toBe('uncategorized')
+    // Deposit-return pair stays flagged (pre-mortem: a refund seed would inflate expenses).
+    expect(applyRules(tx('DEPOSITED ITEM RETURNED       Stop Payment   099002789 | DEBIT | DEPOSIT_RETURN', -2793.59), seeds).category).toBe('uncategorized')
   })
 })
 
@@ -140,5 +170,39 @@ describe('computeRecategorizationUpdates (parity core)', () => {
     const b = computeRecategorizationUpdates(build(), rules, [], '')
     expect(Array.from(a.updates.entries()).sort()).toEqual(Array.from(b.updates.entries()).sort())
     expect(a.transferPairs).toBe(b.transferPairs)
+  })
+})
+
+// The shared AI-apply policy (2026-07-02) — one pure function used by BOTH the
+// client path and the workspace AI pass, so the policy can never drift.
+describe('decideAiSuggestion (shared AI-apply policy)', () => {
+  const sugg = (over: Partial<AiSuggestion> = {}): AiSuggestion => ({
+    id: 't1', category: 'expense', subcategory: 'software', confidence: 'high', ...over,
+  })
+
+  it('high confidence + still-uncategorized → applies the category, tagged ai:high', () => {
+    const d = decideAiSuggestion(sugg({ lean: 'business', bucket: 'software' }), 'uncategorized')
+    expect(d.applied).toBe(true)
+    expect(d.update).toMatchObject({ category: 'expense', subcategory: 'software', notes: 'ai:high', ai_lean: 'business', ai_bucket: 'software' })
+  })
+
+  it('high confidence but the row is ALREADY booked → hints only, category untouched', () => {
+    const d = decideAiSuggestion(sugg({ lean: 'business', bucket: 'software' }), 'expense')
+    expect(d.applied).toBe(false)
+    expect(d.update).toEqual({ ai_lean: 'business', ai_bucket: 'software' })
+  })
+
+  it('medium/low confidence never applies a category — hints only', () => {
+    for (const confidence of ['medium', 'low'] as const) {
+      const d = decideAiSuggestion(sugg({ confidence, lean: 'personal' }), 'uncategorized')
+      expect(d.applied).toBe(false)
+      expect(d.update).toEqual({ ai_lean: 'personal' })
+    }
+  })
+
+  it('no hints and nothing to apply → complete no-op (null update)', () => {
+    const d = decideAiSuggestion(sugg({ confidence: 'low' }), 'expense')
+    expect(d.applied).toBe(false)
+    expect(d.update).toBeNull()
   })
 })

@@ -24,7 +24,7 @@ interface View {
   coverage: { questions: CoverageQuestion[]; unanswered: number; incomplete: number }
   completeness: CompletenessSummary
   draft: {
-    pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number }
+    pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number; uncategorizedTotal: number }
     members: Member[]
     beginning_cash: number | null
     beginning_cash_source: 'prior_return' | 'statements' | null
@@ -48,6 +48,14 @@ interface View {
   expense_breakdown?: { slug: string; label: string; total: number }[]
   attested: boolean
   files: FileCard[]
+  /** STAFF WORKSPACE ONLY (Antonio, 2026-07-02): null/absent = upload stage —
+   *  the tool shows the statement manager + "Generate P&L", no totals. The
+   *  portal API never sends these; every use below is gated on isStaff. */
+  generated_at?: string | null
+  /** Statements were ingested AFTER the last generation — totals are stale. */
+  stale?: boolean
+  /** Smart-categorization (AI) jobs still running for this workspace. */
+  aiPending?: number
 }
 
 // Drill-down (Luca's request): the transactions behind one P&L expense category,
@@ -135,7 +143,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // its own — the client doesn't have to guess when to refresh. Stops as soon
   // as nothing is pending. (Only polls when something is actually in flight.)
   useEffect(() => {
-    if (!view || view.ingestPending <= 0) return
+    if (!view || (view.ingestPending <= 0 && (view.aiPending ?? 0) <= 0)) return
     const t = setInterval(() => { void load() }, 20000)
     return () => clearInterval(t)
   }, [view, load])
@@ -397,6 +405,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
+  // Staff workspace only: stamp the workspace as generated (or re-generated
+  // after new uploads) — the server refuses while files are still processing.
+  const generate = async () => {
+    setBusy('generate')
+    setError(null)
+    try {
+      const res = await fetch(`${API}/generate`, { method: 'POST' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not generate — please try again.')
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const gateIcon = (g: Gate) => g.status === 'pass' ? '✓' : g.status === 'na' ? '—' : '!'
   const gateColor = (g: Gate) => g.status === 'pass' ? 'text-emerald-600 bg-emerald-50' : g.status === 'na' ? 'text-zinc-500 bg-zinc-100' : 'text-amber-700 bg-amber-50'
 
@@ -498,6 +525,57 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
   if (loading && !view) return <div className="py-16 text-center text-zinc-500 text-sm">{it ? 'Calcolo dei tuoi numeri…' : 'Computing your numbers…'}</div>
 
+  // ── STAFF WORKSPACE, UPLOAD STAGE (Antonio, 2026-07-02) ──
+  // Until "Generate P&L" is pressed, the tool is a statement manager: upload
+  // every bank's files first (they parse in the background), then generate
+  // once. No totals are rendered here — a partial P&L mid-upload is exactly
+  // the failure mode that produced the B&P $594k number. STRICTLY staff-gated:
+  // the portal API never sends generated_at, and the client flow is unchanged.
+  if (isStaff && view && !view.generated_at) {
+    const processing = view.ingestPending > 0
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
+            Upload bank statements — {taxYear}
+          </h1>
+          <p className="text-zinc-500 text-xs sm:text-sm mt-1">
+            Upload ALL the company&apos;s statements (every bank, every account), then press <strong>Generate P&amp;L</strong>. Files are read in the background while you keep uploading.
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+        )}
+
+        {renderStatements()}
+
+        <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm">
+            {processing ? (
+              <span className="text-blue-800">{view.ingestPending} file(s) still processing — you can keep uploading; Generate unlocks when they finish.</span>
+            ) : view.transactionCount > 0 ? (
+              <span className="text-zinc-700">{view.files.length} statement(s) ready · {view.transactionCount} transactions loaded.</span>
+            ) : (
+              <span className="text-zinc-500">No statements loaded yet.</span>
+            )}
+            {view.ingestFailed > 0 && (
+              <span className="block text-xs text-amber-700 mt-1">{view.ingestFailed} file(s) could not be read — delete and re-upload them, or generate without them.</span>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={busy !== null || processing || view.transactionCount === 0}
+            onClick={() => void generate()}
+            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {busy === 'generate' ? 'Generating…' : 'Generate P&L'}
+          </button>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -522,6 +600,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+      )}
+
+      {/* Staff workspace: statements were added AFTER the last generation —
+          the totals below no longer reflect the data. Ask to regenerate. */}
+      {isStaff && view?.stale && (
+        <section className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-900">New statements were added after the last generation — these totals are OUT OF DATE.</p>
+            <p className="text-xs text-amber-800 mt-1">Regenerate to include the new data before reading or downloading anything.</p>
+          </div>
+          <button
+            type="button"
+            disabled={busy !== null || view.ingestPending > 0}
+            onClick={() => void generate()}
+            className="shrink-0 inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {busy === 'generate' ? 'Regenerating…' : view.ingestPending > 0 ? `Waiting for ${view.ingestPending} file(s)…` : 'Regenerate P&L'}
+          </button>
+        </section>
       )}
 
       {/* Ingestion still running with nothing landed yet — show a clear
@@ -616,6 +713,28 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 : `${view.ingestPending} statement(s) still processing — the numbers below are partial and will update on their own. Please don't confirm until we're done.`}
             </div>
           )}
+          {/* Staff workspace: the smart-categorization pass is still running —
+              the question list / categories below will improve on their own. */}
+          {isStaff && (view.aiPending ?? 0) > 0 && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              Smart categorization is running on the remaining unclassified transactions — this page refreshes on its own.
+            </div>
+          )}
+
+          {/* Staff workspace: unclassified money is EXCLUDED from the totals
+              (never silently folded into income — the B&P $594k lesson). Say
+              it loudly and point at the questions list below. */}
+          {isStaff && view.draft.pnl.uncategorizedCount > 0 && (
+            <section className="rounded-xl border-2 border-red-300 bg-red-50 px-5 py-4">
+              <p className="text-sm font-bold text-red-900">
+                ⚠ {view.draft.pnl.uncategorizedCount} transaction(s) (net {fmt(view.draft.pnl.uncategorizedTotal)}) are UNCLASSIFIED — excluded from these totals.
+              </p>
+              <p className="text-xs text-red-800 mt-1">
+                The P&amp;L and Balance Sheet below are incomplete until every transaction is categorized. Answer the questions in the review list below — do not download or save to a client before that.
+              </p>
+            </section>
+          )}
+
           {/* Gates */}
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
             <h2 className="text-sm font-semibold text-zinc-900 mb-3">{it ? 'Verifiche' : 'Verifications'}</h2>
@@ -706,6 +825,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </div>
                 )}
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Utile netto' : 'Net income'}</dt><dd className="font-semibold">{fmt(view.draft.pnl.netIncome)}</dd></div>
+                {isStaff && view.draft.pnl.uncategorizedCount > 0 && (
+                  <div className="flex justify-between text-red-700">
+                    <dt className="font-medium">⚠ Unclassified — excluded ({view.draft.pnl.uncategorizedCount})</dt>
+                    <dd className="font-medium">{fmt(view.draft.pnl.uncategorizedTotal)}</dd>
+                  </div>
+                )}
                 {view.draft.pnl.totalDistributions !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Prelievi dei soci' : 'Owner distributions'}</dt><dd className="font-medium">−{fmt(view.draft.pnl.totalDistributions)}</dd></div>}
                 {view.draft.pnl.totalContributions !== 0 && <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Apporti dei soci' : 'Owner contributions'}</dt><dd className="font-medium">{fmt(view.draft.pnl.totalContributions)}</dd></div>}
               </dl>
@@ -724,6 +849,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 </div>
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Cassa finale' : 'Ending cash'}</dt><dd className="font-medium">{fmt(view.draft.ending_cash)}</dd></div>
                 <div className="flex justify-between"><dt className="text-zinc-500">{it ? 'Totale attivo' : 'Total assets'}</dt><dd className="font-medium">{fmt(view.draft.total_assets)}</dd></div>
+                {isStaff && view.draft.pnl.uncategorizedCount > 0 && (
+                  <div className="flex justify-between text-red-700">
+                    <dt className="font-medium">⚠ Unclassified cash movement — categorize to balance</dt>
+                    <dd className="font-medium">{fmt(view.draft.pnl.uncategorizedTotal)}</dd>
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Capitale soci' : 'Members’ capital'}</dt><dd className="font-semibold">{fmt(view.draft.ending_capital_total)}</dd></div>
               </dl>
             </section>

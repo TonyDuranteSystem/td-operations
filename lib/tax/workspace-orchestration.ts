@@ -87,8 +87,14 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<F
   //    and NO sync-back to any real table.
   const ownership = resolveOwnership({ priorK1s, wizardMembers, accountContacts: [] })
 
-  // 7. Draft + gates + completeness (identical policy to the portal path).
-  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates })
+  // 7. Draft + gates + completeness. ONE deliberate divergence from the portal
+  // path (2026-07-02, B&P $594k incident): the STAFF workspace does NOT fold
+  // uncategorized rows by sign. An account the categorizer doesn't understand
+  // must surface as visibly-unclassified money — never as silent income. The
+  // client portal keeps folding (its attestation-based review flow, 2026-06-17
+  // policy). This also aligns the on-screen totals with the Excel download,
+  // which has always computed unfolded + warning.
+  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: false, fxRates })
   const gates = evaluateGates({ draft, ownership, priorReturn })
   const missingFxCurrencies = foreignCurrencies.filter(c => !fxRates || !(fxRates[c] > 0))
   const completeness = buildCompletenessSummary({ gates, draft, missingFxCurrencies })
