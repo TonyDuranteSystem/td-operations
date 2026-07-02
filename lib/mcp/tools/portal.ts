@@ -13,6 +13,7 @@ import { gmailPost } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
 import type { MailingAddressRow } from "@/lib/addresses"
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
+import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -1817,7 +1818,7 @@ Supports filtering:
         const lines = threads.map(t => {
           const unreadBadge = t.unread_count > 0 ? ` [${t.unread_count} unread]` : ""
           const name = t.contact_name ? `${t.company_name} (${t.contact_name})` : t.company_name
-          const lastBy = t.last_sender === "client" ? "Client" : "Admin"
+          const lastBy = t.last_sender === "client" ? "Client" : "TD Team"
           const time = t.last_message_at ? new Date(t.last_message_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""
           const id = t.account_id ? `account_id: ${t.account_id}` : `contact_id: ${t.contact_id}`
           return `${t.unread_count > 0 ? "🔴" : "⚪"} **${name}**${unreadBadge}\n   Last (${lastBy}, ${time}): "${t.last_message.substring(0, 100)}${t.last_message.length > 100 ? "..." : ""}"\n   ${id}`
@@ -1899,8 +1900,10 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
         // Format messages
         const formatted = sorted.map(m => {
           const contactData = (m as any).contacts as { full_name: string } | null
-          const senderLabel = contactData?.full_name || null
-          const sender = m.sender_type === "client" ? `Client${senderLabel ? ` (${senderLabel})` : ""}` : `Admin${senderLabel ? ` (${senderLabel})` : ""}`
+          // Staff (admin/system) messages are labelled "TD Team" — never a contact
+          // name. The row's contact_id on an admin send is a routing tag (an
+          // arbitrary linked member), NOT the author. See staffChatSenderLabel.
+          const sender = formatMcpChatSenderLabel(m.sender_type, contactData?.full_name)
           const time = new Date(m.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
           const readStatus = m.sender_type === "client" && !m.read_at ? " 🔴 UNREAD" : ""
           const atts = (m as any).attachments?.length
