@@ -36,6 +36,7 @@ interface FormState {
   step: string
   audience: QuestionAudience
   options: OptionRow[]
+  ai_assist: boolean
   active: boolean
   sort_order: string
 }
@@ -56,12 +57,12 @@ function toForm(q: TdCommQuestion): FormState {
   return {
     key: q.key, label_en: q.label_en, label_it: q.label_it ?? '', type: q.type,
     required: q.required, step: String(q.step), audience: q.audience,
-    options: q.options.map(optionToRow), active: q.active, sort_order: String(q.sort_order),
+    options: q.options.map(optionToRow), ai_assist: q.ai_assist, active: q.active, sort_order: String(q.sort_order),
   }
 }
 const EMPTY_FORM: FormState = {
   key: '', label_en: '', label_it: '', type: 'text', required: false,
-  step: '1', audience: 'both', options: [], active: true, sort_order: '0',
+  step: '1', audience: 'both', options: [], ai_assist: false, active: true, sort_order: '0',
 }
 
 /** A repeater row → clean TdCommOption; drops rows with no value AND no label. */
@@ -92,6 +93,9 @@ function toPayload(f: FormState, _isCreate: boolean) {
     step: Number(f.step || '1'),
     audience: f.audience,
     options,
+    // AI assist only applies to textareas; force false otherwise so a flag can't
+    // linger on a field type that changed away from textarea.
+    ai_assist: f.type === 'textarea' ? f.ai_assist : false,
     active: f.active,
     sort_order: Number(f.sort_order || '0'),
   }
@@ -332,6 +336,17 @@ function QuestionModal({
               <input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} /> Active
             </label>
           </div>
+
+          {/* AI assist — only meaningful on a textarea (the ✨ Generate button). */}
+          {form.type === 'textarea' && (
+            <label className="flex items-start gap-2 text-sm text-gray-700 border rounded-lg px-3 py-2 bg-zinc-50/60">
+              <input type="checkbox" className="mt-0.5" checked={form.ai_assist} onChange={(e) => set('ai_assist', e.target.checked)} />
+              <span>
+                <span className="block font-medium">✨ AI assist</span>
+                <span className="block text-xs text-zinc-500">Show the “Generate with AI” button on this question so clients can draft an answer they then edit.</span>
+              </span>
+            </label>
+          )}
         </div>
         <div className="flex justify-end gap-2 px-5 py-3 border-t sticky bottom-0 bg-white">
           <button onClick={onClose} className="border text-gray-700 hover:bg-gray-50 text-sm rounded font-medium px-3 py-1.5">Cancel</button>

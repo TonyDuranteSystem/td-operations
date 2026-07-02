@@ -13,6 +13,14 @@ describe('mergeCommSettings', () => {
     expect(mergeCommSettings({}).enabled).toBe(true)
   })
 
+  it('ai_enabled defaults true and honors a stored override', () => {
+    expect(DEFAULT_COMM_SETTINGS.ai_enabled).toBe(true)
+    expect(mergeCommSettings({}).ai_enabled).toBe(true)
+    expect(mergeCommSettings({ ai_enabled: false }).ai_enabled).toBe(false)
+    // non-boolean falls back to the default
+    expect(mergeCommSettings({ ai_enabled: 'nope' as unknown as boolean }).ai_enabled).toBe(true)
+  })
+
   it('applies stored overrides', () => {
     const r = mergeCommSettings({ enabled: false, disclaimer_en: 'Hi', default_sla_days: 14 })
     expect(r.enabled).toBe(false)

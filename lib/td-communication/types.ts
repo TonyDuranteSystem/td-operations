@@ -244,6 +244,9 @@ export interface TdCommQuestion {
   audience: QuestionAudience
   /** Options used when type='select' (value + bilingual label/description). */
   options: TdCommOption[]
+  /** When true, the wizard renders the ✨ "Generate with AI" button on this
+   *  question (textarea only — see question-to-field.ts). Operator-editable. */
+  ai_assist: boolean
   active: boolean
   sort_order: number
   created_at: string
@@ -258,6 +261,10 @@ export interface TdCommSettings {
   disclaimer_it: string
   /** Fallback SLA when a package has no delivery_days. */
   default_sla_days: number
+  /** Master kill-switch for the TD Communication AI features (wizard ✨ + brand
+   *  profile). When false, both AI routes return 503 without calling the model —
+   *  lets an admin disable AI from the CRM Settings tab with no deploy. */
+  ai_enabled: boolean
 }
 
 /** Aggregate stats for the enrollments admin tab. */

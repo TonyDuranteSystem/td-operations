@@ -90,6 +90,23 @@ export function SettingsAdmin({ isAdmin }: { isAdmin: boolean }) {
           </label>
         </div>
 
+        {/* AI features kill-switch */}
+        <div className="border rounded-lg bg-white p-4">
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-zinc-900">AI features</span>
+              <span className="block text-xs text-zinc-500">Enable the ✨ brand-audit writing assistant and the AI Brand Profile. Turn off to disable all AI generation instantly (no deploy).</span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-5 w-5"
+              checked={settings.ai_enabled}
+              disabled={disabled}
+              onChange={(e) => set('ai_enabled', e.target.checked)}
+            />
+          </label>
+        </div>
+
         {/* Disclaimer */}
         <div className="border rounded-lg bg-white p-4 space-y-3">
           <h4 className="text-sm font-medium text-zinc-900">Disclaimer text</h4>

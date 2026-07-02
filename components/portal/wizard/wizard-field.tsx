@@ -57,6 +57,11 @@ interface WizardFieldProps {
   value: string | string[] | boolean | number
   onChange: (name: string, value: string | string[] | boolean | number) => void
   onFileUpload?: (name: string, file: File, onProgress?: (pct: number) => void) => Promise<string | null> // returns storage path or null on error
+  /** AI draft helper for a `field.aiAssist` textarea. Returns suggested text (the
+   *  user chooses to use/append it — never auto-applied) or null on failure (the
+   *  caller surfaces the error). When omitted, the ✨ button stays a disabled
+   *  placeholder, so the button is inert for any wizard that doesn't wire this. */
+  onAiAssist?: (field: FieldConfig, currentValue: string) => Promise<string | null>
   locale: 'en' | 'it'
   error?: string
 }
@@ -85,10 +90,27 @@ const COUNTRIES = [
   'United States','Uruguay','Uzbekistan','Vanuatu','Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe',
 ].sort()
 
-export function WizardField({ field, value, onChange, onFileUpload, locale, error }: WizardFieldProps) {
+export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error }: WizardFieldProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<{ name: string; index: number; total: number; pct: number } | null>(null)
+  // ✨ AI draft state (textarea + aiAssist + onAiAssist only).
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null)
+
+  // Enabled only when a real handler is wired (TD Communication). Absent → the
+  // button renders disabled (placeholder), keeping non-TD wizards inert.
+  const aiEnabled = !!(field.aiAssist && onAiAssist)
+  const runAiAssist = async () => {
+    if (!onAiAssist || aiBusy) return
+    setAiBusy(true)
+    try {
+      const text = await onAiAssist(field, String(value ?? ''))
+      if (text) setAiSuggestion(text)
+    } finally {
+      setAiBusy(false)
+    }
+  }
   const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
   const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
   const hint = locale === 'it' && field.hintIt ? field.hintIt : field.hint
@@ -131,23 +153,85 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
       )}
 
       {field.type === 'textarea' ? (
-        <div className="relative">
-          <textarea
-            value={String(value ?? '')}
-            onChange={e => onChange(field.name, e.target.value)}
-            placeholder={placeholder}
-            rows={3}
-            className={cn(inputClass, 'resize-none', field.aiAssist && 'pr-28')}
-          />
-          {field.aiAssist && (
-            <button
-              type="button"
-              disabled
-              title={locale === 'it' ? 'Generazione AI — in arrivo' : 'AI generation — coming soon'}
-              className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-400 cursor-not-allowed"
-            >
-              ✨ {locale === 'it' ? 'Genera' : 'Generate'}
-            </button>
+        <div className="space-y-2">
+          <div className="relative">
+            <textarea
+              value={String(value ?? '')}
+              onChange={e => onChange(field.name, e.target.value)}
+              placeholder={placeholder}
+              rows={3}
+              className={cn(inputClass, 'resize-none', field.aiAssist && 'pr-28')}
+            />
+            {field.aiAssist && (
+              aiEnabled ? (
+                <button
+                  type="button"
+                  onClick={runAiAssist}
+                  disabled={aiBusy}
+                  title={locale === 'it' ? 'Genera una bozza con l’AI' : 'Draft an answer with AI'}
+                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-wait"
+                >
+                  {aiBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span>✨</span>}
+                  {aiBusy ? (locale === 'it' ? 'Genero…' : 'Drafting…') : (locale === 'it' ? 'Genera' : 'Generate')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  title={locale === 'it' ? 'Generazione AI — in arrivo' : 'AI generation — coming soon'}
+                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-400 cursor-not-allowed"
+                >
+                  ✨ {locale === 'it' ? 'Genera' : 'Generate'}
+                </button>
+              )
+            )}
+          </div>
+
+          {/* AI suggestion preview — the client chooses to use/append it; the
+              draft is NEVER auto-written into the field (enhance, not replace). */}
+          {aiSuggestion !== null && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 space-y-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-blue-600">
+                ✨ {locale === 'it' ? 'Bozza suggerita' : 'Suggested draft'}
+              </p>
+              <p className="text-sm text-zinc-800 whitespace-pre-wrap">{aiSuggestion}</p>
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => { onChange(field.name, aiSuggestion); setAiSuggestion(null) }}
+                  className="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                >
+                  {locale === 'it' ? 'Usa questa' : 'Use this'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cur = String(value ?? '').trim()
+                    onChange(field.name, cur ? `${cur}\n\n${aiSuggestion}` : aiSuggestion)
+                    setAiSuggestion(null)
+                  }}
+                  className="inline-flex items-center rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                >
+                  {locale === 'it' ? 'Aggiungi alla risposta' : 'Add to my answer'}
+                </button>
+                <button
+                  type="button"
+                  onClick={runAiAssist}
+                  disabled={aiBusy}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-60"
+                >
+                  {aiBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {locale === 'it' ? 'Rigenera' : 'Regenerate'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAiSuggestion(null)}
+                  className="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-600"
+                >
+                  {locale === 'it' ? 'Ignora' : 'Dismiss'}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       ) : field.type === 'multiselect' ? (

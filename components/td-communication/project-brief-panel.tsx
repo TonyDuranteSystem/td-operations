@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
-  X, Loader2, Building2, FileText, Paperclip, Clock, MessageCircle, Save, ExternalLink, Package,
+  X, Loader2, Building2, FileText, Paperclip, Clock, MessageCircle, Save, ExternalLink, Package, Sparkles, RefreshCw, AlertTriangle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -48,11 +48,23 @@ interface ProjectDetail {
   /** Uploaded materials with signed URLs (server-minted). A '' url = the file
    *  couldn't be signed → shown as unavailable, not a broken link. */
   uploads?: Upload[]
+  /** Cached AI Brand Profile (null/absent if never generated). */
+  ai_brand_profile?: AiBrandProfile | null
+  /** True when the cached profile is out of date vs the current answers. */
+  ai_brand_profile_stale?: boolean
 }
 interface Upload {
   name: string
   url: string
   mime_type?: string
+}
+interface AiBrandProfile {
+  color_palette: { hex: string; name: string }[]
+  personality: string
+  geometric_style: string
+  mood: string
+  generated_at?: string
+  model?: string
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -92,6 +104,127 @@ function Section({ title, icon, children }: { title: string; icon: ReactNode; ch
       </h3>
       {children}
     </section>
+  )
+}
+
+/**
+ * AI Brand Profile — an on-demand synthesis of the client's 30 answers into a
+ * creative starting point (palette / personality / geometric style / mood).
+ * Manual generate (no auto-run); cached server-side, with a stale hint when the
+ * client's answers change after generation. Owns its state seeded from the
+ * server-provided cache.
+ */
+function AiBrandProfileCard({
+  projectId,
+  initial,
+  initialStale,
+  hasAnswers,
+}: {
+  projectId: string
+  initial: AiBrandProfile | null
+  initialStale: boolean
+  hasAnswers: boolean
+}) {
+  const [profile, setProfile] = useState<AiBrandProfile | null>(initial)
+  const [stale, setStale] = useState(initialStale)
+  const [busy, setBusy] = useState(false)
+
+  const generate = async (regenerate: boolean) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const res = await fetch('/api/td-communication/ai/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enrollmentId: projectId, regenerate }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not generate the brand profile.')
+      }
+      const data = await res.json()
+      if (data?.profile) {
+        setProfile(data.profile)
+        setStale(false)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not generate the brand profile.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section title="AI Brand Profile" icon={<Sparkles className="h-3.5 w-3.5" />}>
+      {!profile ? (
+        <div className="space-y-2">
+          <p className="text-sm text-zinc-400">
+            {hasAnswers
+              ? 'Synthesize a creative starting point — palette, personality, geometric style, mood — from the client’s answers.'
+              : 'No brand answers yet — the client hasn’t submitted the audit.'}
+          </p>
+          <button
+            onClick={() => generate(false)}
+            disabled={!hasAnswers || busy}
+            className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Generate AI Brand Profile
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {stale && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>The client’s answers changed since this profile was generated — regenerate for an up-to-date version.</span>
+            </div>
+          )}
+          {profile.color_palette.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-zinc-700 mb-1.5">Suggested palette</p>
+              <div className="flex flex-wrap gap-2.5">
+                {profile.color_palette.map((c, i) => (
+                  <div key={`${c.hex}-${i}`} className="flex items-center gap-1.5">
+                    <span className="h-6 w-6 rounded border border-zinc-200" style={{ backgroundColor: c.hex }} title={c.hex} />
+                    <span className="text-xs text-zinc-600">{c.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {profile.personality && (
+            <div>
+              <p className="text-xs font-semibold text-zinc-700 mb-0.5">Personality</p>
+              <p className="text-sm text-zinc-800 whitespace-pre-wrap">{profile.personality}</p>
+            </div>
+          )}
+          {profile.geometric_style && (
+            <div>
+              <p className="text-xs font-semibold text-zinc-700 mb-0.5">Geometric style</p>
+              <p className="text-sm text-zinc-800 whitespace-pre-wrap">{profile.geometric_style}</p>
+            </div>
+          )}
+          {profile.mood && (
+            <div>
+              <p className="text-xs font-semibold text-zinc-700 mb-0.5">Mood</p>
+              <p className="text-sm text-zinc-800 whitespace-pre-wrap">{profile.mood}</p>
+            </div>
+          )}
+          <div className="flex items-center gap-3 pt-0.5">
+            <button
+              onClick={() => generate(true)}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Regenerate
+            </button>
+            <span className="text-[10px] text-zinc-400">AI-generated starting point — verify before use.</span>
+          </div>
+        </div>
+      )}
+    </Section>
   )
 }
 
@@ -283,6 +416,14 @@ export function ProjectBriefPanel({
             </div>
           ) : project ? (
             <>
+              {/* AI Brand Profile — synthesized starting point at the top of the brief */}
+              <AiBrandProfileCard
+                projectId={project.id}
+                initial={project.ai_brand_profile ?? null}
+                initialStale={!!project.ai_brand_profile_stale}
+                hasAnswers={brief.sections.length > 0}
+              />
+
               {/* Client info */}
               <Section title="Client Info" icon={<Building2 className="h-3.5 w-3.5" />}>
                 <dl className="space-y-2 text-sm">
