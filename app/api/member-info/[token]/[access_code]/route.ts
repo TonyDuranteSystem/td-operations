@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { emitClientChatEvent } from '@/lib/portal/chat-events'
+import { refreshSS4 } from '@/lib/operations/ss4-refresh'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
@@ -201,6 +202,22 @@ export async function POST(
     })
   } catch (err) {
     console.error('[member-info] What\'s New emit failed (non-fatal):', err)
+  }
+
+  // 10. Auto-refresh the account's unsigned SS-4 so it never silently
+  //     contradicts the member data the client just submitted (AI Venture Labs
+  //     2026-07-02: the SS-4 was generated a day BEFORE this form arrived and
+  //     kept the wrong responsible party). refreshSS4 is a no-op when no
+  //     unsigned SS-4 exists, is audited via action_log, and notifies the new
+  //     signer only if the signer changed on an already-sent SS-4. Best-effort:
+  //     a refresh failure must never fail the client's submission.
+  try {
+    const refresh = await refreshSS4({ account_id: accountId, source: 'member-info-form' })
+    if (!refresh.ok && refresh.outcome !== 'no_ss4') {
+      console.error(`[member-info] SS-4 auto-refresh ${refresh.outcome}:`, refresh.message)
+    }
+  } catch (err) {
+    console.error('[member-info] SS-4 auto-refresh failed (non-fatal):', err)
   }
 
   return NextResponse.json({ success: true, member_count: members.length })

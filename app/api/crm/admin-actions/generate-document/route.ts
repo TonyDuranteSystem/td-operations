@@ -18,6 +18,7 @@ import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { formatCountyAndState } from "@/lib/addresses"
 import { decideSs4Signer, ss4SignerAlertMessage, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
+import { refreshSS4 } from "@/lib/operations/ss4-refresh"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -261,6 +262,10 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   // the client signed that exact document; it must never be rewritten.
   // (2026-06-11 LUMA incident: account entity type was corrected after the
   // SS-4 went out as SMLLC, and there was no way to regenerate from the CRM.)
+  // The refresh itself is the SHARED core (lib/operations/ss4-refresh.ts) —
+  // the same implementation behind the flow workspace regenerate and the
+  // member-change auto-refresh, so the surfaces can never drift again
+  // (2026-07-02 AI Venture Labs incident).
   const { data: existing } = await supabaseAdmin
     .from("ss4_applications")
     .select("id, token, access_code, status, signed_at")
@@ -271,10 +276,20 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
     return { exists: true, token: existing.token, status: existing.status }
   }
   if (existing && opts?.regenerate) {
-    const unsigned = !existing.signed_at && (existing.status === "draft" || existing.status === "awaiting_signature")
-    if (!unsigned) {
-      return { error: `SS-4 ${existing.token} is "${existing.status}" — a signed or submitted SS-4 cannot be regenerated. Create the correction manually with support.` }
+    const result = await refreshSS4({ account_id: accountId, source: "crm-regenerate" })
+    if (result.outcome === "refreshed" || result.outcome === "unchanged") {
+      return {
+        success: true,
+        regenerated: true,
+        unchanged: result.outcome === "unchanged",
+        token: existing.token,
+        access_code: existing.access_code,
+        admin_preview: `${SS4_BASE_URL}/${existing.token}/${existing.access_code}?preview=td`,
+        entity_type: result.ss4?.entity_type ?? undefined,
+        company_name: result.ss4?.company_name ?? account.company_name,
+      }
     }
+    return { error: result.message || `Could not regenerate the SS-4 (${result.outcome}).` }
   }
 
   const rawEntity = (account.entity_type || "").toUpperCase().trim()
@@ -351,55 +366,6 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   const slug = slugify(account.company_name)
   const token = `ss4-${slug}-${new Date().getFullYear()}`
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
-
-  // Regenerate path: refresh the existing unsigned row in place. Token and
-  // access_code are preserved so the client's existing link stays valid; the
-  // SS-4 page renders live from this row, so the corrected values appear at
-  // the same URL immediately.
-  if (existing && opts?.regenerate) {
-    const { error: updErr } = await supabaseAdmin
-      .from("ss4_applications")
-      .update({
-        company_name: account.company_name,
-        entity_type: entityType,
-        state_of_formation: state,
-        formation_date: account.formation_date || null,
-        member_count: memberCount,
-        contact_id: responsibleContact.id,
-        responsible_party_name: responsibleContact.full_name,
-        responsible_party_itin: responsibleContact.itin_number || null,
-        responsible_party_phone: responsibleContact.phone || null,
-        responsible_party_title: title,
-        language: responsibleContact.language === "Italian" ? "it" : "en",
-        county_and_state: resolvedCountyAndState,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", existing.id)
-
-    if (updErr) {
-      return { error: `Regenerate failed: ${updErr.message}` }
-    }
-
-    logAction({
-      actor: "crm-admin",
-      action_type: "update",
-      table_name: "ss4_applications",
-      record_id: existing.id,
-      account_id: accountId,
-      summary: `Regenerated SS-4 for ${account.company_name} (${entityType}, ${state}, ${memberCount} member${memberCount === 1 ? "" : "s"}) — same token, link unchanged`,
-      details: { token: existing.token, entity_type: entityType, state, member_count: memberCount, source: "crm-button-regenerate" },
-    })
-
-    return {
-      success: true,
-      regenerated: true,
-      token: existing.token,
-      access_code: existing.access_code,
-      admin_preview: `${SS4_BASE_URL}/${existing.token}/${existing.access_code}?preview=td`,
-      entity_type: entityType,
-      company_name: account.company_name,
-    }
-  }
 
   const { data: ss4, error: insertErr } = await supabaseAdmin
     .from("ss4_applications")

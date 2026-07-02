@@ -14,10 +14,19 @@ interface GenerateSS4DialogProps {
   entityType: string | null
   contactName: string
   formationDate: string | null
+  /**
+   * Status of an already-existing UNSIGNED SS-4 ('draft' | 'awaiting_signature'),
+   * or null/undefined when none exists. When set, the dialog offers
+   * "Regenerate from account data" UP FRONT as the primary action — the old
+   * flow hid it behind a failed Generate click (409 → amber button), which is
+   * how staff "regenerated" three times without ever refreshing anything
+   * (AI Venture Labs, 2026-07-02).
+   */
+  existingUnsignedStatus?: string | null
 }
 
 export function GenerateSS4Dialog({
-  open, onClose, accountId, companyName, state, entityType, contactName, formationDate,
+  open, onClose, accountId, companyName, state, entityType, contactName, formationDate, existingUnsignedStatus,
 }: GenerateSS4DialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -132,6 +141,13 @@ export function GenerateSS4Dialog({
                 </div>
               </div>
 
+              {existingUnsignedStatus && (
+                <div className="text-xs bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800">
+                  <p className="font-medium mb-1">An unsigned SS-4 already exists ({existingUnsignedStatus.replace('_', ' ')}).</p>
+                  <p>Regenerating refreshes it from the account&apos;s current data — entity type, members, signer, addresses. The client&apos;s existing link stays valid.</p>
+                </div>
+              )}
+
               <div className="text-xs text-muted-foreground bg-amber-50 border border-amber-200 rounded-lg p-3">
                 <p className="font-medium text-amber-800 mb-1">After client signs:</p>
                 <p>Luca will receive a task to fax the SS-4 to the IRS.</p>
@@ -175,14 +191,26 @@ export function GenerateSS4Dialog({
               <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-800">
                 Cancel
               </button>
-              <button
-                onClick={() => handleGenerate()}
-                disabled={isPending}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                Generate SS-4
-              </button>
+              {existingUnsignedStatus ? (
+                <button
+                  onClick={() => handleGenerate(true)}
+                  disabled={isPending}
+                  title="Refresh the unsigned SS-4 from the account's current data — entity type, members, state. The client's existing link stays valid."
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                  Regenerate from account data
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleGenerate()}
+                  disabled={isPending}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                  Generate SS-4
+                </button>
+              )}
             </>
           ) : (
             <>

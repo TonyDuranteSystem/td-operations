@@ -24,14 +24,18 @@ interface Ss4Record {
  *   none  → "Generate SS-4" (POST generate-ss4; surfaces the real blocker, e.g.
  *           "Registered Agent not set", per R099)
  *   draft → preview link + "Send to Client for Signature" (POST send-ss4)
- *   awaiting_signature → waiting notice
- *   signed → signed confirmation
+ *           + "Regenerate from account data" (POST {regenerate:true})
+ *   awaiting_signature → waiting notice + regenerate (member data may have
+ *           changed after the invite went out — the refresh keeps the link and
+ *           re-notifies the signer only if the signer changed)
+ *   signed → signed confirmation (locked — no regenerate)
  */
 export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
   const [ss4, setSs4] = useState<Ss4Record | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [info, setInfo] = useState<string | null>(null)
 
   const hasAccount = !!accountId
 
@@ -52,6 +56,7 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
   async function generate() {
     setBusy(true)
     setError(null)
+    setInfo(null)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/generate-ss4`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
@@ -59,8 +64,39 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
         throw new Error(data.error || 'Could not generate the SS-4.')
       }
       setSs4(data.ss4 ?? null)
+      // Honest already-exists messaging: nothing was refreshed.
+      if (data.already_existed && data.note) setInfo(data.note)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not generate the SS-4.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function regenerate() {
+    setBusy(true)
+    setError(null)
+    setInfo(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/generate-ss4`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ regenerate: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not regenerate the SS-4.')
+      }
+      setSs4(data.ss4 ?? null)
+      setInfo(
+        data.unchanged
+          ? 'Already up to date — the SS-4 matches the current account and member data.'
+          : data.signer_changed
+            ? 'Refreshed — the responsible party changed; the new signer has been notified.'
+            : 'Refreshed from current account and member data — same client link.',
+      )
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not regenerate the SS-4.')
     } finally {
       setBusy(false)
     }
@@ -166,16 +202,27 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
             <Clock className="mt-0.5 h-4 w-4 shrink-0" />
             <span>Waiting for the client to sign in the portal.</span>
           </div>
-          {ss4.previewUrl && (
-            <a
-              href={ss4.previewUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100"
+          <div className="flex flex-wrap items-center gap-2">
+            {ss4.previewUrl && (
+              <a
+                href={ss4.previewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100"
+              >
+                <ExternalLink className="h-4 w-4" /> Preview SS-4
+              </a>
+            )}
+            <button
+              onClick={regenerate}
+              disabled={busy}
+              title="Refresh the unsigned SS-4 from current account & member data — same client link. If the responsible party changes, the new signer is notified."
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
             >
-              <ExternalLink className="h-4 w-4" /> Preview SS-4
-            </a>
-          )}
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              Regenerate from account data
+            </button>
+          </div>
         </div>
       ) : (
         // ── Draft ──
@@ -193,14 +240,32 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
               </a>
             )}
           </div>
-          <button
-            onClick={send}
-            disabled={busy}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-            Send to Client for Signature
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={send}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+              Send to Client for Signature
+            </button>
+            <button
+              onClick={regenerate}
+              disabled={busy}
+              title="Refresh the draft SS-4 from current account & member data — entity type, members, signer, addresses."
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              Regenerate from account data
+            </button>
+          </div>
+        </div>
+      )}
+
+      {info && (
+        <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{info}</span>
         </div>
       )}
 
