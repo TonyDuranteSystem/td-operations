@@ -18,9 +18,20 @@ import {
   ENROLLMENT_STATUSES,
 } from '@/lib/td-communication/pipeline'
 import { isImageThumbnailable } from '@/lib/td-communication/deliverables'
+import dynamic from 'next/dynamic'
 import { ConversationChat } from './conversation-chat'
 import { DeliverablesSection } from './deliverables-section'
 import type { CommParticipant } from '@/lib/td-communication/types'
+
+// Cris's design tools (Phase 12). Lazy-loaded with no SSR: the Canvas / zip / SVG
+// code must not weigh down a normal brief-panel open.
+const DesignToolsSection = dynamic(
+  () => import('./design-tools/design-tools-section').then((m) => m.DesignToolsSection),
+  {
+    ssr: false,
+    loading: () => <div className="py-4 text-center text-sm text-zinc-400">Loading design tools…</div>,
+  },
+)
 
 interface TimelineEvent {
   label: string
@@ -560,6 +571,15 @@ export function ProjectBriefPanel({
               {/* Deliverables */}
               <Section title="Deliverables" icon={<Package className="h-3.5 w-3.5" />}>
                 <DeliverablesSection enrollmentId={project.id} onChanged={handleDeliverableChange} />
+              </Section>
+
+              {/* Design Tools (Phase 12) */}
+              <Section title="Design Tools" icon={<Sparkles className="h-3.5 w-3.5" />}>
+                <DesignToolsSection
+                  enrollmentId={project.id}
+                  paletteColors={project.ai_brand_profile?.color_palette ?? []}
+                  onSaved={handleDeliverableChange}
+                />
               </Section>
 
               {/* Timeline */}

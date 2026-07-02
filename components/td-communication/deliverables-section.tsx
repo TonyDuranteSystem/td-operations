@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
-  UploadCloud, Loader2, Trash2, Download, Send, BadgeCheck, Plus, FileText, ImageIcon,
+  UploadCloud, Loader2, Trash2, Download, Send, BadgeCheck, Plus, FileText, ImageIcon, Package,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ import {
   deliverableTypeLabel,
   validateDeliverable,
   isImageThumbnailable,
+  isDesignAssetType,
   groupByConcept,
   conceptLabel,
   nextConceptNumber,
@@ -184,7 +185,17 @@ export function DeliverablesSection({
     load()
   }, [load])
 
-  const concepts = useMemo(() => groupByConcept(deliverables), [deliverables])
+  // Split tool-generated outputs (mockup / asset_kit) out of the concept grouping
+  // so they never mix into the logo A/B/C tabs. They render in their own block.
+  const creativeDeliverables = useMemo(
+    () => deliverables.filter((d) => !isDesignAssetType(d.type)),
+    [deliverables],
+  )
+  const designAssets = useMemo(
+    () => deliverables.filter((d) => isDesignAssetType(d.type)),
+    [deliverables],
+  )
+  const concepts = useMemo(() => groupByConcept(creativeDeliverables), [creativeDeliverables])
 
   // Tabs = existing concepts ∪ a pending "new" concept the user just opened.
   const conceptNumbers = useMemo(() => {
@@ -347,7 +358,7 @@ export function DeliverablesSection({
   )
 
   const addConcept = () => {
-    const n = nextConceptNumber(deliverables)
+    const n = nextConceptNumber(creativeDeliverables)
     setDraftConcept(n)
     setActiveConcept(n)
   }
@@ -469,7 +480,7 @@ export function DeliverablesSection({
       </div>
 
       {/* Version list for the active concept */}
-      {deliverables.length === 0 ? (
+      {creativeDeliverables.length === 0 ? (
         <p className="text-sm text-zinc-400 text-center py-2">No deliverables yet.</p>
       ) : activeVersions.length === 0 ? (
         <p className="text-sm text-zinc-400 text-center py-2">No files in {conceptLabel(targetConcept)} yet.</p>
@@ -487,6 +498,69 @@ export function DeliverablesSection({
           ))}
         </div>
       )}
+
+      {/* Design tool outputs (Phase 12) — saved mockups / asset kits. Internal:
+          download + delete only (no client release — that's the logo-concept flow). */}
+      {designAssets.length > 0 && (
+        <div className="pt-2 border-t border-zinc-100 space-y-2">
+          <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">
+            Design tool outputs
+          </p>
+          {designAssets.map((d) => (
+            <DesignAssetRow key={d.id} d={d} busy={busyId === d.id} onDelete={() => doDelete(d.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A saved design-tool output (mockup / asset kit): download + delete, no release. */
+function DesignAssetRow({
+  d,
+  busy,
+  onDelete,
+}: {
+  d: CommDeliverable
+  busy: boolean
+  onDelete: () => void
+}) {
+  const isImage = isImageThumbnailable(d.file_name, d.mime_type)
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-zinc-200 p-2.5">
+      <div className="shrink-0 h-11 w-11 rounded-md border border-zinc-100 bg-zinc-50 flex items-center justify-center overflow-hidden">
+        {isImage && d.preview_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={d.preview_url} alt={d.file_name} className="h-full w-full object-contain" />
+        ) : (
+          <Package className="h-5 w-5 text-zinc-400" />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-sm font-medium text-zinc-900 truncate max-w-[13rem]">{d.file_name}</span>
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-zinc-50 text-zinc-600 border-zinc-200">
+            {deliverableTypeLabel(d.type)}
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        {d.download_url && (
+          <a
+            href={d.download_url}
+            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+          >
+            <Download className="h-3 w-3" /> Download
+          </a>
+        )}
+        <button
+          onClick={onDelete}
+          disabled={busy}
+          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-zinc-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </div>
     </div>
   )
 }

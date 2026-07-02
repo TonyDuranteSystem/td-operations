@@ -1,0 +1,146 @@
+/**
+ * TD Communication — brand asset kit builder (Phase 12, Tool 4).
+ *
+ * Pure, side-effect-free registry + naming + manifest logic for the asset kit.
+ * The actual raster work (drawing the logo into each size onto each background)
+ * happens in the browser via <canvas>; this module owns the deterministic,
+ * unit-testable parts: which sizes/backgrounds exist, the zip path for each
+ * output, honest background resolution (no "transparent" when the source has no
+ * alpha), and the README manifest.
+ *
+ * No DB / no I/O — client-safe, unit-tested (R086).
+ */
+
+export type KitBackground = 'transparent' | 'white' | 'dark'
+
+export const WHITE_BG_HEX = '#ffffff'
+export const DARK_BG_HEX = '#111111'
+
+/** Hex fill for a background, or null for transparent (no fill). */
+export function backgroundHex(bg: KitBackground): string | null {
+  if (bg === 'white') return WHITE_BG_HEX
+  if (bg === 'dark') return DARK_BG_HEX
+  return null
+}
+
+export function backgroundLabel(bg: KitBackground): string {
+  return bg === 'transparent' ? 'Transparent' : bg === 'white' ? 'White' : 'Dark'
+}
+
+export interface SocialPreset {
+  id: string
+  label: string
+  width: number
+  height: number
+  /** zip subfolder (social platform grouping). */
+  folder: string
+}
+
+/** Social / marketing sizes. Logo is centred with padding, `contain` (never cropped). */
+export const SOCIAL_PRESETS: readonly SocialPreset[] = [
+  { id: 'profile_400', label: 'Profile 400×400', width: 400, height: 400, folder: 'profile' },
+  { id: 'profile_800', label: 'Profile 800×800', width: 800, height: 800, folder: 'profile' },
+  { id: 'instagram_post', label: 'Instagram Post 1080×1080', width: 1080, height: 1080, folder: 'instagram' },
+  { id: 'instagram_story', label: 'Story 1080×1920', width: 1080, height: 1920, folder: 'instagram' },
+  { id: 'x_header', label: 'X Header 1500×500', width: 1500, height: 500, folder: 'x-twitter' },
+  { id: 'fb_li_cover', label: 'FB/LinkedIn Cover 1200×628', width: 1200, height: 628, folder: 'cover' },
+] as const
+
+/** Favicon PNG sizes (a matching SVG favicon is emitted from the source separately). */
+export const FAVICON_SIZES: readonly number[] = [16, 32, 48, 180] as const
+
+/* -------------------------------------------------------------------------- */
+/* Naming                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Filesystem-safe slug for a brand name (falls back to `brand`). */
+export function kitSlug(brandName: string | null | undefined): string {
+  const slug = (brandName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || 'brand'
+}
+
+/** Zip path for a social preset on a given background. */
+export function socialFileName(preset: SocialPreset, bg: KitBackground, brand: string): string {
+  return `social/${preset.folder}/${brand}-${preset.id}-${bg}.png`
+}
+
+/** Zip path for a favicon PNG. */
+export function faviconFileName(size: number, brand: string): string {
+  return `favicons/${brand}-favicon-${size}x${size}.png`
+}
+
+export const FAVICON_SVG_PATH = (brand: string) => `favicons/${brand}-favicon.svg`
+
+/* -------------------------------------------------------------------------- */
+/* Background resolution (honest transparency)                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Resolve which backgrounds to actually produce. `transparent` is only honoured
+ * when the source logo truly has alpha (a white-background JPG has none — we do
+ * NOT fabricate transparency). Always returns at least one background: if the
+ * caller asked only for transparent but the source is opaque, we fall back to
+ * white.
+ */
+export function resolveBackgrounds(
+  requested: KitBackground[],
+  sourceHasAlpha: boolean,
+): KitBackground[] {
+  const uniq = Array.from(new Set(requested))
+  const filtered = uniq.filter((b) => (b === 'transparent' ? sourceHasAlpha : true))
+  if (filtered.length === 0) return ['white']
+  return filtered
+}
+
+/* -------------------------------------------------------------------------- */
+/* Manifest                                                                    */
+/* -------------------------------------------------------------------------- */
+
+export interface ManifestInput {
+  brandName: string
+  /** A pre-formatted timestamp label (kept out of the pure lib — no Date.now here). */
+  generatedAtLabel: string
+  presets: SocialPreset[]
+  backgrounds: KitBackground[]
+  faviconSizes: number[]
+  includeSvgFavicon: boolean
+}
+
+/** Human-readable README.txt bundled at the root of the kit zip. */
+export function buildManifest(input: ManifestInput): string {
+  const brand = input.brandName?.trim() || 'Brand'
+  const bgList = input.backgrounds.map(backgroundLabel).join(', ')
+  const lines: string[] = [
+    `${brand} — Brand Asset Kit`,
+    `Generated by TD Communication on ${input.generatedAtLabel}`,
+    '',
+    'CONTENTS',
+    `- social/       ${input.presets.length} sizes × ${input.backgrounds.length} background(s) (${bgList})`,
+    `- favicons/     ${input.faviconSizes.map((s) => `${s}×${s}`).join(', ')} PNG${
+      input.includeSvgFavicon ? ' + SVG' : ''
+    }`,
+    '',
+    'SOCIAL SIZES',
+    ...input.presets.map((p) => `- ${p.label}  →  social/${p.folder}/`),
+    '',
+    'NOTES',
+    '- Logos are centred and scaled to fit (never cropped or stretched).',
+    '- "Transparent" variants are only included when the source logo has transparency.',
+    '- PNG favicons cover modern browsers and apple-touch-icon (180×180).',
+  ]
+  return lines.join('\n')
+}
+
+/** Total number of image files a kit will contain (for progress / UI counts). */
+export function countKitFiles(
+  presets: SocialPreset[],
+  backgrounds: KitBackground[],
+  faviconSizes: number[],
+  includeSvgFavicon: boolean,
+): number {
+  return presets.length * backgrounds.length + faviconSizes.length + (includeSvgFavicon ? 1 : 0)
+}
