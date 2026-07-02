@@ -5,13 +5,57 @@
  * the reads/writes live in ./questions-queries. Types in ./types.
  */
 
-import type { TdCommQuestion, QuestionFieldType, QuestionAudience } from './types'
+import type { TdCommQuestion, TdCommOption, QuestionFieldType, QuestionAudience } from './types'
 
 export const QUESTION_TYPES: readonly QuestionFieldType[] = ['text', 'textarea', 'select', 'number', 'file']
 export const QUESTION_AUDIENCES: readonly QuestionAudience[] = ['new_brand', 'rebrand', 'both']
 
 /** lowercase snake/kebab key for form_data (e.g. "business_name"). */
 const KEY_RE = /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/
+
+/** Accepts either the object option shape or a legacy bare string. */
+export type RawOption = TdCommOption | string
+
+/**
+ * Normalize one raw option into a `TdCommOption`. A bare string "X" becomes
+ * `{ value: "X", label_en: "X" }` (legacy tolerance); an object is trimmed and
+ * null-defaulted. Returns null when the option carries no usable value/label
+ * (dropped by the caller) so a stray blank row never reaches the wizard.
+ */
+export function coerceOption(raw: unknown): TdCommOption | null {
+  if (typeof raw === 'string') {
+    const v = raw.trim()
+    return v ? { value: v, label_en: v } : null
+  }
+  if (raw && typeof raw === 'object') {
+    const o = raw as Record<string, unknown>
+    const value = typeof o.value === 'string' ? o.value.trim() : ''
+    const labelEnRaw = typeof o.label_en === 'string' ? o.label_en.trim() : ''
+    // Fall back to value as the label, and to label as the value, so a
+    // half-filled option still round-trips instead of vanishing.
+    const value2 = value || labelEnRaw
+    const labelEn = labelEnRaw || value
+    if (!value2 && !labelEn) return null
+    const str = (k: string): string | null => {
+      const s = o[k]
+      return typeof s === 'string' && s.trim() ? s.trim() : null
+    }
+    return {
+      value: value2,
+      label_en: labelEn || value2,
+      label_it: str('label_it'),
+      description_en: str('description_en'),
+      description_it: str('description_it'),
+    }
+  }
+  return null
+}
+
+/** Coerce a raw options array (mixed object/string) into clean `TdCommOption[]`. */
+export function coerceOptions(raw: unknown): TdCommOption[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map(coerceOption).filter((o): o is TdCommOption => o !== null)
+}
 
 export interface QuestionWriteInput {
   key?: string
@@ -21,7 +65,8 @@ export interface QuestionWriteInput {
   required?: boolean
   step?: number
   audience?: QuestionAudience
-  options?: string[]
+  /** Object options; legacy bare strings still accepted and coerced on read. */
+  options?: RawOption[]
   active?: boolean
   sort_order?: number
 }
@@ -66,13 +111,18 @@ export function validateQuestionInput(
     errors.push('Sort order must be a whole number.')
   }
   if (input.options !== undefined) {
-    if (!Array.isArray(input.options) || input.options.some((s) => typeof s !== 'string')) {
-      errors.push('Options must be a list of text values.')
+    if (!Array.isArray(input.options)) {
+      errors.push('Options must be a list.')
+    } else {
+      // Each option must be a non-empty string OR an object with a usable
+      // value/label (coerceOption returns null for anything unusable).
+      const bad = input.options.some((o) => coerceOption(o) === null)
+      if (bad) errors.push('Each option needs a value and an English label.')
     }
   }
-  // A select with no options is unusable.
+  // A select with no (usable) options is unusable.
   if (input.type === 'select') {
-    const opts2 = input.options ?? []
+    const opts2 = coerceOptions(input.options ?? [])
     if (opts2.length === 0) errors.push('A "select" question needs at least one option.')
   }
 
@@ -103,7 +153,7 @@ export function shapeQuestion(row: Record<string, unknown>): TdCommQuestion {
     required: Boolean(row.required),
     step: Number(row.step ?? 1),
     audience: (row.audience as QuestionAudience) ?? 'both',
-    options: Array.isArray(row.options) ? (row.options as string[]) : [],
+    options: coerceOptions(row.options),
     active: row.active === undefined ? true : Boolean(row.active),
     sort_order: Number(row.sort_order ?? 0),
     created_at: String(row.created_at ?? ''),

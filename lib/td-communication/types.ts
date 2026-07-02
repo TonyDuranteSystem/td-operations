@@ -213,6 +213,22 @@ export interface TdCommPackage {
 export type QuestionFieldType = 'text' | 'textarea' | 'select' | 'number' | 'file'
 export type QuestionAudience = 'new_brand' | 'rebrand' | 'both'
 
+/**
+ * A single option for a `select` question. Bilingual label + an optional
+ * bilingual description (e.g. the psychological meaning of a colour). The
+ * wizard folds `description_*` into the rendered option label (the wizard's
+ * FieldConfig option shape has no description slot). Legacy rows may still
+ * store a bare string `"X"`; the reader (`shapeQuestion`) coerces that to
+ * `{ value: "X", label_en: "X" }`.
+ */
+export interface TdCommOption {
+  value: string
+  label_en: string
+  label_it?: string | null
+  description_en?: string | null
+  description_it?: string | null
+}
+
 /** A brand-audit question (td_comm_questions row), operator-editable. */
 export interface TdCommQuestion {
   id: string
@@ -226,8 +242,8 @@ export interface TdCommQuestion {
   step: number
   /** Which enrollment type the question applies to. */
   audience: QuestionAudience
-  /** Option values, used when type='select'. */
-  options: string[]
+  /** Options used when type='select' (value + bilingual label/description). */
+  options: TdCommOption[]
   active: boolean
   sort_order: number
   created_at: string

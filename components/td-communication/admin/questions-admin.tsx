@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Plus, Pencil, ArchiveX, Loader2, X, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { TdCommQuestion, QuestionFieldType, QuestionAudience } from '@/lib/td-communication/types'
+import type { TdCommQuestion, TdCommOption, QuestionFieldType, QuestionAudience } from '@/lib/td-communication/types'
 
 const TYPES: QuestionFieldType[] = ['text', 'textarea', 'select', 'number', 'file']
 const AUDIENCES: { value: QuestionAudience; label: string }[] = [
@@ -18,6 +18,15 @@ const AUDIENCE_BADGE: Record<QuestionAudience, string> = {
   rebrand: 'bg-purple-100 text-purple-800',
 }
 
+/** Editable row in the option repeater. Empty strings render as blanks. */
+interface OptionRow {
+  value: string
+  label_en: string
+  label_it: string
+  description_en: string
+  description_it: string
+}
+
 interface FormState {
   key: string
   label_en: string
@@ -26,27 +35,56 @@ interface FormState {
   required: boolean
   step: string
   audience: QuestionAudience
-  optionsText: string // one per line
+  options: OptionRow[]
   active: boolean
   sort_order: string
+}
+
+const EMPTY_OPTION: OptionRow = { value: '', label_en: '', label_it: '', description_en: '', description_it: '' }
+
+function optionToRow(o: TdCommOption): OptionRow {
+  return {
+    value: o.value,
+    label_en: o.label_en,
+    label_it: o.label_it ?? '',
+    description_en: o.description_en ?? '',
+    description_it: o.description_it ?? '',
+  }
 }
 
 function toForm(q: TdCommQuestion): FormState {
   return {
     key: q.key, label_en: q.label_en, label_it: q.label_it ?? '', type: q.type,
     required: q.required, step: String(q.step), audience: q.audience,
-    optionsText: q.options.join('\n'), active: q.active, sort_order: String(q.sort_order),
+    options: q.options.map(optionToRow), active: q.active, sort_order: String(q.sort_order),
   }
 }
 const EMPTY_FORM: FormState = {
   key: '', label_en: '', label_it: '', type: 'text', required: false,
-  step: '1', audience: 'both', optionsText: '', active: true, sort_order: '0',
+  step: '1', audience: 'both', options: [], active: true, sort_order: '0',
 }
 
-function toPayload(f: FormState, isCreate: boolean) {
-  const options = f.optionsText.split('\n').map((s) => s.trim()).filter(Boolean)
+/** A repeater row → clean TdCommOption; drops rows with no value AND no label. */
+function rowToOption(r: OptionRow): TdCommOption | null {
+  const value = r.value.trim() || r.label_en.trim()
+  const label_en = r.label_en.trim() || r.value.trim()
+  if (!value && !label_en) return null
+  const s = (v: string) => (v.trim() ? v.trim() : null)
   return {
-    ...(isCreate ? { key: f.key.trim() } : { key: f.key.trim() }),
+    value,
+    label_en: label_en || value,
+    label_it: s(r.label_it),
+    description_en: s(r.description_en),
+    description_it: s(r.description_it),
+  }
+}
+
+function toPayload(f: FormState, _isCreate: boolean) {
+  const options = f.type === 'select'
+    ? f.options.map(rowToOption).filter((o): o is TdCommOption => o !== null)
+    : []
+  return {
+    key: f.key.trim(),
     label_en: f.label_en.trim(),
     label_it: f.label_it.trim() || null,
     type: f.type,
@@ -187,6 +225,12 @@ function QuestionModal({
 
   function set<K extends keyof FormState>(k: K, v: FormState[K]) { setForm((f) => ({ ...f, [k]: v })) }
 
+  function setOption<K extends keyof OptionRow>(idx: number, k: K, v: OptionRow[K]) {
+    setForm((f) => ({ ...f, options: f.options.map((o, i) => (i === idx ? { ...o, [k]: v } : o)) }))
+  }
+  function addOption() { setForm((f) => ({ ...f, options: [...f.options, { ...EMPTY_OPTION }] })) }
+  function removeOption(idx: number) { setForm((f) => ({ ...f, options: f.options.filter((_, i) => i !== idx) })) }
+
   async function submit() {
     setBusy(true)
     try {
@@ -216,7 +260,7 @@ function QuestionModal({
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-3 border-b sticky top-0 bg-white">
           <h3 className="font-semibold">{title}</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700"><X className="w-5 h-5" /></button>
@@ -247,8 +291,35 @@ function QuestionModal({
           </div>
 
           {form.type === 'select' && (
-            <label className="block"><span className={label}>Options (one per line)</span>
-              <textarea className={input} rows={3} value={form.optionsText} onChange={(e) => set('optionsText', e.target.value)} placeholder={'Option A\nOption B'} /></label>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className={label}>Options</span>
+                <button type="button" onClick={addOption} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700">
+                  <Plus className="w-3.5 h-3.5" /> Add option
+                </button>
+              </div>
+              {form.options.length === 0 ? (
+                <p className="text-[11px] text-zinc-400 border rounded px-2 py-2">No options yet — add at least one.</p>
+              ) : (
+                <div className="space-y-2">
+                  {form.options.map((o, idx) => (
+                    <div key={idx} className="border rounded p-2 bg-zinc-50/60 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <input className={input} value={o.value} onChange={(e) => setOption(idx, 'value', e.target.value)} placeholder="value (stored)" />
+                        <button type="button" onClick={() => removeOption(idx)} className="shrink-0 text-zinc-400 hover:text-red-600 p-1" title="Remove option"><X className="w-4 h-4" /></button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input className={input} value={o.label_en} onChange={(e) => setOption(idx, 'label_en', e.target.value)} placeholder="Label (EN)" />
+                        <input className={input} value={o.label_it} onChange={(e) => setOption(idx, 'label_it', e.target.value)} placeholder="Label (IT)" />
+                        <input className={input} value={o.description_en} onChange={(e) => setOption(idx, 'description_en', e.target.value)} placeholder="Description (EN)" />
+                        <input className={input} value={o.description_it} onChange={(e) => setOption(idx, 'description_it', e.target.value)} placeholder="Description (IT)" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <span className="text-[11px] text-zinc-400">Value is stored in the answer; the label (EN/IT) is shown to the client, with the description folded in.</span>
+            </div>
           )}
 
           <div className="flex items-center gap-4">

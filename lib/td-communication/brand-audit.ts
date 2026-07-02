@@ -40,11 +40,13 @@ export function normalizeClientType(raw: unknown): EnrollmentClientType {
   return raw === 'rebrand' ? 'rebrand' : 'new_brand'
 }
 
-/** The client's business name from the brand-audit answers (both paths use
- *  `business_name`). Falls back to a neutral label for the chat notice. */
+/** The client's business name from the brand-audit answers. The DB-driven
+ *  question set stores it under `brand_name` (Step 3); the legacy placeholder
+ *  used `business_name`. Accept both, then fall back to a neutral label for the
+ *  chat notice. */
 export function businessNameFromFormData(data: Record<string, unknown>): string {
-  const name = data?.business_name
-  return typeof name === 'string' && name.trim() ? name.trim() : 'New brand'
+  const raw = data?.business_name ?? data?.brand_name
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : 'New brand'
 }
 
 /** The system chat notice posted when a brand audit is submitted. */

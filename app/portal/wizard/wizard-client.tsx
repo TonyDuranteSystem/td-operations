@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
-import { WizardShell } from '@/components/portal/wizard/wizard-shell'
+import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD } from '@/components/portal/wizard/wizard-configs'
 import { createClient } from '@/lib/supabase/client'
@@ -74,6 +74,11 @@ interface WizardClientProps {
   /** Bank CSV-export guides (catalog-driven, §3.1/§8): shown under a bank
    * upload card when the typed bank name matches a guide's match terms. */
   bankGuides?: Array<{ name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }>
+  /** DB-driven wizard config. When provided (TD Communication brand audit,
+   * built server-side from td_comm_questions), it REPLACES the code-side
+   * getWizardConfig() output. Every wizard type without a DB source leaves this
+   * undefined and keeps the synchronous static config. */
+  configOverride?: { steps: WizardStep[]; fields: Record<string, FieldConfig[]> }
 }
 
 // A conditional field is visible only if its condition matches AND its parent
@@ -244,8 +249,9 @@ export function WizardClient({
   isLocked,
   itinCount = 0,
   bankGuides = [],
+  configOverride,
 }: WizardClientProps) {
-  const { steps, fields: baseFields } = getWizardConfig(wizardType, entityType)
+  const { steps, fields: baseFields } = configOverride ?? getWizardConfig(wizardType, entityType)
 
   // Inject the per-person "applies for ITIN?" field into the owner step and the
   // members step when the offer bundled ITIN (itinCount > 0). Done here (not in
