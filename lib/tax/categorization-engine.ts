@@ -114,8 +114,9 @@ export interface RecategorizeOptions {
   aiOptions?: AiCategorizeOptions
 }
 
-/** The bank_transactions columns this engine reads (matches the select below). */
-interface CategorizableRow {
+/** The bank_transactions columns this engine reads (matches the select below).
+ *  Exported so the standalone P&L workspace path reuses the exact row shape. */
+export interface CategorizableRow {
   id: string
   transaction_date: string
   description: string | null
@@ -134,55 +135,29 @@ interface CategorizableRow {
   ai_bucket: string | null
 }
 
+/** A pending change to one transaction produced by the deterministic passes. */
+export type RecatUpdate = { category?: string; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string }
+
 /**
- * Re-categorize an account's tax-year transactions: rules pass + transfer-pair
- * pass (+ optional AI-assist pass), persisting only changed rows. Run after
- * ingest, and re-runnable any time staff edit rules (idempotent).
+ * PURE deterministic core of {@link recategorizeAccountYear}: pass 1 (rules),
+ * pass 2 (transfer pairs), pass 2b (own-entity self-transfers). Builds the
+ * per-row update map from IN-MEMORY inputs only — no DB, no AI, no network.
  *
- * Precedence: manual ("manual:" notes) > rules > AI. Guards:
- * - rows a human corrected are never overwritten by ANY pass
- * - rules may recategorize an AI-tagged row (rule wins, "ai:" tag cleared),
- *   but a re-run never downgrades an AI-categorized row back to uncategorized
+ * Extracted (2026-07-01, standalone P&L workspace tool) so the workspace path
+ * and the client account path share ONE categorization algorithm and can never
+ * diverge — the parity guarantee. `recategorizeAccountYear` delegates to this,
+ * then layers its optional AI-assist pass + DB persistence on top. Do NOT add
+ * any I/O here.
  */
-export async function recategorizeAccountYear(
-  accountId: string,
-  taxYear: number,
-  opts?: RecategorizeOptions,
-): Promise<RecategorizeResult> {
-  // Paginated read — a >1000-tx account otherwise had only the first 1000 rows
-  // recategorized, leaving the rest uncategorized and breaking transfer-pair
-  // matching across the full year.
-  const rows = await fetchAllBankTransactionsByYear<CategorizableRow>(
-    accountId,
-    taxYear,
-    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket",
-  )
-  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
-
-  const rules = await getCategorizationRules(accountId)
-
-  // member names for related-party detection (same source the tools use)
-  const { data: links } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contacts(first_name, last_name)")
-    .eq("account_id", accountId)
-  const memberNames = ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
-    .filter(l => l.contacts)
-    .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
-    .filter(n => n.length > 0)
-
-  // Company's own legal name — used by the own-entity self-transfer pass below
-  // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.
-  const { data: acctRow } = await supabaseAdmin
-    .from("accounts")
-    .select("company_name")
-    .eq("id", accountId)
-    .single()
-  const companyName = acctRow?.company_name ?? ""
-
+export function computeRecategorizationUpdates(
+  rows: CategorizableRow[],
+  rules: CategorizationRule[],
+  memberNames: string[],
+  companyName: string,
+): { updates: Map<string, RecatUpdate>; transferPairs: number } {
   // Pass 1: rules. (ai_lean/ai_bucket are ADVISORY review hints — #2 — written
   // for residual rows even when their category stays uncategorized.)
-  const updates = new Map<string, { category?: string; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string }>()
+  const updates = new Map<string, RecatUpdate>()
   for (const row of rows) {
     if ((row.notes ?? "").startsWith("manual:")) continue // human corrections win, always
     const isAiTagged = (row.notes ?? "").startsWith("ai:")
@@ -233,6 +208,61 @@ export async function recategorizeAccountYear(
   for (const id of ownHits) {
     updates.set(id, { category: "conversion", subcategory: "internal_transfer", notes: "own-entity transfer" })
   }
+
+  return { updates, transferPairs: pairs.length }
+}
+
+/**
+ * Re-categorize an account's tax-year transactions: rules pass + transfer-pair
+ * pass (+ optional AI-assist pass), persisting only changed rows. Run after
+ * ingest, and re-runnable any time staff edit rules (idempotent).
+ *
+ * Precedence: manual ("manual:" notes) > rules > AI. Guards:
+ * - rows a human corrected are never overwritten by ANY pass
+ * - rules may recategorize an AI-tagged row (rule wins, "ai:" tag cleared),
+ *   but a re-run never downgrades an AI-categorized row back to uncategorized
+ */
+export async function recategorizeAccountYear(
+  accountId: string,
+  taxYear: number,
+  opts?: RecategorizeOptions,
+): Promise<RecategorizeResult> {
+  // Paginated read — a >1000-tx account otherwise had only the first 1000 rows
+  // recategorized, leaving the rest uncategorized and breaking transfer-pair
+  // matching across the full year.
+  const rows = await fetchAllBankTransactionsByYear<CategorizableRow>(
+    accountId,
+    taxYear,
+    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket",
+  )
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
+
+  const rules = await getCategorizationRules(accountId)
+
+  // member names for related-party detection (same source the tools use)
+  const { data: links } = await supabaseAdmin
+    .from("account_contacts")
+    .select("contacts(first_name, last_name)")
+    .eq("account_id", accountId)
+  const memberNames = ((links ?? []) as unknown as Array<{ contacts: { first_name: string | null; last_name: string | null } | null }>)
+    .filter(l => l.contacts)
+    .map(l => `${l.contacts!.first_name ?? ""} ${l.contacts!.last_name ?? ""}`.trim())
+    .filter(n => n.length > 0)
+
+  // Company's own legal name — used by the own-entity self-transfer pass below
+  // and (when aiAssist) reused for the AI context. Fetched once, unconditionally.
+  const { data: acctRow } = await supabaseAdmin
+    .from("accounts")
+    .select("company_name")
+    .eq("id", accountId)
+    .single()
+  const companyName = acctRow?.company_name ?? ""
+
+  // Passes 1 (rules) + 2 (transfer pairs) + 2b (own-entity self-transfers): the
+  // pure deterministic core, extracted so the standalone P&L workspace tool
+  // categorizes IDENTICALLY to this client path (no divergence — parity
+  // guarantee). See computeRecategorizationUpdates above.
+  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, memberNames, companyName)
 
   // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
   // the deterministic passes. Only high-confidence suggestions are applied,
@@ -339,5 +369,5 @@ export async function recategorizeAccountYear(
     return (u?.category ?? r.category) === "uncategorized"
   }).length
 
-  return { scanned: rows.length, recategorized, transferPairs: pairs.length, aiCategorized, aiErrors, uncategorizedRemaining }
+  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining }
 }

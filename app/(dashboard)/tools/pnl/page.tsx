@@ -23,8 +23,9 @@ export default async function PnlToolPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">P&amp;L / Balance Sheet</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Run the tax-financials review for any client — upload their bank statements and prior-year
-          return, review, and download the Profit &amp; Loss statement and Balance Sheet.
+          Run an isolated Profit &amp; Loss / Balance Sheet — from scratch or forked from a client.
+          Upload statements, review, and download. Nothing touches a client&apos;s real books until you
+          explicitly <span className="font-medium">Save to client</span>.
         </p>
       </div>
       <StaffFinancials defaultYear={currentYear - 1} />

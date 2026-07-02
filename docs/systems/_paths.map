@@ -17,7 +17,7 @@ docs/systems/billing-invoicing.md|lib/portal/td-invoice.ts,lib/portal/unified-in
 docs/systems/formation.md|lib/operations/service-delivery.ts,lib/operations/activation.ts,lib/operations/ein-received.ts,lib/operations/sync-tier.ts,lib/portal/auto-create.ts,lib/mcp/tools/formation.ts
 docs/systems/offers.md|lib/offers/,lib/mcp/tools/offers.ts,app/api/webhooks/offer-signed/,lib/portal/offer-invoice-policy.ts,app/api/crm/admin-actions/generate-offer-narrative/,lib/offer-narrative.ts,components/offers/create-offer-dialog.tsx
 docs/systems/banking-bankfeed.md|lib/bank-feed-matcher.ts,lib/operations/process-bank-feed-matches.ts,lib/plaid-sync.ts,lib/airwallex-sync.ts,lib/finance/,lib/mcp/tools/banking-form.ts,lib/mcp/tools/bank-statements.ts
-docs/systems/tax-returns.md|lib/tax/,lib/mcp/tools/tax.ts,lib/mcp/tools/tax-quote.ts,lib/installment-handler.ts,app/(dashboard)/tools/pnl/,app/api/portal/tax-financials/,components/portal/tax-financials-review.tsx
+docs/systems/tax-returns.md|lib/tax/,lib/mcp/tools/tax.ts,lib/mcp/tools/tax-quote.ts,lib/installment-handler.ts,app/(dashboard)/tools/pnl/,app/api/portal/tax-financials/,app/api/tools/pnl/,components/portal/tax-financials-review.tsx
 docs/systems/portal.md|lib/portal/tier-config.ts,lib/portal/auto-create.ts,lib/portal/queries.ts,lib/portal/notifications.ts,lib/operations/sync-tier.ts,lib/mcp/tools/portal.ts,app/portal/,components/portal/wizard/
 docs/systems/referrals-circleback.md|lib/operations/referral.ts,lib/referral-utils.ts,lib/bank-referrals.ts,lib/portal/credit-notes.ts,lib/calendly/,lib/mcp/tools/referrals.ts,app/api/webhooks/calendly/
 docs/systems/workflow-engine.md|lib/catalog/,lib/tasks/,lib/mcp/tools/catalog.ts,app/(dashboard)/workflows/
