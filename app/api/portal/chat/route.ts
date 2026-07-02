@@ -120,6 +120,14 @@ export async function GET(request: NextRequest) {
     // auto-reply is sender_type='system' WITHOUT a marker and IS meant for the
     // client. See sysdoc notification-center-workflow-integration-plan.
     query = query.not('message', 'ilike', '%<!-- chat-event:%')
+  } else {
+    // STAFF reads: hide payment_received events from the Messages thread.
+    // "Client paid INV-…" is bookkeeping ABOUT the client, not conversation —
+    // it already surfaces as a What's New card (payment_received event key,
+    // lib/notifications/whats-new-defaults.ts), so rendering it inline in the
+    // chat duplicated it in the wrong place (Antonio, 2026-07-02, Umberto
+    // Moretti thread). Other event kinds keep their inline pills for now.
+    query = query.not('message', 'ilike', '%<!-- chat-event: kind=payment_received%')
   }
 
   // Per-company scoped plan takes precedence (client switched to a company /
