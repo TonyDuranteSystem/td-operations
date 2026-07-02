@@ -9,7 +9,7 @@ import {
   stableRowRef, dedupeRefs, sniffCsvDialect, parseDelimitedRows,
   detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV,
 } from '@/lib/bank-csv-parsers'
-import { parseWiseCSV, parseBankStatement } from '@/lib/bank-statement-parser'
+import { parseWiseCSV, parseBankStatement, categorizeTransaction } from '@/lib/bank-statement-parser'
 
 const RELAY_CSV = [
   'Date,Payee,Transaction Type,Description,Reference,Status,Amount,Currency,Balance',
@@ -113,6 +113,38 @@ describe('Wise blank-reference fallback (DB non-blank CHECK)', () => {
     const r = parseWiseCSV(csv, 'wise.csv')
     expect(r.transactions).toHaveLength(1)
     expect(r.transactions[0].transaction_ref.startsWith('h-')).toBe(true)
+  })
+})
+
+describe('Wise Payment Reference folding (2026-07-02, B&P golden repro)', () => {
+  // Wise SENT rows don't embed the Payment Reference in the description, so
+  // the client's own note ("Dividend", "Invoice 45") was invisible to every
+  // rule and the AI — €29k of B&P owner dividends were booked as expenses.
+  const csv = [
+    'TransferWise ID,Date,Amount,Currency,Description,Payment Reference,Running Balance',
+    'TRANSFER-1853561227,04-12-2025,-4977.00,EUR,Sent money to Andrea Bosco,Dividend,10386.00',
+    'TRANSFER-1853426617,04-12-2025,10690.00,EUR,Received money from Alpha Business with reference Pagamento fattura n.70/2025,Pagamento fattura n.70/2025,15363.00',
+  ].join('\n')
+
+  it('folds the reference into a SENT description so rules/AI can read the note', () => {
+    const r = parseWiseCSV(csv, 'wise.csv')
+    expect(r.transactions[0].description).toBe('Sent money to Andrea Bosco with reference Dividend')
+    // The folded note now drives the legacy dividend rule → distribution.
+    const c = categorizeTransaction(r.transactions[0])
+    expect(c.category).toBe('distribution')
+    // Counterparty extraction unaffected.
+    expect(r.transactions[0].counterparty).toBe('Andrea Bosco')
+  })
+
+  it('never duplicates a reference the description already embeds (received rows)', () => {
+    const r = parseWiseCSV(csv, 'wise.csv')
+    expect(r.transactions[1].description).toBe('Received money from Alpha Business with reference Pagamento fattura n.70/2025')
+  })
+
+  it('dedup identity unchanged: ref still comes from the reference column', () => {
+    const r = parseWiseCSV(csv, 'wise.csv')
+    expect(r.transactions[0].transaction_ref).toBe('Dividend')
+    expect(r.transactions[1].transaction_ref).toBe('Pagamento fattura n.70/2025')
   })
 })
 

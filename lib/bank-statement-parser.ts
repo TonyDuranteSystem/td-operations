@@ -329,8 +329,21 @@ export function parseWiseCSV(csvContent: string, fileName: string): ParseResult 
       const dateStr = row[colMap.date]?.trim() || ""
       const amount = parseNum(row[colMap.amount] || "0")
       const description = row[colMap.description]?.trim() || ""
-      const reference = row[colMap.reference]?.trim() || row[colMap.id]?.trim() || ""
+      const paymentRef = row[colMap.reference]?.trim() || ""
+      const reference = paymentRef || row[colMap.id]?.trim() || ""
       const balance = colMap.balance !== undefined ? parseNum(row[colMap.balance] || "") : null
+
+      // Fold the client's own note into the matched text (2026-07-02, B&P
+      // golden repro): Wise "Sent money to X" rows do NOT embed the Payment
+      // Reference in the description (received rows do), so notes like
+      // "Dividend" / "Invoice 45" were invisible to every rule and the AI —
+      // €29k of B&P owner dividends were booked as expenses. Dedup-safe: the
+      // transaction_ref comes from the reference itself when present, and the
+      // no-reference hash below uses the ORIGINAL description.
+      const descriptionWithRef =
+        paymentRef && !description.toLowerCase().includes(paymentRef.toLowerCase())
+          ? `${description} with reference ${paymentRef}`
+          : description
 
       // Parse date (Wise uses DD-MM-YYYY or YYYY-MM-DD or DD/MM/YYYY)
       let isoDate = ""
@@ -356,13 +369,15 @@ export function parseWiseCSV(csvContent: string, fileName: string): ParseResult 
 
       transactions.push({
         transaction_date: isoDate,
-        description,
+        description: descriptionWithRef,
         counterparty,
         amount,
         currency,
         balance_after: balance === 0 && colMap.balance === undefined ? null : balance,
         // refs are the dedup identity and must never be blank (DB CHECK since
-        // 20260611-1400) — rows without a Wise reference get a content hash
+        // 20260611-1400) — rows without a Wise reference get a content hash.
+        // The hash uses the ORIGINAL description (not descriptionWithRef) so
+        // the reference-folding above can never change a row's identity.
         transaction_ref: reference && reference.trim() !== ""
           ? reference
           : stableRowRef([isoDate, amount, description, balance]),
