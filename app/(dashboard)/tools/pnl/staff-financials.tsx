@@ -130,7 +130,11 @@ function BlankForm({ defaultYear, onCreated, onDone }: { defaultYear: number; on
     <div className="rounded-xl border bg-white p-5 space-y-4 max-w-2xl">
       <h3 className="text-sm font-semibold text-zinc-800">New blank workspace (MMLLC)</h3>
       <div className="grid grid-cols-2 gap-3">
-        <div><label className="block text-xs font-medium text-zinc-600 mb-1">Company name</label><input className={inputCls} value={companyName} onChange={e => setCompanyName(e.target.value)} /></div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-600 mb-1">Company name</label>
+          <input className={inputCls} value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Exact legal name, e.g. B&P International LLC" />
+          <p className="mt-1 text-[11px] text-zinc-500">Use the company&apos;s EXACT legal name as it appears on the bank statements — it&apos;s how transfers between the company&apos;s own accounts are recognized (not counted as revenue/expenses).</p>
+        </div>
         <div><label className="block text-xs font-medium text-zinc-600 mb-1">EIN (optional)</label><input className={inputCls} value={ein} onChange={e => setEin(e.target.value)} /></div>
         <div><label className="block text-xs font-medium text-zinc-600 mb-1">Tax year</label><input type="number" min={2000} max={2100} className={inputCls} value={year} onChange={e => setYear(e.target.value)} /></div>
         <div><label className="block text-xs font-medium text-zinc-600 mb-1">Label (optional)</label><input className={inputCls} value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. scenario A" /></div>

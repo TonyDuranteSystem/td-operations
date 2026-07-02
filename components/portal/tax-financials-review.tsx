@@ -553,7 +553,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm">
             {processing ? (
-              <span className="text-blue-800">{view.ingestPending} file(s) still processing — you can keep uploading; Generate unlocks when they finish.</span>
+              <span className="text-blue-800">⏳ Almost ready — we&apos;re reading and preparing your statements ({view.ingestPending} left, usually 2–5 minutes). You can keep uploading; Generate unlocks by itself when everything is ready.</span>
             ) : view.transactionCount > 0 ? (
               <span className="text-zinc-700">{view.files.length} statement(s) ready · {view.transactionCount} transactions loaded.</span>
             ) : (

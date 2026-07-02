@@ -35,7 +35,7 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
   try {
     const { data: ws } = await db
       .from('pnl_workspaces')
-      .select('id')
+      .select('id, company_name, linked_account_id')
       .eq('id', workspaceId)
       .maybeSingle()
     if (!ws) return NextResponse.json({ error: 'Workspace not found.' }, { status: 404 })
@@ -63,6 +63,31 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
         { error: `${stillPending} statement(s) are still processing — wait for them to finish, then generate.`, pending: stillPending },
         { status: 409 },
       )
+    }
+
+    // Re-run the DETERMINISTIC pass with the workspace's CURRENT metadata
+    // (2026-07-03, B&P2 prod QA): the pass previously ran only at ingest, so
+    // fixing a wrong company name afterwards ("B&P2" → the legal name the
+    // statements actually carry) changed nothing and own-account transfers
+    // stayed mis-booked. Generate/Regenerate now always re-applies rules +
+    // transfer-pair + own-entity detection first. Idempotent; rows a human
+    // corrected ("manual:" notes) are immune by design.
+    try {
+      const { data: memberRows } = await db
+        .from('pnl_workspace_members')
+        .select('display_name')
+        .eq('workspace_id', workspaceId)
+      const memberNames = ((memberRows ?? []) as Array<{ display_name: string | null }>)
+        .map(m => (m.display_name ?? '').trim())
+        .filter(n => n.length > 0)
+      const { recategorizeWorkspace } = await import('@/lib/tax/workspace-recategorize')
+      await recategorizeWorkspace(workspaceId, {
+        linkedAccountId: (ws.linked_account_id as string | null) ?? null,
+        companyName: (ws.company_name as string | null) ?? '',
+        memberNames,
+      })
+    } catch (e) {
+      console.error('[tools/pnl] deterministic re-run failed (generation continues):', e)
     }
 
     const { error } = await db
