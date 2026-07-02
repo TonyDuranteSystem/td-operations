@@ -5,6 +5,7 @@
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logAction } from '@/lib/mcp/action-log'
+import { staffChatSenderLabel } from '@/lib/portal/chat-sender-name'
 import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
 import { searchTemplates } from './templates'
 import { resolveMailbox } from './gmail-mailbox'
@@ -885,7 +886,7 @@ async function searchPortalMessages(p: any) {
   const result = (data ?? []).map((m: any) => ({
     id: m.id,
     account: (m.accounts as any)?.company_name ?? m.account_id,
-    sender: m.sender_type === 'client' ? (m.sender_context || 'Client') : 'Admin (TD)',
+    sender: staffChatSenderLabel(m.sender_type) ?? (m.sender_context || 'Client'),
     topic: m.topic ?? 'General',
     message: m.message,
     read: m.read_at !== null,
@@ -1799,7 +1800,7 @@ async function getClient360(p: any) {
   ])
 
   const messages = (messagesRes.data ?? []).map(m => ({
-    sender: m.sender_type === 'client' ? (m.sender_context || 'Client') : 'Admin (TD)',
+    sender: staffChatSenderLabel(m.sender_type) ?? (m.sender_context || 'Client'),
     topic: m.topic ?? 'General',
     message: m.message,
     unread: m.sender_type === 'client' && m.read_at === null,
@@ -1957,7 +1958,7 @@ async function portalChatInboxTool(p: any): Promise<string> {
       id: `account_id: ${acctId}`, isAccount: true,
       name: cName ? `${acct?.company_name ?? 'Unknown'} (${cName})` : (acct?.company_name ?? 'Unknown'),
       last: lastMsg?.message?.substring(0, 120) ?? '', lastAt: lastMsg?.created_at ?? '',
-      lastBy: lastMsg?.sender_type === 'client' ? 'Client' : 'Admin', unread,
+      lastBy: staffChatSenderLabel(lastMsg?.sender_type) ?? 'Client', unread,
     })
   }
 
@@ -1971,7 +1972,7 @@ async function portalChatInboxTool(p: any): Promise<string> {
       id: `contact_id: ${ctId}`, isAccount: false,
       name: ct?.full_name ?? ct?.email ?? 'Unknown Contact',
       last: lastMsg?.message?.substring(0, 120) ?? '', lastAt: lastMsg?.created_at ?? '',
-      lastBy: lastMsg?.sender_type === 'client' ? 'Client' : 'Admin', unread,
+      lastBy: staffChatSenderLabel(lastMsg?.sender_type) ?? 'Client', unread,
     })
   }
 
