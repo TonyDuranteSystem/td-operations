@@ -1,8 +1,27 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { explainFailure } from "@/lib/errors/explain-failure"
+import { refreshSS4, type Ss4RefreshResult } from "@/lib/operations/ss4-refresh"
 
 export const dynamic = "force-dynamic"
+
+/**
+ * After any member write, refresh the account's unsigned SS-4 so it never
+ * silently contradicts the Members section (AI Venture Labs, 2026-07-02).
+ * No-op when no unsigned SS-4 exists; MMLLC with ≠1 flagged signer skips the
+ * refresh and returns the staff alert; best-effort — never fails the mutation.
+ * The compact result is returned to the CRM UI as `ss4_refresh`.
+ */
+async function autoRefreshSs4(accountId: string): Promise<Pick<Ss4RefreshResult, "outcome" | "message" | "signerChanged"> | null> {
+  try {
+    const r = await refreshSS4({ account_id: accountId, source: "crm-members-edit" })
+    if (r.outcome === "no_ss4") return null
+    return { outcome: r.outcome, message: r.message, signerChanged: r.signerChanged }
+  } catch (err) {
+    console.error("[members] SS-4 auto-refresh failed (non-fatal):", err)
+    return null
+  }
+}
 
 // GET /api/accounts/[id]/members — list all members
 export async function GET(
@@ -101,7 +120,8 @@ export async function POST(
       }
     }
 
-    return NextResponse.json({ data }, { status: 201 })
+    const ss4Refresh = await autoRefreshSs4(params.id)
+    return NextResponse.json({ data, ss4_refresh: ss4Refresh }, { status: 201 })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
@@ -149,7 +169,8 @@ export async function PATCH(
 
     if (error) return NextResponse.json({ error: explainFailure(error).message }, { status: 400 })
     if (!data) return NextResponse.json({ error: "Member not found" }, { status: 404 })
-    return NextResponse.json({ data })
+    const ss4Refresh = await autoRefreshSs4(params.id)
+    return NextResponse.json({ data, ss4_refresh: ss4Refresh })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
@@ -175,7 +196,8 @@ export async function DELETE(
       .eq("account_id", params.id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ success: true })
+    const ss4Refresh = await autoRefreshSs4(params.id)
+    return NextResponse.json({ success: true, ss4_refresh: ss4Refresh })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }

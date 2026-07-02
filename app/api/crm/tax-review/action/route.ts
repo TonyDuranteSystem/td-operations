@@ -130,19 +130,50 @@ export async function POST(req: NextRequest) {
       .is("resolved_at", null)
   }
 
-  // Client-facing portal notice.
-  // sender_id uses the zero-UUID system placeholder — portal_messages.sender_id
-  // is NOT NULL; see lib/portal/chat-events.ts for the established convention.
-  const notice = clientNotice(action, note)
-  if (notice && sub.account_id) {
-    const { error: msgErr } = await supabaseAdmin.from("portal_messages").insert({
+  // Client-facing notice. request_changes and approve BLOCK the review loop on
+  // a client action (edit+resubmit / click Confirm), so they dispatch the full
+  // action-required package (clickable chat + immediate email + bell/push,
+  // Phase C 2026-07-02 — was chat-only, silent unless the client happened to
+  // open the portal). reopen keeps the original chat-only notice.
+  let clientNotified: unknown = null
+  if (sub.account_id && (action === "request_changes" || action === "approve")) {
+    const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+    const staffNote = note?.trim() ?? ""
+    const dispatch = await notifyClientActionRequired({
       account_id: sub.account_id,
-      sender_type: "system",
-      sender_id: "00000000-0000-0000-0000-000000000000",
-      message: notice,
+      contact_id: (sub.contact_id as string | null) ?? null,
+      title:
+        action === "request_changes"
+          ? { en: "Changes needed on your tax submission", it: "Modifiche richieste alla tua dichiarazione" }
+          : { en: "Please confirm your reviewed tax data", it: "Conferma i tuoi dati fiscali verificati" },
+      message:
+        action === "request_changes"
+          ? {
+              en: `Our team reviewed your tax submission and needs a change: ${staffNote}\n\nPlease open your portal, edit your tax information, and resubmit.`,
+              it: `Il nostro team ha revisionato la tua dichiarazione e serve una modifica: ${staffNote}\n\nAccedi al portale, correggi le informazioni fiscali e reinvia.`,
+            }
+          : {
+              en: "Good news — your tax data has been reviewed. Please open your portal and click Confirm to finalize.",
+              it: "Buone notizie — i tuoi dati fiscali sono stati verificati. Accedi al portale e clicca Conferma per finalizzare.",
+            },
+      link: "/portal",
     })
-    if (msgErr) console.error("[tax-review] portal_messages insert failed:", msgErr.message)
+    clientNotified = dispatch
+  } else {
+    // reopen (and any future informational action): original chat-only notice.
+    // sender_id uses the zero-UUID system placeholder — portal_messages.sender_id
+    // is NOT NULL; see lib/portal/chat-events.ts for the established convention.
+    const notice = clientNotice(action, note)
+    if (notice && sub.account_id) {
+      const { error: msgErr } = await supabaseAdmin.from("portal_messages").insert({
+        account_id: sub.account_id,
+        sender_type: "system",
+        sender_id: "00000000-0000-0000-0000-000000000000",
+        message: notice,
+      })
+      if (msgErr) console.error("[tax-review] portal_messages insert failed:", msgErr.message)
+    }
   }
 
-  return NextResponse.json({ success: true, review_status: target })
+  return NextResponse.json({ success: true, review_status: target, client_notified: clientNotified })
 }

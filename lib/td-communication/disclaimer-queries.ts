@@ -116,6 +116,10 @@ export async function listReleasedConceptsForClient(
     .eq('enrollment_id', enrollmentId)
     .not('released_at', 'is', null)
     .is('deleted_at', null)
+    // Phase 12: never surface design-tool outputs (mockups / asset kits) in the
+    // client's logo reveal — it is for logo concepts only (defense in depth; these
+    // are not client-releasable via the UI).
+    .not('type', 'in', '("mockup","asset_kit")')
     .order('concept_number', { ascending: true })
     .order('version_number', { ascending: false })
   if (error) throw new Error(error.message)

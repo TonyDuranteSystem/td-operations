@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { extractMembersFromWizardData } from '@/lib/utils/wizard-members'
 import { logAction } from '@/lib/mcp/action-log'
+import { refreshSS4 } from '@/lib/operations/ss4-refresh'
 
 type PanelMember = {
   member_id: string | null
@@ -191,7 +192,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       details: { source: 'flow-members-panel', service_delivery_id: serviceDeliveryId, is_signer: isSigner },
     })
 
-    return NextResponse.json({ success: true }, noStore)
+    // Auto-refresh the account's unsigned SS-4 so the responsible party never
+    // silently contradicts the signer staff just flagged (AI Venture Labs,
+    // 2026-07-02). No-op when no unsigned SS-4 exists; best-effort.
+    let ss4Refresh: { outcome: string; message?: string; signerChanged?: boolean } | null = null
+    if (member.account_id) {
+      try {
+        const r = await refreshSS4({ account_id: member.account_id, source: 'flow-members-panel' })
+        if (r.outcome !== 'no_ss4') ss4Refresh = { outcome: r.outcome, message: r.message, signerChanged: r.signerChanged }
+      } catch (err) {
+        console.error('[flow-members] SS-4 auto-refresh failed (non-fatal):', err)
+      }
+    }
+
+    return NextResponse.json({ success: true, ss4_refresh: ss4Refresh }, noStore)
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : String(e) },

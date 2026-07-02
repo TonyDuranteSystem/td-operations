@@ -136,7 +136,12 @@ export interface CommEnrollment extends CommEnrollmentRow {
 /* Phase 3 — Deliverables (td_comm_deliverables)                               */
 /* -------------------------------------------------------------------------- */
 
-/** Category of a creative deliverable. Independent of is_draft (the release state). */
+/**
+ * Category of a creative deliverable. Independent of is_draft (the release state).
+ * `mockup` / `asset_kit` (Phase 12) are produced by Cris's design tools and saved
+ * via the isolated design-assets route — they are NOT offered in the manual-upload
+ * dropdown (DELIVERABLE_TYPES) and never auto-advance the pipeline.
+ */
 export type DeliverableType =
   | 'logo_draft'
   | 'logo_final'
@@ -144,6 +149,8 @@ export type DeliverableType =
   | 'brand_guide'
   | 'business_card'
   | 'other'
+  | 'mockup'
+  | 'asset_kit'
 
 /**
  * A creative deliverable uploaded against an enrollment. Lives in the private

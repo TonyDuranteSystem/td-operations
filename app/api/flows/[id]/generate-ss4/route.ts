@@ -5,6 +5,12 @@
  *   POST → generate the SS-4 via the shared createSS4 core (lib/operations/ss4.ts),
  *          the same logic the ss4_create MCP tool uses. Surfaces the real reason
  *          when a prerequisite blocks creation (e.g. no Registered Agent) — R099.
+ *   POST {regenerate:true} → refresh the EXISTING unsigned SS-4 in place from
+ *          current account/member data via the shared refreshSS4 core
+ *          (lib/operations/ss4-refresh.ts) — same token, client link unchanged.
+ *          Before 2026-07-02 this route had no regenerate at all and returned
+ *          the stale record as a plain success, which is how "regenerate did
+ *          nothing" burned staff time on the AI Venture Labs wrong-signer case.
  *
  * [id] = service_delivery_id.
  */
@@ -15,6 +21,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createSS4 } from '@/lib/operations/ss4'
+import { refreshSS4 } from '@/lib/operations/ss4-refresh'
 import { APP_BASE_URL } from '@/lib/config'
 
 async function resolveAccountId(serviceDeliveryId: string): Promise<{ account_id: string | null; service_type: string | null } | null> {
@@ -56,7 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const sd = await resolveAccountId(params.id)
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })
@@ -70,13 +77,46 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       )
     }
 
+    const body = await req.json().catch(() => ({} as Record<string, unknown>))
+
+    // ── Regenerate: refresh the existing unsigned SS-4 in place ──
+    if (body?.regenerate === true) {
+      const refresh = await refreshSS4({ account_id: sd.account_id, source: 'flow-regenerate' })
+      if (refresh.outcome === 'refreshed' || refresh.outcome === 'unchanged') {
+        return NextResponse.json({
+          success: true,
+          regenerated: true,
+          unchanged: refresh.outcome === 'unchanged',
+          signer_changed: refresh.signerChanged === true,
+          ss4: refresh.ss4
+            ? {
+                id: refresh.ss4.id,
+                status: refresh.ss4.status,
+                company_name: refresh.ss4.company_name,
+                previewUrl: `${APP_BASE_URL}/ss4/${refresh.ss4.token}/${refresh.ss4.access_code}?preview=td`,
+              }
+            : null,
+        })
+      }
+      if (refresh.outcome === 'no_ss4') {
+        return NextResponse.json({ success: false, error: 'No SS-4 exists yet — use Generate SS-4 instead.' }, { status: 404 })
+      }
+      return NextResponse.json(
+        { success: false, error: refresh.message || `Could not regenerate the SS-4 (${refresh.outcome}).`, outcome: refresh.outcome },
+        { status: 409 },
+      )
+    }
+
     const result = await createSS4({ account_id: sd.account_id })
 
-    // already_exists isn't a failure for the workspace — return the existing record so the panel refreshes.
+    // already_exists isn't a failure for the workspace, but be HONEST that
+    // nothing was refreshed — the stale-success here is what hid the AI
+    // Venture Labs wrong-signer bug from staff.
     if (result.outcome === 'already_exists' && result.ss4) {
       return NextResponse.json({
         success: true,
         already_existed: true,
+        note: 'An SS-4 already exists for this account — it was NOT refreshed. Use "Regenerate from account data" to update it from current account/member data.',
         ss4: { id: result.ss4.id, status: result.ss4.status, company_name: result.ss4.company_name, previewUrl: result.previewUrl },
       })
     }

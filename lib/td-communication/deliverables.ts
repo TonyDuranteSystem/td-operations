@@ -18,6 +18,12 @@ import type { CommDeliverable, DeliverableType } from './types'
 /* Types                                                                       */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The types offered in the MANUAL upload dropdown (deliverables manager). The
+ * Phase 12 tool-only types (`mockup`, `asset_kit`) are intentionally absent —
+ * they are produced by the design tools and saved via the isolated design-assets
+ * route, never hand-uploaded here.
+ */
 export const DELIVERABLE_TYPES: readonly { value: DeliverableType; label: string }[] = [
   { value: 'logo_draft', label: 'Logo Draft' },
   { value: 'logo_final', label: 'Logo Final' },
@@ -27,13 +33,25 @@ export const DELIVERABLE_TYPES: readonly { value: DeliverableType; label: string
   { value: 'other', label: 'Other' },
 ] as const
 
-export const DELIVERABLE_TYPE_LABELS: Record<DeliverableType, string> = DELIVERABLE_TYPES.reduce(
-  (acc, t) => {
-    acc[t.value] = t.label
-    return acc
-  },
-  {} as Record<DeliverableType, string>,
-)
+/** Labels for EVERY type (incl. the tool-only ones) so saved rows render nicely. */
+export const DELIVERABLE_TYPE_LABELS: Record<DeliverableType, string> = {
+  logo_draft: 'Logo Draft',
+  logo_final: 'Logo Final',
+  landing_page: 'Landing Page',
+  brand_guide: 'Brand Guide',
+  business_card: 'Business Card',
+  other: 'Other',
+  mockup: 'Mockup',
+  asset_kit: 'Asset Kit',
+}
+
+/** Tool-only deliverable types (Phase 12), saved via the design-assets route. */
+export const DESIGN_ASSET_TYPES = ['mockup', 'asset_kit'] as const
+export type DesignAssetType = (typeof DESIGN_ASSET_TYPES)[number]
+
+export function isDesignAssetType(v: unknown): v is DesignAssetType {
+  return typeof v === 'string' && (DESIGN_ASSET_TYPES as readonly string[]).includes(v)
+}
 
 export function deliverableTypeLabel(type: string): string {
   return DELIVERABLE_TYPE_LABELS[type as DeliverableType] ?? 'Other'

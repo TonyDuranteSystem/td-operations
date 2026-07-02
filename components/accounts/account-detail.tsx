@@ -806,6 +806,10 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         entityType={account.entity_type}
         contactName={primaryContact?.full_name || ''}
         formationDate={account.formation_date}
+        existingUnsignedStatus={(() => {
+          const s = ss4Applications[0]
+          return s && !s.signed_at && (s.status === 'draft' || s.status === 'awaiting_signature') ? s.status : null
+        })()}
       />
       <PlaceClientWizard
         open={showPlaceClient}
