@@ -1,3 +1,5 @@
+import { localeFromLanguage } from '@/lib/locale'
+
 /**
  * Gender-aware greeting helper.
  * Uses contacts.gender (M/F) + language to produce the correct salutation.
@@ -14,7 +16,7 @@ export function getGreeting(
   }
 ): string {
   const { firstName, lastName, gender } = opts
-  const lang = normalizeLanguage(opts.language)
+  const lang = localeFromLanguage(opts.language)
 
   if (lang === 'it') {
     if (gender === 'F') return `Cara ${firstName}`
@@ -26,11 +28,4 @@ export function getGreeting(
   if (gender === 'F' && lastName) return `Dear Ms. ${lastName}`
   if (gender === 'M' && lastName) return `Dear Mr. ${lastName}`
   return `Dear ${firstName}`
-}
-
-function normalizeLanguage(lang?: string | null): 'it' | 'en' {
-  if (!lang) return 'en'
-  const l = lang.toLowerCase()
-  if (l === 'it' || l === 'italian' || l === 'italiano') return 'it'
-  return 'en'
 }

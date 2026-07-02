@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { escapeHtml } from '@/lib/html-escape'
+import { localeFromLanguage, isItalian } from '@/lib/locale'
 
 // Email digest is handled by /api/cron/portal-digest (every 5 min)
 // All notification types are eligible for digest emails.
@@ -23,15 +24,20 @@ export async function createPortalNotification(params: {
   title: string
   body?: string
   link?: string
+  /** When true, the row is born with email_sent_at set so the portal-digest
+   * cron never emails it — for callers that send their own immediate email
+   * (lib/portal/action-required.ts). Push + bell are unaffected. */
+  suppressDigestEmail?: boolean
 }) {
   if (!params.account_id && !params.contact_id) {
     console.error('createPortalNotification: account_id or contact_id required')
     return
   }
 
+  const { suppressDigestEmail, ...row } = params
   const { error } = await supabaseAdmin
     .from('portal_notifications')
-    .insert(params)
+    .insert(suppressDigestEmail ? { ...row, email_sent_at: new Date().toISOString() } : row)
 
   if (error) {
     console.error('Failed to create portal notification:', error.message)
@@ -330,7 +336,10 @@ export async function notifyClientOfAdminMessage({
     }
     if (hasPush) continue // has push — skip the redundant email
 
-    const isIt = recipient.language === 'it'
+    // contacts.language is messy free text ("Italian", "Italiano", "it", …) —
+    // the canonical normalizer decides. A strict === 'it' check here used to
+    // send English chat emails to every Italian client (2026-07-02 fix).
+    const isIt = isItalian(recipient.language)
     const greeting = recipient.firstName ? (isIt ? `Ciao ${recipient.firstName},` : `Hi ${recipient.firstName},`) : (isIt ? 'Ciao,' : 'Hi,')
     const subject = isIt ? 'Nuovo messaggio dal team Tony Durante' : 'New message from the Tony Durante team'
     const bodyText = isIt
@@ -483,7 +492,7 @@ export async function notifyClientOfStageAdvance(params: {
 
   for (const recipient of recipients) {
     const copy = buildStageAdvanceCopy({
-      locale: recipient.language === 'it' ? 'it' : 'en',
+      locale: localeFromLanguage(recipient.language),
       serviceName: service_name,
       stageName: stage_name,
       firstName: recipient.firstName,

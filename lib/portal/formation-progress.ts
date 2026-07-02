@@ -78,6 +78,16 @@ export function buildFormationTrackerSteps(
   locale: 'en' | 'it',
   filedAt?: string | null,
   faxedAt?: string | null,
+  /**
+   * Whether the "sign" action is actually performable — i.e. the SS-4 is at
+   * 'awaiting_signature' (queries.ts::getFormationTracker). The SD reaches
+   * "SS-4 Prepared" when staff PREPARE the form, but the client can only sign
+   * once staff SEND it; until then the amber "Action required" glow would
+   * point at nothing signable. false → suppress the sign glow (step stays
+   * 'current', no action). null/undefined → unknown → fail OPEN (keep the
+   * glow, pre-2026-07-02 behavior). Only affects the 'sign' action.
+   */
+  signActionReady?: boolean | null,
 ): FormationTrackerStep[] {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order)
   const currentRow = currentStage
@@ -93,12 +103,13 @@ export function buildFormationTrackerSteps(
     else status = 'upcoming'
 
     const action = ACTION_STAGES[s.stage_name]
+    const actionSuppressed = action === 'sign' && signActionReady === false
     return {
       stageName: s.stage_name,
       label: labelFor(s, locale),
       status,
-      action,
-      isActionRequired: status === 'current' && action != null,
+      action: actionSuppressed ? undefined : action,
+      isActionRequired: status === 'current' && action != null && !actionSuppressed,
       // Carry the filing date only on the Filed-with-State step, and only once
       // it's reached (completed/current) — an upcoming step shows no date.
       ...(s.stage_name === FILED_STAGE && filedAt && status !== 'upcoming'

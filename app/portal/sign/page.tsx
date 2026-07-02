@@ -205,13 +205,20 @@ export default async function PortalSignPage() {
 
   if (ss4Result.data) {
     const ss4 = ss4Result.data
-    documents.push({
-      type: 'ss4',
-      status: ss4.status === 'signed' ? 'signed' : 'awaiting',
-      href: '/portal/sign/ss4',
-      companyName: ss4.company_name,
-      signedAt: ss4.signed_at,
-    })
+    // Only 'awaiting_signature' is actionable. 'draft' means staff are still
+    // reviewing — it must NOT render as signable (the old `!== 'signed' →
+    // awaiting` mapping showed Michele Cotti a "Sign your SS-4" card for a
+    // draft that was never sent, 2026-07-02). 'signed'/'submitted'/'done' are
+    // all past signing → treated as signed (hidden from the To-sign list).
+    if (ss4.status !== 'draft') {
+      documents.push({
+        type: 'ss4',
+        status: ss4.status === 'awaiting_signature' ? 'awaiting' : 'signed',
+        href: '/portal/sign/ss4',
+        companyName: ss4.company_name,
+        signedAt: ss4.signed_at,
+      })
+    }
   }
 
   if (form8832Result.data) {

@@ -79,7 +79,14 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       details: { source: 'flow-send-ss4', from: 'draft', to: 'awaiting_signature' },
     })
 
-    return NextResponse.json({ success: true, status: 'awaiting_signature' })
+    // Tell the signer (chat + immediate email + bell/push). Before 2026-07-02
+    // this button notified NOTHING — the SS-4 sat signable while the client had
+    // no idea (Michele Cotti / AI Venture Labs). Best-effort: the status flip
+    // above already committed; a notification failure is reported, not fatal.
+    const { notifySs4ReadyToSign } = await import('@/lib/portal/action-required')
+    const notify = await notifySs4ReadyToSign({ ss4Id: ss4.id, serviceDeliveryId: params.id })
+
+    return NextResponse.json({ success: true, status: 'awaiting_signature', client_notified: notify })
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }

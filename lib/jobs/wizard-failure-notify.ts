@@ -41,6 +41,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { Json } from "@/lib/database.types"
 import { JOB_TYPES } from "@/lib/portal/wizard-map"
+import { localeFromLanguage } from "@/lib/locale"
 
 /** Zero-UUID system sender — same sentinel the formation-name-checks system
  * path uses for platform-authored portal_messages (sender_id is NOT NULL but
@@ -65,14 +66,9 @@ export function isWizardFailureJobType(jobType: string): boolean {
   return WIZARD_FAILURE_JOB_TYPES.has(jobType)
 }
 
-/** Normalize a free-text contacts.language value to a portal locale.
- * contacts.language is messy in production ("Italian", "Italiano - Ingle",
- * "it", "en", "English", "Italian / Englis", ""). Anything that looks Italian
- * → "it"; everything else (including blank/unknown) → "en". */
-export function localeFromLanguage(language: string | null | undefined): "it" | "en" {
-  const v = (language ?? "").trim().toLowerCase()
-  return v === "it" || v.startsWith("ital") ? "it" : "en"
-}
+// Canonical implementation moved to lib/locale.ts (2026-07-02) — re-exported
+// so existing imports (ingest-complete-notify.ts and friends) keep working.
+export { localeFromLanguage }
 
 const MESSAGE: Record<"it" | "en", string> = {
   en: "We received your information, but ran into a technical issue while processing it. Our team has been notified and is handling it — no action is needed from you.",

@@ -147,7 +147,7 @@ export default async function PortalDashboardPage() {
       const ctx = await getFormationContext(contactId)
       const tracker = await getFormationTracker({ sdId: selectedFormation.sdId })
       const trackerSteps = tracker?.currentStage
-        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt, tracker.ss4SignPending)
         : null
       const itinFlows = await loadItinFlows()
       return (
@@ -298,7 +298,7 @@ export default async function PortalDashboardPage() {
         ])
         const tracker = await getFormationTracker({ accountId: formationAccount.id, contactId })
         const trackerSteps = tracker?.currentStage
-          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
+          ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt, tracker.ss4SignPending)
           : null
         const itinFlows = await loadItinFlows()
         return (
@@ -329,7 +329,7 @@ export default async function PortalDashboardPage() {
       const ctx = await getFormationContext(contactId)
       const tracker = await getFormationTracker({ contactId })
       const trackerSteps = tracker?.currentStage
-        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
+        ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt, tracker.ss4SignPending)
         : null
       const itinFlows = await loadItinFlows()
       return (
@@ -468,7 +468,7 @@ export default async function PortalDashboardPage() {
     ])
     const tracker = await getFormationTracker({ accountId: selectedAccountId, contactId })
     const trackerSteps = tracker?.currentStage
-      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt)
+      ? buildFormationTrackerSteps(tracker.stages, tracker.currentStage, locale, tracker.filedAt, tracker.faxedAt, tracker.ss4SignPending)
       : null
     const itinFlows = await loadItinFlows()
     return (

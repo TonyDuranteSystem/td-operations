@@ -42,6 +42,29 @@ describe('buildFormationTrackerSteps', () => {
     expect(payment.isActionRequired).toBe(false)
   })
 
+  it('suppresses the sign glow when the SS-4 is not signable (signActionReady=false)', () => {
+    const steps = buildFormationTrackerSteps(STAGES, 'SS-4 Prepared', 'en', null, null, false)
+    const ss4 = steps.find((s) => s.stageName === 'SS-4 Prepared')!
+    expect(ss4.status).toBe('current') // the step itself is still current
+    expect(ss4.action).toBeUndefined()
+    expect(ss4.isActionRequired).toBe(false)
+  })
+
+  it('keeps the sign glow when signActionReady is true or unknown (fail open)', () => {
+    for (const ready of [true, null, undefined]) {
+      const steps = buildFormationTrackerSteps(STAGES, 'SS-4 Prepared', 'en', null, null, ready)
+      const ss4 = steps.find((s) => s.stageName === 'SS-4 Prepared')!
+      expect(ss4.isActionRequired).toBe(true)
+    }
+  })
+
+  it('signActionReady=false does NOT affect the wizard action stage', () => {
+    const steps = buildFormationTrackerSteps(STAGES, 'Payment Confirmed', 'en', null, null, false)
+    const payment = steps.find((s) => s.stageName === 'Payment Confirmed')!
+    expect(payment.action).toBe('wizard')
+    expect(payment.isActionRequired).toBe(true)
+  })
+
   it('uses Italian labels when locale is it', () => {
     const steps = buildFormationTrackerSteps(STAGES, 'Payment Confirmed', 'it')
     expect(steps[0].label).toBe('Pagamento confermato')

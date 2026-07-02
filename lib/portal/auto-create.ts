@@ -12,6 +12,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { localeFromLanguage, isItalian } from '@/lib/locale'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { findContactIdByEmail } from '@/lib/operations/find-contact-by-email'
 import { PORTAL_BASE_URL } from '@/lib/config'
@@ -98,7 +99,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
         targetContactId = (await findContactIdByEmail(lead.email)) ?? undefined
         // If no contact exists yet, we can still create a portal user from the lead email
         if (!targetContactId) {
-          return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en', autoCreated, undefined)
+          return await createFromEmail(lead.email, lead.full_name, accountId, tier, localeFromLanguage(lead.language), autoCreated, undefined)
         }
       }
     }
@@ -118,7 +119,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
       return { success: false, alreadyExists: false, error: 'Contact has no email address' }
     }
 
-    const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
+    const contactLang = localeFromLanguage(contact.language)
     return await createFromEmail(contact.email, contact.full_name, accountId, tier, contactLang, autoCreated, targetContactId)
   } catch (err) {
     return {
@@ -508,7 +509,7 @@ export async function sendPortalWelcomeEmail(params: {
   language?: string
 }): Promise<{ success: boolean; error?: string }> {
   const { email, fullName, tempPassword, language } = params
-  const isIt = language === 'it' || language === 'Italian'
+  const isIt = isItalian(language)
   const loginUrl = `${PORTAL_BASE_URL}/portal/login`
 
   try {

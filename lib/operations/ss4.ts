@@ -417,6 +417,30 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     /* non-fatal — the SS-4 record already exists; the doc link is best-effort */
   }
 
+  // ─── 12. NOTIFY THE SIGNER (only when created directly signable) ───
+  // ready_to_sign=true creates the record at 'awaiting_signature' — the client
+  // can sign NOW, so tell them (action-required: chat + immediate email +
+  // bell/push). A 'draft' creation stays silent: staff review first and the
+  // send-ss4 / ss4_update promotion paths notify at that later transition.
+  // Best-effort — a notification failure never fails the creation.
+  if (ss4.status === "awaiting_signature") {
+    try {
+      const { notifySs4ReadyToSign } = await import("@/lib/portal/action-required")
+      const { data: sdForNotify } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id")
+        .eq("account_id", params.account_id)
+        .eq("service_type", "Company Formation")
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      await notifySs4ReadyToSign({ ss4Id: ss4.id, serviceDeliveryId: sdForNotify?.id ?? null })
+    } catch (notifyErr) {
+      console.error("[createSS4] action-required notification failed:", notifyErr)
+    }
+  }
+
   return {
     ok: true,
     outcome: "created",

@@ -23,6 +23,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { localeFromLanguage } from "@/lib/locale"
 
 const WELCOME_MESSAGES_CATALOG_ID = "welcome_messages" as const
 
@@ -125,8 +126,7 @@ export async function getWelcomeMessage(opts: {
   pipelines: string[]
   language: string | null | undefined
 }): Promise<WelcomeMessageTemplate | null> {
-  const lang: "en" | "it" =
-    opts.language === "it" || opts.language === "Italian" ? "it" : "en"
+  const lang: "en" | "it" = localeFromLanguage(opts.language)
 
   // Resolve candidate slugs.
   const slugs = new Set<string>()

@@ -221,14 +221,14 @@ export async function getFormationTracker(opts: {
   sdId?: string | null
   contactId?: string | null
   accountId?: string | null
-}): Promise<{ currentStage: string | null; stages: FormationStageRow[]; filedAt: string | null; faxedAt: string | null } | null> {
+}): Promise<{ currentStage: string | null; stages: FormationStageRow[]; filedAt: string | null; faxedAt: string | null; ss4SignPending: boolean | null } | null> {
   // Resolve the formation SD's current stage, cascading through the locators in
   // priority order and stopping at the first hit (an account-scoped lookup falls
   // back to the contact-scoped SD for not-yet-materialized formations). We also
   // capture stage_entered_at + stage_history off the matched SD so we can derive
   // the filing date (see filedAt below).
-  const SD_COLS = 'stage, stage_entered_at, stage_history'
-  let sdRow: { stage: string | null; stage_entered_at: string | null; stage_history: unknown } | null = null
+  const SD_COLS = 'stage, stage_entered_at, stage_history, account_id'
+  let sdRow: { stage: string | null; stage_entered_at: string | null; stage_history: unknown; account_id: string | null } | null = null
   if (opts.sdId) {
     const { data } = await supabaseAdmin
       .from('service_deliveries')
@@ -265,6 +265,24 @@ export async function getFormationTracker(opts: {
 
   const currentStage = (sdRow?.stage as string | null) ?? null
 
+  // "Sign your SS-4" readiness — only meaningful while the SD sits at
+  // "SS-4 Prepared". The stage flips when staff PREPARE the SS-4, but the
+  // client can only sign once it's SENT (ss4_applications.status =
+  // 'awaiting_signature'); a draft is still under staff review. Without this
+  // gate the tracker glowed "Action required — sign your SS-4" while there was
+  // nothing signable (Michele Cotti, 2026-07-02). null = unknown/not at that
+  // stage → the tracker fails OPEN (keeps the glow) so a lookup hiccup never
+  // hides a real action.
+  let ss4SignPending: boolean | null = null
+  if (currentStage === 'SS-4 Prepared' && sdRow?.account_id) {
+    const { data: ss4Row, error: ss4Err } = await supabaseAdmin
+      .from('ss4_applications')
+      .select('status')
+      .eq('account_id', sdRow.account_id)
+      .maybeSingle()
+    if (!ss4Err) ss4SignPending = ss4Row?.status === 'awaiting_signature'
+  }
+
   // Filing date for the "Filed with State" step + the waiting banner. Prefer the
   // durable stage_history transition into "Filed with State" (survives advancing
   // past the stage); fall back to stage_entered_at only while the SD still sits
@@ -287,7 +305,7 @@ export async function getFormationTracker(opts: {
     .order('stage_order', { ascending: true })
 
   if (!stageRows || stageRows.length === 0) return null
-  return { currentStage, stages: stageRows as unknown as FormationStageRow[], filedAt, faxedAt }
+  return { currentStage, stages: stageRows as unknown as FormationStageRow[], filedAt, faxedAt, ss4SignPending }
 }
 
 export interface InProgressFormation {

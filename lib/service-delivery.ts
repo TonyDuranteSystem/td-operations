@@ -277,12 +277,36 @@ export async function advanceServiceDelivery(
   if (!skip_notify && (delivery.account_id || delivery.contact_id)) {
     try {
       const { createPortalNotification } = await import("@/lib/portal/notifications")
+      // Client-friendly stage label instead of the internal stage name
+      // ("Sign your SS-4", not "SS-4 Prepared"). Localized to the SD's contact
+      // when one is linked; account-scoped SDs without a contact fall back to
+      // the English label. Internal name remains the last-resort fallback.
+      const stageForLabel = targetStage as typeof targetStage & {
+        client_label?: string | null
+        client_label_it?: string | null
+      }
+      let stageLabel = stageForLabel.client_label || targetStage.stage_name
+      if (stageForLabel.client_label_it && delivery.contact_id) {
+        try {
+          const { data: labelContact } = await supabaseAdmin
+            .from("contacts")
+            .select("language")
+            .eq("id", delivery.contact_id)
+            .maybeSingle()
+          const { localeFromLanguage } = await import("@/lib/locale")
+          if (localeFromLanguage(labelContact?.language) === "it") {
+            stageLabel = stageForLabel.client_label_it
+          }
+        } catch {
+          /* label localization is best-effort — keep the English/internal label */
+        }
+      }
       const title = isCompleted
         ? `${delivery.service_name || delivery.service_type} is complete!`
         : `${delivery.service_name || delivery.service_type} update`
       const body = isCompleted
         ? "Your service has been completed."
-        : `Status updated to: ${targetStage.stage_name}`
+        : `Status updated to: ${stageLabel}`
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,
@@ -385,7 +409,11 @@ export async function advanceServiceDelivery(
         .select("language")
         .eq("id", delivery.contact_id)
         .maybeSingle()
-      const lang = contact?.language === "it" ? "it" : "en"
+      // Canonical normalizer — contacts.language holds free text ("Italian",
+      // "Italiano", …); the old strict === "it" check sent English to every
+      // Italian client (2026-07-02 fix).
+      const { localeFromLanguage } = await import("@/lib/locale")
+      const lang = localeFromLanguage(contact?.language)
 
       const message =
         lang === "it"

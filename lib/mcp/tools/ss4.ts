@@ -197,6 +197,22 @@ Note: signed records (status='signed') cannot be updated.`,
         }
 
         const newStatus = (updates.status as string | undefined) || ss4.status
+
+        // Promotion to awaiting_signature = the client can sign NOW → notify
+        // the signer (chat + immediate email + bell/push). Only on a REAL
+        // transition (was not already awaiting), never on content edits.
+        // Best-effort — the update above already committed.
+        let notifyNote = ""
+        if (updates.status === "awaiting_signature" && ss4.status !== "awaiting_signature") {
+          try {
+            const { notifySs4ReadyToSign } = await import("@/lib/portal/action-required")
+            const notify = await notifySs4ReadyToSign({ ss4Id: ss4.id as string })
+            notifyNote = `\nClient notified: chat=${notify.chat}, email=${notify.email}, portal=${notify.notification}`
+          } catch (notifyErr) {
+            notifyNote = `\n⚠️ Client notification failed: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`
+          }
+        }
+
         const previewUrl = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`
         const resetNote = updates.status === "draft" && ss4.status === "awaiting_signature"
           ? "\n⚠️  Status reset to draft — content was changed while record was awaiting_signature."
@@ -210,6 +226,7 @@ Note: signed records (status='signed') cannot be updated.`,
               `Status: ${newStatus}`,
               `Fields updated: ${Object.keys(updates).filter(k => k !== "updated_at" && k !== "status").join(", ") || "none"}`,
               resetNote,
+              notifyNote,
               ``,
               `Admin Preview: ${previewUrl}`,
             ].filter(Boolean).join("\n"),

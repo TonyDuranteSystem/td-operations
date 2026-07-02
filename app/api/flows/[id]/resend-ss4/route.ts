@@ -83,7 +83,13 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       details: { source: 'flow-resend-ss4', from: ss4.status, to: 'awaiting_signature' },
     })
 
-    return NextResponse.json({ success: true, status: 'awaiting_signature' })
+    // Tell the signer they need to sign AGAIN (chat + immediate email +
+    // bell/push) — a re-opened SS-4 without a message is exactly the silent
+    // wait this feature removes. Best-effort, never fails the re-open.
+    const { notifySs4ReadyToSign } = await import('@/lib/portal/action-required')
+    const notify = await notifySs4ReadyToSign({ ss4Id: ss4.id, serviceDeliveryId: params.id })
+
+    return NextResponse.json({ success: true, status: 'awaiting_signature', client_notified: notify })
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }
