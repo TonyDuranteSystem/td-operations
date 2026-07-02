@@ -44,6 +44,14 @@ interface ProjectDetail {
   form_data: Record<string, unknown>
   timeline: TimelineEvent[]
   sd: { stage: string | null; status: string | null } | null
+  /** Uploaded materials with signed URLs (server-minted). A '' url = the file
+   *  couldn't be signed → shown as unavailable, not a broken link. */
+  uploads?: Upload[]
+}
+interface Upload {
+  name: string
+  url: string
+  mime_type?: string
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -205,6 +213,9 @@ export function ProjectBriefPanel({
 
   const now = new Date()
   const brief = project ? groupBrief(project.form_data) : { sections: [], uploads: [] }
+  // Uploads come pre-signed from the server (private bucket). groupBrief still
+  // powers the text sections; its uploads carry raw paths, so we never render those.
+  const uploads = project?.uploads ?? []
   const tracked = project ? isSlaTracked(project.status) : false
   const sla = project && tracked ? slaIndicator(project.deadline, now) : null
   const countdown = project && tracked ? deadlineLabel(project.deadline, now) : null
@@ -333,24 +344,36 @@ export function ProjectBriefPanel({
 
               {/* Uploaded materials */}
               <Section title="Uploaded Materials" icon={<Paperclip className="h-3.5 w-3.5" />}>
-                {brief.uploads.length === 0 ? (
+                {uploads.length === 0 ? (
                   <p className="text-sm text-zinc-400">No files uploaded.</p>
                 ) : (
                   <ul className="space-y-1.5">
-                    {brief.uploads.map((u, i) => (
-                      <li key={`${u.url}-${i}`}>
-                        <a
-                          href={u.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                    {uploads.map((u, i) =>
+                      u.url ? (
+                        <li key={`${u.name}-${i}`}>
+                          <a
+                            href={u.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                          >
+                            <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{u.name}</span>
+                            <ExternalLink className="h-3 w-3 shrink-0 text-zinc-400" />
+                          </a>
+                        </li>
+                      ) : (
+                        <li
+                          key={`${u.name}-${i}`}
+                          className="flex items-center gap-2 text-sm text-zinc-400"
+                          title="This file could not be loaded (it may have been removed)."
                         >
                           <Paperclip className="h-3.5 w-3.5 shrink-0" />
                           <span className="truncate">{u.name}</span>
-                          <ExternalLink className="h-3 w-3 shrink-0 text-zinc-400" />
-                        </a>
-                      </li>
-                    ))}
+                          <span className="shrink-0 text-xs">(unavailable)</span>
+                        </li>
+                      ),
+                    )}
                   </ul>
                 )}
               </Section>

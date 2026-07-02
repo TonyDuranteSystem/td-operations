@@ -13,7 +13,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveSubjectsBatch, resolveSubject, pickSubjectRef, buildSubject } from './subject'
-import { isEnrollmentStatus, isSlaTracked } from './pipeline'
+import { isEnrollmentStatus, isSlaTracked, groupBrief, type BriefUpload } from './pipeline'
+import { signBriefUploads } from './brief-uploads'
 import { ensureDeadlineAt } from './sla'
 import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './types'
 
@@ -38,6 +39,10 @@ export interface CommEnrollmentSd {
 export interface CommEnrollmentDetail extends CommEnrollment {
   timeline: TimelineEvent[]
   sd: CommEnrollmentSd | null
+  /** Uploaded brand materials with short-lived SIGNED urls (the raw form_data
+   *  values are private-bucket paths — see brief-uploads.ts). A `url` of '' means
+   *  the file couldn't be signed (deleted / bad path) → render as unavailable. */
+  uploads: BriefUpload[]
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -146,10 +151,25 @@ export async function getEnrollment(id: string): Promise<CommEnrollmentDetail | 
     }
   }
 
+  // Uploaded materials are private-bucket paths — mint short-lived signed URLs so
+  // the staff brief can actually open them. Reuse groupBrief's extraction (the
+  // single source of which form_data keys are files). Signing must never fail the
+  // whole brief: on a storage error, fall through to unsigned (rendered as
+  // "unavailable") rather than 500 the panel.
+  const rawUploads = groupBrief(row.form_data).uploads
+  let uploads: BriefUpload[] = rawUploads
+  try {
+    uploads = await signBriefUploads(rawUploads)
+  } catch (err) {
+    console.warn('[td-comm] failed to sign brief uploads:', err)
+    uploads = rawUploads.map((u) => ({ ...u, url: '' }))
+  }
+
   return {
     ...withDerived(row, subject),
     sd,
     timeline: buildTimeline(row, sd),
+    uploads,
   }
 }
 
