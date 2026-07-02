@@ -66,10 +66,28 @@ describe('validateQuestionInput — create', () => {
     expect(r.errors.join(' ')).toMatch(/option/i)
   })
 
-  it('accepts a select with options', () => {
+  it('accepts a select with legacy string options', () => {
     expect(
       validateQuestionInput({ ...base, type: 'select', options: ['a', 'b'] }, { isCreate: true }).valid,
     ).toBe(true)
+  })
+
+  it('accepts a select with object options', () => {
+    expect(
+      validateQuestionInput(
+        { ...base, type: 'select', options: [{ value: 'red', label_en: 'Red', label_it: 'Rosso' }] },
+        { isCreate: true },
+      ).valid,
+    ).toBe(true)
+  })
+
+  it('rejects an option with neither value nor label', () => {
+    const r = validateQuestionInput(
+      { ...base, type: 'select', options: [{ value: '  ', label_en: '' }] },
+      { isCreate: true },
+    )
+    expect(r.valid).toBe(false)
+    expect(r.errors.join(' ')).toMatch(/option/i)
   })
 })
 
@@ -106,5 +124,28 @@ describe('shapeQuestion', () => {
     expect(s.step).toBe(1)
     expect(s.options).toEqual([])
     expect(s.active).toBe(true)
+  })
+
+  it('coerces legacy string options to objects', () => {
+    const s = shapeQuestion({ id: '1', key: 'k', label_en: 'L', options: ['Red', 'Blue'] })
+    expect(s.options).toEqual([
+      { value: 'Red', label_en: 'Red' },
+      { value: 'Blue', label_en: 'Blue' },
+    ])
+  })
+
+  it('normalizes object options (bilingual + description, null-safe)', () => {
+    const s = shapeQuestion({
+      id: '1', key: 'k', label_en: 'L',
+      options: [{ value: 'red', label_en: 'Red', label_it: 'Rosso', description_en: 'passionate' }],
+    })
+    expect(s.options).toEqual([
+      { value: 'red', label_en: 'Red', label_it: 'Rosso', description_en: 'passionate', description_it: null },
+    ])
+  })
+
+  it('drops unusable option entries', () => {
+    const s = shapeQuestion({ id: '1', key: 'k', label_en: 'L', options: ['', '  ', 42, null] })
+    expect(s.options).toEqual([])
   })
 })

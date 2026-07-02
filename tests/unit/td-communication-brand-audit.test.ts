@@ -57,8 +57,15 @@ describe('businessNameFromFormData', () => {
   it('reads business_name when present', () => {
     expect(businessNameFromFormData({ business_name: 'Acme LLC' })).toBe('Acme LLC')
   })
+  it('falls back to brand_name (the DB-driven question set)', () => {
+    expect(businessNameFromFormData({ brand_name: 'Nova LLC' })).toBe('Nova LLC')
+  })
+  it('prefers business_name over brand_name when both present', () => {
+    expect(businessNameFromFormData({ business_name: 'Acme LLC', brand_name: 'Nova LLC' })).toBe('Acme LLC')
+  })
   it('trims whitespace', () => {
     expect(businessNameFromFormData({ business_name: '  Acme  ' })).toBe('Acme')
+    expect(businessNameFromFormData({ brand_name: '  Nova  ' })).toBe('Nova')
   })
   it('falls back when missing / blank / non-string', () => {
     expect(businessNameFromFormData({})).toBe('New brand')

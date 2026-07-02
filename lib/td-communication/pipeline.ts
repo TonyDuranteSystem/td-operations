@@ -273,52 +273,71 @@ export interface Brief {
   uploads: BriefUpload[]
 }
 
+// Mirrors the 4-step DB brand-audit (td_comm_questions). Staff-facing brief, so
+// English labels regardless of the client's language. A section renders only
+// when it has ≥1 non-empty field, so old placeholder submissions (which used
+// different keys) simply fall through to "Other Details" — nothing is dropped.
 const SECTION_SPEC: { title: string; keys: { key: string; label: string }[] }[] = [
   {
-    title: 'Business Description',
+    title: 'Business & Strategy',
     keys: [
-      { key: 'business_name', label: 'Business Name' },
-      { key: 'business_description', label: 'Description' },
-      { key: 'industry', label: 'Industry' },
+      { key: 'business_description', label: 'Business Description' },
+      { key: 'added_value', label: 'Added Value' },
+      { key: 'target_client', label: 'Target Client' },
+      { key: 'mission', label: 'Mission' },
+      { key: 'vision', label: 'Vision' },
+      { key: 'core_values', label: 'Core Values' },
+      { key: 'brand_message', label: 'Brand Message' },
+      { key: 'strengths', label: 'Strengths' },
+      { key: 'brand_usage', label: 'Where the Brand Is Used' },
+      { key: 'competitors', label: 'Competitors' },
     ],
   },
   {
-    title: 'Target Audience',
+    title: 'Brand Personality',
     keys: [
-      { key: 'target_audience', label: 'Audience' },
-      { key: 'audience_age', label: 'Age Range' },
-      { key: 'audience_location', label: 'Location' },
+      { key: 'brand_famous_person', label: 'Brand as a Famous Person' },
+      { key: 'admired_company', label: 'Admired Company' },
+      { key: 'people_say', label: 'What People Say' },
+      { key: 'unsaid_message', label: 'Unsaid Message' },
+      { key: 'company_personality', label: 'Company Personality' },
+      { key: 'client_feedback', label: 'Client Feedback' },
     ],
   },
   {
-    title: 'Style Preferences',
+    title: 'Visual & Design',
     keys: [
-      { key: 'style_preferences', label: 'Style' },
-      { key: 'style_keywords', label: 'Keywords' },
-      { key: 'brands_admired', label: 'Brands Admired' },
+      { key: 'brand_name', label: 'Brand Name' },
+      { key: 'color_personality', label: 'Brand Color' },
+      { key: 'color_preference', label: 'Color Preferences' },
+      { key: 'design_elements', label: 'Design Elements' },
+      { key: 'symbol_object', label: 'Symbol / Object' },
+      { key: 'geometric_shapes', label: 'Geometric Shapes' },
+      { key: 'admired_logo', label: 'Admired Logo / Style' },
+      { key: 'brand_place', label: 'Brand as a Place' },
     ],
   },
   {
-    title: 'Color Choices',
+    title: 'Final Details',
     keys: [
-      { key: 'color_choices', label: 'Colors' },
-      { key: 'color_notes', label: 'Notes' },
-      { key: 'colors_to_avoid', label: 'Colors to Avoid' },
-    ],
-  },
-  {
-    title: 'Additional Notes',
-    keys: [
-      { key: 'additional_notes', label: 'Notes' },
-      { key: 'timeline', label: 'Timeline' },
-      { key: 'budget', label: 'Budget' },
+      { key: 'one_word', label: 'One Word' },
+      { key: 'never_communicate', label: 'Never Communicate' },
+      { key: 'brand_soundtrack', label: 'Brand Soundtrack' },
+      { key: 'era_movement', label: 'Era / Movement' },
+      { key: 'additional_notes', label: 'Additional Notes' },
+      { key: 'disclaimer_accepted', label: 'Accuracy Confirmed' },
     ],
   },
 ]
 
-/** Known keys consumed by SECTION_SPEC + 'uploads' (excluded from "Other Details"). */
+/** File-upload form_data keys — values are storage paths surfaced as uploads
+ *  (not text fields), so they must NOT dump into "Other Details". Covers the new
+ *  key (`upload_materials`) + legacy placeholder keys + the generic `uploads`. */
+const KNOWN_FILE_KEYS = ['uploads', 'upload_materials', 'materials', 'current_materials'] as const
+
+/** Known keys consumed by SECTION_SPEC + the file keys (excluded from "Other Details"). */
 const KNOWN_KEYS = new Set<string>([
-  'uploads',
+  ...KNOWN_FILE_KEYS,
   ...SECTION_SPEC.flatMap((s) => s.keys.map((k) => k.key)),
 ])
 
@@ -338,24 +357,42 @@ function formatValue(v: unknown): string | null {
   return null // objects are not rendered as a flat field
 }
 
+/** Normalize one raw upload entry (a storage-path string, or an object with
+ *  url/path + optional name/mime) into a BriefUpload, or null when unusable.
+ *  NOTE: the value is the storage PATH in a PRIVATE bucket — the panel needs a
+ *  signed URL to actually open it (tracked gap; not signed here). */
+function normalizeUpload(u: unknown): BriefUpload | null {
+  if (typeof u === 'string') {
+    const url = u.trim()
+    if (!url) return null
+    return { name: url.split('/').pop() || url, url }
+  }
+  if (u && typeof u === 'object') {
+    const obj = u as Record<string, unknown>
+    const url = (typeof obj.url === 'string' && obj.url) || (typeof obj.path === 'string' && obj.path) || ''
+    if (!url) return null
+    const name = (typeof obj.name === 'string' && obj.name) || url.split('/').pop() || 'File'
+    const mime = typeof obj.mime_type === 'string' ? obj.mime_type : undefined
+    return { name, url, mime_type: mime }
+  }
+  return null
+}
+
+/**
+ * Collect uploads from every known file key. A file field (e.g. `upload_materials`)
+ * stores an array of storage paths under its OWN key — the wizard never writes a
+ * combined `form_data.uploads`, so reading only that key (the old behaviour) always
+ * yielded nothing for this wizard. We now read all KNOWN_FILE_KEYS. A single-file
+ * field may store one bare string, so accept both a string and an array.
+ */
 function extractUploads(formData: Record<string, unknown>): BriefUpload[] {
-  const raw = formData?.uploads
-  if (!Array.isArray(raw)) return []
   const out: BriefUpload[] = []
-  for (const u of raw) {
-    if (typeof u === 'string') {
-      const name = u.split('/').pop() || u
-      out.push({ name, url: u })
-    } else if (u && typeof u === 'object') {
-      const obj = u as Record<string, unknown>
-      const url = (typeof obj.url === 'string' && obj.url) || (typeof obj.path === 'string' && obj.path) || ''
-      if (!url) continue
-      const name =
-        (typeof obj.name === 'string' && obj.name) ||
-        url.split('/').pop() ||
-        'File'
-      const mime = typeof obj.mime_type === 'string' ? obj.mime_type : undefined
-      out.push({ name, url, mime_type: mime })
+  for (const key of KNOWN_FILE_KEYS) {
+    const raw = formData?.[key]
+    const items = Array.isArray(raw) ? raw : raw != null ? [raw] : []
+    for (const u of items) {
+      const upload = normalizeUpload(u)
+      if (upload) out.push(upload)
     }
   }
   return out

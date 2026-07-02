@@ -20,6 +20,8 @@ import { getInProgressFormations } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
+import { listQuestions } from '@/lib/td-communication/questions-queries'
+import { buildTdCommWizardConfig, type TdCommWizardConfig } from '@/lib/td-communication/question-to-field'
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
 import { firstYearCoherent } from '@/lib/tax/prior-return-case'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
@@ -581,11 +583,14 @@ export default async function WizardPage({
   // breaking member-add for every multi-member client. See normalizeEntityType.
   entityType = normalizeEntityType(entityType)
 
-  // TD Communication brand audit: the New-Brand (3-step) vs Rebrand (2-step)
-  // path is chosen by the client's active enrollment.client_type. Resolve it by
-  // the WHOLE identity (contact OR any owned account) and pass it through as
-  // entityType — getWizardConfig reads entityType as the client_type for this
-  // type. Defaults to new_brand when no enrollment is found (direct-URL case).
+  // TD Communication brand audit: the client_type ('new_brand' | 'rebrand') is
+  // chosen by the client's active enrollment. Resolve it by the WHOLE identity
+  // (contact OR any owned account) and pass it through as entityType. The
+  // wizard's questions come from the DB (td_comm_questions) — built here into a
+  // configOverride and prop-drilled to WizardClient. Falls back to the code-side
+  // placeholder config when the DB has no active questions (direct-URL / not-yet
+  // -seeded safety). Defaults to new_brand when no enrollment is found.
+  let tdCommConfigOverride: TdCommWizardConfig | undefined
   if (wizardType === 'td_communication') {
     const ownedAccountIds: string[] = []
     if (accountId) ownedAccountIds.push(accountId)
@@ -601,6 +606,14 @@ export default async function WizardPage({
     const { getClientActiveEnrollment } = await import('@/lib/td-communication/brand-audit')
     const enrollment = await getClientActiveEnrollment(contactId || null, ownedAccountIds)
     entityType = enrollment?.client_type === 'rebrand' ? 'rebrand' : 'new_brand'
+
+    try {
+      const allQuestions = await listQuestions()
+      const built = buildTdCommWizardConfig(allQuestions, entityType === 'rebrand' ? 'rebrand' : 'new_brand')
+      if (built.steps.length > 0) tdCommConfigOverride = built
+    } catch (err) {
+      console.error('[wizard] td_communication question load failed — falling back to code config', err)
+    }
   }
 
   // Build wizard list with submission status for the selector
@@ -829,6 +842,7 @@ export default async function WizardPage({
           isLocked={isLocked}
           itinCount={itinCount}
           bankGuides={bankGuides}
+          configOverride={tdCommConfigOverride}
         />
       )}
 

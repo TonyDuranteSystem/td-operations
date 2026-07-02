@@ -135,49 +135,70 @@ describe('subjectTypeLabel', () => {
 /* ------------------------------ brief ------------------------------------ */
 
 describe('groupBrief', () => {
-  it('groups a full form_data into ordered sections + uploads', () => {
+  it('groups a full 4-step brand audit into ordered sections + uploads', () => {
     const brief = groupBrief({
-      business_name: 'Acme',
+      // Step 1 — Business & Strategy
       business_description: 'We sell rockets',
-      industry: 'Aerospace',
-      target_audience: 'Engineers',
-      style_preferences: 'Minimal',
-      style_keywords: ['clean', 'bold'],
-      color_choices: ['#fff', '#000'],
+      core_values: ['bold', 'honest'],
+      competitors: 'SpaceY',
+      // Step 2 — Brand Personality
+      company_personality: 'Adventurous',
+      // Step 3 — Visual & Design
+      brand_name: 'Acme',
+      color_personality: 'blue',
+      geometric_shapes: 'rounded',
+      // Step 4 — Final Details
+      one_word: 'Bold',
       additional_notes: 'Rush it',
-      uploads: [
-        { name: 'logo.png', url: 'https://x/logo.png', mime_type: 'image/png' },
-        'https://x/brief.pdf',
+      disclaimer_accepted: true,
+      // uploads via the field's own key (not a combined `uploads` blob)
+      upload_materials: [
+        { name: 'logo.png', url: 'onboarding-uploads/logo.png', mime_type: 'image/png' },
+        'onboarding-uploads/brief.pdf',
       ],
     })
     const titles = brief.sections.map((s) => s.title)
     expect(titles).toEqual([
-      'Business Description',
-      'Target Audience',
-      'Style Preferences',
-      'Color Choices',
-      'Additional Notes',
+      'Business & Strategy',
+      'Brand Personality',
+      'Visual & Design',
+      'Final Details',
     ])
-    // arrays join, business section keeps all three fields
-    expect(brief.sections[0].fields).toHaveLength(3)
-    expect(brief.sections[2].fields.find((f) => f.label === 'Keywords')?.value).toBe('clean, bold')
-    expect(brief.sections[3].fields[0].value).toBe('#fff, #000')
+    // array values join
+    expect(brief.sections[0].fields.find((f) => f.label === 'Core Values')?.value).toBe('bold, honest')
+    expect(brief.sections[2].fields.find((f) => f.label === 'Brand Name')?.value).toBe('Acme')
+    expect(brief.sections[3].fields.find((f) => f.label === 'Accuracy Confirmed')?.value).toBe('Yes')
+    // uploads read from the file key, both string + object shapes normalized
     expect(brief.uploads).toHaveLength(2)
-    expect(brief.uploads[1]).toEqual({ name: 'brief.pdf', url: 'https://x/brief.pdf' })
+    expect(brief.uploads[1]).toEqual({ name: 'brief.pdf', url: 'onboarding-uploads/brief.pdf' })
+  })
+
+  it('reads uploads from legacy file keys (materials / current_materials)', () => {
+    const brief = groupBrief({
+      materials: 'onboarding-uploads/old-logo.svg',
+      current_materials: ['onboarding-uploads/guidelines.pdf'],
+    })
+    expect(brief.uploads.map((u) => u.name)).toEqual(['old-logo.svg', 'guidelines.pdf'])
   })
 
   it('drops empty sections and empty fields, keeps unknown keys in Other Details', () => {
     const brief = groupBrief({
       business_description: 'Just this',
-      industry: '   ', // whitespace → dropped
+      mission: '   ', // whitespace → dropped
       favorite_animal: 'otter', // unknown → Other Details
       extra: null, // dropped
     })
     const titles = brief.sections.map((s) => s.title)
-    expect(titles).toEqual(['Business Description', 'Other Details'])
-    expect(brief.sections[0].fields).toEqual([{ label: 'Description', value: 'Just this' }])
+    expect(titles).toEqual(['Business & Strategy', 'Other Details'])
+    expect(brief.sections[0].fields).toEqual([{ label: 'Business Description', value: 'Just this' }])
     expect(brief.sections[1].fields).toEqual([{ label: 'Favorite Animal', value: 'otter' }])
     expect(brief.uploads).toEqual([])
+  })
+
+  it('does not dump file keys into Other Details', () => {
+    const brief = groupBrief({ upload_materials: ['onboarding-uploads/x.png'] })
+    expect(brief.sections).toEqual([]) // the only key is a file key → no text section
+    expect(brief.uploads).toHaveLength(1)
   })
 
   it('handles empty / null / non-object input', () => {
