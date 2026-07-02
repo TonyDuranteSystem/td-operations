@@ -181,10 +181,12 @@ pending.
   a separate **"Design tool outputs"** block (download + delete only — no client release, so the
   release→`concept_ready` path is never reached for them). **Reveal guard:**
   `listReleasedConceptsForClient` excludes `mockup`/`asset_kit` (defense in depth).
-- **In-panel help:** a collapsible **"How these tools work — read me"** (native `<details>`, mirrors the
-  `/tools/pnl` read-me pattern) sits atop the Design Tools section — plain-English what-it-is / the three
-  tools / how-to-use / safety notes (nothing reaches the client automatically; saving never changes the
-  project status; transparent only when the logo has alpha; AI logo gen coming later).
+- **In-panel help (two read-mes, native `<details>`, mirror the `/tools/pnl` pattern):** a **"How this
+  project works — read me"** at the very top of the brief panel body (what the workspace is + what each
+  section does + Release-is-the-only-client-facing-action), and a **"How these tools work — read me"**
+  atop the Design Tools section (what-it-is / the three tools / how-to-use / safety notes: nothing reaches
+  the client automatically; saving never changes the project status; transparent only when the logo has
+  alpha; AI logo gen coming later).
 - **NOT built (deliberate):** Tool 1 (image gen) deferred; `.ico` favicon (PNG+SVG cover modern browsers);
   photoreal mockups; per-preset size toggles (the whole social set is always produced). Canvas logic is
   QA-only (not unit-testable) — all decision logic lives in the pure libs.

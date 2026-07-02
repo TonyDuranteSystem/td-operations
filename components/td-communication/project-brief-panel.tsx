@@ -427,6 +427,91 @@ export function ProjectBriefPanel({
             </div>
           ) : project ? (
             <>
+              {/* Built-in help — what this project workspace is + what you can do.
+                  Native <details>, mirrors the P&L / Design Tools read-me. */}
+              <div className="px-5 py-4 border-b border-zinc-100">
+                <details className="rounded-xl border border-zinc-200 bg-white text-sm text-zinc-700">
+                  <summary className="cursor-pointer select-none px-3 py-2 font-medium text-zinc-800">
+                    How this project works — read me
+                  </summary>
+                  <div className="space-y-4 border-t border-zinc-100 px-3 py-3 leading-relaxed text-[13px]">
+                    <section className="space-y-1">
+                      <h3 className="font-semibold text-zinc-900">What it is</h3>
+                      <p>
+                        The complete workspace for one branding project — everything about this client&apos;s
+                        job in one place: their brief, an AI starting point, the files you produce, design
+                        tools, the project chat, and the deadline. <strong>Only &quot;Release to Client&quot;
+                        reaches the client</strong> — everything else here is internal.
+                      </p>
+                    </section>
+
+                    <section className="space-y-1">
+                      <h3 className="font-semibold text-zinc-900">What you can do here</h3>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>
+                          <strong>Status</strong> (in Client Info) — move the project through its stages (New
+                          → In Progress → Ready for Review → Revision → Approved → Delivered). Changing it
+                          here is manual; releasing a deliverable also advances it automatically.
+                        </li>
+                        <li>
+                          <strong>AI Brand Profile</strong> — generate a synthesized starting point (colour
+                          palette, personality, geometric style, mood) from the client&apos;s answers.
+                          Regenerate it if the answers change; it also feeds the Palette design tool.
+                        </li>
+                        <li>
+                          <strong>Brand Audit Answers</strong> — the client&apos;s answers to the brand-audit
+                          questionnaire.
+                        </li>
+                        <li>
+                          <strong>Uploaded Materials</strong> — brand references the client uploaded (logos,
+                          mood boards, examples); click a thumbnail to zoom.
+                        </li>
+                        <li>
+                          <strong>Deliverables</strong> — upload your creative files, organised by concept
+                          (A/B/C) and version (v1/v2…), mark draft vs final, and <strong>Release to
+                          Client</strong>. Delete removes a file from the project.
+                        </li>
+                        <li>
+                          <strong>Design Tools</strong> — Palette, Mockups and Asset Kit (see their own
+                          read-me inside that section).
+                        </li>
+                        <li>
+                          <strong>Project Timeline</strong> — key dates and the SLA deadline.
+                        </li>
+                        <li>
+                          <strong>Chat</strong> — the internal conversation for this project (team ↔ the
+                          communication partner). The client is <em>not</em> in this chat — they use the
+                          client portal.
+                        </li>
+                        <li>
+                          <strong>Private Notes</strong> — your own notes on the project; not shared.
+                        </li>
+                      </ul>
+                    </section>
+
+                    <section className="space-y-1">
+                      <h3 className="font-semibold text-amber-700">Good to know</h3>
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li>
+                          <strong>Release to Client is the client-facing moment.</strong> It advances the
+                          project and, once the client accepts the disclaimer on their portal, shows them the
+                          released concept. Everything else stays internal.
+                        </li>
+                        <li>
+                          <strong>Design-tool saves are internal.</strong> Saved mockups and asset kits land
+                          in Deliverables under &quot;Design tool outputs&quot; (download/delete only) — never
+                          released to the client and never change the project status.
+                        </li>
+                        <li>
+                          <strong>The deadline dot</strong> next to the status shows the SLA — amber is due
+                          soon, red is overdue.
+                        </li>
+                      </ul>
+                    </section>
+                  </div>
+                </details>
+              </div>
+
               {/* AI Brand Profile — synthesized starting point at the top of the brief */}
               <AiBrandProfileCard
                 projectId={project.id}
