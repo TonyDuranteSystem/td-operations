@@ -457,6 +457,74 @@ export function sanitizeForPdf(text: string): string {
     .replace(/[^\x00-\xFF]/g, "?")                    // any remaining non-Latin-1
 }
 
+// ─── Field-Row Layout Helpers ───
+
+/**
+ * Column geometry for label/value rows in the summary PDF.
+ * Labels longer than the value column (x=200) used to be overprinted by the
+ * value drawn at a fixed x=200 (e.g. "Personal Expenses Paid Through LLC
+ * (USD):" is 192pt wide at 9pt bold, so the number landed on top of the label
+ * tail — reported unreadable by the accountant on 2026-07-02). Every row must
+ * go through valueStartX/wrapByWidth so label and value can never collide.
+ */
+export const PDF_LAYOUT = {
+  /** Right edge of the printable area (page is 612pt wide). */
+  rightMargin: 562,
+  /** Preferred x where values start — keeps a visually aligned column. */
+  valueColumnX: 200,
+  /** Minimum horizontal gap between the end of a label and its value. */
+  labelValueGap: 8,
+  /** Indent for value lines wrapped below their label. */
+  wrapIndentX: 60,
+  /** If the value would have to start past this x, wrap it below instead. */
+  maxValueStartX: 340,
+} as const
+
+/** X where a row's value can start without overlapping its label. */
+export function valueStartX(labelX: number, labelWidth: number): number {
+  return Math.max(PDF_LAYOUT.valueColumnX, labelX + labelWidth + PDF_LAYOUT.labelValueGap)
+}
+
+/**
+ * Greedy word-wrap by MEASURED width (not character count — character counts
+ * under-estimate wide glyphs). Words wider than maxWidth are hard-broken so
+ * no line can ever overflow.
+ */
+export function wrapByWidth(
+  text: string,
+  maxWidth: number,
+  widthOf: (s: string) => number
+): string[] {
+  const lines: string[] = []
+  let line = ""
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    // Hard-break words that alone exceed maxWidth
+    if (widthOf(word) > maxWidth) {
+      if (line) { lines.push(line); line = "" }
+      let chunk = ""
+      for (const ch of word) {
+        if (widthOf(chunk + ch) > maxWidth && chunk) {
+          lines.push(chunk)
+          chunk = ch
+        } else {
+          chunk += ch
+        }
+      }
+      line = chunk
+      continue
+    }
+    const candidate = line ? `${line} ${word}` : word
+    if (widthOf(candidate) > maxWidth && line) {
+      lines.push(line)
+      line = word
+    } else {
+      line = candidate
+    }
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
 // ─── Generate Summary PDF ───
 
 export async function generateFormSummaryPDF(
@@ -480,6 +548,46 @@ export async function generateFormSummaryPDF(
       page = pdf.addPage([612, 792])
       y = 740
     }
+  }
+
+  /**
+   * Draw one "Label:  value" row with collision-proof layout: the value
+   * starts after the measured label (aligned at x=200 when it fits) and
+   * wraps below the label when it can't fit beside it. All four field
+   * render sites MUST use this — never drawText a value at a hardcoded x.
+   */
+  function drawFieldRow(
+    label: string,
+    display: string,
+    labelX: number,
+    opts?: { valueSize?: number; rowAdvance?: number }
+  ) {
+    const valueSize = opts?.valueSize ?? 10
+    const rowAdvance = opts?.rowAdvance ?? 16
+    // Collapse newlines/tabs: values render as a single flowing string (the
+    // wrap path always did this via split(/\s+/); measuring raw control
+    // chars would throw in pdf-lib's WinAnsi encoder).
+    display = display.replace(/\s+/g, " ").trim()
+    ensureSpace(20)
+    page.drawText(label, { x: labelX, y, size: 9, font: fontBold, color: gray })
+    const vx = valueStartX(labelX, fontBold.widthOfTextAtSize(label, 9))
+    if (
+      vx <= PDF_LAYOUT.maxValueStartX &&
+      font.widthOfTextAtSize(display, valueSize) <= PDF_LAYOUT.rightMargin - vx
+    ) {
+      page.drawText(display, { x: vx, y, size: valueSize, font, color: black })
+      y -= rowAdvance
+      return
+    }
+    // Value doesn't fit beside the label — wrap it on its own line(s) below.
+    y -= 14
+    const maxW = PDF_LAYOUT.rightMargin - PDF_LAYOUT.wrapIndentX
+    for (const line of wrapByWidth(display, maxW, s => font.widthOfTextAtSize(s, 9))) {
+      ensureSpace(14)
+      page.drawText(line, { x: PDF_LAYOUT.wrapIndentX, y, size: 9, font, color: black })
+      y -= 12
+    }
+    y -= 4
   }
 
   // Title
@@ -566,13 +674,10 @@ export async function generateFormSummaryPDF(
 
           for (const [itemKey, itemVal] of Object.entries(item)) {
             if (itemVal === undefined || itemVal === null || itemVal === "") continue
-            ensureSpace(14)
             const itemLabel = memberFieldLabels[itemKey] || itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
             const mappedValue = repeaterValueLabels[itemKey]?.[String(itemVal)]
             const itemDisplay = sanitizeForPdf(mappedValue ?? (typeof itemVal === "boolean" ? (itemVal ? "Yes" : "No") : String(itemVal)))
-            page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
-            page.drawText(itemDisplay, { x: 200, y, size: 10, font, color: black })
-            y -= 14
+            drawFieldRow(`${itemLabel}:`, itemDisplay, 70, { rowAdvance: 14 })
           }
           y -= 6
         }
@@ -589,35 +694,7 @@ export async function generateFormSummaryPDF(
         display = String(val)
       }
 
-      display = sanitizeForPdf(display)
-
-      // Wrap long values across multiple lines (never truncate)
-      page.drawText(field.label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
-      if (display.length <= 60) {
-        page.drawText(display, { x: 200, y, size: 10, font, color: black })
-        y -= 16
-      } else {
-        y -= 14
-        // Split into lines of ~80 chars
-        const words = display.split(/\s+/)
-        let line = ""
-        for (const word of words) {
-          if ((line + " " + word).length > 80 && line.length > 0) {
-            ensureSpace(14)
-            page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
-            y -= 12
-            line = word
-          } else {
-            line += " " + word
-          }
-        }
-        if (line.trim()) {
-          ensureSpace(14)
-          page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
-          y -= 12
-        }
-        y -= 4
-      }
+      drawFieldRow(field.label + ":", sanitizeForPdf(display), 50)
     }
     y -= 8
   }
@@ -650,11 +727,8 @@ export async function generateFormSummaryPDF(
           y -= 14
           for (const [itemKey, itemVal] of Object.entries(item)) {
             if (itemVal === undefined || itemVal === null || itemVal === "") continue
-            ensureSpace(14)
             const itemLabel = itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
-            page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
-            page.drawText(sanitizeForPdf(String(itemVal)), { x: 200, y, size: 10, font, color: black })
-            y -= 14
+            drawFieldRow(`${itemLabel}:`, sanitizeForPdf(String(itemVal)), 70, { rowAdvance: 14 })
           }
           y -= 6
         }
@@ -666,34 +740,9 @@ export async function generateFormSummaryPDF(
       else if (Array.isArray(val)) display = val.join(", ")
       else if (typeof val === "object" && val !== null) display = JSON.stringify(val, null, 2)
       else display = String(val)
-      display = sanitizeForPdf(display)
 
       const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
-      page.drawText(label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
-      if (display.length <= 60) {
-        page.drawText(display, { x: 200, y, size: 10, font, color: black })
-        y -= 16
-      } else {
-        y -= 14
-        const words = display.split(/\s+/)
-        let line = ""
-        for (const word of words) {
-          if ((line + " " + word).length > 80 && line.length > 0) {
-            ensureSpace(14)
-            page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
-            y -= 12
-            line = word
-          } else {
-            line += " " + word
-          }
-        }
-        if (line.trim()) {
-          ensureSpace(14)
-          page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
-          y -= 12
-        }
-        y -= 4
-      }
+      drawFieldRow(label + ":", sanitizeForPdf(display), 50)
     }
   }
 
