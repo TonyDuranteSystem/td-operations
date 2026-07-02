@@ -1,5 +1,6 @@
 # P&L / Balance Sheet — Excel export engine
-_Last verified against code: 2026-07-01 — Claude (Reframed. There are TWO P&L computations in the codebase and the tax-financials one is authoritative — see below. The earlier standalone `/tools/pnl` parallel build on `generatePnlExcel` was SCRAPPED and replaced by exposing the real tax-financials system to staff — that lives in **tax-returns.md**. This doc now covers only the Excel export layer.)_
+_Last verified against code: 2026-07-02 — Claude (The standalone P&L **workspace** tool (`/tools/pnl`, see **tax-returns.md**) reuses `buildFinancialsWorkbook` unchanged for its Excel download — it renders from the workspace's `FinancialDraft` (`getWorkspaceFinancialsView`) + the workspace transactions, exactly as the portal download does from the client draft, so the workspace file matches the workspace screen. No new workbook builder was added, per the gotcha below.)_
+_Prior: 2026-07-01 — Claude (Reframed. There are TWO P&L computations in the codebase and the tax-financials one is authoritative — see below. The earlier standalone `/tools/pnl` parallel build on `generatePnlExcel` was SCRAPPED and replaced by exposing the real tax-financials system to staff — that lives in **tax-returns.md**. This doc now covers only the Excel export layer.)_
 
 ## What it is
 The code that turns computed financials into the downloadable **Excel workbook** (P&L + Balance Sheet + detail sheets). There are two builders, and knowing which is authoritative matters:

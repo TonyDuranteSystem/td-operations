@@ -76,13 +76,19 @@ const activeAnswerOf = (g: QuestionGroup) => CATEGORY_TO_ANSWER[g.current_catego
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client' }: { accountId: string; taxYear: number; locale: string; mode?: 'staff' | 'client' }) {
+export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client', apiBase = '/api/portal/tax-financials' }: { accountId: string; taxYear: number; locale: string; mode?: 'staff' | 'client'; apiBase?: string }) {
   const it = locale === 'it'
   // Staff mode (standalone /tools/pnl): same review + categorization + gates +
   // Excel, but the client-only affordances are hidden — the client attestation
   // (staff aren't the client attesting) and the portal-wizard "edit my info"
   // link. Defaults to 'client' so the portal screen is unchanged.
   const isStaff = mode === 'staff'
+  // Single base for every backend call: '/api/portal/tax-financials' for the
+  // client portal (default — byte-identical to before) OR '/api/tools/pnl/{id}'
+  // for the staff workspace tool. The workspace routes are keyed by the {id}
+  // path and IGNORE any legacy account_id/tax_year in the query/body, so every
+  // call site below works unchanged with only the base swapped.
+  const API = apiBase
   const [view, setView] = useState<View | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -107,7 +113,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/portal/tax-financials?account_id=${accountId}&tax_year=${taxYear}`)
+      const res = await fetch(`${API}?account_id=${accountId}&tax_year=${taxYear}`)
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile caricare i dati — riprova.' : 'Could not load your financials — please try again.'))
@@ -120,7 +126,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     } finally {
       setLoading(false)
     }
-  }, [accountId, taxYear, it])
+  }, [accountId, taxYear, it, API])
 
   useEffect(() => { void load() }, [load])
 
@@ -137,7 +143,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const answer = async (g: QuestionGroup, value: string) => {
     setBusy(g.group_key)
     try {
-      const res = await fetch('/api/portal/tax-financials/answer', {
+      const res = await fetch(`${API}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, answer: value }),
@@ -162,7 +168,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     if (catData[slug]) return
     setCatLoading(slug)
     try {
-      const res = await fetch(`/api/portal/tax-financials/category-transactions?account_id=${accountId}&tax_year=${taxYear}&bucket=${encodeURIComponent(slug)}`)
+      const res = await fetch(`${API}/category-transactions?account_id=${accountId}&tax_year=${taxYear}&bucket=${encodeURIComponent(slug)}`)
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile caricare la categoria — riprova.' : 'Could not load this category — please try again.'))
@@ -181,7 +187,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     if (name.length < 2) return
     setBusy('add-bucket')
     try {
-      const res = await fetch('/api/portal/tax-financials/add-bucket', {
+      const res = await fetch(`${API}/add-bucket`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, name }),
@@ -203,7 +209,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     setBusy('bulk')
     try {
       for (const g of groups) {
-        const res = await fetch('/api/portal/tax-financials/answer', {
+        const res = await fetch(`${API}/answer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, answer: value }),
@@ -224,7 +230,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const setBucket = async (g: QuestionGroup, bucket: string) => {
     setBusy(g.group_key)
     try {
-      const res = await fetch('/api/portal/tax-financials/set-bucket', {
+      const res = await fetch(`${API}/set-bucket`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, bucket }),
@@ -248,7 +254,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     if (!window.confirm(msg)) return
     setBusy(f.source_file_id)
     try {
-      const res = await fetch(`/api/portal/tax-financials/statement?account_id=${accountId}&tax_year=${taxYear}&source_file_id=${encodeURIComponent(f.source_file_id)}`, { method: 'DELETE' })
+      const res = await fetch(`${API}/statement?account_id=${accountId}&tax_year=${taxYear}&source_file_id=${encodeURIComponent(f.source_file_id)}`, { method: 'DELETE' })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile eliminare il file — riprova.' : 'Could not delete the file — please try again.'))
@@ -269,7 +275,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     fd.append('tax_year', String(taxYear))
     fd.append('bank_name', bank)
     fd.append('account_kind', uploadKind)
-    const res = await fetch('/api/portal/tax-financials/upload', { method: 'POST', body: fd })
+    const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
     const d = await res.json().catch(() => ({}))
     if (!res.ok) {
       throw new Error(d.error || (it ? 'Caricamento non riuscito — riprova.' : 'Upload failed — please try again.'))
@@ -315,7 +321,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const answerCoverage = async (q: CoverageQuestion, value: 'no_activity' | 'had_activity') => {
     setBusy(q.key)
     try {
-      const res = await fetch('/api/portal/tax-financials/coverage', {
+      const res = await fetch(`${API}/coverage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, tax_year: taxYear, question_key: q.key, answer: value }),
@@ -374,7 +380,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const attest = async () => {
     setBusy('attest')
     try {
-      const res = await fetch('/api/portal/tax-financials/attest', {
+      const res = await fetch(`${API}/attest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account_id: accountId, tax_year: taxYear }),
@@ -857,7 +863,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 })
               })()}
               {/* Add a new bucket — flexible, shared vocabulary (#2). A bucket added
-                  here is saved globally and offered to everyone next time. */}
+                  here is saved globally and offered to everyone next time. Hidden in
+                  the staff workspace tool: a scratch workspace must NOT write to the
+                  global expense-category catalog (sealed leak #1). */}
+              {!isStaff && (
               <div className="mt-1 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
                 <span className="text-xs text-zinc-500">{it ? 'Manca una categoria?' : 'Missing a category?'}</span>
                 <input
@@ -875,6 +884,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   {it ? 'Aggiungi' : 'Add'}
                 </button>
               </div>
+              )}
             </section>
           )}
 
@@ -959,7 +969,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           {/* Download + Attest */}
           <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 space-y-4">
             <a
-              href={`/api/portal/tax-financials/download?account_id=${accountId}&tax_year=${taxYear}`}
+              href={`${API}/download?account_id=${accountId}&tax_year=${taxYear}`}
               className="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900"
             >
               {it ? 'Scarica Excel (P&L + Stato Patrimoniale)' : 'Download Excel (P&L + Balance Sheet)'}
