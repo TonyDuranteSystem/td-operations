@@ -194,6 +194,21 @@ describe("notifyClientActionRequired", () => {
     expect(notificationCalls[0].title).toBe(TITLE.en)
   })
 
+  it("skipEmail: chat + bell dispatch, email deliberately not sent", async () => {
+    const r = await notifyClientActionRequired({
+      contact_id: "ctc-1",
+      title: TITLE,
+      message: MESSAGE,
+      link: "/portal/invoices?inv=pay-1",
+      skipEmail: true,
+    })
+    expect(r.dispatched).toBe(true)
+    expect(r.chat).toBe("ok")
+    expect(r.notification).toBe("ok")
+    expect(r.email).toContain("caller sends its own email")
+    expect(emailSends).toHaveLength(0)
+  })
+
   it("still sends chat + bell when the contact has no email", async () => {
     fixtures.contact = { id: "ctc-1", email: null, full_name: "No Email", language: null }
     const r = await notifyClientActionRequired({

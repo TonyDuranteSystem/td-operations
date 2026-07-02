@@ -16,6 +16,7 @@ const q = (over: Partial<TdCommQuestion>): TdCommQuestion => ({
   step: over.step ?? 1,
   audience: over.audience ?? 'both',
   options: over.options ?? [],
+  ai_assist: over.ai_assist ?? false,
   active: over.active ?? true,
   sort_order: over.sort_order ?? 0,
   created_at: '',
@@ -124,6 +125,12 @@ describe('shapeQuestion', () => {
     expect(s.step).toBe(1)
     expect(s.options).toEqual([])
     expect(s.active).toBe(true)
+    expect(s.ai_assist).toBe(false)
+  })
+
+  it('reads the ai_assist flag', () => {
+    expect(shapeQuestion({ id: '1', key: 'k', label_en: 'L', ai_assist: true }).ai_assist).toBe(true)
+    expect(shapeQuestion({ id: '1', key: 'k', label_en: 'L', ai_assist: false }).ai_assist).toBe(false)
   })
 
   it('coerces legacy string options to objects', () => {

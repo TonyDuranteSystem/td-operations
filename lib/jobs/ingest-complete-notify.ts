@@ -27,45 +27,14 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { PORTAL_BASE_URL } from "@/lib/config"
-import { localeFromLanguage } from "./wizard-failure-notify"
 
-const SYSTEM_SENDER_ID = "00000000-0000-0000-0000-000000000000"
-
-const MESSAGE: Record<"it" | "en", string> = {
-  en: `Good news — we've finished reading your bank statements. You can now review your Profit & Loss and Balance Sheet in the portal: ${PORTAL_BASE_URL}/portal/tax-financials`,
-  it: `Buone notizie — abbiamo finito di leggere i tuoi estratti conto. Ora puoi controllare il tuo Conto Economico e Stato Patrimoniale nel portale: ${PORTAL_BASE_URL}/portal/tax-financials`,
-}
+// Locale resolution + message copy moved into the shared action-required
+// dispatch (Phase C 2026-07-02) — the helper resolves per-recipient locale
+// and appends the /portal/tax-financials deep link itself.
 
 export interface IngestCompleteNotifyResult {
   notified: boolean
   reason?: string
-}
-
-/** Resolve the account's portal locale from its primary (or any) linked contact. */
-async function resolveAccountLocale(accountId: string): Promise<"it" | "en"> {
-  try {
-    const { data: links } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contact_id, is_primary")
-      .eq("account_id", accountId)
-    const rows = (links ?? []) as Array<{ contact_id: string | null; is_primary: boolean | null }>
-    const chosen =
-      rows.find((r) => r.is_primary && r.contact_id)?.contact_id ||
-      rows.find((r) => r.contact_id)?.contact_id ||
-      null
-    if (chosen) {
-      const { data } = await supabaseAdmin
-        .from("contacts")
-        .select("language")
-        .eq("id", chosen)
-        .maybeSingle()
-      return localeFromLanguage(data?.language)
-    }
-  } catch {
-    // fall through to default
-  }
-  return "en"
 }
 
 /**
@@ -113,16 +82,26 @@ export async function notifyIfIngestComplete(params: {
     const meta = (sub.financials_meta ?? {}) as Record<string, unknown>
     if (meta.ready_notified === true) return { notified: false, reason: "already_notified" }
 
-    const locale = await resolveAccountLocale(accountId)
-
-    const { error } = await supabaseAdmin.from("portal_messages").insert({
+    // Phase C (2026-07-02): reviewing + attesting the P&L/BS is a CLIENT
+    // ACTION, so this dispatches the full action-required package (clickable
+    // chat + immediate email + bell/push) instead of the old chat-only system
+    // message. Idempotency stays HERE (last-job gate + financials_meta marker)
+    // — the helper's 10-minute dedup is not sufficient for re-uploads.
+    const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+    const dispatch = await notifyClientActionRequired({
       account_id: accountId,
-      sender_type: "system",
-      sender_id: SYSTEM_SENDER_ID,
-      message: MESSAGE[locale],
+      title: {
+        en: `Review your Profit & Loss — ${taxYear}`,
+        it: `Controlla il tuo Conto Economico — ${taxYear}`,
+      },
+      message: {
+        en: "Good news — we've finished reading your bank statements. Please review your Profit & Loss and Balance Sheet in the portal and confirm them so we can move forward with your tax return.",
+        it: "Buone notizie — abbiamo finito di leggere i tuoi estratti conto. Controlla il tuo Conto Economico e Stato Patrimoniale nel portale e confermali così possiamo procedere con la tua dichiarazione.",
+      },
+      link: "/portal/tax-financials",
     })
-    if (error) {
-      console.error(`[ingest-complete-notify] insert failed for account ${accountId} ${taxYear}:`, error.message)
+    if (dispatch.chat.startsWith("failed") && dispatch.notification.startsWith("failed")) {
+      console.error(`[ingest-complete-notify] dispatch failed for account ${accountId} ${taxYear}:`, dispatch.chat)
       return { notified: false, reason: "insert_failed" }
     }
 

@@ -842,6 +842,124 @@ export async function copyUploadsToDrive(
   return { copied, failed }
 }
 
+// ─── Tax-return payload normalization for the summary PDF ───
+
+/**
+ * Alias keys the portal tax wizard stores alongside the canonical section
+ * keys (same value under several names). The "Additional Information"
+ * section used to dump every alias as its own row (Ein / Llc Ein / Email /
+ * Personal Email / …), burying the real extra data in noise. An alias row
+ * is skipped ONLY when the canonical key holds the exact same value — if
+ * they ever diverge, both are shown (divergence is signal, never hide it).
+ */
+const TAX_ALIAS_OF: Record<string, string> = {
+  ein: "ein_number",
+  llc_ein: "ein_number",
+  email: "owner_email",
+  personal_email: "owner_email",
+  phone: "owner_phone",
+  personal_phone: "owner_phone",
+  first_name: "owner_first_name",
+  last_name: "owner_last_name",
+  company_name: "llc_name",
+  business_name: "llc_name",
+  personal_country: "owner_country",
+  formation_date: "date_of_incorporation",
+  state_of_formation: "state_of_incorporation",
+}
+
+/**
+ * Normalize a portal tax-wizard payload for the accountant summary PDF:
+ *
+ * 1. Fold FLATTENED repeater keys (member_N_…, related_party_transactions_N_rpt_…)
+ *    into the arrays the PDF's object-array renderer understands
+ *    (members_list → "Member N" blocks; related_party_transactions →
+ *    "Transaction N" blocks with readable direction/type labels instead of
+ *    raw codes like "from_llc"/"capital"). The count key is authoritative
+ *    (removed rows leave orphaned higher-index keys behind). After a
+ *    successful fold the flattened keys + count are dropped so they don't
+ *    duplicate into "Additional Information". If a fold produces nothing,
+ *    the raw keys are kept — never hide data.
+ * 2. Drop alias keys whose canonical twin carries the identical value
+ *    (see TAX_ALIAS_OF).
+ *
+ * Pure function — returns a new object, never mutates the input.
+ */
+export function normalizeTaxPayloadForPdf(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...data }
+
+  // ── Fold members (member_count + member_N_member_*) ──
+  if (out.member_count !== undefined) {
+    const count = Number(out.member_count) || 0
+    const membersList: Record<string, unknown>[] = []
+    for (let i = 0; i < count; i++) {
+      const get = (k: string) => out[`member_${i}_${k}`]
+      if (!get("member_first_name") && !get("member_last_name") && !get("member_company_name")) continue
+      membersList.push({
+        member_name: get("member_company_name") || `${get("member_first_name") ?? ""} ${get("member_last_name") ?? ""}`.trim(),
+        member_kind: get("member_type"),
+        member_citizenship: get("member_citizenship"),
+        member_residence_country: get("member_residence_country"),
+        member_address: [get("member_street"), get("member_city"), get("member_zip")].filter(Boolean).join(", "),
+        member_itin_status: get("member_itin_status"),
+        member_itin: get("member_itin"),
+        member_company_owner: get("member_company_owner"),
+        member_foreign_tax_id: get("member_foreign_tax_id"),
+        member_ownership_pct: get("member_ownership_pct"),
+      })
+    }
+    if (membersList.length > 0) {
+      out.members_list = membersList
+      delete out.member_count
+      for (const k of Object.keys(out)) {
+        if (/^member_\d+_/.test(k)) delete out[k]
+      }
+    }
+  }
+
+  // ── Fold related-party transactions (…_count + …_N_rpt_*) ──
+  if (out.related_party_transactions_count !== undefined) {
+    const count = Number(out.related_party_transactions_count) || 0
+    const transactions: Record<string, unknown>[] = []
+    for (let i = 0; i < count; i++) {
+      const get = (k: string) => out[`related_party_transactions_${i}_${k}`]
+      if (!get("rpt_company_name") && !get("rpt_description") && !get("rpt_amount")) continue
+      transactions.push({
+        rpt_company_name: get("rpt_company_name"),
+        rpt_address: get("rpt_address"),
+        rpt_country: get("rpt_country"),
+        rpt_vat_number: get("rpt_vat_number"),
+        rpt_amount: get("rpt_amount"),
+        rpt_direction: get("rpt_direction"),
+        rpt_type: get("rpt_type"),
+        rpt_description: get("rpt_description"),
+      })
+    }
+    if (transactions.length > 0) {
+      out.related_party_transactions = transactions
+      delete out.related_party_transactions_count
+      for (const k of Object.keys(out)) {
+        if (/^related_party_transactions_\d+_/.test(k)) delete out[k]
+      }
+    }
+  }
+
+  // ── Drop alias keys that exactly duplicate their canonical twin ──
+  for (const [alias, canonical] of Object.entries(TAX_ALIAS_OF)) {
+    if (
+      alias in out &&
+      out[canonical] !== undefined && out[canonical] !== null && out[canonical] !== "" &&
+      String(out[alias]) === String(out[canonical])
+    ) {
+      delete out[alias]
+    }
+  }
+
+  return out
+}
+
 // ─── Full Save-to-Drive Pipeline ───
 
 export async function saveFormToDrive(
@@ -864,31 +982,11 @@ export async function saveFormToDrive(
    */
   opts?: { bucket?: string },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }> {
-  // Tax MMLLC redesign (§14): the wizard submits members as FLATTENED keys
-  // (member_0_member_first_name…). Synthesize the members array the PDF's
-  // object-array renderer understands, so the accountant sees every member's
-  // K-1 data in one block. member_count is authoritative (removed members
-  // leave orphaned higher-index keys behind).
-  if (formType === "tax_return" && submittedData.member_count !== undefined) {
-    const count = Number(submittedData.member_count) || 0
-    const membersList: Record<string, unknown>[] = []
-    for (let i = 0; i < count; i++) {
-      const get = (k: string) => submittedData[`member_${i}_${k}`]
-      if (!get("member_first_name") && !get("member_last_name") && !get("member_company_name")) continue
-      membersList.push({
-        member_name: get("member_company_name") || `${get("member_first_name") ?? ""} ${get("member_last_name") ?? ""}`.trim(),
-        member_kind: get("member_type"),
-        member_citizenship: get("member_citizenship"),
-        member_residence_country: get("member_residence_country"),
-        member_address: [get("member_street"), get("member_city"), get("member_zip")].filter(Boolean).join(", "),
-        member_itin_status: get("member_itin_status"),
-        member_itin: get("member_itin"),
-        member_company_owner: get("member_company_owner"),
-        member_foreign_tax_id: get("member_foreign_tax_id"),
-        member_ownership_pct: get("member_ownership_pct"),
-      })
-    }
-    if (membersList.length > 0) submittedData = { ...submittedData, members_list: membersList }
+  // Tax wizard payloads arrive with flattened repeater keys and alias
+  // duplicates — normalize them for the accountant PDF (fold member/RPT
+  // repeaters into renderable arrays, drop exact-duplicate alias keys).
+  if (formType === "tax_return") {
+    submittedData = normalizeTaxPayloadForPdf(submittedData)
   }
   const config = FORM_CONFIGS[formType]
   if (!config) {

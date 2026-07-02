@@ -63,9 +63,11 @@ function questionToField(q: TdCommQuestion): FieldConfig {
   if (q.type === 'select' && q.options.length > 0) {
     field.options = q.options.map(optionToField)
   }
-  // Preserve the ✨ Generate helper that the hardcoded config attached to the
-  // business description — the only AI-assisted field in the brand audit.
-  if (q.key === 'business_description') field.aiAssist = true
+  // DB-driven ✨ Generate helper: the operator toggles ai_assist per question in
+  // the CRM Questions editor (backfilled true for every textarea). Only textareas
+  // render the button (wizard-field ignores the flag on other types), but we gate
+  // here too so a mis-set flag on a non-textarea never lights it up.
+  if (q.ai_assist && q.type === 'textarea') field.aiAssist = true
   return field
 }
 

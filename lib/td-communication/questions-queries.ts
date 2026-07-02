@@ -13,7 +13,7 @@ import type { TdCommQuestion } from './types'
 const db = supabaseAdmin as any
 
 const COLUMNS =
-  'id, key, label_en, label_it, type, required, step, audience, options, active, sort_order, created_at, updated_at'
+  'id, key, label_en, label_it, type, required, step, audience, options, ai_assist, active, sort_order, created_at, updated_at'
 
 const PG_UNIQUE_VIOLATION = '23505'
 
@@ -41,6 +41,7 @@ export async function createQuestion(input: QuestionWriteInput): Promise<TdCommQ
     step: input.step ?? 1,
     audience: input.audience ?? 'both',
     options: input.options ?? [],
+    ai_assist: input.ai_assist ?? false,
     active: input.active ?? true,
     sort_order: input.sort_order ?? 0,
     created_at: now,
@@ -58,7 +59,7 @@ export async function createQuestion(input: QuestionWriteInput): Promise<TdCommQ
 export async function updateQuestion(id: string, input: QuestionWriteInput): Promise<TdCommQuestion> {
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   const fields: (keyof QuestionWriteInput)[] = [
-    'key', 'label_en', 'label_it', 'type', 'required', 'step', 'audience', 'options', 'active', 'sort_order',
+    'key', 'label_en', 'label_it', 'type', 'required', 'step', 'audience', 'options', 'ai_assist', 'active', 'sort_order',
   ]
   for (const f of fields) {
     if (input[f] !== undefined) patch[f] = input[f]

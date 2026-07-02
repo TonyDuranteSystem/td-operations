@@ -76,8 +76,14 @@ export interface ActionRequiredParams {
   message: LocalizedText
   /** Portal-relative action path (e.g. "/portal/sign/ss4"). Rendered as an
    * absolute PORTAL_BASE_URL link in chat/email; stored relative on the
-   * bell notification (the portal navigates internally). */
+   * bell notification (the portal navigates internally). Also the dedup
+   * scope — give per-entity actions a unique link (e.g.
+   * "/portal/invoices?inv=<id>") so two different invoices both notify. */
   link: string
+  /** Skip the email channel — for callers that already send their own richer
+   * email (e.g. the invoice mailer attaches the PDF). Chat + bell/push still
+   * dispatch. */
+  skipEmail?: boolean
 }
 
 export interface ActionRequiredResult {
@@ -253,8 +259,10 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
 
     // ── 3. Immediate email ──────────────────────────────────────────────
     try {
-      const emailable = recipients.filter((r) => !!r.email)
-      if (emailable.length === 0) {
+      const emailable = params.skipEmail ? [] : recipients.filter((r) => !!r.email)
+      if (params.skipEmail) {
+        result.email = 'skipped: caller sends its own email'
+      } else if (emailable.length === 0) {
         result.email = 'skipped: no recipient email'
       } else {
         const { gmailPost } = await import('@/lib/gmail')

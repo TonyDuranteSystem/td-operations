@@ -36,6 +36,7 @@ interface FormState {
   step: string
   audience: QuestionAudience
   options: OptionRow[]
+  ai_assist: boolean
   active: boolean
   sort_order: string
 }
@@ -56,12 +57,12 @@ function toForm(q: TdCommQuestion): FormState {
   return {
     key: q.key, label_en: q.label_en, label_it: q.label_it ?? '', type: q.type,
     required: q.required, step: String(q.step), audience: q.audience,
-    options: q.options.map(optionToRow), active: q.active, sort_order: String(q.sort_order),
+    options: q.options.map(optionToRow), ai_assist: q.ai_assist, active: q.active, sort_order: String(q.sort_order),
   }
 }
 const EMPTY_FORM: FormState = {
   key: '', label_en: '', label_it: '', type: 'text', required: false,
-  step: '1', audience: 'both', options: [], active: true, sort_order: '0',
+  step: '1', audience: 'both', options: [], ai_assist: false, active: true, sort_order: '0',
 }
 
 /** A repeater row → clean TdCommOption; drops rows with no value AND no label. */
@@ -92,6 +93,9 @@ function toPayload(f: FormState, _isCreate: boolean) {
     step: Number(f.step || '1'),
     audience: f.audience,
     options,
+    // AI assist only applies to textareas; force false otherwise so a flag can't
+    // linger on a field type that changed away from textarea.
+    ai_assist: f.type === 'textarea' ? f.ai_assist : false,
     active: f.active,
     sort_order: Number(f.sort_order || '0'),
   }
@@ -223,6 +227,38 @@ function QuestionModal({
   const [form, setForm] = useState<FormState>(initial)
   const [busy, setBusy] = useState(false)
 
+  // ── AI-assist preview (read-only; nothing saved) ──────────────────────────
+  const [pvCtx, setPvCtx] = useState(
+    'We roast and sell specialty coffee beans online to home baristas across Italy. A small team focused on quality, sustainability, and personal service.',
+  )
+  const [pvLang, setPvLang] = useState<'en' | 'it'>('en')
+  const [pvBusy, setPvBusy] = useState(false)
+  const [pvText, setPvText] = useState<string | null>(null)
+  const [pvErr, setPvErr] = useState<string | null>(null)
+
+  async function runPreview() {
+    if (pvBusy) return
+    setPvBusy(true)
+    setPvErr(null)
+    try {
+      const res = await fetch('/api/td-communication/admin/ai-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionLabel: form.label_en.trim(), sampleContext: pvCtx, locale: pvLang }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Preview failed.')
+      }
+      const data = await res.json()
+      setPvText(typeof data.text === 'string' ? data.text : '')
+    } catch (e) {
+      setPvErr(e instanceof Error && e.message ? e.message : 'Preview failed.')
+    } finally {
+      setPvBusy(false)
+    }
+  }
+
   function set<K extends keyof FormState>(k: K, v: FormState[K]) { setForm((f) => ({ ...f, [k]: v })) }
 
   function setOption<K extends keyof OptionRow>(idx: number, k: K, v: OptionRow[K]) {
@@ -332,6 +368,66 @@ function QuestionModal({
               <input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} /> Active
             </label>
           </div>
+
+          {/* AI assist — only meaningful on a textarea (the ✨ Generate button). */}
+          {form.type === 'textarea' && (
+            <label className="flex items-start gap-2 text-sm text-gray-700 border rounded-lg px-3 py-2 bg-zinc-50/60">
+              <input type="checkbox" className="mt-0.5" checked={form.ai_assist} onChange={(e) => set('ai_assist', e.target.checked)} />
+              <span>
+                <span className="block font-medium">✨ AI assist</span>
+                <span className="block text-xs text-zinc-500">Show the “Generate with AI” button on this question so clients can draft an answer they then edit.</span>
+              </span>
+            </label>
+          )}
+
+          {/* Preview / Try it — see exactly what the client's ✨ button would
+              produce for this question. Read-only QA: uses a sample business
+              description, saves nothing. Only when AI assist is on. */}
+          {form.type === 'textarea' && form.ai_assist && (
+            <div className="border rounded-lg p-3 space-y-2 bg-blue-50/40">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-zinc-700">✨ Preview the AI draft</span>
+                <div className="inline-flex rounded-md border border-zinc-200 overflow-hidden text-[11px]">
+                  {(['en', 'it'] as const).map((lng) => (
+                    <button
+                      key={lng}
+                      type="button"
+                      onClick={() => setPvLang(lng)}
+                      className={cn('px-2 py-0.5 font-medium', pvLang === lng ? 'bg-blue-600 text-white' : 'bg-white text-zinc-600 hover:bg-zinc-50')}
+                    >
+                      {lng.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                See what a client would get for this question. Uses the sample business description below — nothing is saved.
+              </p>
+              <textarea
+                className="w-full border rounded px-2 py-1.5 text-xs"
+                rows={2}
+                value={pvCtx}
+                onChange={(e) => setPvCtx(e.target.value)}
+                placeholder="Sample business description (context for the draft)…"
+              />
+              <button
+                type="button"
+                onClick={runPreview}
+                disabled={pvBusy || !form.label_en.trim()}
+                className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1"
+              >
+                {pvBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>✨</span>}
+                {pvText !== null ? 'Regenerate' : 'Generate preview'}
+              </button>
+              {pvErr && <p className="text-xs text-red-600">{pvErr}</p>}
+              {pvText !== null && !pvErr && (
+                <div className="rounded-md border border-blue-200 bg-white p-2.5">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-blue-600 mb-1">Sample draft ({pvLang.toUpperCase()})</p>
+                  <p className="text-sm text-zinc-800 whitespace-pre-wrap">{pvText}</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-2 px-5 py-3 border-t sticky bottom-0 bg-white">
           <button onClick={onClose} className="border text-gray-700 hover:bg-gray-50 text-sm rounded font-medium px-3 py-1.5">Cancel</button>

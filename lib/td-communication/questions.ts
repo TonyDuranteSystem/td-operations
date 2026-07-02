@@ -67,6 +67,8 @@ export interface QuestionWriteInput {
   audience?: QuestionAudience
   /** Object options; legacy bare strings still accepted and coerced on read. */
   options?: RawOption[]
+  /** Render the ✨ Generate-with-AI button on this question (textarea only). */
+  ai_assist?: boolean
   active?: boolean
   sort_order?: number
 }
@@ -154,6 +156,7 @@ export function shapeQuestion(row: Record<string, unknown>): TdCommQuestion {
     step: Number(row.step ?? 1),
     audience: (row.audience as QuestionAudience) ?? 'both',
     options: coerceOptions(row.options),
+    ai_assist: Boolean(row.ai_assist),
     active: row.active === undefined ? true : Boolean(row.active),
     sort_order: Number(row.sort_order ?? 0),
     created_at: String(row.created_at ?? ''),

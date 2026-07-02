@@ -411,6 +411,37 @@ export function WizardClient({
     [wizardType, accountId, contactId, leadId],
   )
 
+  // ✨ AI draft helper for TD Communication brand-audit textareas. POSTs the
+  // client's own answers as context and returns a suggested draft; the WizardField
+  // preview lets the client use/append it (never auto-written). R099: surface the
+  // server's message. Wired only for wizardType === 'td_communication' below.
+  const handleAiAssist = useCallback(
+    async (field: FieldConfig, _currentValue: string): Promise<string | null> => {
+      try {
+        const res = await fetch('/api/td-communication/ai/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            questionKey: field.name,
+            questionLabel: field.label,
+            answers: formData,
+            locale,
+          }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || (locale === 'it' ? 'Generazione non riuscita.' : 'Could not generate a draft.'))
+        }
+        const data = await res.json()
+        return typeof data.text === 'string' ? data.text : null
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : (locale === 'it' ? 'Generazione non riuscita.' : 'Could not generate a draft.'))
+        return null
+      }
+    },
+    [formData, locale],
+  )
+
   // A file field is empty when its array of paths is empty. Other field types
   // keep the original string/boolean/number emptiness rules.
   const isEmptyValue = (val: unknown) => {
@@ -1149,6 +1180,7 @@ export function WizardClient({
                     value={formData[field.name] ?? ''}
                     onChange={handleFieldChange}
                     onFileUpload={handleFileUpload}
+                    onAiAssist={wizardType === 'td_communication' ? handleAiAssist : undefined}
                     locale={locale}
                   />
                   {/* High-stakes confirmation: show an amber warning when the

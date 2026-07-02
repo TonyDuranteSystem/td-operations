@@ -357,6 +357,36 @@ export async function sendTDInvoice(
     .eq("id", paymentId)
   if (updateErr) throw new Error(`Failed to mark payment as Sent: ${updateErr.message}`)
 
+  // Phase C (2026-07-02): paying the invoice is a CLIENT ACTION — drop the
+  // action-required package in the portal too (clickable chat + bell/push).
+  // skipEmail: the rich invoice email with the PDF was ALREADY sent above —
+  // never a second email. Per-invoice link (?inv=) so two invoices sent in a
+  // row both notify (the helper dedups by link). Portal audience only: a
+  // no-portal recipient pays via the /pay/{token} link in the email and would
+  // never see portal messages. Best-effort — the invoice is already sent.
+  if (audience !== "no_portal") {
+    try {
+      const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+      const amountLabel = `${csym}${total}`
+      await notifyClientActionRequired({
+        account_id: (payment.account_id as string | null) ?? null,
+        contact_id: (payment.contact_id as string | null) ?? null,
+        title: {
+          en: `New invoice ${invoiceNumber} — ${amountLabel}`,
+          it: `Nuova fattura ${invoiceNumber} — ${amountLabel}`,
+        },
+        message: {
+          en: `We've issued invoice ${invoiceNumber} for ${amountLabel}. Please open your portal to view and pay it.`,
+          it: `Abbiamo emesso la fattura ${invoiceNumber} di ${amountLabel}. Accedi al portale per visualizzarla e pagarla.`,
+        },
+        link: `/portal/invoices?inv=${paymentId}`,
+        skipEmail: true,
+      })
+    } catch (notifyErr) {
+      console.warn(`[sendTDInvoice] action-required dispatch failed for ${paymentId}:`, notifyErr)
+    }
+  }
+
   // QB sync (non-blocking)
   syncInvoiceToQB(paymentId).catch(() => {})
 }

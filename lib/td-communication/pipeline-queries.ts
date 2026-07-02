@@ -16,6 +16,7 @@ import { resolveSubjectsBatch, resolveSubject, pickSubjectRef, buildSubject } fr
 import { isEnrollmentStatus, isSlaTracked, groupBrief, type BriefUpload } from './pipeline'
 import { signBriefUploads } from './brief-uploads'
 import { ensureDeadlineAt } from './sla'
+import { hashAnswers, type BrandProfile, type CachedBrandProfile } from './brand-profile'
 import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,6 +44,11 @@ export interface CommEnrollmentDetail extends CommEnrollment {
    *  values are private-bucket paths — see brief-uploads.ts). A `url` of '' means
    *  the file couldn't be signed (deleted / bad path) → render as unavailable. */
   uploads: BriefUpload[]
+  /** Cached AI Brand Profile (metadata.ai_brand_profile), or null if never generated. */
+  ai_brand_profile: CachedBrandProfile | null
+  /** True when the cached profile's source_hash no longer matches the current
+   *  answers (client re-submitted) — the panel prompts a regenerate. */
+  ai_brand_profile_stale: boolean
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -156,7 +162,8 @@ export async function getEnrollment(id: string): Promise<CommEnrollmentDetail | 
   // single source of which form_data keys are files). Signing must never fail the
   // whole brief: on a storage error, fall through to unsigned (rendered as
   // "unavailable") rather than 500 the panel.
-  const rawUploads = groupBrief(row.form_data).uploads
+  const brief = groupBrief(row.form_data)
+  const rawUploads = brief.uploads
   let uploads: BriefUpload[] = rawUploads
   try {
     uploads = await signBriefUploads(rawUploads)
@@ -165,12 +172,71 @@ export async function getEnrollment(id: string): Promise<CommEnrollmentDetail | 
     uploads = rawUploads.map((u) => ({ ...u, url: '' }))
   }
 
+  // AI Brand Profile: cached in metadata. It's "stale" once the client's answers
+  // change (re-submit) — compare the cached source_hash to the current answers.
+  const cached = readCachedProfile(row.metadata)
+  const aiBrandProfileStale = cached ? cached.source_hash !== hashAnswers(brief.sections) : false
+
   return {
     ...withDerived(row, subject),
     sd,
     timeline: buildTimeline(row, sd),
     uploads,
+    ai_brand_profile: cached,
+    ai_brand_profile_stale: aiBrandProfileStale,
   }
+}
+
+/** Read a cached brand profile out of metadata, defensively (null if absent/malformed). */
+function readCachedProfile(metadata: Record<string, unknown>): CachedBrandProfile | null {
+  const p = metadata?.ai_brand_profile
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null
+  const o = p as Record<string, unknown>
+  if (typeof o.personality !== 'string') return null
+  return {
+    color_palette: Array.isArray(o.color_palette) ? (o.color_palette as CachedBrandProfile['color_palette']) : [],
+    personality: o.personality,
+    geometric_style: typeof o.geometric_style === 'string' ? o.geometric_style : '',
+    mood: typeof o.mood === 'string' ? o.mood : '',
+    generated_at: typeof o.generated_at === 'string' ? o.generated_at : '',
+    model: typeof o.model === 'string' ? o.model : '',
+    source_hash: typeof o.source_hash === 'string' ? o.source_hash : '',
+  }
+}
+
+/**
+ * Persist a freshly generated AI Brand Profile into metadata (safe merge — keeps
+ * notes/deadline/sla_alert_sent). Stamps generated_at/model and the source_hash
+ * of the CURRENT answers so staleness can be detected after a re-submit.
+ */
+export async function saveBrandProfile(
+  id: string,
+  profile: BrandProfile,
+  model: string,
+): Promise<CachedBrandProfile> {
+  const { data, error } = await db
+    .from('td_comm_enrollments')
+    .select('metadata, form_data')
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Enrollment not found.')
+
+  const metadata = asObject(data.metadata)
+  const sections = groupBrief(asObject(data.form_data)).sections
+  const cached: CachedBrandProfile = {
+    ...profile,
+    generated_at: new Date().toISOString(),
+    model,
+    source_hash: hashAnswers(sections),
+  }
+  const nextMeta = { ...metadata, ai_brand_profile: cached }
+  const { error: upErr } = await db
+    .from('td_comm_enrollments')
+    .update({ metadata: nextMeta, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (upErr) throw new Error(upErr.message)
+  return cached
 }
 
 /**

@@ -12,6 +12,7 @@ const q = (over: Partial<TdCommQuestion>): TdCommQuestion => ({
   step: over.step ?? 1,
   audience: over.audience ?? 'both',
   options: over.options ?? [],
+  ai_assist: over.ai_assist ?? false,
   active: over.active ?? true,
   sort_order: over.sort_order ?? 0,
   created_at: '',
@@ -66,14 +67,20 @@ describe('buildTdCommWizardConfig', () => {
     ])
   })
 
-  it('attaches the ✨ aiAssist helper only to business_description', () => {
+  it('attaches the ✨ aiAssist helper from the DB flag, on textareas only', () => {
     const cfg = buildTdCommWizardConfig(
-      [q({ key: 'business_description', step: 1 }), q({ key: 'added_value', step: 1, sort_order: 1 })],
+      [
+        q({ key: 'on', step: 1, sort_order: 0, type: 'textarea', ai_assist: true }),
+        q({ key: 'off', step: 1, sort_order: 1, type: 'textarea', ai_assist: false }),
+        // Flag set on a non-textarea must NOT light up (gated in the mapper).
+        q({ key: 'text_flag', step: 1, sort_order: 2, type: 'text', ai_assist: true }),
+      ],
       'new_brand',
     )
-    const [desc, other] = cfg.fields.step_1
-    expect(desc.aiAssist).toBe(true)
-    expect(other.aiAssist).toBeUndefined()
+    const byName = Object.fromEntries(cfg.fields.step_1.map((f) => [f.name, f]))
+    expect(byName.on.aiAssist).toBe(true)
+    expect(byName.off.aiAssist).toBeUndefined()
+    expect(byName.text_flag.aiAssist).toBeUndefined()
   })
 
   it('appends the disclaimer checkbox to the LAST step only', () => {

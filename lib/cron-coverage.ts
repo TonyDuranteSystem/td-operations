@@ -55,6 +55,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/memory-digest": "0 9 * * 0",
   "/api/cron/memory-decay": "0 9 1 * *",
   "/api/cron/esign-reminders": "0 */6 * * *",
+  "/api/cron/action-required-reminders": "0 13 * * *",
 }
 
 /**

@@ -271,10 +271,43 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 8-pre. ACTION-REQUIRED stages (Phase C, 2026-07-02): stages registered in
+  // lib/portal/action-stage-registry.ts require a CLIENT action on entry
+  // (fill the tax wizard, print/sign/mail ITIN docs). For those, the shared
+  // notifyClientActionRequired dispatch (clickable chat + immediate email +
+  // bell/push) REPLACES the generic notification (8), the raw stage push (8a)
+  // and the notify_client_email stage email (8b) — one message, never doubles.
+  const { actionStageConfigFor } = await import("@/lib/portal/action-stage-registry")
+  const actionStageCfg = actionStageConfigFor(delivery.service_type, targetStage.stage_name)
+  if (!skip_notify && actionStageCfg && (delivery.account_id || delivery.contact_id)) {
+    try {
+      const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+      const { buildFlowTopic, deriveFlowYear } = await import("@/lib/flows/resolve-flows")
+      const topic = buildFlowTopic(delivery.service_type, deriveFlowYear(delivery)) || null
+      const dispatch = await notifyClientActionRequired({
+        contact_id: delivery.contact_id ?? null,
+        account_id: delivery.account_id ?? null,
+        service_delivery_id: delivery.id,
+        topic,
+        title: actionStageCfg.title,
+        message: actionStageCfg.message,
+        link: actionStageCfg.link.replace("{sd_id}", delivery.id),
+      })
+      autoTriggers.push(
+        `Action-required dispatched (${targetStage.stage_name}): chat=${dispatch.chat}, email=${dispatch.email}, portal=${dispatch.notification}`,
+      )
+    } catch (actionErr) {
+      autoTriggers.push(
+        `Action-required dispatch failed: ${actionErr instanceof Error ? actionErr.message : String(actionErr)}`,
+      )
+    }
+  }
+
   // 8. Portal notification for client. Accept either account-scoped SDs or
   // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
   // the client too. Suppressed when skip_notify (bulk reconcile/backfill).
-  if (!skip_notify && (delivery.account_id || delivery.contact_id)) {
+  // Skipped for action-required stages — 8-pre owns those.
+  if (!skip_notify && !actionStageCfg && (delivery.account_id || delivery.contact_id)) {
     try {
       const { createPortalNotification } = await import("@/lib/portal/notifications")
       // Client-friendly stage label instead of the internal stage name
@@ -326,7 +359,7 @@ export async function advanceServiceDelivery(
   // for the same delivery instead of accumulating. Account-scoped SDs push to
   // the account; contact-only SDs (ITIN) push to the contact.
   // Suppressed when skip_notify (bulk reconcile/backfill).
-  if (!skip_notify && (delivery.account_id || delivery.contact_id)) {
+  if (!skip_notify && !actionStageCfg && (delivery.account_id || delivery.contact_id)) {
     try {
       const { sendPushToAccount, sendPushToContact } = await import("@/lib/portal/web-push")
       const serviceLabel = delivery.service_name || delivery.service_type
@@ -362,7 +395,7 @@ export async function advanceServiceDelivery(
     notify_client_email?: boolean | null
     client_notification_message?: string | null
   }
-  if (!skip_notify && targetStageWithNotify.notify_client_email && (delivery.account_id || delivery.contact_id)) {
+  if (!skip_notify && !actionStageCfg && targetStageWithNotify.notify_client_email && (delivery.account_id || delivery.contact_id)) {
     try {
       const { notifyClientOfStageAdvance } = await import("@/lib/portal/notifications")
       const result = await notifyClientOfStageAdvance({
@@ -378,81 +411,11 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 8c. ITIN — post the client a portal chat message when staff advance the
-  // workspace from "Document Preparation" → "Client Signing". This is the ONLY
-  // client communication for the ITIN document hand-off (2026-06-25, branch
-  // fix/itin-workspace-only): the client gets the documents from the PORTAL
-  // (Documents tab), prints them, wet-ink-signs, includes two color passport
-  // copies, and mails everything to the TD office. We do NOT email the PDFs —
-  // the portal is the delivery mechanism (this replaced the old
-  // itin.approve_and_send email handler). Stamped with service_delivery_id so it
-  // threads into the workspace flow chat AND the client's portal chat. Bilingual
-  // (EN/IT) per the contact's CRM language. Best-effort: a chat failure never
-  // fails the advance. Suppressed under skip_notify (bulk reconcile/backfill).
-  // ITIN SDs are contact-scoped (account_id null, contact_id set).
-  if (
-    !skip_notify &&
-    delivery.service_type === "ITIN" &&
-    (delivery.stage || "") === "Document Preparation" &&
-    targetStage.stage_name === "Client Signing" &&
-    delivery.contact_id
-  ) {
-    try {
-      // Stable system admin sender (portal_messages.sender_id is NOT NULL, no
-      // FK). Same id the prior ITIN handler + other admin messages use.
-      const ITIN_ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
-      const { buildFlowTopic, deriveFlowYear } = await import("@/lib/flows/resolve-flows")
-      const { notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
-
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("language")
-        .eq("id", delivery.contact_id)
-        .maybeSingle()
-      // Canonical normalizer — contacts.language holds free text ("Italian",
-      // "Italiano", …); the old strict === "it" check sent English to every
-      // Italian client (2026-07-02 fix).
-      const { localeFromLanguage } = await import("@/lib/locale")
-      const lang = localeFromLanguage(contact?.language)
-
-      const message =
-        lang === "it"
-          ? `I tuoi documenti ITIN sono pronti nel portale. Per favore stampali, firmali a inchiostro (firma originale), includi due copie a colori del passaporto e spedisci tutto al nostro ufficio. Troverai le istruzioni complete e l'indirizzo di spedizione nel tuo portale.`
-          : `Your ITIN documents are ready in your portal. Please print them, sign with wet ink, include two color copies of your passport, and mail everything to our office. You'll find the complete instructions and mailing address in your portal.`
-
-      const topic = buildFlowTopic(delivery.service_type, deriveFlowYear(delivery)) || null
-
-      // service_delivery_id is not in the generated portal_messages Insert type
-      // until the column is promoted to production; the `as any` cast keeps the
-      // build green (same pattern as app/api/flows/[id]/save-ein).
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: chatErr } = await (supabaseAdmin as any).from("portal_messages").insert({
-        account_id: delivery.account_id ?? null,
-        contact_id: delivery.contact_id,
-        service_delivery_id: delivery.id,
-        topic,
-        sender_type: "admin",
-        sender_id: ITIN_ADMIN_SENDER_ID,
-        message,
-      })
-      if (chatErr) {
-        autoTriggers.push(`ITIN client portal message failed: ${chatErr.message}`)
-      } else {
-        autoTriggers.push(`ITIN client portal message posted (${lang})`)
-        // Email/digest notification of the chat message (R103-throttled 1/2h).
-        void notifyClientOfAdminMessage({
-          account_id: delivery.account_id ?? null,
-          contact_id: delivery.contact_id,
-          topic,
-          messagePreview: message,
-        }).catch(() => {})
-      }
-    } catch (itinChatErr) {
-      autoTriggers.push(
-        `ITIN client portal message error: ${itinChatErr instanceof Error ? itinChatErr.message : String(itinChatErr)}`,
-      )
-    }
-  }
+  // 8c (RETIRED 2026-07-02, Phase C): the bespoke ITIN "Document Preparation
+  // → Client Signing" chat block moved to the shared action-stage rail — the
+  // 'ITIN::Client Signing' entry in lib/portal/action-stage-registry.ts,
+  // dispatched by 8-pre above (same copy, same SD-stamped chat threading,
+  // plus bell/push and an immediate email replacing the R103-throttled one).
 
   // 9. Tax Return — sync tax_returns record with SD stage.
   // Canonical service_type is "Tax Return" (matches activate-service,

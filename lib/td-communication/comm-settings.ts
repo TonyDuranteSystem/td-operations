@@ -18,6 +18,7 @@ export const DEFAULT_COMM_SETTINGS: TdCommSettings = {
   disclaimer_en: '',
   disclaimer_it: '',
   default_sla_days: 7,
+  ai_enabled: true,
 }
 
 /** Pure: layer a (possibly partial / malformed) stored value over the defaults. */
@@ -31,6 +32,7 @@ export function mergeCommSettings(stored: Partial<TdCommSettings> | null | undef
       typeof s.default_sla_days === 'number' && Number.isFinite(s.default_sla_days) && s.default_sla_days >= 0
         ? s.default_sla_days
         : DEFAULT_COMM_SETTINGS.default_sla_days,
+    ai_enabled: typeof s.ai_enabled === 'boolean' ? s.ai_enabled : DEFAULT_COMM_SETTINGS.ai_enabled,
   }
 }
 
