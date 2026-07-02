@@ -357,21 +357,36 @@ function formatValue(v: unknown): string | null {
   return null // objects are not rendered as a flat field
 }
 
+/**
+ * Human filename from a wizard storage object name. The upload-URL minter names
+ * objects `{fieldName}_{8-hex-unique}_{originalFile}` (the original name is NOT
+ * stored anywhere else), so the brief would otherwise show
+ * "upload_materials_ab12cd34_logo.png". Strip the field + unique prefix back to
+ * "logo.png". Non-greedy so a file whose own name contains `_<8hex>_` keeps it.
+ * A name that doesn't match the pattern (legacy / external) is returned as-is.
+ */
+export function prettyUploadName(storageName: string): string {
+  const m = /^.+?_[0-9a-f]{8}_(.+)$/.exec(storageName)
+  return m ? m[1] : storageName
+}
+
 /** Normalize one raw upload entry (a storage-path string, or an object with
  *  url/path + optional name/mime) into a BriefUpload, or null when unusable.
- *  NOTE: the value is the storage PATH in a PRIVATE bucket — the panel needs a
- *  signed URL to actually open it (tracked gap; not signed here). */
+ *  NOTE: the value is the storage PATH in a PRIVATE bucket — the server signs it
+ *  into a fetchable URL before render (see brief-uploads.ts). */
 function normalizeUpload(u: unknown): BriefUpload | null {
   if (typeof u === 'string') {
     const url = u.trim()
     if (!url) return null
-    return { name: url.split('/').pop() || url, url }
+    return { name: prettyUploadName(url.split('/').pop() || url), url }
   }
   if (u && typeof u === 'object') {
     const obj = u as Record<string, unknown>
     const url = (typeof obj.url === 'string' && obj.url) || (typeof obj.path === 'string' && obj.path) || ''
     if (!url) return null
-    const name = (typeof obj.name === 'string' && obj.name) || url.split('/').pop() || 'File'
+    // An explicit name is the ORIGINAL filename (trusted as-is); a name derived
+    // from the storage path carries the minted prefix and gets prettified.
+    const name = (typeof obj.name === 'string' && obj.name) || prettyUploadName(url.split('/').pop() || 'File')
     const mime = typeof obj.mime_type === 'string' ? obj.mime_type : undefined
     return { name, url, mime_type: mime }
   }

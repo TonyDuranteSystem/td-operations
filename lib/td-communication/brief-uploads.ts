@@ -23,6 +23,36 @@ import type { BriefUpload } from './pipeline'
 export const WIZARD_UPLOAD_BUCKET = 'onboarding-uploads'
 
 /**
+ * Path prefixes a brand-audit brief may surface. The td_communication wizard
+ * writes uploads as `td_communication/<id>/…` (the path-minter uses the wizard
+ * type as the first segment, falling back to `wizard/` when it's absent).
+ *
+ * Deliberately NOT the shared `WIZARD_UPLOAD_PREFIXES` from wizard-uploads.ts:
+ * that list OMITS `td_communication/` (it would reject the very paths we need)
+ * AND is load-bearing for the Drive/passport sweep (`collectUploadPaths`), so
+ * reusing or extending it here would be both wrong and a cross-feature side
+ * effect.
+ */
+const BRIEF_UPLOAD_PREFIXES = ['td_communication/', 'wizard/'] as const
+
+/**
+ * Defense-in-depth (security): only mint a signed URL for a path that looks like
+ * a legitimate brand-audit upload. `onboarding-uploads` is a SHARED bucket that
+ * also holds passports / SSNs / tax returns, and an EXTERNAL partner (Cris)
+ * consumes this brief — so we never hand out a signed URL for an arbitrary
+ * bucket path. Paths come from server-read form_data (no client input), so this
+ * is belt-and-suspenders against a future mis-seeded row / form_data injection,
+ * not a live hole. A rejected path is simply not signed → the UI renders it as
+ * "(unavailable)".
+ */
+export function isSignableUploadPath(path: string): boolean {
+  if (typeof path !== 'string') return false
+  const p = path.trim()
+  if (!p || p.includes('..')) return false
+  return BRIEF_UPLOAD_PREFIXES.some((prefix) => p.startsWith(prefix))
+}
+
+/**
  * Pure: replace each upload's `url` (a storage path) with its signed URL from
  * `signed`. A path missing from the map (couldn't be signed) becomes '' so the
  * UI can show it as unavailable rather than link to a dead path. Preserves order
@@ -46,6 +76,9 @@ export async function signBriefUploads(
   ttlSeconds?: number,
 ): Promise<BriefUpload[]> {
   if (uploads.length === 0) return uploads
-  const map = await createSignedUrlMap(WIZARD_UPLOAD_BUCKET, uploads.map((u) => u.url), ttlSeconds)
+  // Only sign paths that pass the allow-list; disallowed ones aren't signed and
+  // fall through to '' (unavailable) in applySignedUrls.
+  const signablePaths = uploads.map((u) => u.url).filter(isSignableUploadPath)
+  const map = await createSignedUrlMap(WIZARD_UPLOAD_BUCKET, signablePaths, ttlSeconds)
   return applySignedUrls(uploads, map)
 }

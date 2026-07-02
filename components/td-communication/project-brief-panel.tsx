@@ -17,6 +17,7 @@ import {
   SLA_DOT,
   ENROLLMENT_STATUSES,
 } from '@/lib/td-communication/pipeline'
+import { isImageThumbnailable } from '@/lib/td-communication/deliverables'
 import { ConversationChat } from './conversation-chat'
 import { DeliverablesSection } from './deliverables-section'
 import type { CommParticipant } from '@/lib/td-communication/types'
@@ -112,6 +113,9 @@ export function ProjectBriefPanel({
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
+  // In-panel zoom for uploaded material images (same pattern as the chat's
+  // attachment lightbox in conversation-chat.tsx).
+  const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -157,14 +161,16 @@ export function ProjectBriefPanel({
     onChanged?.()
   }, [refreshProject, onChanged])
 
-  // Close on Escape.
+  // Close on Escape — the image lightbox first (if open), then the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (lightbox) setLightbox(null)
+      else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, lightbox])
 
   const saveStatus = async (status: string) => {
     if (!project || status === project.status) return
@@ -216,6 +222,11 @@ export function ProjectBriefPanel({
   // Uploads come pre-signed from the server (private bucket). groupBrief still
   // powers the text sections; its uploads carry raw paths, so we never render those.
   const uploads = project?.uploads ?? []
+  // For a branding brief the client's images (logos, references) get the same
+  // visual treatment as produced deliverables: a thumbnail gallery. Non-images
+  // (and anything the server couldn't sign, url === '') render as a file list.
+  const imageUploads = uploads.filter((u) => u.url && isImageThumbnailable(u.name, u.mime_type))
+  const otherUploads = uploads.filter((u) => !u.url || !isImageThumbnailable(u.name, u.mime_type))
   const tracked = project ? isSlaTracked(project.status) : false
   const sla = project && tracked ? slaIndicator(project.deadline, now) : null
   const countdown = project && tracked ? deadlineLabel(project.deadline, now) : null
@@ -347,34 +358,61 @@ export function ProjectBriefPanel({
                 {uploads.length === 0 ? (
                   <p className="text-sm text-zinc-400">No files uploaded.</p>
                 ) : (
-                  <ul className="space-y-1.5">
-                    {uploads.map((u, i) =>
-                      u.url ? (
-                        <li key={`${u.name}-${i}`}>
-                          <a
-                            href={u.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                  <div className="space-y-3">
+                    {/* Image gallery — click a thumbnail to zoom in-panel. object-contain,
+                        not cover: logos/references must never be cropped. */}
+                    {imageUploads.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2">
+                        {imageUploads.map((u, i) => (
+                          <button
+                            key={`img-${u.name}-${i}`}
+                            type="button"
+                            onClick={() => setLightbox({ url: u.url, name: u.name })}
+                            title={u.name}
+                            className="group relative block aspect-square overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
                           >
-                            <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate">{u.name}</span>
-                            <ExternalLink className="h-3 w-3 shrink-0 text-zinc-400" />
-                          </a>
-                        </li>
-                      ) : (
-                        <li
-                          key={`${u.name}-${i}`}
-                          className="flex items-center gap-2 text-sm text-zinc-400"
-                          title="This file could not be loaded (it may have been removed)."
-                        >
-                          <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{u.name}</span>
-                          <span className="shrink-0 text-xs">(unavailable)</span>
-                        </li>
-                      ),
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={u.url} alt={u.name} className="h-full w-full object-contain" />
+                            <span className="absolute bottom-0 inset-x-0 truncate bg-black/50 px-1.5 py-0.5 text-left text-[10px] text-white opacity-0 group-hover:opacity-100">
+                              {u.name}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
                     )}
-                  </ul>
+
+                    {/* Non-image files (and any that couldn't be signed). */}
+                    {otherUploads.length > 0 && (
+                      <ul className="space-y-1.5">
+                        {otherUploads.map((u, i) =>
+                          u.url ? (
+                            <li key={`doc-${u.name}-${i}`}>
+                              <a
+                                href={u.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                              >
+                                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                                <span className="truncate">{u.name}</span>
+                                <ExternalLink className="h-3 w-3 shrink-0 text-zinc-400" />
+                              </a>
+                            </li>
+                          ) : (
+                            <li
+                              key={`doc-${u.name}-${i}`}
+                              className="flex items-center gap-2 text-sm text-zinc-400"
+                              title="This file could not be loaded (it may have been removed)."
+                            >
+                              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">{u.name}</span>
+                              <span className="shrink-0 text-xs">(unavailable)</span>
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    )}
+                  </div>
                 )}
               </Section>
 
@@ -438,6 +476,39 @@ export function ProjectBriefPanel({
           ) : null}
         </div>
       </aside>
+
+      {/* Image lightbox — same interaction as the chat's attachment zoom
+          (conversation-chat.tsx): click outside or ✕ (or Escape) to close.
+          z-[60] so it sits above the z-50 panel. */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <button
+            onClick={() => setLightbox(null)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white hover:bg-black/70"
+            aria-label="Close image"
+          >
+            <X className="h-6 w-6" />
+          </button>
+          <figure className="max-h-[90vh] max-w-full" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={lightbox.url} alt={lightbox.name} className="max-h-[85vh] max-w-full rounded-lg object-contain" />
+            <figcaption className="mt-2 flex items-center justify-center gap-3 text-xs text-white/80">
+              <span className="truncate max-w-[16rem]">{lightbox.name}</span>
+              <a
+                href={lightbox.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-white hover:underline"
+              >
+                Open original <ExternalLink className="h-3 w-3" />
+              </a>
+            </figcaption>
+          </figure>
+        </div>
+      )}
     </>
   )
 }
