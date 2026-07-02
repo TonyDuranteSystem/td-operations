@@ -248,7 +248,7 @@ export function FormationDashboard({
           steps={trackerSteps}
           locale={locale}
           wizardHref={wizardHref}
-          signHref="/portal/sign"
+          signHref="/portal/sign/ss4"
           title={tr.progressTitle}
         />
       ) : (
