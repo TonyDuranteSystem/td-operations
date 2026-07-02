@@ -59,17 +59,28 @@ async function fetchAllWorkspaceTransactions(workspaceId: string): Promise<Categ
   })
 }
 
-/** Load the rules the workspace should categorize with (fork → client+global; blank → global). */
-async function loadRulesForWorkspace(linkedAccountId: string | null): Promise<CategorizationRule[]> {
+/** Load the rules the workspace should categorize with.
+ *  Fork → the linked client's rules + global (identical to the client path).
+ *  Blank → global rules + the workspace's OWN learned rules (Phase 4 auto-learn:
+ *  staff answers in a blank workspace persist as workspace-scoped rules and
+ *  auto-apply on every re-run; they're promoted to the client on Save). */
+async function loadRulesForWorkspace(linkedAccountId: string | null, workspaceId?: string): Promise<CategorizationRule[]> {
   if (linkedAccountId) return getCategorizationRules(linkedAccountId)
   const { data, error } = await db
     .from("bank_categorization_rules")
-    .select("id, pattern, match_type, category, subcategory, account_id, priority, direction")
+    .select("id, pattern, match_type, category, subcategory, account_id, workspace_id, priority, direction")
     .eq("active", true)
     .is("account_id", null)
+    .or(workspaceId ? `workspace_id.is.null,workspace_id.eq.${workspaceId}` : "workspace_id.is.null")
     .order("priority", { ascending: true })
-  if (error) throw new Error(`Failed to load global categorization rules: ${error.message}`)
-  return (data ?? []) as CategorizationRule[]
+  if (error) throw new Error(`Failed to load workspace categorization rules: ${error.message}`)
+  // The engine's applyRules gives precedence to rules with a non-null
+  // account_id ("per-client before global"). A workspace-scoped rule must win
+  // the same way, so its workspace_id is surfaced AS the account_id marker —
+  // ordering-only; these rows never leave this function's result.
+  return ((data ?? []) as Array<CategorizationRule & { workspace_id: string | null }>).map(r =>
+    r.workspace_id ? { ...r, account_id: r.workspace_id } : r,
+  ) as CategorizationRule[]
 }
 
 /**
@@ -85,7 +96,7 @@ export async function recategorizeWorkspace(
   const rows = await fetchAllWorkspaceTransactions(workspaceId)
   if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, uncategorizedRemaining: 0 }
 
-  const rules = await loadRulesForWorkspace(opts.linkedAccountId)
+  const rules = await loadRulesForWorkspace(opts.linkedAccountId, workspaceId)
   const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, opts.memberNames, opts.companyName)
 
   let recategorized = 0

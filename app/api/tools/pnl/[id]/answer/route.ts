@@ -1,8 +1,17 @@
 /**
  * POST /api/tools/pnl/[id]/answer — categorize a group of workspace transactions
  * (STAFF ONLY). Mirrors the portal answer route against the ISOLATED workspace
- * table. NO learned-rule writes (sealed leak #2) — a workspace never trains the
- * real client/global categorization rules.
+ * table.
+ *
+ * AUTO-LEARN (Phase 4, 2026-07-02 — deliberate change to the old "sealed leak
+ * #2" stance): a staff answer now ALSO persists a learned rule, so the same
+ * merchant auto-categorizes on every future run, year after year:
+ *   - forked workspace (linked client) → ACCOUNT-scoped rule (the client's
+ *     permanent memory — staff answering is as authoritative as the client);
+ *   - blank workspace → WORKSPACE-scoped rule (dies with the workspace,
+ *     PROMOTED to the client on Save-to-client).
+ * Global rules are still never written from here — no blank-scratch answer can
+ * ever affect another client (DB CHECK + loader filters enforce it).
  */
 
 import { createClient } from '@/lib/supabase/server'
@@ -39,10 +48,36 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       .eq('workspace_id', params.id)
       .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
       .in('id', ids)
-      .select('id')
+      .select('id, description, counterparty, amount')
     if (error) throw new Error(error.message)
+    const updatedRows = (data ?? []) as Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }>
 
-    return NextResponse.json({ ok: true, updated: (data ?? []).length })
+    // Auto-learn (fire-and-forget — learning must never fail the answer).
+    if (updatedRows.length > 0) {
+      try {
+        const { data: ws } = await db
+          .from('pnl_workspaces')
+          .select('linked_account_id')
+          .eq('id', params.id)
+          .maybeSingle()
+        const { upsertLearnedMerchantRules, makeSupabaseRuleStore } = await import('@/lib/tax/learned-rules')
+        const scope = ws?.linked_account_id
+          ? { account_id: ws.linked_account_id as string }
+          : { workspace_id: params.id }
+        await upsertLearnedMerchantRules(
+          makeSupabaseRuleStore(db),
+          scope,
+          updatedRows,
+          mapped.category,
+          mapped.subcategory,
+          user?.email ?? 'staff',
+        )
+      } catch (e) {
+        console.error('[tools/pnl] learned-rule write failed (answer saved fine):', e)
+      }
+    }
+
+    return NextResponse.json({ ok: true, updated: updatedRows.length })
   } catch (err) {
     console.error('[tools/pnl] answer failed:', err)
     return NextResponse.json({ error: 'Could not save the answer — please try again.' }, { status: 500 })

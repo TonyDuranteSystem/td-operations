@@ -194,6 +194,49 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     if (!error) inserted++
   }
 
+  // Auto-learn promotion (Phase 4, 2026-07-02): a blank workspace's learned
+  // rules become the client's permanent per-account memory — next year's
+  // wizard/fork auto-applies them via the existing rule loading. Runs BEFORE
+  // the recategorize below so the promoted rules already apply to this save.
+  // Fire-and-forget: promotion must never fail the save.
+  let promotedRules = 0
+  try {
+    // Untyped client on purpose — the typed builder + a table outside
+    // database.types.ts triggers TS "type instantiation is excessively deep"
+    // (same erasure pattern as makeSupabaseRuleStore).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rulesDb = supabaseAdmin as any
+    const { data: wsRules } = await rulesDb
+      .from("bank_categorization_rules")
+      .select("pattern, match_type, category, subcategory, direction, created_by")
+      .eq("workspace_id", workspaceId)
+      .eq("active", true) as { data: Array<{ pattern: string; match_type: string; category: string; subcategory: string; direction: string; created_by: string | null }> | null }
+    if (wsRules && wsRules.length > 0) {
+      const { makeSupabaseRuleStore } = await import("./learned-rules")
+      const store = makeSupabaseRuleStore(supabaseAdmin as never)
+      for (const r of wsRules) {
+        const existing = await store.findRule({ account_id: targetAccountId }, r.pattern, r.direction)
+        if (existing) {
+          await store.updateRule(existing.id, {
+            category: r.category, subcategory: r.subcategory, active: true, source: "learned",
+            updated_at: new Date().toISOString(),
+          })
+        } else {
+          await store.insertRule({
+            pattern: r.pattern, match_type: r.match_type, category: r.category, subcategory: r.subcategory,
+            account_id: targetAccountId, workspace_id: null, direction: r.direction,
+            priority: 100, active: true, source: "learned",
+            notes: `promoted from P&L workspace ${workspaceId} on save`,
+            created_by: r.created_by ?? actor,
+          })
+        }
+        promotedRules++
+      }
+    }
+  } catch (e) {
+    console.error("[workspace-save] learned-rule promotion failed (rows saved fine):", e)
+  }
+
   // Client-path follow-ups (called, never modified).
   try {
     await recategorizeAccountYear(targetAccountId, taxYear)
@@ -215,8 +258,8 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
       table_name: "bank_transactions",
       record_id: workspaceId,
       account_id: targetAccountId,
-      summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""} for tax year ${taxYear}`,
-      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, backup_path: backupPath ?? null },
+      summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""}${promotedRules ? `, ${promotedRules} learned rule(s) promoted` : ""} for tax year ${taxYear}`,
+      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, backup_path: backupPath ?? null, promoted_rules: promotedRules },
     } as never)
   } catch (e) {
     console.error("[workspace-save] audit log insert failed (save already applied):", e)

@@ -85,12 +85,17 @@ export function applyRules(
   return legacy
 }
 
-/** Load active rules for an account (its own + global). */
+/** Load active rules for an account (its own + global).
+ *  LEAK GUARD (Phase 4, 2026-07-02): workspace-scoped learned rules carry
+ *  account_id NULL — without the `.is("workspace_id", null)` filter they would
+ *  match the global branch of the OR and leak a scratch workspace's learning
+ *  into EVERY client's categorization. Never remove this filter. */
 export async function getCategorizationRules(accountId: string): Promise<CategorizationRule[]> {
   const { data, error } = await db
     .from("bank_categorization_rules")
     .select("id, pattern, match_type, category, subcategory, account_id, priority, direction")
     .eq("active", true)
+    .is("workspace_id", null)
     .or(`account_id.is.null,account_id.eq.${accountId}`)
     .order("priority", { ascending: true })
   if (error) throw new Error(`Failed to load categorization rules: ${error.message}`)

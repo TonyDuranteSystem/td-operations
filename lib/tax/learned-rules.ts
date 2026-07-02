@@ -41,6 +41,18 @@ export interface LearnedRuleSpec {
  *  'contains' match and would risk catching unrelated transactions. */
 export const MIN_LEARN_PATTERN_LENGTH = 3
 
+/** Generic banking words that must NEVER become a contains-rule (Phase 4,
+ *  2026-07-02): a root like "payment" or "transfer" would blanket-match half
+ *  the statement. Exact normalized-root match, EN + IT vocabulary. */
+export const LEARN_PATTERN_STOPLIST = new Set([
+  "payment", "payments", "transfer", "transfers", "wire", "fee", "fees",
+  "card", "pos", "ach", "deposit", "withdrawal", "credit", "debit", "check",
+  "invoice", "transaction", "balance",
+  // Italian equivalents (Wise IT descriptions)
+  "pagamento", "pagamenti", "bonifico", "bonifici", "commissione", "commissioni",
+  "versamento", "prelievo", "fattura", "addebito", "accredito",
+])
+
 /**
  * PURE: derive the per-client rule(s) to learn from a set of answered rows and
  * the category they were assigned. Groups the rows by merchant root (normally
@@ -58,6 +70,7 @@ export function deriveLearnedRules(
     const key = root.trim()
     if (key.length < MIN_LEARN_PATTERN_LENGTH) continue // skip blank/generic
     if (key.toLowerCase() === "(no description)") continue
+    if (LEARN_PATTERN_STOPLIST.has(key.toLowerCase())) continue // generic banking word — never a contains-rule
     if (!byRoot.has(key)) byRoot.set(key, { ins: 0, outs: 0 })
     const amt = Number(r.amount)
     if (amt > 0) byRoot.get(key)!.ins += 1
@@ -72,9 +85,15 @@ export function deriveLearnedRules(
   }))
 }
 
+/** Where a learned rule lives (Phase 4, 2026-07-02): a real client's account
+ *  (permanent, year-after-year memory) OR a blank workspace (scratch memory
+ *  that cascades away with the workspace and is PROMOTED to the client on
+ *  Save-to-client). Mutually exclusive — enforced by the DB CHECK. */
+export type LearnScope = { account_id: string; workspace_id?: undefined } | { workspace_id: string; account_id?: undefined }
+
 /** Minimal DB surface this helper needs — lets tests inject a fake. */
 export interface RuleStore {
-  findRule(accountId: string, pattern: string, direction: string): Promise<{ id: string } | null>
+  findRule(scope: LearnScope, pattern: string, direction: string): Promise<{ id: string } | null>
   insertRule(row: Record<string, unknown>): Promise<void>
   updateRule(id: string, patch: Record<string, unknown>): Promise<void>
 }
@@ -87,15 +106,16 @@ export interface RuleStore {
  */
 export function makeSupabaseRuleStore(db: { from: (table: string) => any }): RuleStore { // eslint-disable-line @typescript-eslint/no-explicit-any
   return {
-    findRule: async (accountId, pattern, direction) => {
-      const { data } = await db
+    findRule: async (scope, pattern, direction) => {
+      let q = db
         .from("bank_categorization_rules")
         .select("id")
-        .eq("account_id", accountId)
         .eq("pattern", pattern)
         .eq("direction", direction)
-        .limit(1)
-        .maybeSingle()
+      q = scope.account_id
+        ? q.eq("account_id", scope.account_id).is("workspace_id", null)
+        : q.eq("workspace_id", scope.workspace_id)
+      const { data } = await q.limit(1).maybeSingle()
       return data ? { id: data.id as string } : null
     },
     insertRule: async (row) => {
@@ -108,24 +128,26 @@ export function makeSupabaseRuleStore(db: { from: (table: string) => any }): Rul
 }
 
 /**
- * Persist the learned rules for an account, upserting on
- * (account_id, pattern, direction). Returns how many rules were created vs
- * updated. Never throws on a single-rule failure mid-batch is the caller's
+ * Persist the learned rules for a scope, upserting on
+ * (scope, pattern, direction). `scope` accepts a bare account id string for
+ * backward compatibility with the portal answer route. Returns how many rules
+ * were created vs updated. Single-rule failure mid-batch is the caller's
  * concern; this resolves the batch and lets the caller log.
  */
 export async function upsertLearnedMerchantRules(
   store: RuleStore,
-  accountId: string,
+  scopeInput: LearnScope | string,
   rows: LearnableRow[],
   category: string,
   subcategory: string,
   createdBy: string,
 ): Promise<{ created: number; updated: number }> {
+  const scope: LearnScope = typeof scopeInput === "string" ? { account_id: scopeInput } : scopeInput
   const specs = deriveLearnedRules(rows, category, subcategory)
   let created = 0
   let updated = 0
   for (const spec of specs) {
-    const existing = await store.findRule(accountId, spec.pattern, spec.direction)
+    const existing = await store.findRule(scope, spec.pattern, spec.direction)
     if (existing) {
       await store.updateRule(existing.id, {
         category: spec.category,
@@ -141,12 +163,15 @@ export async function upsertLearnedMerchantRules(
         match_type: spec.match_type,
         category: spec.category,
         subcategory: spec.subcategory,
-        account_id: accountId,
+        account_id: scope.account_id ?? null,
+        workspace_id: scope.workspace_id ?? null,
         direction: spec.direction,
         priority: 100,
         active: true,
         source: "learned",
-        notes: "learned from client answer on the tax-financials review",
+        notes: scope.workspace_id
+          ? "learned from staff answer in a P&L workspace"
+          : "learned from an answer on the tax-financials review",
         created_by: createdBy,
       })
       created += 1
