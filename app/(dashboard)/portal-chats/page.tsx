@@ -3017,6 +3017,10 @@ export default function PortalChatsPage() {
                             </span>
                           )
                         })()}
+                        {/* Sender label for admin messages — always "TD Team", never a staff/member name */}
+                        {isAdmin && (
+                          <p className="text-[10px] font-semibold text-blue-100 mb-0.5">TD Team</p>
+                        )}
                         {/* Sender name for client messages (shows member name in MMLLC) */}
                         {!isAdmin && msg.sender_name && (
                           <p className="text-[10px] font-semibold text-zinc-500 mb-0.5">{msg.sender_name}</p>
