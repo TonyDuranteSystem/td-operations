@@ -5,8 +5,10 @@
  *  - fires ONLY when no other ingest job for the account+year is in flight
  *  - fires ONCE (idempotency marker in financials_meta.ready_notified)
  *  - skips when there is no completed submission
- *  - posts a system message in the client's locale
- *  - never throws (insert error → not notified, no exception)
+ *  - delegates to the shared action-required dispatch (Phase C 2026-07-02:
+ *    chat + immediate email + bell/push; locale + deep link are the helper's
+ *    job — see tests/unit/action-required.test.ts)
+ *  - never throws (dispatch failure → not notified, no exception)
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -14,18 +16,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 interface Fixtures {
   otherJobs: Array<{ id: string; payload: { tax_year?: number | string } | null }>
   submission: { id: string; financials_meta: Record<string, unknown> | null } | null
-  accountContacts: Array<{ contact_id: string | null; is_primary: boolean | null }>
-  contactLanguage: string | null
-  insertError: { message: string } | null
+  dispatchResult: { dispatched: boolean; chat: string; notification: string; email: string }
 }
 const fixtures: Fixtures = {
   otherJobs: [],
   submission: { id: "sub-1", financials_meta: null },
-  accountContacts: [{ contact_id: "ctc-1", is_primary: true }],
-  contactLanguage: null,
-  insertError: null,
+  dispatchResult: { dispatched: true, chat: "ok", notification: "ok", email: "ok (1 sent)" },
 }
-const inserts: Array<Record<string, unknown>> = []
+const dispatches: Array<Record<string, unknown>> = []
 const updates: Array<{ table: string; payload: Record<string, unknown> }> = []
 
 function resolveFor(table: string, op: "select" | "insert" | "update") {
@@ -34,9 +32,6 @@ function resolveFor(table: string, op: "select" | "insert" | "update") {
     if (op === "update") return { data: null, error: null }
     return { data: fixtures.submission, error: null }
   }
-  if (table === "account_contacts") return { data: fixtures.accountContacts, error: null }
-  if (table === "contacts") return { data: { language: fixtures.contactLanguage }, error: null }
-  if (table === "portal_messages") return { data: null, error: fixtures.insertError }
   return { data: null, error: null }
 }
 
@@ -55,9 +50,8 @@ function makeBuilder(table: string) {
     updates.push({ table, payload })
     return b
   }
-  b.insert = (payload: Record<string, unknown>) => {
+  b.insert = () => {
     state.op = "insert"
-    if (table === "portal_messages") inserts.push(payload)
     return b
   }
   b.maybeSingle = async () => resolveFor(state.table, state.op)
@@ -70,16 +64,20 @@ function makeBuilder(table: string) {
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: { from: (table: string) => makeBuilder(table) },
 }))
+vi.mock("@/lib/portal/action-required", () => ({
+  notifyClientActionRequired: vi.fn(async (params: Record<string, unknown>) => {
+    dispatches.push(params)
+    return fixtures.dispatchResult
+  }),
+}))
 
 import { notifyIfIngestComplete } from "@/lib/jobs/ingest-complete-notify"
 
 beforeEach(() => {
   fixtures.otherJobs = []
   fixtures.submission = { id: "sub-1", financials_meta: null }
-  fixtures.accountContacts = [{ contact_id: "ctc-1", is_primary: true }]
-  fixtures.contactLanguage = null
-  fixtures.insertError = null
-  inserts.length = 0
+  fixtures.dispatchResult = { dispatched: true, chat: "ok", notification: "ok", email: "ok (1 sent)" }
+  dispatches.length = 0
   updates.length = 0
 })
 
@@ -87,9 +85,12 @@ describe("notifyIfIngestComplete", () => {
   it("notifies (and marks) when this is the last ingest job for the year", async () => {
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(true)
-    expect(inserts).toHaveLength(1)
-    expect(inserts[0].sender_type).toBe("system")
-    expect(String(inserts[0].message)).toContain("/portal/tax-financials")
+    expect(dispatches).toHaveLength(1)
+    expect(dispatches[0].account_id).toBe("acct-1")
+    expect(dispatches[0].link).toBe("/portal/tax-financials")
+    const msg = dispatches[0].message as { en: string; it: string }
+    expect(msg.en).toContain("bank statements")
+    expect(msg.it).toContain("Buone notizie")
     // idempotency marker written back
     expect(updates.some(u => u.table === "tax_return_submissions" && (u.payload.financials_meta as Record<string, unknown>).ready_notified === true)).toBe(true)
   })
@@ -99,14 +100,14 @@ describe("notifyIfIngestComplete", () => {
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(false)
     expect(res.reason).toBe("more_pending")
-    expect(inserts).toHaveLength(0)
+    expect(dispatches).toHaveLength(0)
   })
 
   it("ignores in-flight jobs that belong to a DIFFERENT tax year", async () => {
     fixtures.otherJobs = [{ id: "job-other", payload: { tax_year: 2024 } }]
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(true)
-    expect(inserts).toHaveLength(1)
+    expect(dispatches).toHaveLength(1)
   })
 
   it("does not re-notify once the marker is set", async () => {
@@ -114,7 +115,7 @@ describe("notifyIfIngestComplete", () => {
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(false)
     expect(res.reason).toBe("already_notified")
-    expect(inserts).toHaveLength(0)
+    expect(dispatches).toHaveLength(0)
   })
 
   it("skips when there is no completed submission to attach to", async () => {
@@ -124,16 +125,16 @@ describe("notifyIfIngestComplete", () => {
     expect(res.reason).toBe("no_submission")
   })
 
-  it("uses Italian copy when the client's language is Italian", async () => {
-    fixtures.contactLanguage = "Italian"
-    await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
-    expect(String(inserts[0].message)).toContain("Buone notizie")
-  })
-
-  it("never throws and reports insert failure", async () => {
-    fixtures.insertError = { message: "boom" }
+  it("never throws and reports a total dispatch failure", async () => {
+    fixtures.dispatchResult = { dispatched: false, chat: "failed: boom", notification: "failed: boom", email: "failed: boom" }
     const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
     expect(res.notified).toBe(false)
     expect(res.reason).toBe("insert_failed")
+  })
+
+  it("still notifies when only one channel fails (partial success)", async () => {
+    fixtures.dispatchResult = { dispatched: true, chat: "failed: boom", notification: "ok", email: "ok (1 sent)" }
+    const res = await notifyIfIngestComplete({ accountId: "acct-1", taxYear: 2025, selfJobId: "job-self" })
+    expect(res.notified).toBe(true)
   })
 })
