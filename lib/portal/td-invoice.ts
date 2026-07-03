@@ -325,7 +325,9 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         status: paid ? 'Paid' : 'Pending', // 'paid' includes credit-fully-covered, so a $0 covered invoice shows Paid in the portal
         source: 'td_invoice',
         td_payment_id: paymentId,
-        notes: notes || null,
+        // Deliberately NO `notes`: payments.notes is INTERNAL staff context and
+        // client_expenses belongs to the client's own bookkeeping — internal
+        // notes must never be copied there (decided 2026-07-03).
         category: 'Services',
       })
       .select('id')

@@ -123,6 +123,9 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
     .from('referral_payouts')
     .select('id, status, amount, currency, payout_type, payout_method, payment_id, approved_at, paid_at, created_at, notes, payout_request, invoice_url, invoice_name, requested_at')
     .eq('partner_id', params.id)
+    // Phase 13: TD Communication payouts (payout_type='td_comm') live in the same
+    // ledger but belong to the TD-Comm Revenue tab, not this referral-payout panel.
+    .neq('payout_type', 'td_comm')
     .order('created_at', { ascending: false })
 
   const payouts: PayoutRow[] = (payoutRows ?? []).map(r => ({

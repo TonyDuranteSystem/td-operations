@@ -18,12 +18,21 @@
  * lives in the cron (auto) and the bulk action (manual). It just sends one
  * reminder, bumps `reminder_count` / `last_reminder_at`, and writes an
  * `invoice_reminder_log` row (source = auto | manual) for the history UI.
+ *
+ * ONE deliberate exception to the no-policy rule: the account-level reminder
+ * pause (`accounts.dunning_pause` boolean + dated `dunning_pause_until` —
+ * "client promised to pay by X") IS enforced here, at the choke point, because
+ * reminder jobs are enqueued minutes-to-hours before they send — a pause set
+ * after enqueue must still stop the email, and the manual single-send used to
+ * bypass the pause entirely. Callers pass `force: true` for a deliberate staff
+ * override (the single-send warn-and-confirm flow); auto/bulk never force.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
+import { isAccountReminderPaused } from "@/lib/billing/reminder-snooze"
 import { APP_BASE_URL } from "@/lib/config"
 
 /** Brand logo for email headers (same asset the portal-notification emails use). */
@@ -33,6 +42,10 @@ export interface ReminderResult {
   ok: boolean
   sent: boolean
   alreadySent?: boolean
+  /** Skipped because the account's reminders are paused (boolean pause or an
+   *  active dated pause). `pausedUntil` carries the date when it's a dated one. */
+  paused?: boolean
+  pausedUntil?: string | null
   recipient?: string
   reminderNumber?: number
   error?: string
@@ -174,7 +187,7 @@ function buildRawEmail(to: string, subject: string, html: string): string {
  */
 export async function sendInvoiceReminder(
   paymentId: string,
-  opts: { source?: "auto" | "manual" } = {},
+  opts: { source?: "auto" | "manual"; force?: boolean } = {},
 ): Promise<ReminderResult> {
   const source = opts.source ?? "manual"
   const { data: payment } = await supabaseAdmin
@@ -188,6 +201,21 @@ export async function sendInvoiceReminder(
 
   if (!REMINDABLE_STATUSES.includes(payment.invoice_status as (typeof REMINDABLE_STATUSES)[number])) {
     return { ok: false, sent: false, error: `Cannot remind on invoice with status "${payment.invoice_status}"` }
+  }
+
+  // Account-level pause gate (choke point — see module header). Re-checked at
+  // send time so a pause set AFTER a job was enqueued still stops the email.
+  // `force: true` = deliberate staff override from the warn-and-confirm flow.
+  if (!opts.force && payment.account_id) {
+    const { data: account } = await supabaseAdmin
+      .from("accounts")
+      .select("dunning_pause, dunning_pause_until, dunning_pause_reason")
+      .eq("id", payment.account_id)
+      .single()
+    const acct = account as { dunning_pause?: boolean | null; dunning_pause_until?: string | null } | null
+    if (isAccountReminderPaused(acct)) {
+      return { ok: true, sent: false, paused: true, pausedUntil: acct?.dunning_pause_until ?? null }
+    }
   }
 
   const recipient = await resolvePaymentRecipient(

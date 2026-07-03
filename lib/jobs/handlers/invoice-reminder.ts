@@ -41,10 +41,14 @@ export async function handleInvoiceReminder(job: Job): Promise<JobResult> {
   }
 
   if (r.ok) {
-    // Not sent, but no error — invoice paid / capped / already reminded since enqueue.
+    // Not sent, but no error — reminders paused for the account, invoice paid,
+    // or already reminded since enqueue.
+    const detail = r.paused
+      ? `reminders paused for this client${r.pausedUntil ? ` until ${r.pausedUntil}` : ""}`
+      : r.alreadySent ? "already sent recently" : "no longer eligible"
     return {
-      steps: [{ name: "send", status: "skipped", detail: r.alreadySent ? "already sent recently" : "no longer eligible", timestamp: ts() }],
-      summary: "Skipped — no longer eligible at send time",
+      steps: [{ name: "send", status: "skipped", detail, timestamp: ts() }],
+      summary: `Skipped — ${detail}`,
     }
   }
 

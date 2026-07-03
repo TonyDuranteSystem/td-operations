@@ -19,6 +19,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createConversation, insertMessage, SYSTEM_STAFF } from './queries'
 import { ensureDeadlineAt } from './sla'
+import { resolveDefaultCommWorker } from './earning'
 import type { CommEnrollmentRow, EnrollmentClientType } from './types'
 
 // SYSTEM_STAFF moved to ./queries (the neutral hub) to avoid an import cycle with
@@ -139,9 +140,18 @@ export async function submitBrandAudit(
         ? { contact_id: contactId }
         : null
     if (!subject) throw new Error('Cannot create brand-audit enrollment: no account or contact subject')
+    // Phase 13: attribute the work to the TD Communication worker (Cris) so it
+    // surfaces in his earnings. Non-fatal — a missing/ambiguous partner must never
+    // break client enrollment (leave worker_partner_id null; a later admin/backfill fixes it).
+    let workerPartnerId: string | null = null
+    try {
+      workerPartnerId = await resolveDefaultCommWorker()
+    } catch (err) {
+      console.warn('[td-comm] could not resolve default worker for new enrollment:', err)
+    }
     const { data: created, error: createErr } = await db
       .from('td_comm_enrollments')
-      .insert({ ...subject, client_type: clientType, status: 'enrolled' })
+      .insert({ ...subject, client_type: clientType, status: 'enrolled', worker_partner_id: workerPartnerId })
       .select(ENROLLMENT_COLUMNS)
       .single()
     if (createErr) throw new Error(createErr.message)

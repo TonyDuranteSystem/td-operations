@@ -80,7 +80,7 @@ export default async function FinancePage({
   // ── Fetch ALL invoices for flat list view (from payments) ──
   const { data: allPaymentsFlat } = await supabaseAdmin
     .from('payments')
-    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, reminder_count, last_reminder_at, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, reminder_count, last_reminder_at, accounts:account_id(company_name, dunning_pause, dunning_pause_until), contacts:contact_id(full_name)')
     .not('invoice_status', 'is', null)
     .not('invoice_status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
@@ -118,7 +118,7 @@ export default async function FinancePage({
     last_reminder_at: (p as { last_reminder_at?: string | null }).last_reminder_at ?? null,
     reminders_auto: reminderBreakdown[p.id]?.auto ?? 0,
     reminders_manual: reminderBreakdown[p.id]?.manual ?? 0,
-    accounts: p.accounts as unknown as { company_name: string } | null,
+    accounts: p.accounts as unknown as { company_name: string; dunning_pause: boolean | null; dunning_pause_until: string | null } | null,
     contacts: p.contacts as unknown as { full_name: string } | null,
   }))
 

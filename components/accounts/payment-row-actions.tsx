@@ -59,9 +59,12 @@ export interface PaymentRowLike {
 
 interface Props {
   payment: PaymentRowLike
+  /** Account-level reminder pause (boolean or active dated pause) — when set,
+   *  Send Reminder warns and requires an explicit "send anyway" (force). */
+  reminderPaused?: { active: boolean; until: string | null } | null
 }
 
-export function PaymentRowActions({ payment }: Props) {
+export function PaymentRowActions({ payment, reminderPaused }: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -165,8 +168,16 @@ export function PaymentRowActions({ payment }: Props) {
 
   const handleSendReminder = () => {
     setMenuOpen(false)
+    // Paused client → explicit warn-and-confirm, then a deliberate force-send.
+    const paused = reminderPaused?.active === true
+    if (paused) {
+      const until = reminderPaused?.until
+      if (!window.confirm(
+        `⏸ Payment reminders are PAUSED for this client${until ? ` until ${until}` : ''}${payment.notes?.trim() ? `\n\nInternal note: ${payment.notes.trim()}` : ''}\n\nSend the reminder for ${label} anyway?`,
+      )) return
+    }
     startTransition(async () => {
-      const result = await sendInvoiceReminder(payment.id)
+      const result = await sendInvoiceReminder(payment.id, { force: paused })
       if (result.success) {
         toast.success(`Reminder sent for ${label}`)
         router.refresh()

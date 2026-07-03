@@ -11,6 +11,8 @@ import { toast } from 'sonner'
 import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment, sendBulkReminders } from './actions'
 import { regenerateInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
+import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
+import { isAccountReminderPaused } from '@/lib/billing/reminder-snooze'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -45,8 +47,13 @@ export interface InvoiceRecord {
   last_reminder_at?: string | null
   reminders_auto?: number
   reminders_manual?: number
-  accounts: { company_name: string } | null
+  accounts: { company_name: string; dunning_pause?: boolean | null; dunning_pause_until?: string | null } | null
   contacts: { full_name: string } | null
+}
+
+/** Reminders paused for this invoice's client (boolean or active dated pause)? */
+function isPaused(inv: InvoiceRecord): boolean {
+  return isAccountReminderPaused(inv.accounts)
 }
 
 function formatCurrency(amount: number, currency = 'USD') {
@@ -109,8 +116,16 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
   async function handleBulkRemind() {
     const ids = Array.from(selected)
     if (ids.length === 0) return
+    // Pre-send review warnings (the KG Wolf incident, 2026-07-03): surface
+    // internal notes and paused clients BEFORE the emails go out.
+    const selectedInvoices = invoices.filter(i => selected.has(i.id))
+    const noted = selectedInvoices.filter(i => i.notes?.trim())
+    const pausedCount = selectedInvoices.filter(i => isPaused(i)).length
+    const notedList = noted.slice(0, 8).map(i => i.invoice_number).join(', ')
     if (!window.confirm(
       `Send a payment reminder to ${ids.length} invoice${ids.length > 1 ? 's' : ''}?` +
+      (noted.length > 0 ? `\n\n⚠ ${noted.length} of them ${noted.length === 1 ? 'has' : 'have'} an internal note — review before sending (hover the 📝 icon): ${notedList}${noted.length > 8 ? ', …' : ''}` : '') +
+      (pausedCount > 0 ? `\n\n⏸ ${pausedCount} belong to clients with reminders paused — those are skipped automatically.` : '') +
       (overrideCap ? '\n\nIncluding invoices already at the 2-reminder limit.' : '')
     )) return
     setBulkSending(true)
@@ -533,6 +548,17 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                       {inv.status}
                     </span>
+                    <InvoiceNoteDot note={inv.notes} className="ml-1" />
+                    {isPaused(inv) && (
+                      <div
+                        className="mt-1 text-[11px] text-violet-600 whitespace-nowrap cursor-default"
+                        title={inv.accounts?.dunning_pause_until
+                          ? `Payment reminders are paused for this client until ${formatDate(inv.accounts.dunning_pause_until)} — set in the account's Payment Reminder Settings`
+                          : 'Payment reminders are paused for this client — set in the account\'s Payment Reminder Settings'}
+                      >
+                        ⏸ Paused{inv.accounts?.dunning_pause_until ? ` until ${formatDate(inv.accounts.dunning_pause_until)}` : ''}
+                      </div>
+                    )}
                     {(inv.reminder_count ?? 0) > 0 && (
                       <div
                         className="mt-1 text-[11px] text-amber-600 whitespace-nowrap cursor-default"
@@ -643,9 +669,15 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   }
 
   const handleSendReminder = () => {
-    if (!window.confirm(`Send payment reminder for ${invoiceNumber}?`)) return
+    // Paused client → explicit warn-and-confirm, then a deliberate force-send.
+    const paused = isPaused(invoice)
+    const until = invoice.accounts?.dunning_pause_until
+    const prompt = paused
+      ? `⏸ Payment reminders are PAUSED for this client${until ? ` until ${formatDate(until)}` : ''}${invoice.notes?.trim() ? `\n\nInternal note: ${invoice.notes.trim()}` : ''}\n\nSend the reminder for ${invoiceNumber} anyway?`
+      : `Send payment reminder for ${invoiceNumber}?`
+    if (!window.confirm(prompt)) return
     startTransition(async () => {
-      const result = await sendInvoiceReminder(invoiceId)
+      const result = await sendInvoiceReminder(invoiceId, { force: paused })
       if (result.success) { toast.success(`Reminder sent for ${invoiceNumber}`); router.refresh() }
       else toast.error(result.error ?? 'Failed')
     })

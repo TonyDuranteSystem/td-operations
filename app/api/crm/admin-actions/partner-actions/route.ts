@@ -425,7 +425,7 @@ export async function POST(req: NextRequest) {
 
         const { data: existing } = await supabaseAdmin
           .from('referral_payouts')
-          .select('id, status, partner_id, amount, currency')
+          .select('id, status, partner_id, amount, currency, payout_type')
           .eq('id', payout_id)
           .single()
 
@@ -461,7 +461,76 @@ export async function POST(req: NextRequest) {
           details: { partner_id: existing.partner_id, payout_method },
         })
 
+        // Phase 13 (TD Communication): a td_comm payout also posts a TD expense so
+        // Cris's cash outflow shows in Finance/P&L. Fires exactly once (guarded by
+        // the approved→paid transition above). Non-fatal: the payout is already
+        // paid; a failed expense insert must not undo that (the payout id in
+        // td_expenses.notes is the reconciliation key to add it manually if needed).
+        if (existing.payout_type === 'td_comm') {
+          const { error: expErr } = await supabaseAdmin.from('td_expenses').insert({
+            vendor_name: 'TD Communication — Cris',
+            category: 'TD Communication / Contractor',
+            currency: existing.currency || 'USD',
+            status: 'Paid',
+            subtotal: existing.amount,
+            total: existing.amount,
+            paid_date: new Date().toISOString().slice(0, 10),
+            payment_method: payout_method,
+            description: `TD Communication payout ${payout_id}`,
+            notes: payout_id,
+          })
+          if (expErr) {
+            console.warn('[td-comm] td_expenses insert failed for payout', payout_id, expErr.message)
+            result = { success: true, detail: `Payout marked paid via ${payout_method} (⚠️ expense entry failed — add manually)` }
+            break
+          }
+        }
+
         result = { success: true, detail: `Payout marked paid via ${payout_method}` }
+        break
+      }
+
+      // ─── REJECT PARTNER PAYOUT (Phase 13) ───
+      case 'reject_payout': {
+        if (!isAdmin) {
+          result = { success: false, detail: 'Admin access required' }
+          break
+        }
+        const { payout_id } = params || {}
+        if (!payout_id) {
+          result = { success: false, detail: 'Missing payout_id' }
+          break
+        }
+        const { data: existing } = await supabaseAdmin
+          .from('referral_payouts')
+          .select('id, status, partner_id, amount, currency')
+          .eq('id', payout_id)
+          .single()
+        if (!existing) {
+          result = { success: false, detail: 'Payout not found' }
+          break
+        }
+        if (!['pending', 'manual_review', 'requested', 'approved'].includes(existing.status)) {
+          result = { success: false, detail: `Cannot reject a ${existing.status} payout` }
+          break
+        }
+        const { error: upErr } = await supabaseAdmin
+          .from('referral_payouts')
+          .update({ status: 'rejected' })
+          .eq('id', payout_id)
+        if (upErr) {
+          result = { success: false, detail: upErr.message }
+          break
+        }
+        await supabaseAdmin.from('action_log').insert({
+          actor: user!.email || 'crm-admin',
+          action_type: 'reject_partner_payout',
+          table_name: 'referral_payouts',
+          record_id: payout_id,
+          summary: `Payout rejected: ${existing.amount} ${existing.currency || 'EUR'}`,
+          details: { partner_id: existing.partner_id, prev_status: existing.status },
+        })
+        result = { success: true, detail: 'Payout rejected' }
         break
       }
 

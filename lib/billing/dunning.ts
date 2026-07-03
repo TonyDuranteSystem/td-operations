@@ -19,6 +19,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
+import { isAccountReminderPaused } from "@/lib/billing/reminder-snooze"
 import { enqueueJobs } from "@/lib/jobs/queue"
 
 /** Default per-pass enqueue bound (gentle backlog rollout; UI-configurable). */
@@ -135,13 +136,21 @@ async function markOverdueInvoices(errors: string[]): Promise<number> {
 async function enqueueDueReminders(cap: number, errors: string[]): Promise<{ queued: number; skipped: number; considered: number; capped: boolean }> {
   const { data: accountConfigs } = await supabaseAdmin
     .from("accounts")
-    .select("id, dunning_reminder_1_days, dunning_reminder_2_days, dunning_pause")
+    .select("id, dunning_reminder_1_days, dunning_reminder_2_days, dunning_pause, dunning_pause_until")
   const cfg: Record<string, { r1: number; r2: number; paused: boolean }> = {}
-  for (const ac of accountConfigs ?? []) {
+  for (const ac of (accountConfigs ?? []) as unknown as Array<{
+    id: string
+    dunning_reminder_1_days: number | null
+    dunning_reminder_2_days: number | null
+    dunning_pause: boolean | null
+    dunning_pause_until: string | null
+  }>) {
     cfg[ac.id] = {
       r1: ac.dunning_reminder_1_days ?? 7,
       r2: ac.dunning_reminder_2_days ?? 14,
-      paused: ac.dunning_pause ?? false,
+      // Boolean pause (indefinite) OR an active dated pause ("promised to pay
+      // by X" — expires by itself). Only gates REMINDERS, never Overdue marking.
+      paused: isAccountReminderPaused(ac),
     }
   }
 

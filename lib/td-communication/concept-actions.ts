@@ -15,6 +15,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createConversation, insertMessage } from './queries'
 import { SYSTEM_STAFF } from './brand-audit'
+import { lockEarningIfEligible } from './earning'
 import { resolveSubject } from './subject'
 import type { CommEnrollmentRow } from './types'
 
@@ -64,6 +65,9 @@ export async function approveConcept(
     .update({ status: 'approved', updated_at: new Date().toISOString() })
     .eq('id', enrollment.id)
     .eq('status', enrollment.status)
+
+  // Phase 13: recognize Cris's earning on client approval (set-once, never throws).
+  await lockEarningIfEligible(enrollment.id)
 
   await insertMessage({
     conversationId,

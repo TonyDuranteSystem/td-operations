@@ -2,12 +2,14 @@
 
 import { useCallback, useState, type ComponentType } from 'react'
 import dynamic from 'next/dynamic'
-import { LayoutGrid, MessagesSquare, Settings, Bell, LayoutTemplate, Palette } from 'lucide-react'
+import { LayoutGrid, MessagesSquare, Settings, Bell, LayoutTemplate, Palette, Wallet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ConversationChat } from './conversation-chat'
 import { PipelineBoard } from './pipeline-board'
 import { ProjectBriefPanel } from './project-brief-panel'
 import { LandingEditor } from './landing-editor'
+import { EarningsPanel } from './earnings-panel'
+import { SectionReadme, SECTION_READMES } from './section-readmes'
 import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
 
 // Standalone Design Tools workspace. Lazy (Canvas / zip / SVG) so it never weighs
@@ -17,13 +19,14 @@ const DesignToolsWorkspace = dynamic(
   { ssr: false, loading: () => <div className="p-6 text-sm text-zinc-400">Loading design tools…</div> },
 )
 
-type Section = 'projects' | 'design-tools' | 'chat' | 'landing' | 'settings'
+type Section = 'projects' | 'design-tools' | 'chat' | 'landing' | 'earnings' | 'settings'
 
 const NAV: { key: Section; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
   { key: 'design-tools', label: 'Design Tools', icon: Palette },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
+  { key: 'earnings', label: 'Earnings', icon: Wallet },
   { key: 'settings', label: 'Settings', icon: Settings },
 ]
 
@@ -99,7 +102,7 @@ export function CollabDashboard({
         {/* Top bar */}
         <header className="shrink-0 h-14 bg-white border-b border-zinc-200 flex items-center justify-between px-6">
           <h1 className="text-base font-semibold text-zinc-900">
-            {section === 'projects' ? 'Project Pipeline' : section === 'design-tools' ? 'Design Tools' : section === 'chat' ? 'Chat with TD' : section === 'landing' ? 'Landing Page' : 'Settings'}
+            {section === 'projects' ? 'Project Pipeline' : section === 'design-tools' ? 'Design Tools' : section === 'chat' ? 'Chat with TD' : section === 'landing' ? 'Landing Page' : section === 'earnings' ? 'Earnings' : 'Settings'}
           </h1>
           <button className="relative p-2 rounded-md hover:bg-zinc-100 text-zinc-500" aria-label="Notifications">
             <Bell className="h-4.5 w-4.5" />
@@ -111,6 +114,15 @@ export function CollabDashboard({
 
         {/* Content */}
         <main className="flex-1 min-h-0 flex flex-col p-6">
+          {/* Section-level "how it works" read-me at the top of each section.
+              Skip 'settings' — on /collab it's just Cris's account info, not the
+              admin config the shared Settings read-me describes. */}
+          {section !== 'settings' && SECTION_READMES[section] && (
+            <div className="shrink-0 mb-3">
+              <SectionReadme title={SECTION_READMES[section].title}>{SECTION_READMES[section].body}</SectionReadme>
+            </div>
+          )}
+
           {section === 'projects' && (
             <PipelineBoard projects={projects} onSelect={setSelectedId} />
           )}
@@ -128,6 +140,8 @@ export function CollabDashboard({
           )}
 
           {section === 'landing' && <LandingEditor canEdit />}
+
+          {section === 'earnings' && <EarningsPanel />}
 
           {section === 'settings' && (
             <div className="max-w-lg">
