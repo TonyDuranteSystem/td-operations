@@ -163,6 +163,12 @@ export function computeRecategorizationUpdates(
   rules: CategorizationRule[],
   memberNames: string[],
   companyName: string,
+  // Phase 3R slice 4 (amendment F2): the client's DECLARED related entities
+  // (wizard rpt_company_name + other-owned-companies answers). FLAG-ONLY —
+  // categorizeTransaction sets is_related_party + a note, never a category;
+  // the review card / human answer decides the booking. NEVER feed these into
+  // ownNames/nameVariants (that would auto-book conversion — reviewer F2).
+  relatedEntities: string[] = [],
 ): { updates: Map<string, RecatUpdate>; transferPairs: number } {
   // Pass 1: rules. (ai_lean/ai_bucket are ADVISORY review hints — #2 — written
   // for residual rows even when their category stays uncategorized.)
@@ -170,7 +176,7 @@ export function computeRecategorizationUpdates(
   for (const row of rows) {
     if ((row.notes ?? "").startsWith("manual:")) continue // human corrections win, always
     const isAiTagged = (row.notes ?? "").startsWith("ai:")
-    const next = applyRules(row as unknown as ParsedTransaction, rules, memberNames)
+    const next = applyRules(row as unknown as ParsedTransaction, rules, memberNames, relatedEntities)
     // A re-run must never downgrade an AI-categorized row back to uncategorized
     // just because no deterministic rule covers it.
     if (isAiTagged && next.category === "uncategorized") continue
@@ -295,11 +301,18 @@ export async function recategorizeAccountYear(
     .single()
   const companyName = acctRow?.company_name ?? ""
 
+  // Declared related entities (Phase 3R slice 4): the wizard's rpt_company_name
+  // + other_owned_companies answers flag matching rows (is_related_party +
+  // note) so a $183k transfer to the client's OWN other company can never
+  // silently read as a vendor expense. Flag-only; humans decide the booking.
+  const { fetchDeclaredEntities } = await import("./declared-entities")
+  const relatedEntities = await fetchDeclaredEntities(supabaseAdmin, accountId, taxYear)
+
   // Passes 1 (rules) + 2 (transfer pairs) + 2b (own-entity self-transfers): the
   // pure deterministic core, extracted so the standalone P&L workspace tool
   // categorizes IDENTICALLY to this client path (no divergence — parity
   // guarantee). See computeRecategorizationUpdates above.
-  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, memberNames, companyName)
+  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, memberNames, companyName, relatedEntities)
 
   // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
   // the deterministic passes. Only high-confidence suggestions are applied,

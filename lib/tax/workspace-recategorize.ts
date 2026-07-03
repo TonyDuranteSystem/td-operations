@@ -97,7 +97,17 @@ export async function recategorizeWorkspace(
   if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, uncategorizedRemaining: 0 }
 
   const rules = await loadRulesForWorkspace(opts.linkedAccountId, workspaceId)
-  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, opts.memberNames, opts.companyName)
+  // Declared related entities (Phase 3R slice 4): forked workspaces inherit
+  // the linked client's wizard declarations; blank workspaces have none.
+  let relatedEntities: string[] = []
+  if (opts.linkedAccountId) {
+    const { data: wsRow } = await db.from("pnl_workspaces").select("tax_year").eq("id", workspaceId).maybeSingle()
+    if (wsRow?.tax_year) {
+      const { fetchDeclaredEntities } = await import("./declared-entities")
+      relatedEntities = await fetchDeclaredEntities(db, opts.linkedAccountId, wsRow.tax_year as number)
+    }
+  }
+  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, opts.memberNames, opts.companyName, relatedEntities)
 
   let recategorized = 0
   for (const [id, u] of Array.from(updates.entries())) {
