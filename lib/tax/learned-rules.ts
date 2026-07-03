@@ -96,6 +96,13 @@ export interface RuleStore {
   findRule(scope: LearnScope, pattern: string, direction: string): Promise<{ id: string } | null>
   insertRule(row: Record<string, unknown>): Promise<void>
   updateRule(id: string, patch: Record<string, unknown>): Promise<void>
+  /** Phase 0.2 (2026-07-03): active rules for the same (scope, pattern) whose
+   *  direction OVERLAPS keepDirection — i.e. 'any' conflicts with 'in'/'out'
+   *  and vice versa; 'in' and 'out' are COMPATIBLE (direction gating separates
+   *  them: PayPal can be income inbound and vendor-payment outbound). The
+   *  upsert deactivates conflicts so two overlapping rules can never coexist
+   *  with a nondeterministic winner. */
+  findConflicting(scope: LearnScope, pattern: string, keepDirection: string): Promise<Array<{ id: string }>>
 }
 
 /**
@@ -124,6 +131,21 @@ export function makeSupabaseRuleStore(db: { from: (table: string) => any }): Rul
     updateRule: async (id, patch) => {
       await db.from("bank_categorization_rules").update(patch).eq("id", id)
     },
+    findConflicting: async (scope, pattern, keepDirection) => {
+      // 'any' overlaps 'in'+'out'; 'in'/'out' overlap only 'any'.
+      const conflictDirs = keepDirection === "any" ? ["in", "out"] : ["any"]
+      let q = db
+        .from("bank_categorization_rules")
+        .select("id")
+        .eq("pattern", pattern)
+        .eq("active", true)
+        .in("direction", conflictDirs)
+      q = scope.account_id
+        ? q.eq("account_id", scope.account_id).is("workspace_id", null)
+        : q.eq("workspace_id", scope.workspace_id)
+      const { data } = await q
+      return (data ?? []) as Array<{ id: string }>
+    },
   }
 }
 
@@ -147,6 +169,18 @@ export async function upsertLearnedMerchantRules(
   let created = 0
   let updated = 0
   for (const spec of specs) {
+    // Direction reconciliation (Phase 0.2): an 'any' rule supersedes 'in'/'out'
+    // for the same pattern (and vice versa when the owner's newest answer is
+    // direction-specific) — deactivate the conflicting variants so applyRules
+    // never has two contradictory candidates at equal priority.
+    const conflicting = await store.findConflicting(scope, spec.pattern, spec.direction)
+    for (const c of conflicting) {
+      await store.updateRule(c.id, {
+        active: false,
+        notes: "deactivated: superseded by a newer answer with a different direction",
+        updated_at: new Date().toISOString(),
+      })
+    }
     const existing = await store.findRule(scope, spec.pattern, spec.direction)
     if (existing) {
       await store.updateRule(existing.id, {

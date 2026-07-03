@@ -25,7 +25,7 @@ import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 const db = supabaseAdmin as any
 import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, detectOwnEntityTransfers, type TransferCandidate } from "./transfer-matcher"
-import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion } from "./ai-categorizer"
+import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion } from "./ai-categorizer"
 import { getExpenseBuckets } from "./expense-buckets"
 
 export interface CategorizationRule {
@@ -242,7 +242,9 @@ export function decideAiSuggestion(
   if (s.lean) hint.ai_lean = s.lean
   if (s.bucket) hint.ai_bucket = s.bucket
   if (s.confidence === "high" && effectiveCategory === "uncategorized") {
-    return { applied: true, update: { category: s.category, subcategory: s.subcategory, notes: "ai:high", ...hint } }
+    // Version-stamped (Phase 0.5): a challenged categorization must trace to
+    // the exact prompt that produced it. All note checks use startsWith("ai:").
+    return { applied: true, update: { category: s.category, subcategory: s.subcategory, notes: `ai:high@${AI_PROMPT_VERSION}`, ...hint } }
   }
   if (hint.ai_lean || hint.ai_bucket) return { applied: false, update: hint }
   return { applied: false, update: null }
@@ -293,6 +295,33 @@ export async function recategorizeAccountYear(
   // Pass 3 (optional, Slice 5b): AI assist on what's STILL uncategorized after
   // the deterministic passes. Only high-confidence suggestions are applied,
   // tagged "ai:high" so staff and the review screen can always tell them apart.
+  // Persist the DETERMINISTIC updates FIRST (Phase 0.3, 2026-07-03): the old
+  // single end-of-run persist made rule/transfer results wait behind the
+  // (minutes-long) AI loop — a killed run lost EVERYTHING, including work that
+  // never needed the AI. Deterministic writes land now; the AI pass below
+  // persists per batch.
+  let recategorized = 0
+  for (const [id, u] of Array.from(updates.entries())) {
+    const orig = rows.find(r => r.id === id)
+    if (!orig) continue
+    const nextCategory = u.category ?? (orig.category as string)
+    const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
+    const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
+    if (!catChanged && !u.notes) continue
+    const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
+    if (u.notes) payload.notes = u.notes
+    const { error: upErr } = await supabaseAdmin
+      .from("bank_transactions")
+      .update(payload)
+      .eq("id", id)
+    if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
+    recategorized++
+  }
+
+  // Effective category per row after the deterministic pass (source of truth
+  // for the AI candidate filter + apply policy below).
+  const effCat = new Map(rows.map(r => [r.id as string, updates.get(r.id as string)?.category ?? (r.category as string)]))
+
   let aiCategorized = 0
   let aiErrors: string[] = []
   if (opts?.aiAssist) {
@@ -301,12 +330,11 @@ export async function recategorizeAccountYear(
     // inflows booked as income or undecided — so the client review is pre-sorted
     // even for rows a rule already expensed. Skip rows that already have both
     // hints (idempotent + cost). Category is still APPLIED only to uncategorized
-    // rows below (a rule/AI never auto-decides personal — that's the owner's call).
-    const catById = new Map(rows.map(r => [r.id as string, r.category as string]))
+    // rows (a rule/AI never auto-decides personal — that's the owner's call).
     const toLabel = rows.filter(r => {
       if ((r.notes ?? "").startsWith("manual:")) return false
       if ((r.ai_lean ?? null) !== null && (r.ai_bucket ?? null) !== null) return false
-      const cat = updates.get(r.id as string)?.category ?? (r.category as string)
+      const cat = effCat.get(r.id as string) as string
       const amt = Number(r.amount)
       return amt < 0
         ? ["uncategorized", "expense", "fee", "cogs"].includes(cat)
@@ -338,53 +366,50 @@ export async function recategorizeAccountYear(
         bank_name: (r.bank_name as string) ?? "",
       }))
       const buckets = await getExpenseBuckets(db)
+
+      const written = new Set<string>()
+      // Persist one suggestion via the shared pure policy. TOCTOU guard
+      // (re-review COND-3): applied-category writes carry
+      // .eq('category','uncategorized') so a human answer or re-run landing
+      // mid-AI is never overwritten by a verdict decided on stale data.
+      const persistSuggestion = async (s: AiSuggestion) => {
+        const d = decideAiSuggestion(s, effCat.get(s.id))
+        if (!d.update) return
+        const payload: Record<string, unknown> = {}
+        if (d.update.category) payload.category = d.update.category
+        if (d.update.subcategory !== undefined) payload.subcategory = d.update.subcategory
+        if (d.update.notes) payload.notes = d.update.notes
+        if (d.update.ai_lean !== undefined) payload.ai_lean = d.update.ai_lean
+        if (d.update.ai_bucket !== undefined) payload.ai_bucket = d.update.ai_bucket
+        let q = supabaseAdmin.from("bank_transactions").update(payload as never).eq("id", s.id)
+        if (d.applied) q = q.eq("category", "uncategorized")
+        const { error: aiErr } = await q
+        if (aiErr) throw new Error(`Failed to update transaction ${s.id}: ${aiErr.message}`)
+        if (d.applied) { aiCategorized++; effCat.set(s.id, d.update.category as string) }
+        written.add(s.id)
+      }
+
+      // Per-batch persistence (Phase 0.3): each batch lands before the next
+      // API call — a killed run keeps everything already paid for.
       const ai = await aiSuggestCategories(
         txs,
         { companyName: companyName || "the company", memberNames, bankNames, businessDescription, buckets },
-        opts.aiOptions,
+        {
+          ...opts.aiOptions,
+          onBatch: async (batchSuggestions) => {
+            for (const s of batchSuggestions) await persistSuggestion(s)
+          },
+        },
       )
       aiErrors = ai.errors
+      // Reconcile anything a failed mid-run onBatch write missed.
       for (const s of ai.suggestions) {
-        // Shared pure policy (decideAiSuggestion): high-confidence applies a
-        // category only to still-uncategorized rows (tagged "ai:high"); every
-        // suggestion's lean/bucket lands as an advisory hint; hints never
-        // change the bookkeeping category of an already-booked row.
-        const effCat = updates.get(s.id)?.category ?? catById.get(s.id)
-        const d = decideAiSuggestion(s, effCat)
-        if (d.update) updates.set(s.id, { ...updates.get(s.id), ...d.update })
-        if (d.applied) aiCategorized++
+        if (!written.has(s.id)) await persistSuggestion(s)
       }
     }
   }
 
-  // Persist changed rows
-  let recategorized = 0
-  for (const [id, u] of Array.from(updates.entries())) {
-    const orig = rows.find(r => r.id === id)
-    if (!orig) continue
-    // A hint-only update (non-high AI) leaves category/subcategory as-is.
-    const nextCategory = u.category ?? (orig.category as string)
-    const nextSub = u.subcategory ?? ((orig.subcategory as string) ?? "")
-    const catChanged = nextCategory !== orig.category || nextSub !== ((orig.subcategory as string) ?? "")
-    const leanChanged = u.ai_lean !== undefined && u.ai_lean !== ((orig.ai_lean as string | null) ?? undefined)
-    const bucketChanged = u.ai_bucket !== undefined && u.ai_bucket !== ((orig.ai_bucket as string | null) ?? undefined)
-    if (!catChanged && !u.notes && !leanChanged && !bucketChanged) continue
-    const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
-    if (u.notes) payload.notes = u.notes
-    if (u.ai_lean !== undefined) payload.ai_lean = u.ai_lean
-    if (u.ai_bucket !== undefined) payload.ai_bucket = u.ai_bucket
-    const { error: upErr } = await supabaseAdmin
-      .from("bank_transactions")
-      .update(payload)
-      .eq("id", id)
-    if (upErr) throw new Error(`Failed to update transaction ${id}: ${upErr.message}`)
-    recategorized++
-  }
-
-  const uncategorizedRemaining = rows.filter(r => {
-    const u = updates.get(r.id as string)
-    return (u?.category ?? r.category) === "uncategorized"
-  }).length
+  const uncategorizedRemaining = Array.from(effCat.values()).filter(c => c === "uncategorized").length
 
   return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining }
 }

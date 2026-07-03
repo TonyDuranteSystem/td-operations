@@ -180,10 +180,13 @@ describe('decideAiSuggestion (shared AI-apply policy)', () => {
     id: 't1', category: 'expense', subcategory: 'software', confidence: 'high', ...over,
   })
 
-  it('high confidence + still-uncategorized → applies the category, tagged ai:high', () => {
+  it('high confidence + still-uncategorized → applies the category, tagged + version-stamped', () => {
     const d = decideAiSuggestion(sugg({ lean: 'business', bucket: 'software' }), 'uncategorized')
     expect(d.applied).toBe(true)
-    expect(d.update).toMatchObject({ category: 'expense', subcategory: 'software', notes: 'ai:high', ai_lean: 'business', ai_bucket: 'software' })
+    expect(d.update).toMatchObject({ category: 'expense', subcategory: 'software', ai_lean: 'business', ai_bucket: 'software' })
+    // Version-stamped for tax-audit traceability (Phase 0.5); all note checks
+    // in code use startsWith('ai:'), so the stamp is compatible everywhere.
+    expect(d.update?.notes).toMatch(/^ai:high@v\d+$/)
   })
 
   it('high confidence but the row is ALREADY booked → hints only, category untouched', () => {

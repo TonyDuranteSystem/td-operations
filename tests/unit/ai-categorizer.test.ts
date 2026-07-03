@@ -152,3 +152,74 @@ describe("aiSuggestCategories", () => {
     expect(res.errors[0]).toContain("ECONNRESET")
   })
 })
+
+// ── Phase 0 (2026-07-03): truncation surfacing, per-batch hook, kill switch ──
+
+describe("aiSuggestCategories — Phase 0 foundations", () => {
+  const KEY = "ANTHROPIC_API_KEY"
+  let savedKey: string | undefined
+  beforeEach(() => { savedKey = process.env[KEY]; process.env[KEY] = "test-key" })
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env[KEY]
+    else process.env[KEY] = savedKey
+  })
+
+  it("surfaces a max_tokens truncation as a counted error (was silent)", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({
+        stop_reason: "max_tokens",
+        content: [{ type: "tool_use", name: "suggest_categories", input: { suggestions: [] } }],
+      }), { status: 200 })) as unknown as typeof fetch
+    const res = await aiSuggestCategories([tx("a")], CTX, { fetchImpl })
+    expect(res.stats.truncatedBatches).toBe(1)
+    expect(res.errors.some(e => e.includes("TRUNCATED at max_tokens"))).toBe(true)
+  })
+
+  it("calls onBatch after each batch with that batch's suggestions (per-batch persistence)", async () => {
+    // 41 txs → 2 batches of 40 + 1
+    const txs = Array.from({ length: 41 }, (_, i) => tx(`t${i}`))
+    const fetchImpl = (async (_url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as { messages: Array<{ content: string }> }
+      const ids = Array.from(body.messages[0].content.matchAll(/^(t\d+) \|/gm), m => m[1])
+      return new Response(JSON.stringify({
+        content: [{ type: "tool_use", name: "suggest_categories", input: {
+          suggestions: ids.map(id => ({ id, category: "expense", subcategory: "software", confidence: "high" })),
+        } }],
+      }), { status: 200 })
+    }) as unknown as typeof fetch
+    const batches: number[] = []
+    const res = await aiSuggestCategories(txs, CTX, {
+      fetchImpl,
+      onBatch: async (sugg, meta) => { batches.push(sugg.length); expect(meta.batchIndex).toBe(batches.length - 1) },
+    })
+    expect(batches).toEqual([40, 1])
+    expect(res.suggestions).toHaveLength(41) // final return still complete (back-compat)
+    expect(res.stats.batchesSent).toBe(2)
+  })
+
+  it("a throwing onBatch is recorded as a batch error; the run continues and returns all suggestions", async () => {
+    const txs = Array.from({ length: 41 }, (_, i) => tx(`t${i}`))
+    const fetchImpl = fakeFetchReturning([{ id: "t0", category: "expense", subcategory: "s", confidence: "high" }])
+    let calls = 0
+    const res = await aiSuggestCategories(txs, CTX, {
+      fetchImpl,
+      onBatch: async () => { calls++; if (calls === 1) throw new Error("db write failed") },
+    })
+    expect(res.errors.some(e => e.includes("db write failed"))).toBe(true)
+    expect(res.stats.batchesSent).toBe(2) // second batch still ran
+  })
+
+  it("kill switch: AI_CATEGORIZATION_DISABLED=1 skips everything with an explicit reason", async () => {
+    process.env.AI_CATEGORIZATION_DISABLED = "1"
+    try {
+      let fetched = false
+      const fetchImpl = (async () => { fetched = true; return new Response("{}") }) as unknown as typeof fetch
+      const res = await aiSuggestCategories([tx("a")], CTX, { fetchImpl })
+      expect(fetched).toBe(false)
+      expect(res.suggestions).toHaveLength(0)
+      expect(res.errors[0]).toContain("kill switch")
+    } finally {
+      delete process.env.AI_CATEGORIZATION_DISABLED
+    }
+  })
+})

@@ -70,6 +70,14 @@ describe('upsertLearnedMerchantRules (insert vs update)', () => {
         return hit ? { id: hit[0] } : null
       },
       insertRule: async (row) => { const id = `r${seq++}`; rows[id] = row; inserted.push(row) },
+      findConflicting: async (scope: LearnScope, pattern, keepDirection) => {
+        const dirs = keepDirection === 'any' ? ['in', 'out'] : ['any']
+        return Object.entries(rows)
+          .filter(([, r]) =>
+            (scope.account_id ? r.account_id === scope.account_id && !r.workspace_id : r.workspace_id === scope.workspace_id)
+            && r.pattern === pattern && r.active !== false && dirs.includes(r.direction as string))
+          .map(([id]) => ({ id }))
+      },
       updateRule: async (id, patch) => { rows[id] = { ...rows[id], ...patch }; updated.push({ id, patch }) },
     }
     return { store, inserted, updated, rows }
@@ -137,6 +145,14 @@ describe('upsertLearnedMerchantRules — workspace scope (blank P&L workspaces)'
         return hit ? { id: hit[0] } : null
       },
       insertRule: async (row) => { const id = `r${seq++}`; rows[id] = row; inserted.push(row) },
+      findConflicting: async (scope: LearnScope, pattern, keepDirection) => {
+        const dirs = keepDirection === 'any' ? ['in', 'out'] : ['any']
+        return Object.entries(rows)
+          .filter(([, r]) =>
+            (scope.account_id ? r.account_id === scope.account_id && !r.workspace_id : r.workspace_id === scope.workspace_id)
+            && r.pattern === pattern && r.active !== false && dirs.includes(r.direction as string))
+          .map(([id]) => ({ id }))
+      },
       updateRule: async (id, patch) => { rows[id] = { ...rows[id], ...patch } },
     }
     return { store, inserted }
@@ -179,5 +195,63 @@ describe('upsertLearnedMerchantRules — workspace scope (blank P&L workspaces)'
     expect(res).toEqual({ created: 1, updated: 0 }) // NOT an update of the income rule
     const dirs = inserted.map(r => r.direction).sort()
     expect(dirs).toEqual(['in', 'out'])
+  })
+})
+
+// ── Phase 0.2 (2026-07-03): direction-overlap reconciliation ──
+
+describe('upsertLearnedMerchantRules — direction reconciliation', () => {
+  function fakeStore() {
+    const rows: Record<string, Record<string, unknown>> = {}
+    let seq = 0
+    const store: RuleStore = {
+      findRule: async (scope: LearnScope, pattern, direction) => {
+        const hit = Object.entries(rows).find(([, r]) =>
+          (scope.account_id ? r.account_id === scope.account_id && !r.workspace_id : r.workspace_id === scope.workspace_id)
+          && r.pattern === pattern && r.direction === direction)
+        return hit ? { id: hit[0] } : null
+      },
+      insertRule: async (row) => { rows[`r${seq++}`] = { ...row } },
+      updateRule: async (id, patch) => { rows[id] = { ...rows[id], ...patch } },
+      findConflicting: async (scope: LearnScope, pattern, keepDirection) => {
+        const dirs = keepDirection === 'any' ? ['in', 'out'] : ['any']
+        return Object.entries(rows)
+          .filter(([, r]) =>
+            (scope.account_id ? r.account_id === scope.account_id && !r.workspace_id : r.workspace_id === scope.workspace_id)
+            && r.pattern === pattern && r.active !== false && dirs.includes(r.direction as string))
+          .map(([id]) => ({ id }))
+      },
+    }
+    return { store, rows }
+  }
+  const spend = [{ description: 'Repsol', counterparty: null, amount: -40 }]
+  const inflow = [{ description: 'Repsol', counterparty: null, amount: 40 }]
+  const both = [{ description: 'Repsol', counterparty: null, amount: -40 }, { description: 'Repsol', counterparty: null, amount: 40 }]
+
+  it("an 'any' answer deactivates a prior 'out' rule (no nondeterministic winner)", async () => {
+    const { store, rows } = fakeStore()
+    await upsertLearnedMerchantRules(store, 'a1', spend, 'expense', 'x', 'u')       // learns out
+    await upsertLearnedMerchantRules(store, 'a1', both, 'conversion', 'transfer', 'u') // learns any
+    const active = Object.values(rows).filter(r => r.active !== false)
+    expect(active).toHaveLength(1)
+    expect(active[0]).toMatchObject({ direction: 'any', category: 'conversion' })
+  })
+
+  it("a direction-specific answer deactivates a prior 'any' rule", async () => {
+    const { store, rows } = fakeStore()
+    await upsertLearnedMerchantRules(store, 'a1', both, 'conversion', 'transfer', 'u') // any
+    await upsertLearnedMerchantRules(store, 'a1', spend, 'expense', 'x', 'u')          // out supersedes
+    const active = Object.values(rows).filter(r => r.active !== false)
+    expect(active).toHaveLength(1)
+    expect(active[0]).toMatchObject({ direction: 'out', category: 'expense' })
+  })
+
+  it("'in' and 'out' rules COEXIST (PayPal: income inbound, vendor outbound)", async () => {
+    const { store, rows } = fakeStore()
+    await upsertLearnedMerchantRules(store, 'a1', inflow, 'income', 'revenue', 'u')
+    await upsertLearnedMerchantRules(store, 'a1', spend, 'expense', 'vendor', 'u')
+    const active = Object.values(rows).filter(r => r.active !== false)
+    expect(active).toHaveLength(2)
+    expect(active.map(r => r.direction).sort()).toEqual(['in', 'out'])
   })
 })

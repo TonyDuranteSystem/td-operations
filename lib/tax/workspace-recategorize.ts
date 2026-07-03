@@ -27,7 +27,7 @@ import {
   type CategorizableRow,
   type CategorizationRule,
 } from "./categorization-engine"
-import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions } from "./ai-categorizer"
+import { aiSuggestCategories, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion } from "./ai-categorizer"
 import { getExpenseBuckets } from "./expense-buckets"
 
 // Workspace tables are not yet in the generated database.types.ts — same
@@ -176,28 +176,49 @@ export async function recategorizeWorkspaceAi(
     bank_name: (r.bank_name as string) ?? "",
   }))
   const buckets = await getExpenseBuckets(db)
-  const ai = await aiSuggestCategories(
-    txs,
-    { companyName: opts.companyName || "the company", memberNames: opts.memberNames, bankNames, buckets },
-    opts.aiOptions,
-  )
 
   const catById = new Map(rows.map(r => [r.id as string, r.category as string]))
   let aiCategorized = 0
   let labeled = 0
-  for (const s of ai.suggestions) {
+  const written = new Set<string>()
+
+  // Persist one suggestion. TOCTOU guard (re-review COND-3): the category write
+  // carries .eq('category','uncategorized') — a Regenerate or a staff answer
+  // landing while the AI was thinking must never be overwritten by a verdict
+  // decided on stale data. Hint-only writes are additive and unguarded.
+  const persistSuggestion = async (s: AiSuggestion) => {
     const d = decideAiSuggestion(s, catById.get(s.id))
-    if (!d.update) continue
+    if (!d.update) return
     const payload: Record<string, unknown> = {}
     if (d.update.category) payload.category = d.update.category
     if (d.update.subcategory !== undefined) payload.subcategory = d.update.subcategory
     if (d.update.notes) payload.notes = d.update.notes
     if (d.update.ai_lean !== undefined) payload.ai_lean = d.update.ai_lean
     if (d.update.ai_bucket !== undefined) payload.ai_bucket = d.update.ai_bucket
-    const { error } = await db.from("pnl_workspace_transactions").update(payload).eq("id", s.id)
+    let q = db.from("pnl_workspace_transactions").update(payload).eq("id", s.id)
+    if (d.applied) q = q.eq("category", "uncategorized")
+    const { error } = await q
     if (error) throw new Error(`Failed to update workspace transaction ${s.id}: ${error.message}`)
     if (d.applied) { aiCategorized++; catById.set(s.id, d.update.category as string) }
     labeled++
+    written.add(s.id)
+  }
+
+  // Per-batch persistence (Phase 0.3): each batch is written before the next
+  // API call — a killed run (300s window) keeps everything already paid for.
+  const ai = await aiSuggestCategories(
+    txs,
+    { companyName: opts.companyName || "the company", memberNames: opts.memberNames, bankNames, buckets },
+    {
+      ...opts.aiOptions,
+      onBatch: async (batchSuggestions) => {
+        for (const s of batchSuggestions) await persistSuggestion(s)
+      },
+    },
+  )
+  // Reconcile: anything a failed mid-run onBatch write missed.
+  for (const s of ai.suggestions) {
+    if (!written.has(s.id)) await persistSuggestion(s)
   }
 
   const uncategorizedRemaining = Array.from(catById.values()).filter(c => c === "uncategorized").length

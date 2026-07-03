@@ -17,8 +17,25 @@ import type { CategorizedTransaction } from "@/lib/bank-statement-parser"
 
 const MODEL = "claude-sonnet-4-6"
 const BATCH_SIZE = 40
-const MAX_TOKENS = 4096
+// 8192 (was 4096, Phase 0.1 2026-07-03): 40 suggestions × (UUID echo + 6 fields)
+// ≈ 3-4k output tokens — batches were hitting max_tokens mid-tool-call and a
+// truncated tool_use block parses to ZERO suggestions silently (fail-open
+// looked like a low auto-rate with no signal). stop_reason is now surfaced.
+const MAX_TOKENS = 8192
 const TIMEOUT_MS = 90_000
+
+/** Prompt/policy version — stamped into applied-row notes (ai:high@vN) so a
+ *  challenged categorization is traceable to the exact prompt that made it
+ *  (audit requirement for a tax product). Bump on ANY change to systemPrompt,
+ *  SUGGEST_TOOL, or the apply policy. */
+export const AI_PROMPT_VERSION = "v2"
+
+/** Kill switch (Phase 0.4): set AI_CATEGORIZATION_DISABLED=1 on Vercel to stop
+ *  the AI pass fleet-wide (both the workspace and client paths call through
+ *  here). Deterministic passes and human answers keep working. */
+export function aiCategorizationDisabled(): boolean {
+  return process.env.AI_CATEGORIZATION_DISABLED === "1"
+}
 
 export interface AiCategorizableTx {
   id: string
@@ -160,6 +177,22 @@ export interface AiCategorizeOptions {
   model?: string
   /** Cap on API calls per run (cost guard). Default 80 batches (~3200 tx). */
   maxBatches?: number
+  /** Per-batch persistence hook (Phase 0.3, 2026-07-03): called after EACH
+   *  batch's suggestions are parsed, BEFORE the next API call. Callers persist
+   *  incrementally so a killed run loses nothing already paid for. A throw
+   *  here is recorded as a batch error and the run continues — the final
+   *  return still includes ALL suggestions, so an end-of-run reconcile can
+   *  retry anything a mid-run write missed. */
+  onBatch?: (batchSuggestions: AiSuggestion[], meta: { batchIndex: number; stopReason: string | null; parsed: number }) => Promise<void>
+}
+
+/** Per-run stats for the observability record (Phase 0.5). */
+export interface AiRunStats {
+  batchesSent: number
+  batchesFailed: number
+  suggestionsParsed: number
+  truncatedBatches: number
+  capped: boolean
 }
 
 /**
@@ -171,9 +204,14 @@ export async function aiSuggestCategories(
   txs: AiCategorizableTx[],
   ctx: AiCategorizeContext,
   opts?: AiCategorizeOptions,
-): Promise<{ suggestions: AiSuggestion[]; errors: string[] }> {
+): Promise<{ suggestions: AiSuggestion[]; errors: string[]; stats: AiRunStats }> {
+  const emptyStats = (capped = false): AiRunStats =>
+    ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped })
+  if (aiCategorizationDisabled()) {
+    return { suggestions: [], errors: ["AI_CATEGORIZATION_DISABLED=1 — AI pass skipped (kill switch)"], stats: emptyStats() }
+  }
   const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return { suggestions: [], errors: ["ANTHROPIC_API_KEY not set — AI categorization skipped"] }
+  if (!apiKey) return { suggestions: [], errors: ["ANTHROPIC_API_KEY not set — AI categorization skipped"], stats: emptyStats() }
   const doFetch = opts?.fetchImpl ?? fetch
   const maxBatches = opts?.maxBatches ?? 80
 
@@ -183,12 +221,15 @@ export async function aiSuggestCategories(
 
   const batches: AiCategorizableTx[][] = []
   for (let i = 0; i < txs.length; i += BATCH_SIZE) batches.push(txs.slice(i, i + BATCH_SIZE))
-  if (batches.length > maxBatches) {
+  const capped = batches.length > maxBatches
+  if (capped) {
     errors.push(`Capped at ${maxBatches} batches (${maxBatches * BATCH_SIZE} tx) of ${batches.length} — rerun to continue`)
     batches.length = maxBatches
   }
+  const stats: AiRunStats = emptyStats(capped)
 
-  for (const batch of batches) {
+  for (let bi = 0; bi < batches.length; bi++) {
+    const batch = batches[bi]
     const validIds = new Set(batch.map(t => t.id))
     const lines = batch.map(t =>
       `${t.id} | ${t.transaction_date} | ${t.bank_name} | ${t.amount > 0 ? "+" : ""}${t.amount} ${t.currency} | ${t.counterparty || "-"} | ${t.description}`,
@@ -214,17 +255,32 @@ export async function aiSuggestCategories(
         }),
       })
       clearTimeout(timer)
+      stats.batchesSent++
       if (!res.ok) {
+        stats.batchesFailed++
         errors.push(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`)
         continue
       }
-      const data = await res.json() as { content?: Array<{ type: string; name?: string; input?: unknown }> }
+      const data = await res.json() as { stop_reason?: string; content?: Array<{ type: string; name?: string; input?: unknown }> }
+      // Truncation surfacing (Phase 0.1): a max_tokens stop mid-tool-call used
+      // to parse to zero suggestions with NO signal — now it's counted + logged.
+      const stopReason = data.stop_reason ?? null
+      if (stopReason === "max_tokens") {
+        stats.truncatedBatches++
+        errors.push(`Batch ${bi + 1}/${batches.length} TRUNCATED at max_tokens — suggestions from this batch are partial/lost`)
+      }
       const toolBlock = data.content?.find(b => b.type === "tool_use" && b.name === "suggest_categories")
-      suggestions.push(...parseSuggestions(toolBlock?.input, validIds, validBuckets))
+      const parsed = parseSuggestions(toolBlock?.input, validIds, validBuckets)
+      stats.suggestionsParsed += parsed.length
+      suggestions.push(...parsed)
+      // Per-batch persistence (Phase 0.3): caller writes THIS batch before the
+      // next API call — a killed run keeps everything already paid for.
+      if (opts?.onBatch) await opts.onBatch(parsed, { batchIndex: bi, stopReason, parsed: parsed.length })
     } catch (e) {
+      stats.batchesFailed++
       errors.push(`Batch failed: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  return { suggestions, errors }
+  return { suggestions, errors, stats }
 }
