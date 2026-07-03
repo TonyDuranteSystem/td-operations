@@ -132,7 +132,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // the rendered totals no longer match the data → the UI asks to Regenerate.
     const { data: wsRow } = await db
       .from('pnl_workspaces')
-      .select('generated_at')
+      .select('generated_at, linked_account_id')
       .eq('id', workspaceId)
       .maybeSingle()
     const generatedAt = (wsRow?.generated_at as string | null) ?? null
@@ -148,9 +148,83 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       stale = !!newest?.created_at && String(newest.created_at) > generatedAt
     }
 
+    // Location-period triage (Phase 2b, staff-only tool — the portal API never
+    // sends these). Residence anchor = the linked client's declared fiscal-
+    // residence country from the CRM; periods there are home life, never cards.
+    const { detectPresencePeriods } = await import('@/lib/tax/presence-periods')
+    const { residenceCountryToIso } = await import('@/lib/tax/merchant-locations')
+    let residenceCountry: string | null = null
+    let residenceOnFile = false
+    if (wsRow?.linked_account_id) {
+      const { data: acRows } = await db
+        .from('account_contacts')
+        .select('contact_id')
+        .eq('account_id', wsRow.linked_account_id)
+      const contactIds = ((acRows ?? []) as Array<{ contact_id: string }>).map(r => r.contact_id)
+      if (contactIds.length > 0) {
+        const { data: contactRows } = await db
+          .from('contacts')
+          .select('address_country')
+          .in('id', contactIds)
+        for (const c of (contactRows ?? []) as Array<{ address_country: string | null }>) {
+          const iso = residenceCountryToIso(c.address_country)
+          if (iso) { residenceCountry = iso; residenceOnFile = true; break }
+        }
+      }
+    }
+    const locatedRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
+      const { data, error } = await db
+        .from('pnl_workspace_transactions')
+        .select('id, transaction_date, description, counterparty, amount, category, notes, loc_code')
+        .eq('workspace_id', workspaceId)
+        .not('loc_code', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to)
+      if (error) throw new Error(error.message)
+      return (data ?? []) as Record<string, unknown>[]
+    })
+    const { data: batchRows } = await db
+      .from('pnl_period_answers')
+      .select('id, loc_codes, period_start, period_end, choice, actor_role, row_count, dollar_total, created_at, undone_at')
+      .eq('workspace_id', workspaceId)
+      .order('created_at', { ascending: false })
+    const periodAnswers = ((batchRows ?? []) as Array<Record<string, unknown>>).filter(b => !b.undone_at)
+    const allPeriods = detectPresencePeriods(
+      locatedRows.map(r => ({
+        id: String(r.id),
+        transaction_date: String(r.transaction_date ?? ''),
+        description: (r.description as string | null) ?? null,
+        counterparty: (r.counterparty as string | null) ?? null,
+        amount: Number(r.amount),
+        category: (r.category as string | null) ?? null,
+        notes: (r.notes as string | null) ?? null,
+        loc_code: (r.loc_code as string | null) ?? null,
+      })),
+      residenceCountry,
+    )
+    // A period already covered by an active (not-undone) batch is answered —
+    // no card; the attestation line renders from period_answers instead. A
+    // period with nothing sweepable left renders no card either.
+    const overlapDays = (aStart: string, aEnd: string, bStart: string, bEnd: string) => {
+      const s = Math.max(Date.parse(aStart), Date.parse(bStart))
+      const e = Math.min(Date.parse(aEnd), Date.parse(bEnd))
+      return e < s ? 0 : (e - s) / 86400000 + 1
+    }
+    const periods = allPeriods.filter(p => {
+      if (p.sweepable_count === 0) return false
+      const pDays = overlapDays(p.start, p.end, p.start, p.end)
+      return !periodAnswers.some(b =>
+        (b.loc_codes as string[]).includes(p.primary) &&
+        overlapDays(p.start, p.end, String(b.period_start), String(b.period_end)) / pDays >= 0.8)
+    })
+
     return NextResponse.json({
       ...view,
       questions,
+      periods,
+      period_answers: periodAnswers,
+      residence_country: residenceCountry,
+      residence_on_file: residenceOnFile,
       // Coverage is a client-completeness nudge — not used in the staff scratch tool.
       coverage: { questions: [], unanswered: 0, incomplete: 0 },
       expense_breakdown,

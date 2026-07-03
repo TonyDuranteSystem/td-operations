@@ -76,7 +76,57 @@ interface View {
   stale?: boolean
   /** Smart-categorization (AI) jobs still running for this workspace. */
   aiPending?: number
+  /** Location-period triage (Phase 2b, STAFF WORKSPACE ONLY — the portal API
+   *  never sends these; every use below is additionally gated on isStaff). */
+  periods?: PresencePeriodView[]
+  period_answers?: PeriodAnswerView[]
+  residence_country?: string | null
+  residence_on_file?: boolean
 }
+
+// Location-period triage (Phase 2b): a detected presence stretch ("~6 months
+// in Italy") the owner answers ONCE — all business / all personal / one-by-one.
+interface PresencePeriodView {
+  loc_codes: string[]
+  primary: string
+  start: string
+  end: string
+  confidence: string
+  row_count: number
+  dollar_total: number
+  sweepable_count: number
+  sweepable_total: number
+  top_merchants: string[]
+  group_keys: string[]
+}
+interface PeriodAnswerView {
+  id: string
+  loc_codes: string[]
+  period_start: string
+  period_end: string
+  choice: string
+  actor_role: string
+  row_count: number
+  dollar_total: number
+  created_at: string
+}
+
+/** Display names for period locations (loc_code → label). */
+const LOC_LABELS: Record<string, { en: string; it: string }> = {
+  EU: { en: 'Europe', it: 'Europa' }, IT: { en: 'Italy', it: 'Italia' },
+  ES: { en: 'Spain', it: 'Spagna' }, PT: { en: 'Portugal', it: 'Portogallo' },
+  FR: { en: 'France', it: 'Francia' }, DE: { en: 'Germany', it: 'Germania' },
+  AE: { en: 'Dubai / UAE', it: 'Dubai / EAU' }, US: { en: 'United States', it: 'Stati Uniti' },
+  GB: { en: 'United Kingdom', it: 'Regno Unito' }, CH: { en: 'Switzerland', it: 'Svizzera' },
+  NL: { en: 'Netherlands', it: 'Paesi Bassi' }, AT: { en: 'Austria', it: 'Austria' },
+  GR: { en: 'Greece', it: 'Grecia' }, TR: { en: 'Turkey', it: 'Turchia' },
+  TH: { en: 'Thailand', it: 'Thailandia' }, GE: { en: 'Georgia', it: 'Georgia' },
+}
+const locLabel = (code: string, it: boolean) => (LOC_LABELS[code] ? (it ? LOC_LABELS[code].it : LOC_LABELS[code].en) : code)
+const periodLabel = (p: { loc_codes: string[]; primary: string }, it: boolean) =>
+  p.loc_codes.length > 1
+    ? `${locLabel(p.primary, it)} / ${p.loc_codes.filter(c => c !== p.primary).map(c => locLabel(c, it)).join(' / ')}`
+    : locLabel(p.primary, it)
 
 // Drill-down (Luca's request): the transactions behind one P&L expense category,
 // grouped by merchant, loaded on demand.
@@ -103,6 +153,8 @@ const CATEGORY_TO_ANSWER: Record<string, string> = {
 const activeAnswerOf = (g: QuestionGroup) => CATEGORY_TO_ANSWER[g.current_category ?? 'uncategorized'] ?? 'business_expense'
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtDay = (iso: string, it: boolean) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString(it ? 'it-IT' : 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 
 export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client', apiBase = '/api/portal/tax-financials' }: { accountId: string; taxYear: number; locale: string; mode?: 'staff' | 'client'; apiBase?: string }) {
   const it = locale === 'it'
@@ -135,6 +187,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [openCat, setOpenCat] = useState<string | null>(null)
   // Triage tiers (2026-07-03): which collapsed review sections are open.
   const [openSections, setOpenSections] = useState<Set<string>>(new Set())
+  // Location-period triage (Phase 2b): pending confirm dialog + one-by-one filter.
+  const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
+  const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
   const [catData, setCatData] = useState<Record<string, CategoryDrill>>({})
   const [catLoading, setCatLoading] = useState<string | null>(null)
   const [catError, setCatError] = useState<string | null>(null)
@@ -181,6 +236,58 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Location-period sweep: only from the confirm dialog, never one-click. The
+  // server recomputes everything and 409s if the data moved (guards i-v in the
+  // endpoint) — a 409 here just reloads so the user re-confirms fresh numbers.
+  const confirmPeriodAnswer = async () => {
+    if (!periodConfirm) return
+    const { period: p, choice } = periodConfirm
+    setBusy(`period-${p.primary}-${p.start}`)
+    try {
+      const res = await fetch(`${API}/period-answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          loc_codes: p.loc_codes, period_start: p.start, period_end: p.end, choice,
+          expected_row_count: p.sweepable_count, expected_dollar_total: p.sweepable_total,
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile registrare il periodo — riprova.' : 'Could not book the period — please try again.'))
+      }
+      setPeriodConfirm(null)
+      setPeriodFilter(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setPeriodConfirm(null)
+      await load() // 409 = numbers moved — re-render fresh so a re-confirm is honest
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const undoPeriodAnswer = async (batchId: string) => {
+    setBusy(`period-undo-${batchId}`)
+    try {
+      const res = await fetch(`${API}/period-answer/undo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_id: batchId }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile annullare — riprova.' : 'Could not undo — please try again.'))
       }
       await load()
     } catch (e) {
@@ -907,6 +1014,150 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </section>
           )}
 
+          {/* LOCATION-PERIOD TRIAGE (Phase 2b, staff-only v1): one question per
+              detected presence stretch instead of hundreds of merchant rows.
+              Interrogative copy + top merchants so a wrong detection is
+              falsifiable at a glance; answers apply ONLY from the confirm
+              dialog and are fully undoable (exact prior-state restore). */}
+          {isStaff && ((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0) && (
+            <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
+              <h3 className="text-sm font-bold text-indigo-900 mb-1">
+                🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}
+              </h3>
+              <p className="text-xs text-zinc-600 mb-3">
+                {view.residence_on_file
+                  ? (it
+                    ? `Residenza fiscale registrata: ${locLabel(view.residence_country ?? '', it)}. Le spese fatte lì restano nella revisione normale; per i periodi all'estero basta UNA risposta.`
+                    : `Fiscal residence on file: ${locLabel(view.residence_country ?? '', it)}. Spending there stays in the normal review; each period away needs just ONE answer.`)
+                  : (it
+                    ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
+                    : 'No fiscal residence on file in the CRM for this client — showing every detected period.')}
+              </p>
+              <div className="space-y-3">
+                {(view.periods ?? []).map(p => {
+                  const key = `period-${p.primary}-${p.start}`
+                  return (
+                    <div key={key} className="rounded-lg border border-indigo-200 bg-white p-3 sm:p-4">
+                      <div className="text-sm font-semibold text-zinc-900">
+                        {it
+                          ? `Eri in ${periodLabel(p, it)} dal ${fmtDay(p.start, it)} al ${fmtDay(p.end, it)}?`
+                          : `Were you in ${periodLabel(p, it)}, ${fmtDay(p.start, it)} – ${fmtDay(p.end, it)}?`}
+                      </div>
+                      <div className="mt-1 text-xs text-zinc-600">
+                        {it
+                          ? `${p.row_count} transazioni sul posto · $${fmt(p.dollar_total)}`
+                          : `${p.row_count} in-person transactions · $${fmt(p.dollar_total)}`}
+                        {p.top_merchants.length > 0 && (
+                          <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {p.top_merchants.join(', ')})</span>
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          disabled={busy !== null}
+                          onClick={() => setPeriodConfirm({ period: p, choice: 'business' })}
+                          className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          {it ? 'Tutto aziendale' : 'All business'}
+                        </button>
+                        <button
+                          disabled={busy !== null}
+                          onClick={() => setPeriodConfirm({ period: p, choice: 'personal' })}
+                          className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                        >
+                          {it ? 'Tutto personale' : 'All personal'}
+                        </button>
+                        <button
+                          disabled={busy !== null}
+                          onClick={() => setPeriodFilter({ label: `${periodLabel(p, it)} · ${fmtDay(p.start, it)} – ${fmtDay(p.end, it)}`, keys: new Set(p.group_keys) })}
+                          className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                        >
+                          {it ? 'Controllo una per una' : 'Review one-by-one'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+                {(view.period_answers ?? []).map(b => (
+                  <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                    <span>
+                      ✓ {b.actor_role === 'client'
+                        ? (it ? 'Il cliente ha attestato' : 'Client attested')
+                        : (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')}
+                      {': '}
+                      <strong className="text-zinc-800">{b.loc_codes.map(c => locLabel(c, it)).join(' / ')} {fmtDay(b.period_start, it)} – {fmtDay(b.period_end, it)} = {b.choice === 'business' ? (it ? 'aziendale' : 'business') : (it ? 'personale' : 'personal')}</strong>
+                      {` (${b.row_count} ${it ? 'righe' : 'rows'}, $${fmt(b.dollar_total)})`}
+                    </span>
+                    <button
+                      disabled={busy !== null}
+                      onClick={() => void undoPeriodAnswer(b.id)}
+                      className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+                    >
+                      {it ? 'Annulla' : 'Undo'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Period-answer confirm dialog (B&P2 guard): exact counts, what's
+              excluded, MMLLC draw-split disclosure — never a one-click sweep. */}
+          {periodConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+              <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+                <h4 className="text-sm font-bold text-zinc-900">
+                  {periodConfirm.choice === 'business'
+                    ? (it ? 'Registrare tutto il periodo come AZIENDALE?' : 'Book the whole period as BUSINESS?')
+                    : (it ? 'Registrare tutto il periodo come PERSONALE?' : 'Book the whole period as PERSONAL?')}
+                </h4>
+                <p className="mt-2 text-xs text-zinc-600">
+                  {periodLabel(periodConfirm.period, it)} · {fmtDay(periodConfirm.period.start, it)} – {fmtDay(periodConfirm.period.end, it)}
+                </p>
+                <p className="mt-2 text-sm text-zinc-800">
+                  {it
+                    ? <><strong>{periodConfirm.period.sweepable_count}</strong> transazioni per <strong>${fmt(periodConfirm.period.sweepable_total)}</strong> verranno registrate.</>
+                    : <><strong>{periodConfirm.period.sweepable_count}</strong> transactions totalling <strong>${fmt(periodConfirm.period.sweepable_total)}</strong> will be booked.</>}
+                </p>
+                {periodConfirm.period.row_count > periodConfirm.period.sweepable_count && (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {it
+                      ? `${periodConfirm.period.row_count - periodConfirm.period.sweepable_count} righe già decise a mano o non idonee restano come sono.`
+                      : `${periodConfirm.period.row_count - periodConfirm.period.sweepable_count} rows already hand-answered or ineligible stay as they are.`}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-zinc-500">
+                  {it ? 'Abbonamenti, trasferimenti e incassi non vengono mai toccati da questa risposta.' : 'Subscriptions, transfers and income are never touched by this answer.'}
+                </p>
+                {periodConfirm.choice === 'personal' && (
+                  <p className="mt-2 rounded-md bg-amber-50 p-2 text-xs text-amber-800">
+                    {it
+                      ? 'Nota: verranno registrate come prelievi dei soci ripartiti per quota di proprietà (non attribuiti a un socio specifico).'
+                      : 'Note: these will be recorded as owner draws split by ownership % (not attributed to a specific member).'}
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-zinc-500">{it ? 'Puoi annullare questa operazione in qualsiasi momento.' : 'You can undo this at any time.'}</p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => setPeriodConfirm(null)}
+                    disabled={busy !== null}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                  >
+                    {it ? 'Annulla' : 'Cancel'}
+                  </button>
+                  <button
+                    onClick={() => void confirmPeriodAnswer()}
+                    disabled={busy !== null}
+                    className={periodConfirm.choice === 'business'
+                      ? 'rounded-full border border-emerald-600 bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
+                      : 'rounded-full border border-amber-500 bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50'}
+                  >
+                    {busy !== null ? (it ? 'Registrazione…' : 'Booking…') : (it ? 'Conferma' : 'Confirm')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TRIAGE-FIRST REVIEW (Antonio, 2026-07-03): the screen is a WORK
               QUEUE, not an archive. Tier 1 (expanded): only groups that need a
               human decision. Tier 2 (collapsed): booked but worth a glance
@@ -917,8 +1168,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
               {(() => {
                 const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
-                const needs = view.questions.filter(g => (g.current_category ?? 'uncategorized') === 'uncategorized')
-                const booked = view.questions.filter(g => (g.current_category ?? 'uncategorized') !== 'uncategorized')
+                // Review-one-by-one period filter (zero writes): narrows every
+                // tier to the merchants seen inside the selected period.
+                const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(g.group_key)
+                const needs = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') === 'uncategorized')
+                const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized')
                 const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
                 const autoBooked = booked.filter(g => g.ai_lean === 'business')
                 const needsIn = needs.filter(g => g.direction !== 'out')
@@ -977,6 +1231,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
 
                 return (
                   <>
+                    {periodFilter && (
+                      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
+                        <span>🌍 {it ? 'Stai controllando solo' : 'Reviewing only'}: <strong>{periodFilter.label}</strong></span>
+                        <button
+                          onClick={() => setPeriodFilter(null)}
+                          className="rounded-full border border-indigo-300 bg-white px-2.5 py-0.5 font-medium text-indigo-700 hover:border-indigo-600"
+                        >
+                          {it ? 'Mostra tutto' : 'Show all'} ✕
+                        </button>
+                      </div>
+                    )}
                     {/* Guide: what this screen is, what you MUST do, what you CAN do. */}
                     <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 sm:p-4 mb-4 text-xs text-zinc-600 space-y-1.5">
                       <p className="text-sm font-semibold text-zinc-900">{it ? 'Come funziona questa revisione' : 'How this review works'}</p>

@@ -36,7 +36,7 @@ import { getExpenseBuckets } from "./expense-buckets"
 const db = supabaseAdmin as any
 
 const WS_TX_COLUMNS =
-  "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket"
+  "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence"
 
 export interface WorkspaceRecategorizeResult {
   scanned: number
@@ -120,6 +120,26 @@ export async function recategorizeWorkspace(
     const u = updates.get(r.id as string)
     return (u?.category ?? r.category) === "uncategorized"
   }).length
+
+  // Location labeling (Phase 2b, deterministic-only v1): stamp loc_* on every
+  // row where the inferred location differs from what's stored. Idempotent —
+  // the extractors are pure, so re-runs converge; a row that lost its signal
+  // (e.g. category became conversion) is cleared back to NULL.
+  const { inferLocation } = await import("./merchant-locations")
+  for (const r of rows) {
+    const u = updates.get(r.id as string)
+    const hit = inferLocation({
+      description: (r.description as string | null) ?? null,
+      counterparty: (r.counterparty as string | null) ?? null,
+      amount: Number(r.amount),
+      category: (u?.category ?? r.category) as string | null,
+    })
+    const next = hit ?? { loc_code: null, loc_source: null, loc_confidence: null }
+    const cur = r as unknown as { loc_code: string | null; loc_source: string | null; loc_confidence: string | null }
+    if (cur.loc_code === next.loc_code && cur.loc_source === next.loc_source && cur.loc_confidence === next.loc_confidence) continue
+    const { error } = await db.from("pnl_workspace_transactions").update(next).eq("id", r.id)
+    if (error) throw new Error(`Failed to stamp location on workspace transaction ${r.id}: ${error.message}`)
+  }
 
   return { scanned: rows.length, recategorized, transferPairs, uncategorizedRemaining }
 }
