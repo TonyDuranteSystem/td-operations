@@ -288,3 +288,26 @@ describe('parser contract — bank tokens the categorization layers depend on', 
     expect(r.transactions[2].amount).toBe(25850)
   })
 })
+
+describe('Wise duplicate-reference dedup (2026-07-03 — eval harness finding)', () => {
+  it('four same-day same-amount payments with the SAME free-text note stay four distinct rows', () => {
+    // Real incident: 3 of 4 course sales (EUR 1,497 each, note "Accesso community
+    // privata prop") were silently dropped at DB insert because the Wise ref
+    // (the client's note) collided on (ref, date, amount). EUR 5,988 of real
+    // revenue vanished from the P&L.
+    const csv = [
+      'TransferWise ID,Date,Amount,Currency,Description,Payment Reference,Running Balance',
+      'TRANSFER-1,28-03-2025,1497.00,EUR,Received money from CUSTOMER A,Accesso community privata prop,1000.00',
+      'TRANSFER-2,28-03-2025,1497.00,EUR,Received money from CUSTOMER B,Accesso community privata prop,2497.00',
+      'TRANSFER-3,28-03-2025,1497.00,EUR,Received money from CUSTOMER C,Accesso community privata prop,3994.00',
+      'TRANSFER-4,28-03-2025,1497.00,EUR,Received money from CUSTOMER D,Accesso community privata prop,5491.00',
+    ].join('\n')
+    const r = parseWiseCSV(csv, 'wise.csv')
+    expect(r.transactions).toHaveLength(4)
+    const refs = r.transactions.map(t => t.transaction_ref)
+    expect(new Set(refs).size).toBe(4) // all distinct → nothing deduped away at insert
+    expect(refs[0]).toBe('Accesso community privata prop')
+    expect(refs[1]).toBe('Accesso community privata prop-2')
+    expect(refs[3]).toBe('Accesso community privata prop-4')
+  })
+})

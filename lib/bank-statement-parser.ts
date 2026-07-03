@@ -9,7 +9,7 @@
  * reconciliation guard (lib/bank-statement-ai-extract.ts).
  */
 
-import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef } from "./bank-csv-parsers"
+import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef, dedupeRefs } from "./bank-csv-parsers"
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -392,6 +392,16 @@ export function parseWiseCSV(csvContent: string, fileName: string): ParseResult 
   // Determine period from transaction dates
   const dates = transactions.map(t => t.transaction_date).sort()
   const period = dates.length > 0 ? `${dates[0]} to ${dates[dates.length - 1]}` : "unknown"
+
+  // Suffix-dedupe identical refs (2026-07-03, found by the Phase 1 eval
+  // harness label validation): Wise's Payment Reference is the client's
+  // free-text note and is NOT unique — four distinct customers paying the same
+  // amount on the same day with the same note ("Accesso community privata")
+  // collided on the DB dedup identity (ref, date, amount) and three REAL SALES
+  // were silently dropped at insert (€5,988 of missing revenue in the B&P
+  // golden set). Same treatment the Relay/generic parsers already have.
+  const dedupedRefs = dedupeRefs(transactions.map(t => t.transaction_ref))
+  transactions.forEach((t, i) => { t.transaction_ref = dedupedRefs[i] })
 
   return {
     transactions,
