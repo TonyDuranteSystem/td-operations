@@ -133,6 +133,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   // P&L expense-category drill-down (Luca's request, dev_task 1bee0ffe).
   const [openCat, setOpenCat] = useState<string | null>(null)
+  // Triage tiers (2026-07-03): which collapsed review sections are open.
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set())
   const [catData, setCatData] = useState<Record<string, CategoryDrill>>({})
   const [catLoading, setCatLoading] = useState<string | null>(null)
   const [catError, setCatError] = useState<string | null>(null)
@@ -233,27 +235,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
-  const bulkAnswer = async (groups: QuestionGroup[], value: string) => {
-    setBusy('bulk')
-    try {
-      for (const g of groups) {
-        const res = await fetch(`${API}/answer`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: g.transaction_ids, answer: value }),
-        })
-        if (!res.ok) {
-          const d = await res.json().catch(() => ({}))
-          throw new Error(d.error || (it ? 'Aggiornamento non riuscito — riprova.' : 'Could not update — please try again.'))
-        }
-      }
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(null)
-    }
-  }
+  // NOTE (2026-07-03): the "All as:" bulk-answer buttons were REMOVED with the
+  // triage redesign. An exploratory bulk click silently wrote ~200 binding
+  // manual answers on B&P2 (the root-cause incident) — one group answer already
+  // covers all of that merchant's rows, and auto-learn propagates it, so the
+  // bulk path's value was small and its blast radius huge. If it ever returns,
+  // it must carry an explicit confirmation dialog + undo.
 
   const setBucket = async (g: QuestionGroup, bucket: string) => {
     setBusy(g.group_key)
@@ -920,105 +907,191 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </section>
           )}
 
-          {/* Spending review (#2) — grouped into accountant buckets, each merchant
-              pre-tagged with the AI's business/personal guess. Everything is set
-              to business expense by default (reflected in the P&L above); the
-              owner confirms/flips the exceptions (which persist + feed learning)
-              and can re-bucket or add a new (shared) category. */}
+          {/* TRIAGE-FIRST REVIEW (Antonio, 2026-07-03): the screen is a WORK
+              QUEUE, not an archive. Tier 1 (expanded): only groups that need a
+              human decision. Tier 2 (collapsed): booked but worth a glance
+              (AI leaned personal/unsure). Tier 3 (collapsed to bucket
+              summaries): everything booked automatically — open only to audit
+              or correct. Guide box tells the client what they MUST vs CAN do. */}
           {view.questions.length > 0 && (
             <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
-              <h2 className="text-sm font-semibold text-zinc-900">
-                {it ? 'Le tue spese — già impostate come spese aziendali' : 'Your spending — already set as business expenses'}
-              </h2>
-              <p className="text-xs text-zinc-500 mt-1 mb-4">
-                {it
-                  ? 'Le abbiamo raggruppate per categoria e segnalato quelle che sembrano personali. Conferma o correggi: tocca “Personale” su ciò che era tuo (non della società). Il resto lascialo così.'
-                  : 'We’ve grouped them by category and flagged the ones that look personal. Confirm or correct: tap “Personal” on anything that was yours (not the company’s). Leave the rest as they are.'}
-              </p>
               {(() => {
                 const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
-                const order = [...view.buckets.map(b => b.slug), '__unsorted__']
-                const byBucket = new Map<string, QuestionGroup[]>()
-                for (const g of view.questions) {
-                  const key = g.ai_bucket && bucketLabel.has(g.ai_bucket) ? g.ai_bucket : '__unsorted__'
-                  if (!byBucket.has(key)) byBucket.set(key, [])
-                  byBucket.get(key)!.push(g)
-                }
-                return order.filter(k => byBucket.has(k)).map(slug => {
-                  const groups = byBucket.get(slug)!
-                  const label = slug === '__unsorted__' ? (it ? 'Da sistemare' : 'Not yet sorted') : (bucketLabel.get(slug) ?? slug)
-                  const outGroups = groups.filter(x => x.direction === 'out')
+                const needs = view.questions.filter(g => (g.current_category ?? 'uncategorized') === 'uncategorized')
+                const booked = view.questions.filter(g => (g.current_category ?? 'uncategorized') !== 'uncategorized')
+                const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
+                const autoBooked = booked.filter(g => g.ai_lean === 'business')
+                const needsIn = needs.filter(g => g.direction !== 'out')
+                const needsOut = needs.filter(g => g.direction === 'out')
+
+                const renderCard = (g: QuestionGroup) => {
+                  const lean = g.ai_lean === 'personal'
+                    ? { txt: it ? 'Sembra personale' : 'Looks personal', cls: 'text-amber-700 bg-amber-50' }
+                    : g.ai_lean === 'business'
+                      ? { txt: it ? 'Sembra aziendale' : 'Looks business', cls: 'text-emerald-700 bg-emerald-50' }
+                      : { txt: it ? 'Da controllare' : 'Please check', cls: 'text-zinc-500 bg-zinc-100' }
                   return (
-                    <div key={slug} className="mb-5">
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{label} · {groups.length}</div>
-                        {outGroups.length > 1 && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] text-zinc-400">{it ? 'Tutti come:' : 'All as:'}</span>
-                            <button
-                              disabled={busy !== null}
-                              onClick={() => void bulkAnswer(outGroups, 'business_expense')}
-                              className="rounded-full border border-zinc-300 bg-white px-2.5 py-0.5 text-[11px] font-medium text-zinc-600 hover:border-zinc-900 disabled:opacity-50"
-                            >{it ? 'Aziendale' : 'Business'}</button>
-                            <button
-                              disabled={busy !== null}
-                              onClick={() => void bulkAnswer(outGroups, 'personal_spending')}
-                              className="rounded-full border border-amber-300 bg-white px-2.5 py-0.5 text-[11px] font-medium text-amber-700 hover:border-amber-600 disabled:opacity-50"
-                            >{it ? 'Personale' : 'Personal'}</button>
-                          </div>
-                        )}
+                    <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <div className="text-sm font-medium text-zinc-800">{g.label}</div>
+                        <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}</div>
                       </div>
-                      <div className="space-y-2">
-                        {groups.map(g => {
-                          const lean = g.ai_lean === 'personal'
-                            ? { txt: it ? 'Sembra personale' : 'Looks personal', cls: 'text-amber-700 bg-amber-50' }
-                            : g.ai_lean === 'business'
-                              ? { txt: it ? 'Sembra aziendale' : 'Looks business', cls: 'text-emerald-700 bg-emerald-50' }
-                              : { txt: it ? 'Da controllare' : 'Please check', cls: 'text-zinc-500 bg-zinc-100' }
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
+                        <select
+                          value={g.ai_bucket ?? ''}
+                          disabled={busy !== null}
+                          onChange={e => void setBucket(g, e.target.value)}
+                          className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
+                        >
+                          <option value="">{it ? '— categoria —' : '— category —'}</option>
+                          {view.buckets.map(b => <option key={b.slug} value={b.slug}>{b.label}</option>)}
+                        </select>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
+                        {visibleAnswers(g).map(a => {
+                          const selected = a.value === activeAnswerOf(g)
                           return (
-                            <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3">
-                              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                <div className="text-sm font-medium text-zinc-800">{g.label}</div>
-                                <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}</div>
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
-                                <select
-                                  value={g.ai_bucket ?? ''}
-                                  disabled={busy !== null}
-                                  onChange={e => void setBucket(g, e.target.value)}
-                                  className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
-                                >
-                                  <option value="">{it ? '— categoria —' : '— category —'}</option>
-                                  {view.buckets.map(b => <option key={b.slug} value={b.slug}>{b.label}</option>)}
-                                </select>
-                              </div>
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
-                                {visibleAnswers(g).map(a => {
-                                  const selected = a.value === activeAnswerOf(g)
-                                  return (
-                                    <button
-                                      key={a.value}
-                                      disabled={busy !== null || selected}
-                                      onClick={() => void answer(g, a.value)}
-                                      aria-pressed={selected}
-                                      className={selected
-                                        ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
-                                        : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
-                                    >
-                                      {selected ? '✓ ' : ''}{it ? a.it : a.en}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            </div>
+                            <button
+                              key={a.value}
+                              disabled={busy !== null || selected}
+                              onClick={() => void answer(g, a.value)}
+                              aria-pressed={selected}
+                              className={selected
+                                ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
+                                : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
+                            >
+                              {selected ? '✓ ' : ''}{it ? a.it : a.en}
+                            </button>
                           )
                         })}
                       </div>
                     </div>
                   )
+                }
+
+                const toggle = (key: string) => setOpenSections(s => {
+                  const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n
                 })
+
+                return (
+                  <>
+                    {/* Guide: what this screen is, what you MUST do, what you CAN do. */}
+                    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 sm:p-4 mb-4 text-xs text-zinc-600 space-y-1.5">
+                      <p className="text-sm font-semibold text-zinc-900">{it ? 'Come funziona questa revisione' : 'How this review works'}</p>
+                      <p>
+                        {it
+                          ? 'Abbiamo letto i tuoi estratti conto e registrato automaticamente ogni transazione — l\'etichetta blu ✓ mostra come è stata registrata ciascuna voce.'
+                          : 'We read your bank statements and booked every transaction automatically — the blue ✓ chip shows how each item is booked.'}
+                      </p>
+                      <p>
+                        <strong>{it ? 'Cosa DEVI fare: ' : 'What you MUST do: '}</strong>
+                        {it
+                          ? `rispondere alle voci in “Serve una tua decisione” (${needs.length}) — un tocco ciascuna.`
+                          : `answer the items under “Needs your decision” (${needs.length}) — one tap each.`}
+                      </p>
+                      <p>
+                        <strong>{it ? 'Cosa PUOI fare (facoltativo): ' : 'What you CAN do (optional): '}</strong>
+                        {it
+                          ? 'aprire le sezioni qui sotto per controllare ciò che abbiamo registrato e correggerlo con un tocco — ad esempio segnare come “Personale” una spesa che era tua e non della società.'
+                          : 'open the sections below to double-check anything we booked and correct it with one tap — for example marking something as “Personal” if it was yours, not the company\'s.'}
+                      </p>
+                      <p>
+                        {it
+                          ? 'Ogni risposta viene ricordata e applicata automaticamente l\'anno prossimo. Quando “Serve una tua decisione” è vuoto, hai finito.'
+                          : 'Every answer is remembered and applied automatically next year. When “Needs your decision” is empty, you\'re done.'}
+                      </p>
+                      <p className="text-zinc-500">
+                        {booked.length} {it ? 'gruppi registrati automaticamente' : 'groups booked automatically'} · <strong className="text-zinc-800">{needs.length} {it ? 'da decidere' : 'need your decision'}</strong>
+                      </p>
+                    </div>
+
+                    {/* TIER 1 — Needs your decision (the work queue, always expanded). */}
+                    {needs.length > 0 ? (
+                      <div className="mb-5 rounded-xl border-2 border-amber-300 bg-amber-50/50 p-3 sm:p-4">
+                        <h3 className="text-sm font-bold text-amber-900 mb-2">
+                          🖐 {it ? `Serve una tua decisione · ${needs.length}` : `Needs your decision · ${needs.length}`}
+                        </h3>
+                        {needsIn.length > 0 && (
+                          <div className="mb-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800 mb-1.5">{it ? 'Soldi in entrata' : 'Money in'}</div>
+                            <div className="space-y-2">{needsIn.map(renderCard)}</div>
+                          </div>
+                        )}
+                        {needsOut.length > 0 && (
+                          <div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800 mb-1.5">{it ? 'Spese' : 'Spending'}</div>
+                            <div className="space-y-2">{needsOut.map(renderCard)}</div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mb-5 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-4 text-sm font-semibold text-emerald-900">
+                        ✓ {it ? 'Tutto registrato — non serve nessuna decisione.' : 'All booked — nothing needs your decision.'}
+                      </div>
+                    )}
+
+                    {/* TIER 2 — Booked, worth a glance (collapsed). */}
+                    {glance.length > 0 && (
+                      <div className="mb-4 rounded-lg border border-zinc-200">
+                        <button type="button" onClick={() => toggle('glance')} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                          <span className="text-sm font-medium text-zinc-800">
+                            👀 {it ? `Registrate — vale la pena dare un'occhiata · ${glance.length}` : `Booked — worth a glance · ${glance.length}`}
+                          </span>
+                          <span className="text-zinc-400 text-xs">{openSections.has('glance') ? '▲' : '▼'}</span>
+                        </button>
+                        {openSections.has('glance') && (
+                          <div className="space-y-2 px-3 pb-3">
+                            <p className="text-[11px] text-zinc-500">{it ? 'Già incluse nei totali; l\'AI le ha segnalate come possibilmente personali o incerte.' : 'Already in the totals; the AI flagged these as possibly personal or uncertain.'}</p>
+                            {glance.map(renderCard)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* TIER 3 — Booked automatically, collapsed to bucket summaries. */}
+                    {autoBooked.length > 0 && (
+                      <div className="mb-2 rounded-lg border border-zinc-200">
+                        <button type="button" onClick={() => toggle('auto')} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                          <span className="text-sm font-medium text-zinc-800">
+                            ✅ {it ? `Registrate automaticamente · ${autoBooked.length} gruppi` : `Booked automatically · ${autoBooked.length} groups`}
+                          </span>
+                          <span className="text-zinc-400 text-xs">{openSections.has('auto') ? '▲' : '▼'}</span>
+                        </button>
+                        {openSections.has('auto') && (
+                          <div className="px-3 pb-3">
+                            <p className="text-[11px] text-zinc-500 mb-2">
+                              {it ? 'Tutto qui è già nei totali. Apri una categoria solo per verificare o correggere.' : 'Everything here is already in the totals. Open a category only to double-check or correct.'}
+                            </p>
+                            {(() => {
+                              const byBucket = new Map<string, QuestionGroup[]>()
+                              for (const g of autoBooked) {
+                                const key = g.ai_bucket && bucketLabel.has(g.ai_bucket) ? g.ai_bucket : '__other__'
+                                if (!byBucket.has(key)) byBucket.set(key, [])
+                                byBucket.get(key)!.push(g)
+                              }
+                              return Array.from(byBucket.entries()).map(([slug, groups]) => {
+                                const label = slug === '__other__' ? (it ? 'Altro' : 'Other') : (bucketLabel.get(slug) ?? slug)
+                                const total = groups.reduce((s, g) => s + g.total, 0)
+                                const key = `bucket:${slug}`
+                                return (
+                                  <div key={slug} className="border-t border-zinc-100 first:border-t-0">
+                                    <button type="button" onClick={() => toggle(key)} className="flex w-full items-center justify-between py-2 text-left">
+                                      <span className="text-xs font-semibold text-zinc-700">{label} · {groups.length} {it ? 'voci' : 'merchants'}</span>
+                                      <span className="text-xs text-zinc-500">{fmt(total)} <span className="text-zinc-300 ml-1">{openSections.has(key) ? '▲' : '▼'}</span></span>
+                                    </button>
+                                    {openSections.has(key) && <div className="space-y-2 pb-2">{groups.map(renderCard)}</div>}
+                                  </div>
+                                )
+                              })
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )
               })()}
               {/* Add a new bucket — flexible, shared vocabulary (#2). A bucket added
                   here is saved globally and offered to everyone next time. Hidden in
