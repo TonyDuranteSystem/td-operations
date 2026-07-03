@@ -30,6 +30,7 @@ import { RevenueAdmin } from './admin/revenue-admin'
 import { SettingsAdmin } from './admin/settings-admin'
 import { AiGuide } from './admin/ai-guide'
 import { LandingEditor } from './landing-editor'
+import { SectionReadme, SECTION_READMES } from './section-readmes'
 import type {
   CommEnrollment,
   CommConversationListItem,
@@ -144,6 +145,14 @@ export function CrmCommunicationDashboard({
           )
         })}
       </div>
+
+      {/* Section-level "how it works" read-me — surfaced at the top of each tab so
+          staff learn how a section works without opening a project. */}
+      {SECTION_READMES[tab] && (
+        <div className="shrink-0 mb-3">
+          <SectionReadme title={SECTION_READMES[tab].title}>{SECTION_READMES[tab].body}</SectionReadme>
+        </div>
+      )}
 
       {/* Content */}
       {tab === 'projects' && (

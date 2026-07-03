@@ -9,6 +9,7 @@ import { PipelineBoard } from './pipeline-board'
 import { ProjectBriefPanel } from './project-brief-panel'
 import { LandingEditor } from './landing-editor'
 import { EarningsPanel } from './earnings-panel'
+import { SectionReadme, SECTION_READMES } from './section-readmes'
 import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
 
 // Standalone Design Tools workspace. Lazy (Canvas / zip / SVG) so it never weighs
@@ -113,6 +114,15 @@ export function CollabDashboard({
 
         {/* Content */}
         <main className="flex-1 min-h-0 flex flex-col p-6">
+          {/* Section-level "how it works" read-me at the top of each section.
+              Skip 'settings' — on /collab it's just Cris's account info, not the
+              admin config the shared Settings read-me describes. */}
+          {section !== 'settings' && SECTION_READMES[section] && (
+            <div className="shrink-0 mb-3">
+              <SectionReadme title={SECTION_READMES[section].title}>{SECTION_READMES[section].body}</SectionReadme>
+            </div>
+          )}
+
           {section === 'projects' && (
             <PipelineBoard projects={projects} onSelect={setSelectedId} />
           )}
