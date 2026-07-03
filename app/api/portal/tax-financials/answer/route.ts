@@ -58,6 +58,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your submission is locked (under review or already confirmed) — ask us to reopen it before changing answers.' }, { status: 409 })
     }
 
+    // Override telemetry (Phase 0.5, 2026-07-03): AI-booked rows (notes
+    // ai:high@vN) the client is about to re-answer are the PRODUCTION precision
+    // meter — captured BEFORE the update overwrites the notes.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: preAiRows } = await (supabaseAdmin as any)
+      .from('bank_transactions')
+      .select('id, category, notes')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear)
+      .in('id', transactionIds)
+      .like('notes', 'ai:high%')
+    const aiPre = (preAiRows ?? []) as Array<{ id: string; category: string; notes: string }>
+
     // Option B (2026-06-18): the owner can re-decide ANY business-booked charge
     // (expense/fee/cogs/income/uncategorized) — and undo a prior client decision
     // (distribution/contribution). We never clobber an auto-detected internal
@@ -74,6 +87,27 @@ export async function POST(request: NextRequest) {
 
     const changed = (updated ?? []).length
     if (changed > 0) {
+      // Override telemetry write (fire-and-forget): only when the answer CHANGED
+      // an AI-applied category — same-category confirmations are agreement.
+      const updatedIds = new Set((updated ?? []).map(u => (u as { id: string }).id))
+      const changedOverrides = aiPre.filter(o => updatedIds.has(o.id) && o.category !== mapped.category)
+      if (changedOverrides.length > 0) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabaseAdmin as any).from('action_log').insert({
+            actor: user.email ?? 'client',
+            action_type: 'ai_categorization_override',
+            table_name: 'bank_transactions',
+            record_id: accountId,
+            account_id: accountId,
+            summary: `Client answer changed ${changedOverrides.length} AI-booked row(s): ${changedOverrides[0].category} → ${mapped.category} (${changedOverrides[0].notes})`,
+            details: { tax_year: taxYear, count: changedOverrides.length, from_categories: changedOverrides.map(o => o.category), to_category: mapped.category, ai_versions: Array.from(new Set(changedOverrides.map(o => o.notes))) },
+          })
+        } catch (e) {
+          console.error('[tax-financials] override telemetry failed (answer saved fine):', e)
+        }
+      }
+
       // The data changed — a prior attestation no longer covers it (QA finding).
       const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
       await resetFinancialsAttestation(accountId, taxYear, `answer applied to ${changed} transactions`)

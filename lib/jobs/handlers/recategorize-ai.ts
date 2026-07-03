@@ -43,6 +43,30 @@ export async function handleRecategorizeAi(job: Job): Promise<JobResult> {
   const { recategorizeAccountYear } = await import("@/lib/tax/categorization-engine")
   const r = await recategorizeAccountYear(p.account_id, p.tax_year, { aiAssist: true })
 
+  // Observability record (Phase 0.5) — mirror of the workspace handler.
+  try {
+    const { AI_MODEL, AI_PROMPT_VERSION } = await import("@/lib/tax/ai-categorizer")
+    const { supabaseAdmin } = await import("@/lib/supabase-admin")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any).from("ai_categorization_runs").insert({
+      account_id: p.account_id,
+      tax_year: p.tax_year,
+      model: AI_MODEL,
+      prompt_version: AI_PROMPT_VERSION,
+      batches_sent: r.aiStats.batchesSent,
+      batches_failed: r.aiStats.batchesFailed,
+      truncated_batches: r.aiStats.truncatedBatches,
+      suggestions_parsed: r.aiStats.suggestionsParsed,
+      applied: r.aiCategorized,
+      labeled: r.aiStats.suggestionsParsed,
+      uncategorized_remaining: r.uncategorizedRemaining,
+      capped: r.aiStats.capped,
+      errors: r.aiErrors,
+    })
+  } catch (e) {
+    console.error("[recategorize-ai] run-record insert failed (job result unaffected):", e)
+  }
+
   result.steps.push(step("ai_categorize", "ok",
     `aiCategorized=${r.aiCategorized}, recategorized=${r.recategorized}, uncategorizedRemaining=${r.uncategorizedRemaining}${r.aiErrors.length ? `, aiErrors=${r.aiErrors.length}` : ""}`))
   result.summary = `AI categorization done for ${p.account_id} (${p.tax_year})`

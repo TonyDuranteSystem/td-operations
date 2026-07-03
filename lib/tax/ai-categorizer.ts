@@ -15,7 +15,8 @@
 
 import type { CategorizedTransaction } from "@/lib/bank-statement-parser"
 
-const MODEL = "claude-sonnet-4-6"
+export const AI_MODEL = "claude-sonnet-4-6"
+const MODEL = AI_MODEL
 const BATCH_SIZE = 40
 // 8192 (was 4096, Phase 0.1 2026-07-03): 40 suggestions × (UUID echo + 6 fields)
 // ≈ 3-4k output tokens — batches were hitting max_tokens mid-tool-call and a

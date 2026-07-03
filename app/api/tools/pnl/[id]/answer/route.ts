@@ -40,6 +40,17 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const mapped = categoryForAnswer(body.answer)
     if (!mapped) return NextResponse.json({ error: `Unknown answer: ${body.answer}` }, { status: 400 })
 
+    // Override telemetry (Phase 0.5): rows the AI auto-booked (notes ai:high@vN)
+    // that a human is about to re-answer are the PRODUCTION precision meter —
+    // captured BEFORE the update overwrites the notes.
+    const { data: preRows } = await db
+      .from('pnl_workspace_transactions')
+      .select('id, category, notes')
+      .eq('workspace_id', params.id)
+      .in('id', ids)
+      .like('notes', 'ai:high%')
+    const aiOverrides = (preRows ?? []) as Array<{ id: string; category: string; notes: string }>
+
     // Only re-file rows still in a reviewable state (never override a prior
     // manual decision by re-answering a stale group), scoped to this workspace.
     const { data, error } = await db
@@ -51,6 +62,25 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       .select('id, description, counterparty, amount')
     if (error) throw new Error(error.message)
     const updatedRows = (data ?? []) as Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }>
+
+    // Override telemetry write (fire-and-forget): only when the human CHANGED
+    // an AI-applied category — same-category confirmations are agreement.
+    const changedOverrides = aiOverrides.filter(o =>
+      updatedRows.some(u => u.id === o.id) && o.category !== mapped.category)
+    if (changedOverrides.length > 0) {
+      try {
+        await db.from('action_log').insert({
+          actor: user?.email ?? 'staff',
+          action_type: 'ai_categorization_override',
+          table_name: 'pnl_workspace_transactions',
+          record_id: params.id,
+          summary: `Staff answer changed ${changedOverrides.length} AI-booked row(s): ${changedOverrides[0].category} → ${mapped.category} (${changedOverrides[0].notes})`,
+          details: { workspace_id: params.id, count: changedOverrides.length, from_categories: changedOverrides.map(o => o.category), to_category: mapped.category, ai_versions: Array.from(new Set(changedOverrides.map(o => o.notes))) },
+        })
+      } catch (e) {
+        console.error('[tools/pnl] override telemetry failed (answer saved fine):', e)
+      }
+    }
 
     // Auto-learn (fire-and-forget — learning must never fail the answer).
     if (updatedRows.length > 0) {

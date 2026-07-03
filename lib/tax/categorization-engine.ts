@@ -25,7 +25,9 @@ import { fetchAllBankTransactionsByYear } from "@/lib/bank-transactions-fetch"
 const db = supabaseAdmin as any
 import { categorizeTransaction, type CategorizedTransaction, type ParsedTransaction } from "@/lib/bank-statement-parser"
 import { matchTransferPairs, detectOwnEntityTransfers, type TransferCandidate } from "./transfer-matcher"
-import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion } from "./ai-categorizer"
+import { aiSuggestCategories, AI_PROMPT_VERSION, type AiCategorizableTx, type AiCategorizeOptions, type AiSuggestion, type AiRunStats } from "./ai-categorizer"
+
+const EMPTY_AI_STATS = (): AiRunStats => ({ batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false })
 import { getExpenseBuckets } from "./expense-buckets"
 
 export interface CategorizationRule {
@@ -109,6 +111,8 @@ export interface RecategorizeResult {
   aiCategorized: number
   aiErrors: string[]
   uncategorizedRemaining: number
+  /** Per-run stats for the ai_categorization_runs record (Phase 0.5). */
+  aiStats: AiRunStats
 }
 
 export interface RecategorizeOptions {
@@ -263,7 +267,7 @@ export async function recategorizeAccountYear(
     taxYear,
     "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket",
   )
-  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0 }
+  if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 
   const rules = await getCategorizationRules(accountId)
 
@@ -324,6 +328,7 @@ export async function recategorizeAccountYear(
 
   let aiCategorized = 0
   let aiErrors: string[] = []
+  let aiStats = EMPTY_AI_STATS()
   if (opts?.aiAssist) {
     // Option B (#2): label the FULL reviewable set for advisory hints — outflows
     // booked as a business cost (expense/fee/cogs) or still undecided, and
@@ -402,6 +407,7 @@ export async function recategorizeAccountYear(
         },
       )
       aiErrors = ai.errors
+      aiStats = ai.stats
       // Reconcile anything a failed mid-run onBatch write missed.
       for (const s of ai.suggestions) {
         if (!written.has(s.id)) await persistSuggestion(s)
@@ -411,5 +417,5 @@ export async function recategorizeAccountYear(
 
   const uncategorizedRemaining = Array.from(effCat.values()).filter(c => c === "uncategorized").length
 
-  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining }
+  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats }
 }

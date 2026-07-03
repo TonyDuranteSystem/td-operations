@@ -252,3 +252,39 @@ describe('parseBankStatement routing — new banks', () => {
     expect(s.transactions).toHaveLength(5)
   })
 })
+
+// ── Phase 0.2b (2026-07-03): parser CONTRACT tests — the seed rules of
+// migration 20260702-2000 (and Phase 2's hint map) depend on the parser
+// emitting these exact tokens. Parser drift here silently zeroes those layers.
+
+describe('parser contract — bank tokens the categorization layers depend on', () => {
+  const CHASE_CSV = [
+    'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #',
+    'DEBIT,12/03/2025,"Online Transfer to MMA ...2131 transaction#: 27277515768 12/03",-6500.00,ACCT_XFER,10000.00,,',
+    'DEBIT,12/04/2025,"SERVICE CHARGES FOR THE MONTH OF NOVEMBER",-55.00,FEE_TRANSACTION,9945.00,,',
+    'CREDIT,12/05/2025,"BOOK TRANSFER CREDIT B/O: NATIONAL WESTMINSTER BANK PLC ORG: AXI FINANCIAL SERVICES (UK)LTD",25850.00,WIRE_INCOMING,35795.00,,',
+  ].join('\n')
+
+  it('Chase CSV (generic parser): Type tokens are folded into the emitted description', async () => {
+    const r = await parseBankStatement(Buffer.from(CHASE_CSV, 'utf-8'), 'Chase5685_Activity.CSV', 'text/csv')
+    expect(r.transactions).toHaveLength(3)
+    const descs = r.transactions.map(t => t.description)
+    // The exact tokens the 20260702-2000 seeds match on:
+    expect(descs[0]).toContain('ACCT_XFER')                       // → conversion/internal_transfer
+    expect(descs[0]).toContain('Online Transfer to MMA ...2131')  // → regex seed with transaction# guard
+    expect(descs[0]).toContain('transaction#')
+    expect(descs[1]).toContain('FEE_TRANSACTION')                 // → fee/bank_fee
+    expect(descs[1]).toContain('SERVICE CHARGES FOR THE MONTH')   // → fee/bank_fee
+    // And the token the seeds deliberately DON'T auto-book must still be visible
+    // to the AI/own-entity passes:
+    expect(descs[2]).toContain('WIRE_INCOMING')
+    expect(descs[2]).toContain('AXI FINANCIAL SERVICES')
+  })
+
+  it('Chase CSV: amounts signed, dates M/D/YYYY parsed to ISO', async () => {
+    const r = await parseBankStatement(Buffer.from(CHASE_CSV, 'utf-8'), 'chase.csv', 'text/csv')
+    expect(r.transactions[0].amount).toBe(-6500)
+    expect(r.transactions[0].transaction_date).toBe('2025-12-03')
+    expect(r.transactions[2].amount).toBe(25850)
+  })
+})

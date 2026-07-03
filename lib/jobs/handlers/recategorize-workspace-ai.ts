@@ -63,6 +63,28 @@ export async function handleRecategorizeWorkspaceAi(job: Job): Promise<JobResult
     memberNames,
   })
 
+  // Observability record (Phase 0.5): one queryable row per AI pass — the data
+  // source for precision trending and the Phase 1 eval reports. Never fails the job.
+  try {
+    const { AI_MODEL, AI_PROMPT_VERSION } = await import("@/lib/tax/ai-categorizer")
+    await db.from("ai_categorization_runs").insert({
+      workspace_id: p.workspace_id,
+      model: AI_MODEL,
+      prompt_version: AI_PROMPT_VERSION,
+      batches_sent: r.stats.batchesSent,
+      batches_failed: r.stats.batchesFailed,
+      truncated_batches: r.stats.truncatedBatches,
+      suggestions_parsed: r.stats.suggestionsParsed,
+      applied: r.aiCategorized,
+      labeled: r.labeled,
+      uncategorized_remaining: r.uncategorizedRemaining,
+      capped: r.stats.capped,
+      errors: r.aiErrors,
+    })
+  } catch (e) {
+    console.error("[recategorize-workspace-ai] run-record insert failed (job result unaffected):", e)
+  }
+
   result.steps.push(step("ai_categorize", "ok",
     `aiCategorized=${r.aiCategorized}, labeled=${r.labeled}, uncategorizedRemaining=${r.uncategorizedRemaining}${r.aiErrors.length ? `, aiErrors=${r.aiErrors.length}` : ""}`))
   result.summary = `Workspace AI categorization done (${p.workspace_id})`

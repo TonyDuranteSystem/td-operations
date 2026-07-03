@@ -130,6 +130,8 @@ export interface WorkspaceAiResult {
   labeled: number
   aiErrors: string[]
   uncategorizedRemaining: number
+  /** Per-run stats for the ai_categorization_runs record (Phase 0.5). */
+  stats: import("./ai-categorizer").AiRunStats
 }
 
 /**
@@ -148,7 +150,7 @@ export async function recategorizeWorkspaceAi(
   opts: { companyName: string; memberNames: string[]; aiOptions?: AiCategorizeOptions },
 ): Promise<WorkspaceAiResult> {
   const rows = await fetchAllWorkspaceTransactions(workspaceId)
-  if (rows.length === 0) return { scanned: 0, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: 0 }
+  if (rows.length === 0) return { scanned: 0, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: 0, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
 
   // Candidate selection — same policy as the client path: label outflows booked
   // as a business cost or undecided + inflows booked as income or undecided;
@@ -163,7 +165,7 @@ export async function recategorizeWorkspaceAi(
       : ["uncategorized", "income"].includes(cat)
   })
   const uncatBefore = rows.filter(r => (r.category as string) === "uncategorized").length
-  if (toLabel.length === 0) return { scanned: rows.length, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: uncatBefore }
+  if (toLabel.length === 0) return { scanned: rows.length, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: uncatBefore, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
 
   const bankNames = Array.from(new Set(rows.map(r => (r.bank_name as string) ?? "").filter(Boolean)))
   const txs: AiCategorizableTx[] = toLabel.map(r => ({
@@ -222,5 +224,5 @@ export async function recategorizeWorkspaceAi(
   }
 
   const uncategorizedRemaining = Array.from(catById.values()).filter(c => c === "uncategorized").length
-  return { scanned: rows.length, aiCategorized, labeled, aiErrors: ai.errors, uncategorizedRemaining }
+  return { scanned: rows.length, aiCategorized, labeled, aiErrors: ai.errors, uncategorizedRemaining, stats: ai.stats }
 }
