@@ -423,7 +423,7 @@ export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
   })
 }
 
-export async function sendInvoiceReminder(paymentId: string): Promise<ActionResult> {
+export async function sendInvoiceReminder(paymentId: string, opts: { force?: boolean } = {}): Promise<ActionResult> {
   // Pre-check: if the invoice is still Draft, delegate to sendNewInvoice so the
   // client receives a real HTML+PDF invoice email (not a plain-text reminder).
   // Root cause of the Apr 2026 "no PDF" incidents (Zhang Holding INV-002040-MNXKCUEJ
@@ -438,8 +438,15 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
     // Delegate to the SINGLE shared reminder function (bilingual EN/IT email,
     // shared recipient resolution, reminder_count bump) — same path the dunning
     // cron and the /remind route use. No duplicate plain-text template here.
+    // The account-level pause is enforced inside it; `force` is the deliberate
+    // staff override coming from the UI's warn-and-confirm dialog.
     const { sendInvoiceReminder: sendReminderEmail } = await import('@/lib/billing/invoice-reminder')
-    const result = await sendReminderEmail(paymentId, { source: 'manual' })
+    const result = await sendReminderEmail(paymentId, { source: 'manual', force: opts.force })
+    if (result.paused) {
+      throw new Error(
+        `Reminders are paused for this client${result.pausedUntil ? ` until ${result.pausedUntil}` : ''} — confirm "send anyway" to override`,
+      )
+    }
     if (!result.ok) throw new Error(result.error ?? 'Failed to send reminder')
     revalidatePath('/finance')
   }, {
@@ -485,11 +492,16 @@ export async function sendBulkReminders(
       const invNo = p?.invoice_number ?? id
       if (!p) { outcomes.push({ id, invoice_number: invNo, status: 'failed', reason: 'Invoice not found' }); continue }
 
-      // Per-account dunning pause gate.
+      // Per-account dunning pause gate — the boolean pause OR an active dated
+      // pause ("client promised to pay by X"). Bulk NEVER overrides a pause;
+      // use the single-row "send anyway" flow for a deliberate exception.
       if (p.account_id) {
-        const { data: acc } = await supabaseAdmin.from('accounts').select('dunning_pause').eq('id', p.account_id).single()
-        if ((acc as { dunning_pause?: boolean } | null)?.dunning_pause) {
-          outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: 'Account reminders paused' })
+        const { data: acc } = await supabaseAdmin.from('accounts').select('dunning_pause, dunning_pause_until').eq('id', p.account_id).single()
+        const { isAccountReminderPaused } = await import('@/lib/billing/reminder-snooze')
+        const acct = acc as { dunning_pause?: boolean | null; dunning_pause_until?: string | null } | null
+        if (isAccountReminderPaused(acct)) {
+          const until = acct?.dunning_pause_until
+          outcomes.push({ id, invoice_number: invNo, status: 'skipped', reason: `Reminders paused for this client${until ? ` until ${until}` : ''}` })
           continue
         }
       }
@@ -554,11 +566,13 @@ export async function updateInvoice(
       }
     }
 
-    // Also update client_expenses mirror
+    // Also update client_expenses mirror. Deliberately NOT `notes`: invoice
+    // notes are INTERNAL staff remarks (the edit dialog promises "not visible
+    // to client") — client_expenses belongs to the client's own bookkeeping,
+    // so internal notes must never be copied there (decided 2026-07-03).
     const expUpdates: Record<string, unknown> = { updated_at: now }
     if (updates.due_date !== undefined) expUpdates.due_date = updates.due_date || null
     if (updates.total !== undefined) { expUpdates.total = updates.total; expUpdates.subtotal = updates.total }
-    if (updates.notes !== undefined) expUpdates.notes = updates.notes
     if (updates.description !== undefined) expUpdates.description = updates.description
     const { error: updateExpErr } = await supabaseAdmin.from('client_expenses').update(expUpdates).eq('td_payment_id', paymentId)
     if (updateExpErr) throw new Error(`Failed to sync to client_expenses mirror: ${updateExpErr.message}`)

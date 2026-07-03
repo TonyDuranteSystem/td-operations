@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
+import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
 import { createUnifiedInvoiceDraft, sendNewInvoice } from './actions'
 
 interface ClientSummary {
@@ -353,7 +354,10 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                           <td className="px-4 py-2.5 text-right font-medium">
                             {status === 'Paid' ? '—' : <span className={amountDue > 0 ? 'text-red-600' : ''}>{sym}{amountDue.toFixed(2)}</span>}
                           </td>
-                          <td className="px-4 py-2.5">{statusBadge(status)}</td>
+                          <td className="px-4 py-2.5">
+                            {statusBadge(status)}
+                            <InvoiceNoteDot note={inv.notes as string | null} className="ml-1" />
+                          </td>
                           <td className="px-4 py-2.5">
                             <div className="flex items-center justify-end gap-1">
                               <button onClick={() => invoiceAction('pdf', id)} title="Download PDF" className="p-1 rounded hover:bg-muted">

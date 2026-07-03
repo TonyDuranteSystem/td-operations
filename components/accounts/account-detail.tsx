@@ -46,6 +46,7 @@ import { ActivityFeed } from './activity-feed'
 import { AddressPicker } from '@/components/shared/address-picker'
 import { RAPicker } from '@/components/shared/ra-picker'
 import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
+import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
 import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
@@ -884,7 +885,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <ServiziTab services={services} today={today} accountId={account.id} accountType={account.account_type ?? null} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} flows={flows} />
       )}
       {activeTab === 'payments' && (
-        <PagamentiTab payments={payments} today={today} account={account as unknown as { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null }} />
+        <PagamentiTab payments={payments} today={today} account={account as unknown as { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null; dunning_pause_until?: string | null; dunning_pause_reason?: string | null }} />
       )}
       {activeTab === 'tax' && (
         <TaxTab taxReturns={taxReturns} today={today} />
@@ -2704,7 +2705,7 @@ function ServiceCard({ service: s, today }: { service: Service; today: string })
 function PagamentiTab({ payments, today, account }: {
   payments: Payment[]
   today: string
-  account: { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null }
+  account: { id: string; updated_at: string; dunning_reminder_1_days?: number | null; dunning_reminder_2_days?: number | null; dunning_pause?: boolean | null; dunning_pause_until?: string | null; dunning_pause_reason?: string | null }
 }) {
   // Split into invoiced (unified system) vs legacy tracking records
   const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0')
@@ -2717,13 +2718,21 @@ function PagamentiTab({ payments, today, account }: {
   const paid = invoiced.filter(p => invoiceStatus(p) === 'Paid')
   const otherInvoiced = invoiced.filter(p => !overdue.includes(p) && !pending.includes(p) && !paid.includes(p))
 
-  const dunningSave = (field: 'dunning_reminder_1_days' | 'dunning_reminder_2_days' | 'dunning_pause') =>
+  const dunningSave = (field: 'dunning_reminder_1_days' | 'dunning_reminder_2_days' | 'dunning_pause' | 'dunning_pause_until' | 'dunning_pause_reason') =>
     async (v: string) => {
       const r = await updateAccountField(account.id, field, v, account.updated_at)
       if (r.success) toast.success('Reminder settings saved')
       else toast.error(r.error ?? 'Failed to save')
       return r
     }
+
+  // Account-level reminder pause: legacy boolean OR active dated pause
+  // ("client promised to pay by X" — expires by itself). Passed down so each
+  // row's Send Reminder can warn-and-confirm instead of silently sending.
+  const pauseUntilActive = !!account.dunning_pause_until && account.dunning_pause_until >= today
+  const reminderPaused = (account.dunning_pause === true || pauseUntilActive)
+    ? { active: true, until: pauseUntilActive ? account.dunning_pause_until ?? null : null }
+    : null
 
   return (
     <div className="space-y-6">
@@ -2732,9 +2741,14 @@ function PagamentiTab({ payments, today, account }: {
         <div className="flex items-center gap-2 mb-3">
           <Bell className="h-4 w-4 text-amber-600" />
           <h3 className="text-sm font-semibold">Payment Reminder Settings</h3>
+          {reminderPaused && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium">
+              ⏸ Paused{reminderPaused.until ? ` until ${reminderPaused.until}` : ''}
+            </span>
+          )}
         </div>
         <p className="text-xs text-muted-foreground mb-3">
-          Automatic reminders for overdue invoices. The 1st goes out this many days after the due date, the 2nd later; the system stops after 2. Set <strong>Reminders</strong> to Paused to stop all automatic chasing for this client.
+          Automatic reminders for overdue invoices. The 1st goes out this many days after the due date, the 2nd later; the system stops after 2. Set <strong>Reminders</strong> to Paused to stop all automatic chasing for this client, or set <strong>Paused until</strong> when the client promised to pay by a date — reminders stop until that day (inclusive) and resume by themselves after. Invoices still show as Overdue either way.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <EditableField
@@ -2754,23 +2768,36 @@ function PagamentiTab({ payments, today, account }: {
             value={account.dunning_pause ? 'true' : 'false'}
             onSave={dunningSave('dunning_pause')}
           />
+          <EditableField
+            label="Paused until (client promised to pay by)"
+            type="date"
+            value={account.dunning_pause_until ?? ''}
+            onSave={dunningSave('dunning_pause_until')}
+          />
+          <div className="sm:col-span-2">
+            <EditableField
+              label="Pause reason (the trace — e.g. 'promised payment by end of Sept')"
+              value={account.dunning_pause_reason ?? ''}
+              onSave={dunningSave('dunning_pause_reason')}
+            />
+          </div>
         </div>
       </div>
 
       {overdue.length > 0 && (
-        <PaymentSection title="Overdue" payments={overdue} color="text-red-600" today={today} />
+        <PaymentSection title="Overdue" payments={overdue} color="text-red-600" today={today} reminderPaused={reminderPaused} />
       )}
       {pending.length > 0 && (
-        <PaymentSection title="Pending" payments={pending} color="text-amber-600" today={today} />
+        <PaymentSection title="Pending" payments={pending} color="text-amber-600" today={today} reminderPaused={reminderPaused} />
       )}
       {paid.length > 0 && (
-        <PaymentSection title="Paid" payments={paid} color="text-emerald-600" today={today} defaultCollapsed />
+        <PaymentSection title="Paid" payments={paid} color="text-emerald-600" today={today} defaultCollapsed reminderPaused={reminderPaused} />
       )}
       {otherInvoiced.length > 0 && (
-        <PaymentSection title="Other" payments={otherInvoiced} color="text-zinc-600" today={today} defaultCollapsed />
+        <PaymentSection title="Other" payments={otherInvoiced} color="text-zinc-600" today={today} defaultCollapsed reminderPaused={reminderPaused} />
       )}
       {legacy.length > 0 && (
-        <PaymentSection title="Legacy (pre-invoice)" payments={legacy} color="text-zinc-400" today={today} defaultCollapsed />
+        <PaymentSection title="Legacy (pre-invoice)" payments={legacy} color="text-zinc-400" today={today} defaultCollapsed reminderPaused={reminderPaused} />
       )}
       {payments.length === 0 && (
         <p className="text-sm text-muted-foreground">No payments recorded</p>
@@ -2785,12 +2812,14 @@ function PaymentSection({
   color,
   today,
   defaultCollapsed = false,
+  reminderPaused = null,
 }: {
   title: string
   payments: Payment[]
   color: string
   today: string
   defaultCollapsed?: boolean
+  reminderPaused?: { active: boolean; until: string | null } | null
 }) {
   const [open, setOpen] = useState(!defaultCollapsed)
   const total = payments.reduce((sum, p) => sum + (Number(p.total) || p.amount_due || p.amount || 0), 0)
@@ -2835,10 +2864,11 @@ function PaymentSection({
                   <span className={cn('text-xs px-1.5 py-0.5 rounded', PAYMENT_STATUS_COLORS[status] ?? 'bg-zinc-100')}>
                     {status}
                   </span>
+                  <InvoiceNoteDot note={p.notes} className="ml-1" />
                 </div>
                 <p className="hidden md:block text-xs text-muted-foreground truncate">{p.payment_method ?? '—'}</p>
                 <div className="hidden md:flex justify-end">
-                  <PaymentRowActions payment={{
+                  <PaymentRowActions reminderPaused={reminderPaused} payment={{
                     id: p.id,
                     invoice_number: p.invoice_number ?? null,
                     description: p.description ?? null,

@@ -31,6 +31,8 @@ export async function updateAccountField(
     'legal_link_verified', 'mailing_link_verified', 'ra_link_verified',
     // Dunning / payment-reminder config (Phase 4)
     'dunning_reminder_1_days', 'dunning_reminder_2_days', 'dunning_pause',
+    // Dated reminder pause + trace ("client promised to pay by X", 2026-07-03)
+    'dunning_pause_until', 'dunning_pause_reason',
   ]
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
@@ -56,6 +58,16 @@ export async function updateAccountField(
       coercedValue !== null && (Number(coercedValue) < 1 || Number(coercedValue) > 365)
     ) {
       return { success: false, error: 'Reminder days must be between 1 and 365' }
+    }
+  } else if (field === 'dunning_pause_until') {
+    // Must be a real YYYY-MM-DD date (or empty to clear the pause).
+    const trimmed = value.trim()
+    if (trimmed === '') {
+      coercedValue = null
+    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed) || isNaN(new Date(`${trimmed}T00:00:00`).getTime())) {
+      return { success: false, error: 'Pause-until must be a valid date (YYYY-MM-DD)' }
+    } else {
+      coercedValue = trimmed
     }
   } else if (field === 'ein_number' && value && value.trim()) {
     const normalized = normalizeEIN(value)
