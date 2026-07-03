@@ -18,7 +18,8 @@ export function MockupPreviewer({
   paletteColors,
   onSaved,
 }: {
-  enrollmentId: string
+  /** null = scratchpad: preview + Export only, Save disabled. */
+  enrollmentId: string | null
   paletteColors: NamedColor[]
   onSaved?: () => void
 }) {
@@ -58,7 +59,7 @@ export function MockupPreviewer({
   }
 
   async function onSave() {
-    if (!logo) return
+    if (!logo || !enrollmentId) return
     setBusy('save')
     try {
       await saveDesignAsset(enrollmentId, 'mockup', await makeBlob(), `${fileBase}.png`)
@@ -157,7 +158,8 @@ export function MockupPreviewer({
         </button>
         <button
           onClick={onSave}
-          disabled={!logo || busy !== null}
+          disabled={!logo || busy !== null || !enrollmentId}
+          title={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined}
           className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
         >
           {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}

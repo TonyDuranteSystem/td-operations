@@ -87,7 +87,8 @@ export function AssetKitTool({
   enrollmentId,
   onSaved,
 }: {
-  enrollmentId: string
+  /** null = scratchpad: Download only, Save disabled. */
+  enrollmentId: string | null
   onSaved?: () => void
 }) {
   const [logo, setLogo] = useState<LoadedLogo | null>(null)
@@ -110,11 +111,12 @@ export function AssetKitTool({
 
   async function run(mode: 'download' | 'save') {
     if (!logo) return
+    if (mode === 'save' && !enrollmentId) return
     setBusy(mode)
     try {
       const { blob } = await buildKit(logo, backgrounds)
       const fileName = `${kitSlug(logo.name)}-brand-kit.zip`
-      if (mode === 'download') {
+      if (mode === 'download' || !enrollmentId) {
         downloadBlob(blob, fileName)
         toast.success('Brand kit downloaded')
       } else {
@@ -187,7 +189,8 @@ export function AssetKitTool({
         </button>
         <button
           onClick={() => run('save')}
-          disabled={!logo || busy !== null || backgrounds.length === 0}
+          disabled={!logo || busy !== null || backgrounds.length === 0 || !enrollmentId}
+          title={!enrollmentId ? 'Select a project to save into its Deliverables' : undefined}
           className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
         >
           {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}

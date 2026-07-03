@@ -27,7 +27,8 @@ export function DesignToolsSection({
   paletteColors,
   onSaved,
 }: {
-  enrollmentId: string
+  /** The project to save into. null = scratchpad (Save disabled, export only). */
+  enrollmentId: string | null
   paletteColors: NamedColor[]
   onSaved?: () => void
 }) {

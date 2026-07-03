@@ -22,7 +22,8 @@ export function LogoPicker({
   onLogo,
   loadedName,
 }: {
-  enrollmentId: string
+  /** null = scratchpad: upload only, no "pick a deliverable" option. */
+  enrollmentId: string | null
   onLogo: (logo: LoadedLogo) => void
   loadedName?: string | null
 }) {
@@ -32,6 +33,10 @@ export function LogoPicker({
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
+    if (!enrollmentId) {
+      setOptions([])
+      return
+    }
     fetchImageDeliverables(enrollmentId).then(setOptions).catch(() => setOptions([]))
   }, [enrollmentId])
 
@@ -51,6 +56,7 @@ export function LogoPicker({
 
   const handleDeliverable = useCallback(
     async (opt: ImageDeliverableOption) => {
+      if (!enrollmentId) return
       setBusy(true)
       try {
         onLogo(await deliverableToLogo(enrollmentId, opt.id, opt.file_name))
