@@ -178,6 +178,14 @@ export interface AiCategorizeOptions {
   model?: string
   /** Cap on API calls per run (cost guard). Default 80 batches (~3200 tx). */
   maxBatches?: number
+  /** Phase 3R (chained chunks): hard wall-clock deadline (epoch ms). The loop
+   *  refuses to START a batch unless a worst-case batch (API timeout + persist)
+   *  fits before it — the run stops CLEANLY (`stats.stoppedOnDeadline`) and the
+   *  caller hands the baton to a continuation job. Anchored to the RUNNER's
+   *  invocation start, never the handler's (review cond. 1). */
+  deadlineAt?: number
+  /** Injectable clock for deadline tests (time-travel pattern). */
+  now?: () => number
   /** Per-batch persistence hook (Phase 0.3, 2026-07-03): called after EACH
    *  batch's suggestions are parsed, BEFORE the next API call. Callers persist
    *  incrementally so a killed run loses nothing already paid for. A throw
@@ -194,7 +202,14 @@ export interface AiRunStats {
   suggestionsParsed: number
   truncatedBatches: number
   capped: boolean
+  /** Phase 3R: run stopped cleanly on `deadlineAt` with batches left — the
+   *  caller must enqueue a continuation chunk. */
+  stoppedOnDeadline?: boolean
 }
+
+/** Worst-case single batch: the 90s API timeout + parse/persist allowance.
+ *  A batch is only STARTED if this still fits before the deadline. */
+export const BATCH_TIME_ALLOWANCE_MS = 100_000
 
 /**
  * Ask Claude for category suggestions for a set of uncategorized transactions.
@@ -229,7 +244,13 @@ export async function aiSuggestCategories(
   }
   const stats: AiRunStats = emptyStats(capped)
 
+  const clock = opts?.now ?? Date.now
   for (let bi = 0; bi < batches.length; bi++) {
+    // Deadline guard (Phase 3R): don't start a batch that can't finish.
+    if (opts?.deadlineAt && clock() + BATCH_TIME_ALLOWANCE_MS > opts.deadlineAt) {
+      stats.stoppedOnDeadline = true
+      break
+    }
     const batch = batches[bi]
     const validIds = new Set(batch.map(t => t.id))
     const lines = batch.map(t =>

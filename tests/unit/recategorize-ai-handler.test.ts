@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { Job } from "@/lib/jobs/queue"
 
-const recatMock = vi.fn(async (..._a: unknown[]) => ({ scanned: 5, recategorized: 2, transferPairs: 0, aiCategorized: 3, aiErrors: [], uncategorizedRemaining: 0 }))
+const recatMock = vi.fn(async (..._a: unknown[]) => ({
+  scanned: 5, recategorized: 2, transferPairs: 0, aiCategorized: 3, aiErrors: [], uncategorizedRemaining: 0,
+  aiStats: { batchesSent: 1, batchesFailed: 0, suggestionsParsed: 3, truncatedBatches: 0, capped: false },
+}))
 vi.mock("@/lib/tax/categorization-engine", () => ({
   recategorizeAccountYear: (...a: unknown[]) => recatMock(...a),
 }))

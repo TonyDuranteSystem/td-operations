@@ -76,6 +76,12 @@ interface View {
   stale?: boolean
   /** Smart-categorization (AI) jobs still running for this workspace. */
   aiPending?: number
+  /** Self-healing chain state (Phase 3R): 'running' | 'retry_scheduled' |
+   *  'exhausted' | 'idle'. Backoff retries are AUTOMATIC — the UI only
+   *  informs; there is deliberately no manual resume control. */
+  aiState?: string
+  aiNextRetryAt?: number | null
+  aiRemaining?: number
   /** Location-period triage (Phase 2b, STAFF WORKSPACE ONLY — the portal API
    *  never sends these; every use below is additionally gated on isStaff). */
   periods?: PresencePeriodView[]
@@ -220,8 +226,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // its own — the client doesn't have to guess when to refresh. Stops as soon
   // as nothing is pending. (Only polls when something is actually in flight.)
   useEffect(() => {
-    if (!view || (view.ingestPending <= 0 && (view.aiPending ?? 0) <= 0)) return
-    const t = setInterval(() => { void load() }, 20000)
+    if (!view) return
+    const active = view.ingestPending > 0 || (view.aiPending ?? 0) > 0
+    // A backoff-waiting chain polls AT the retry time, not every 20s for hours
+    // (review F5c) — clamped to [30s, 5min].
+    const retryWait = view.aiState === 'retry_scheduled'
+      ? Math.min(300_000, Math.max(30_000, (view.aiNextRetryAt ?? Date.now()) - Date.now()))
+      : null
+    if (!active && retryWait === null) return
+    const t = setInterval(() => { void load() }, active ? 20000 : retryWait!)
     return () => clearInterval(t)
   }, [view, load])
 
@@ -763,6 +776,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         </>
       )}
 
+      {/* Client-visible, TEXT-ONLY (Phase 3R): a paused/stopped AI chain must
+          be visible — never look finished — but the client gets no control;
+          recovery is automatic and staff is alerted on exhaustion. */}
+      {!isStaff && view && (view.aiState === 'retry_scheduled' || view.aiState === 'exhausted') && (
+        <p className="text-xs text-zinc-500 mt-2">
+          {it
+            ? 'Stiamo ancora completando la classificazione automatica delle tue transazioni — nessuna azione richiesta da parte tua.'
+            : 'We\'re still finishing the automatic classification of your transactions — no action needed from you.'}
+        </p>
+      )}
+
       {/* Some statements already landed but MORE are still processing — the P&L
           below is INCOMPLETE. The multi-bank case: the old condition
           (transactionCount === 0) hid this signal the moment the first file
@@ -838,8 +862,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             <ProgressCard
               title="Smart categorization is working…"
               detail="The AI is reading each remaining transaction's full description and booking the ones it is confident about. Anything it isn't sure of will be flagged for you — never guessed. The numbers below will improve on their own."
-              eta="Usually 1–3 minutes. This page refreshes by itself — you can keep working."
+              eta="Large workspaces continue automatically across several rounds. This page refreshes by itself — you can keep working."
             />
+          )}
+          {/* Self-healing chain (Phase 3R): a paused chain retries BY ITSELF on
+              a backoff ladder — no button, nothing to check. Only a spent
+              ladder shows the staff-attention line (support already emailed). */}
+          {isStaff && (view.aiPending ?? 0) === 0 && view.aiState === 'retry_scheduled' && (
+            <ProgressCard
+              title="Smart categorization continues automatically…"
+              detail={`${view.aiRemaining ?? 0} transactions still to process. The last round hit a temporary problem — the system retries on its own${view.aiNextRetryAt ? ` (next attempt ~${new Date(view.aiNextRetryAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })})` : ''}. Nothing to do here.`}
+              eta="Retries are automatic; support is alerted if it can't finish by itself."
+            />
+          )}
+          {isStaff && view.aiState === 'exhausted' && (
+            <section className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-3">
+              <p className="text-sm text-amber-900">
+                ⚠ Smart categorization needs staff attention ({view.aiRemaining ?? 0} rows unprocessed after all automatic retries) — <strong>support has been notified by email</strong>. Once the cause is fixed, Regenerate restarts it.
+              </p>
+            </section>
           )}
 
           {/* Staff workspace: unclassified money is EXCLUDED from the totals

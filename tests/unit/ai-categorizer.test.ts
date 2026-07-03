@@ -223,3 +223,70 @@ describe("aiSuggestCategories — Phase 0 foundations", () => {
     }
   })
 })
+
+describe("aiSuggestCategories — Phase 3R chained chunks", () => {
+  const KEY = "ANTHROPIC_API_KEY"
+  let savedKey: string | undefined
+  beforeEach(() => { savedKey = process.env[KEY]; process.env[KEY] = "test-key" })
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env[KEY]
+    else process.env[KEY] = savedKey
+  })
+
+  it("stops CLEANLY before the deadline (never mid-batch) and flags stoppedOnDeadline", async () => {
+    // Injected clock: each batch "takes" 50s. Deadline allows ~2 batches
+    // (guard: now + 100s allowance must fit).
+    let t = 0
+    const fetchImpl = (async () => {
+      t += 50_000
+      return new Response(JSON.stringify({
+        content: [{ type: "tool_use", name: "suggest_categories", input: { suggestions: [] } }],
+      }), { status: 200 })
+    }) as unknown as typeof fetch
+    const txs = Array.from({ length: 200 }, (_, i) => tx(`tx-${i}`)) // 5 batches
+    const res = await aiSuggestCategories(txs, CTX, {
+      fetchImpl,
+      deadlineAt: 190_000, // guard passes at t=0 and t=50k; refuses at t=100k (100k+100k > 190k)
+      now: () => t,
+    })
+    expect(res.stats.stoppedOnDeadline).toBe(true)
+    expect(res.stats.batchesSent).toBe(2)
+  })
+
+  it("no deadline → runs to completion, flag unset (single-shot behavior unchanged)", async () => {
+    const txs = Array.from({ length: 85 }, (_, i) => tx(`tx-${i}`))
+    const res = await aiSuggestCategories(txs, CTX, { fetchImpl: fakeFetchReturning([]) })
+    expect(res.stats.stoppedOnDeadline).toBeUndefined()
+    expect(res.stats.batchesSent).toBe(3)
+  })
+
+  it("batch partition is invariant under chunking: chunked runs see the SAME batches single-shot would (eval-invariance cond. 10)", async () => {
+    const record = (bucket: string[][]) => (async (_url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}")
+      const ids = ((body.messages[0].content as string).match(/tx-\d+/g) ?? [])
+      bucket.push(Array.from(new Set(ids)))
+      return new Response(JSON.stringify({
+        content: [{ type: "tool_use", name: "suggest_categories", input: { suggestions: [] } }],
+      }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const txs = Array.from({ length: 100 }, (_, i) => tx(`tx-${i}`)) // 3 batches: 40/40/20
+    const single: string[][] = []
+    await aiSuggestCategories(txs, CTX, { fetchImpl: record(single) })
+
+    // Chunked: chunk 1 does one batch (tight deadline), chunk 2 gets the REST
+    // of the candidate list (rows the first chunk processed are gone).
+    const chunked: string[][] = []
+    let t = 0
+    const timedRecord = (async (url: unknown, init?: { body?: string }) => {
+      t += 60_000
+      return (record(chunked) as unknown as (u: unknown, i?: { body?: string }) => Promise<Response>)(url, init)
+    }) as unknown as typeof fetch
+    await aiSuggestCategories(txs.slice(0, 100), CTX, { fetchImpl: timedRecord, deadlineAt: 100_000, now: () => t })
+    const processedFirst = chunked.flat()
+    const rest = txs.filter(x => !processedFirst.includes(x.id))
+    await aiSuggestCategories(rest, CTX, { fetchImpl: record(chunked) })
+
+    expect(chunked).toEqual(single)
+  })
+})

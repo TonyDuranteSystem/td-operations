@@ -242,16 +242,21 @@ export function decideAiSuggestion(
   s: AiSuggestion,
   effectiveCategory: string | undefined,
 ): { applied: boolean; update: { category?: CategorizedTransaction["category"]; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string } | null } {
-  const hint: { ai_lean?: string; ai_bucket?: string } = {}
-  if (s.lean) hint.ai_lean = s.lean
-  if (s.bucket) hint.ai_bucket = s.bucket
+  // Sentinel hints (Phase 3R cond. 4 — poison-pill closure): a VALIDATED
+  // suggestion always fills BOTH hints, defaulting to 'unsure'/'other' when the
+  // model omitted them. The chained-chunk candidate filter skips rows carrying
+  // both hints — without sentinels, a lean-less suggestion left its row in the
+  // candidate set forever, re-paid by every chunk and every re-run.
+  const hint: { ai_lean?: string; ai_bucket?: string } = {
+    ai_lean: s.lean ?? "unsure",
+    ai_bucket: s.bucket ?? "other",
+  }
   if (s.confidence === "high" && effectiveCategory === "uncategorized") {
     // Version-stamped (Phase 0.5): a challenged categorization must trace to
     // the exact prompt that produced it. All note checks use startsWith("ai:").
     return { applied: true, update: { category: s.category, subcategory: s.subcategory, notes: `ai:high@${AI_PROMPT_VERSION}`, ...hint } }
   }
-  if (hint.ai_lean || hint.ai_bucket) return { applied: false, update: hint }
-  return { applied: false, update: null }
+  return { applied: false, update: hint }
 }
 
 export async function recategorizeAccountYear(

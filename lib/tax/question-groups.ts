@@ -11,6 +11,8 @@
  * spend on a company card is an owner draw, never a deductible expense.
  */
 
+import { rowRootKey } from "./row-root"
+
 export interface UncategorizedRow {
   id: string
   description: string
@@ -73,11 +75,13 @@ export function merchantRoot(description: string): string {
 }
 
 export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
+  // Phase 3R (cond. 11-12): grouping goes through the SHARED rowRootKey —
+  // description-first with degenerate-description fallback to counterparty
+  // ("Unknown - Corporate Card - 6921" groups as its counterparty "Bershka").
   const groups = new Map<string, { rows: UncategorizedRow[]; label: string }>()
   for (const r of rows) {
-    const root = merchantRoot(r.description || r.counterparty || "")
-    const key = root.toLowerCase() || "(no description)"
-    if (!groups.has(key)) groups.set(key, { rows: [], label: root || "(no description)" })
+    const { key, label } = rowRootKey(r.description, r.counterparty)
+    if (!groups.has(key)) groups.set(key, { rows: [], label })
     groups.get(key)!.rows.push(r)
   }
   return Array.from(groups.entries())

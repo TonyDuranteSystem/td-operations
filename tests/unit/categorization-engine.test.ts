@@ -195,17 +195,21 @@ describe('decideAiSuggestion (shared AI-apply policy)', () => {
     expect(d.update).toEqual({ ai_lean: 'business', ai_bucket: 'software' })
   })
 
-  it('medium/low confidence never applies a category — hints only', () => {
+  it('medium/low confidence never applies a category — hints only (bucket sentinel fills the gap)', () => {
     for (const confidence of ['medium', 'low'] as const) {
       const d = decideAiSuggestion(sugg({ confidence, lean: 'personal' }), 'uncategorized')
       expect(d.applied).toBe(false)
-      expect(d.update).toEqual({ ai_lean: 'personal' })
+      expect(d.update).toEqual({ ai_lean: 'personal', ai_bucket: 'other' })
     }
   })
 
-  it('no hints and nothing to apply → complete no-op (null update)', () => {
+  // Phase 3R cond. 4 (poison-pill closure): a VALIDATED suggestion always
+  // fills BOTH hints — sentinels 'unsure'/'other' when the model omitted them —
+  // so a processed row always exits the chained-chunk candidate set instead of
+  // being re-paid by every chunk and every re-run forever.
+  it('a validated suggestion with no hints writes the sentinels (never a null no-op)', () => {
     const d = decideAiSuggestion(sugg({ confidence: 'low' }), 'expense')
     expect(d.applied).toBe(false)
-    expect(d.update).toBeNull()
+    expect(d.update).toEqual({ ai_lean: 'unsure', ai_bucket: 'other' })
   })
 })

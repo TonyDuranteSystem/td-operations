@@ -27,15 +27,34 @@ describe('deriveLearnedRules (pure)', () => {
 
   it('marks a merchant with both in and out as any', () => {
     const rules = deriveLearnedRules(
-      [{ description: 'PayPal', counterparty: null, amount: 200 }, { description: 'PayPal', counterparty: null, amount: -30 }],
+      [{ description: 'Alpha Business', counterparty: null, amount: 200 }, { description: 'Alpha Business', counterparty: null, amount: -30 }],
       'income', 'revenue',
     )
     expect(rules[0].direction).toBe('any')
   })
 
-  it('falls back to counterparty when description is empty', () => {
+  // Phase 3R cond. 13: payment rails never become contains-rules — a 'paypal'
+  // rule would blanket-book every PayPal-carried merchant.
+  it('never learns a rule from a payment rail', () => {
+    const rules = deriveLearnedRules(
+      [{ description: 'PayPal', counterparty: null, amount: 200 }, { description: 'PayPal', counterparty: null, amount: -30 }],
+      'income', 'revenue',
+    )
+    expect(rules).toHaveLength(0)
+  })
+
+  // Phase 3R cond. 13: a counterparty-FALLBACK root (degenerate description)
+  // never learns — the answer still books the rows, but a contains-rule from
+  // either side of that pair would poison future runs ('Unknown - Corporate
+  // Card' matching everything, or an MCC label like 'Restaurants').
+  it('does NOT learn from a counterparty-fallback root', () => {
     const rules = deriveLearnedRules([{ description: null, counterparty: 'Fiverr', amount: -20 }], 'expense', 'client_confirmed')
-    expect(rules[0].pattern).toBe('Fiverr')
+    expect(rules).toHaveLength(0)
+    const boiler = deriveLearnedRules(
+      [{ description: 'Unknown - Corporate Card - 6921 (Business Card)', counterparty: 'Bershka', amount: -50 }],
+      'expense', 'client_confirmed',
+    )
+    expect(boiler).toHaveLength(0)
   })
 
   it('skips blank and too-short roots (would over-match)', () => {

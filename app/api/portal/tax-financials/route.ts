@@ -189,6 +189,20 @@ export async function GET(request: NextRequest) {
       else if (e.failed) ingestFailed++
     }
 
+    // Self-healing AI chain state (Phase 3R): the client sees a neutral
+    // text-only "still finishing automatically" note during backoff waits —
+    // never a control (review cond.: a stopped client run must be VISIBLE).
+    let aiState: string = 'idle'
+    let aiRemaining = 0
+    try {
+      const { chainStateForScope } = await import('@/lib/jobs/chain-watchdog')
+      const chain = await chainStateForScope({ jobType: 'recategorize_ai', accountId, taxYear })
+      aiState = chain.state
+      aiRemaining = chain.remaining
+    } catch (e) {
+      console.error('[tax-financials] chain state failed (view unaffected):', e)
+    }
+
     return NextResponse.json({
       ...view,
       questions,
@@ -199,6 +213,8 @@ export async function GET(request: NextRequest) {
       ingestFailed,
       attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
+      aiState,
+      aiRemaining,
     })
   } catch (err) {
     console.error('[tax-financials] view failed:', err)

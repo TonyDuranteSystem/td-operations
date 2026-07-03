@@ -33,7 +33,7 @@ import path from "path"
 import { parseBankStatement } from "@/lib/bank-statement-parser"
 import { computeRecategorizationUpdates, decideAiSuggestion, type CategorizableRow, type CategorizationRule } from "@/lib/tax/categorization-engine"
 import { aiSuggestCategories, type AiCategorizableTx } from "@/lib/tax/ai-categorizer"
-import { merchantRoot } from "@/lib/tax/question-groups"
+import { rowRootKey } from "@/lib/tax/row-root"
 import { computeEvalReport, type EvalRow } from "@/lib/tax/categorization-eval"
 
 interface LabelEntry { key: string; label: string; confidence?: "high" | "low" }
@@ -136,7 +136,9 @@ async function main() {
       predicted: effCat.get(r.id) ?? "uncategorized",
       source: source.get(r.id) ?? "none",
       label: l.label,
-      groupKey: merchantRoot((r.description ?? r.counterparty ?? "") as string),
+      // Phase 3R cond. 12: eval measures the SHIPPED grouping (openQuestionGroups
+      // is the human-workload metric — it must count the groups the UI shows).
+      groupKey: rowRootKey(r.description as string | null, r.counterparty as string | null).key,
     })
   }
 

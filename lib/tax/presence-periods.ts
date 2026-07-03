@@ -26,7 +26,7 @@
  *   Antonio's judgment, value recorded in the design doc.
  */
 
-import { merchantRoot } from "./question-groups"
+import { rowRootKey } from "./row-root"
 import { EU_COUNTRIES, REGION_TOKENS } from "./merchant-locations"
 
 /** A week "counts" toward presence when it has at least this many located
@@ -150,13 +150,18 @@ function overlapRatio(a: RawPeriod, b: RawPeriod): number {
 function toPeriod(locCodes: string[], primary: string, rows: LocatableRow[], activeWeeks: number): PresencePeriod {
   const dates = rows.map(r => r.transaction_date).sort()
   const sweepable = rows.filter(isSweepableRow)
-  const merchants = new Map<string, number>()
+  // Shared rowRootKey (cond. 12): group_keys are the LOWERCASED keys the
+  // review's groups use — fixes the live bug where a capitalized merchant
+  // label could never match its group key in the period filter chip.
+  const merchants = new Map<string, { label: string; n: number }>()
   const groupKeys = new Set<string>()
   for (const r of rows) {
-    const root = merchantRoot(r.description ?? r.counterparty ?? "")
-    if (!root) continue
-    merchants.set(root, (merchants.get(root) ?? 0) + 1)
-    groupKeys.add(root)
+    const { key, label, source } = rowRootKey(r.description, r.counterparty)
+    if (source === "none") continue
+    const e = merchants.get(key) ?? { label, n: 0 }
+    e.n++
+    merchants.set(key, e)
+    groupKeys.add(key)
   }
   return {
     loc_codes: locCodes,
@@ -170,7 +175,7 @@ function toPeriod(locCodes: string[], primary: string, rows: LocatableRow[], act
     dollar_total: rows.reduce((s, r) => s + Math.abs(r.amount), 0),
     sweepable_count: sweepable.length,
     sweepable_total: sweepable.reduce((s, r) => s + Math.abs(r.amount), 0),
-    top_merchants: Array.from(merchants.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([m]) => m),
+    top_merchants: Array.from(merchants.values()).sort((a, b) => b.n - a.n).slice(0, 5).map(m => m.label),
     group_keys: Array.from(groupKeys),
   }
 }

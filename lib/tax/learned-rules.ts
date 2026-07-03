@@ -21,7 +21,7 @@
  *   duplicated.
  */
 
-import { merchantRoot } from "@/lib/tax/question-groups"
+import { rowRootKey, RAIL_SET } from "@/lib/tax/row-root"
 
 export interface LearnableRow {
   description: string | null
@@ -66,11 +66,18 @@ export function deriveLearnedRules(
 ): LearnedRuleSpec[] {
   const byRoot = new Map<string, { ins: number; outs: number }>()
   for (const r of rows) {
-    const root = merchantRoot(r.description || r.counterparty || "")
-    const key = root.trim()
+    // Phase 3R (cond. 12-13): SAME root the review grouped by — and NEVER
+    // learn from a counterparty-fallback root. A fallback root means the
+    // description was degenerate ("Unknown - Corporate Card…"); learning a
+    // contains-rule from either side of that pair would blanket-match every
+    // corporate-card row (or an MCC label like "Restaurants") on future runs.
+    const { label, source } = rowRootKey(r.description, r.counterparty)
+    if (source !== "description") continue
+    const key = label.trim()
     if (key.length < MIN_LEARN_PATTERN_LENGTH) continue // skip blank/generic
     if (key.toLowerCase() === "(no description)") continue
     if (LEARN_PATTERN_STOPLIST.has(key.toLowerCase())) continue // generic banking word — never a contains-rule
+    if (RAIL_SET.has(key.toLowerCase())) continue // payment rail — a contains-rule would book every carried merchant
     if (!byRoot.has(key)) byRoot.set(key, { ins: 0, outs: 0 })
     const amt = Number(r.amount)
     if (amt > 0) byRoot.get(key)!.ins += 1

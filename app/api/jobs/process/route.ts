@@ -59,13 +59,24 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        const result = await handler(job)
-        await completeJob(job.id, result)
-        processed.push({
-          job_id: job.id,
-          job_type: job.job_type,
-          status: result.steps.some(s => s.status === "error") ? "completed_with_errors" : "completed",
-        })
+        // Phase 3R: chunked handlers stop cleanly before the INVOCATION's
+        // deadline — anchored here, not in the handler (a chunk claimed late
+        // in the drain loop gets only the window that actually remains).
+        const result = await handler(job, { deadlineAt: startedAt + 280_000 })
+        if (result.ok === false) {
+          // Parity with the cron runner: a handler-reported failure lands in
+          // status='failed' (Exception Center + the chain watchdog's terminal
+          // reads), never hidden inside a completed row.
+          await failJob(job.id, result.summary || "Handler reported failure", result)
+          processed.push({ job_id: job.id, job_type: job.job_type, status: "failed" })
+        } else {
+          await completeJob(job.id, result)
+          processed.push({
+            job_id: job.id,
+            job_type: job.job_type,
+            status: result.steps.some(s => s.status === "error") ? "completed_with_errors" : "completed",
+          })
+        }
       } catch (e) {
         await failJob(job.id, e instanceof Error ? e.message : String(e))
         processed.push({ job_id: job.id, job_type: job.job_type, status: "failed" })

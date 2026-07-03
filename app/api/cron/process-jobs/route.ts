@@ -70,6 +70,17 @@ export async function GET(req: NextRequest) {
 
   const startTime = Date.now()
   const reaped = await reapStuckJobs()
+  // Self-healing AI chains (Phase 3R): revive dropped batons / retry halted
+  // chains on the backoff ladder / alert staff on exhaustion. Runs BEFORE the
+  // claim loop so this invocation can claim its own revival (deadline is
+  // invocation-anchored, so a late claim is safe). Never blocks job processing.
+  let watchdog: import('@/lib/jobs/chain-watchdog').WatchdogResult | null = null
+  try {
+    const { runChainWatchdog } = await import('@/lib/jobs/chain-watchdog')
+    watchdog = await runChainWatchdog(startTime)
+  } catch (e) {
+    console.error('[process-jobs] chain watchdog failed (job processing continues):', e)
+  }
   const results: Array<{ job_id: string; job_type: string; status: string; summary?: string; error?: string }> = []
 
   for (let i = 0; i < MAX_JOBS_PER_RUN; i++) {
@@ -94,7 +105,8 @@ export async function GET(req: NextRequest) {
     }
 
     try {
-      const result = await handler(job)
+      // Phase 3R: invocation-anchored deadline (chunked handlers stop cleanly).
+      const result = await handler(job, { deadlineAt: startTime + 280_000 })
       if (result.ok === false) {
         // Handler reached a failure path but chose not to throw. Move the
         // job to status='failed' so it shows up in the Exception Center's
@@ -129,12 +141,13 @@ export async function GET(req: NextRequest) {
     endpoint: '/api/cron/process-jobs',
     status: processed === 0 ? 'success' : results.some(r => r.status === 'failed') ? 'error' : 'success',
     duration_ms: duration,
-    details: { processed, results, reaped },
+    details: { processed, results, reaped, watchdog },
   })
 
   return NextResponse.json({
     processed,
     reaped,
+    watchdog,
     duration_ms: duration,
     results,
   })

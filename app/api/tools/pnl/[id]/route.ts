@@ -126,6 +126,24 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       .eq('related_entity_id', workspaceId)
       .in('status', ['pending', 'processing'])
 
+    // Self-healing chain state (Phase 3R): aiState/nextRetryAt come from the
+    // SAME pure brain the watchdog acts on — the UI shows "continues
+    // automatically" during backoff waits and a staff-attention line only
+    // after the ladder is spent (staff never clicks anything). aiPending
+    // keeps its exact meaning (the period-answer 409 gate reads it).
+    let aiState: string = 'idle'
+    let aiNextRetryAt: number | null = null
+    let aiRemaining = 0
+    try {
+      const { chainStateForScope } = await import('@/lib/jobs/chain-watchdog')
+      const chain = await chainStateForScope({ jobType: 'recategorize_workspace_ai', workspaceId })
+      aiState = chain.state
+      aiNextRetryAt = chain.nextRetryAt
+      aiRemaining = chain.remaining
+    } catch (e) {
+      console.error('[tools/pnl] chain state failed (view unaffected):', e)
+    }
+
     // Generate stage (Antonio, 2026-07-02): NULL generated_at = upload mode —
     // the UI shows the statement manager and a "Generate P&L" button, no
     // totals. `stale` = statements were ingested AFTER the last generation, so
@@ -236,6 +254,9 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       generated_at: generatedAt,
       stale,
       aiPending: aiPendingCount ?? 0,
+      aiState,
+      aiNextRetryAt,
+      aiRemaining,
     })
   } catch (err) {
     console.error('[tools/pnl] view failed:', err)

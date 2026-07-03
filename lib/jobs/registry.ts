@@ -18,7 +18,14 @@ import { handleRecategorizeAi } from "./handlers/recategorize-ai"
 import { handleRecategorizeWorkspaceAi } from "./handlers/recategorize-workspace-ai"
 import { handleEsignSendEmail } from "./handlers/esign-send-email"
 
-type JobHandler = (job: Job) => Promise<JobResult>
+/** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
+ *  anchored to the RUNNER's invocation start — a chunked handler must stop
+ *  cleanly before it, never trusting its own start time (review cond. 1). */
+export interface JobRunContext {
+  deadlineAt?: number
+}
+
+type JobHandler = (job: Job, ctx?: JobRunContext) => Promise<JobResult>
 
 const handlers: Record<string, JobHandler> = {
   onboarding_setup: handleOnboardingSetup,
