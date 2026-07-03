@@ -20,6 +20,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { nextStatusOnUpload, nextStatusOnReleaseFinal, nextStatusOnRelease, isSlaTracked } from './pipeline'
 import { ensureDeadlineAt } from './sla'
+import { lockEarningIfEligible } from './earning'
 import { nextVersionForConcept } from './deliverables'
 import type { CommDeliverable, DeliverableType } from './types'
 
@@ -299,6 +300,11 @@ async function advanceStatus(
     // doesn't have one yet. Skips terminal targets; idempotent; never throws.
     if (target !== 'enrolled' && isSlaTracked(target)) {
       await ensureDeadlineAt(enrollmentId, new Date().toISOString())
+    }
+
+    // Phase 13: reaching 'delivered'/'approved' recognizes Cris's earning (set-once).
+    if (target === 'delivered' || target === 'approved') {
+      await lockEarningIfEligible(enrollmentId)
     }
   } catch (err) {
     console.warn('[deliverables] status auto-advance failed:', err)

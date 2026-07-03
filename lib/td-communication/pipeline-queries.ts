@@ -16,6 +16,7 @@ import { resolveSubjectsBatch, resolveSubject, pickSubjectRef, buildSubject } fr
 import { isEnrollmentStatus, isSlaTracked, groupBrief, type BriefUpload } from './pipeline'
 import { signBriefUploads } from './brief-uploads'
 import { ensureDeadlineAt } from './sla'
+import { lockEarningIfEligible } from './earning'
 import { hashAnswers, type BrandProfile, type CachedBrandProfile } from './brand-profile'
 import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './types'
 
@@ -293,6 +294,14 @@ export async function setEnrollmentStatus(id: string, status: string): Promise<{
   // a set deadline, won't fail the status change). Skips terminal statuses.
   if (status !== 'enrolled' && isSlaTracked(status)) {
     await ensureDeadlineAt(id, new Date().toISOString())
+  }
+
+  // Phase 13: recognize Cris's earning the first time the project reaches
+  // approved/delivered (delivery implies approval). Set-once + never throws.
+  // NOTE: this is a NEW branch — there is no pre-existing `approved` handling to
+  // piggyback on (the delivered_at stamp above only fires on 'delivered').
+  if (status === 'approved' || status === 'delivered') {
+    await lockEarningIfEligible(id)
   }
 
   return { status: status as EnrollmentStatus }

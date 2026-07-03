@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState, type ComponentType } from 'react'
 import dynamic from 'next/dynamic'
-import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate, Sparkles, Palette } from 'lucide-react'
+import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate, Sparkles, Palette, DollarSign } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Standalone Design Tools workspace. Lazy (Canvas / zip / SVG) so it never weighs
@@ -26,6 +26,7 @@ import { StaffConversations } from './staff-conversations'
 import { PackagesAdmin } from './admin/packages-admin'
 import { QuestionsAdmin } from './admin/questions-admin'
 import { EnrollmentsAdmin } from './admin/enrollments-admin'
+import { RevenueAdmin } from './admin/revenue-admin'
 import { SettingsAdmin } from './admin/settings-admin'
 import { AiGuide } from './admin/ai-guide'
 import { LandingEditor } from './landing-editor'
@@ -40,7 +41,7 @@ interface PartnerOption {
   partner_name: string | null
 }
 
-type Tab = 'projects' | 'deliverables' | 'design-tools' | 'chat' | 'landing' | 'enrollments' | 'packages' | 'questions' | 'settings' | 'ai'
+type Tab = 'projects' | 'deliverables' | 'design-tools' | 'chat' | 'landing' | 'enrollments' | 'revenue' | 'packages' | 'questions' | 'settings' | 'ai'
 
 const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
@@ -49,6 +50,7 @@ const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string 
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
   { key: 'enrollments', label: 'Enrollments', icon: ClipboardList },
+  { key: 'revenue', label: 'Revenue', icon: DollarSign },
   { key: 'packages', label: 'Packages', icon: Boxes },
   { key: 'questions', label: 'Questions', icon: HelpCircle },
   { key: 'settings', label: 'Settings', icon: Settings },
@@ -222,6 +224,12 @@ export function CrmCommunicationDashboard({
 
       {tab === 'enrollments' && (
         <EnrollmentsAdmin onSelect={setSelectedId} />
+      )}
+
+      {tab === 'revenue' && (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <RevenueAdmin isAdmin={isAdmin} />
+        </div>
       )}
 
       {tab === 'packages' && <PackagesAdmin isAdmin={isAdmin} />}
