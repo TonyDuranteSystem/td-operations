@@ -8,6 +8,26 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+
+/** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
+ *  bigger — the client must understand what's going on"). One shared visual
+ *  for every background-work state: big animated spinner, plain-words title,
+ *  what's happening, and how long it usually takes. */
+function ProgressCard({ title, detail, eta }: { title: string; detail: string; eta: string }) {
+  return (
+    <section className="rounded-2xl border-2 border-blue-300 bg-blue-50 px-6 py-6 flex items-start gap-4">
+      <div className="shrink-0 flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-white">
+        <Loader2 className="h-7 w-7 animate-spin" />
+      </div>
+      <div>
+        <p className="text-base font-bold text-blue-950">⏳ {title}</p>
+        <p className="text-sm text-blue-900 mt-1">{detail}</p>
+        <p className="text-xs font-medium text-blue-700 mt-2">{eta}</p>
+      </div>
+    </section>
+  )
+}
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
@@ -551,9 +571,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         {renderStatements()}
 
         <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm">
+          <div className="text-sm flex-1">
             {processing ? (
-              <span className="text-blue-800">⏳ Almost ready — we&apos;re reading and preparing your statements ({view.ingestPending} left, usually 2–5 minutes). You can keep uploading; Generate unlocks by itself when everything is ready.</span>
+              <ProgressCard
+                title="Almost ready — we're reading your statements"
+                detail={`${view.ingestPending} file(s) are still being read and prepared. You can keep uploading more statements meanwhile; the Generate button unlocks by itself when everything is ready.`}
+                eta="Usually 2–5 minutes per batch. This page refreshes on its own."
+              />
             ) : view.transactionCount > 0 ? (
               <span className="text-zinc-700">{view.files.length} statement(s) ready · {view.transactionCount} transactions loaded.</span>
             ) : (
@@ -625,15 +649,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           "preparing" state instead of a misleading all-zeros P&L. The page
           polls itself (effect above) and fills in as jobs finish. */}
       {view && view.ingestPending > 0 && view.transactionCount === 0 && (
-        <section className="rounded-xl border border-blue-200 bg-blue-50 px-5 py-6 text-center">
-          <p className="text-sm font-semibold text-blue-900">
-            {it ? 'Stiamo preparando i tuoi prospetti…' : 'We\'re preparing your statements…'}
-          </p>
-          <p className="text-xs text-blue-700 mt-1.5 max-w-md mx-auto">
-            {it
-              ? `Stiamo leggendo i tuoi estratti conto (${view.ingestPending} in elaborazione). Per un anno intero può richiedere fino a 30–45 minuti. Questa pagina si aggiorna da sola — puoi lasciarla aperta o tornare più tardi.`
-              : `We're reading your bank statements (${view.ingestPending} still processing). For a full year this can take up to 30–45 minutes. This page refreshes on its own — you can leave it open or come back later.`}
-          </p>
+        <>
+          <ProgressCard
+            title={it ? 'Stiamo preparando i tuoi prospetti…' : 'We\'re preparing your statements…'}
+            detail={it
+              ? `Stiamo leggendo i tuoi estratti conto (${view.ingestPending} in elaborazione) e classificando ogni transazione. I numeri compariranno qui da soli.`
+              : `We're reading your bank statements (${view.ingestPending} still processing) and classifying every transaction. Your numbers will appear here on their own.`}
+            eta={it
+              ? 'Per un anno intero può richiedere fino a 30–45 minuti. Questa pagina si aggiorna da sola — puoi lasciarla aperta o tornare più tardi.'
+              : 'For a full year this can take up to 30–45 minutes. This page refreshes on its own — you can leave it open or come back later.'}
+          />
           {view.ingestFailed > 0 && (
             <p className="text-xs text-amber-700 mt-2">
               {it
@@ -641,7 +666,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 : `${view.ingestFailed} file couldn't be read — check your files below once processing finishes.`}
             </p>
           )}
-        </section>
+        </>
       )}
 
       {/* Some statements already landed but MORE are still processing — the P&L
@@ -716,9 +741,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           {/* Staff workspace: the smart-categorization pass is still running —
               the question list / categories below will improve on their own. */}
           {isStaff && (view.aiPending ?? 0) > 0 && (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-              Smart categorization is running on the remaining unclassified transactions — this page refreshes on its own.
-            </div>
+            <ProgressCard
+              title="Smart categorization is working…"
+              detail="The AI is reading each remaining transaction's full description and booking the ones it is confident about. Anything it isn't sure of will be flagged for you — never guessed. The numbers below will improve on their own."
+              eta="Usually 1–3 minutes. This page refreshes by itself — you can keep working."
+            />
           )}
 
           {/* Staff workspace: unclassified money is EXCLUDED from the totals
