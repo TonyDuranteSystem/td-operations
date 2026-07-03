@@ -1,8 +1,16 @@
 'use client'
 
 import { useCallback, useMemo, useState, type ComponentType } from 'react'
-import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate, Sparkles } from 'lucide-react'
+import dynamic from 'next/dynamic'
+import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate, Sparkles, Palette } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+// Standalone Design Tools workspace. Lazy (Canvas / zip / SVG) so it never weighs
+// down the dashboard's first paint.
+const DesignToolsWorkspace = dynamic(
+  () => import('./design-tools/design-tools-workspace').then((m) => m.DesignToolsWorkspace),
+  { ssr: false, loading: () => <div className="p-6 text-sm text-zinc-400">Loading design tools…</div> },
+)
 import {
   packageLabel,
   subjectTypeLabel,
@@ -32,11 +40,12 @@ interface PartnerOption {
   partner_name: string | null
 }
 
-type Tab = 'projects' | 'deliverables' | 'chat' | 'landing' | 'enrollments' | 'packages' | 'questions' | 'settings' | 'ai'
+type Tab = 'projects' | 'deliverables' | 'design-tools' | 'chat' | 'landing' | 'enrollments' | 'packages' | 'questions' | 'settings' | 'ai'
 
 const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
   { key: 'deliverables', label: 'Deliverables', icon: Package },
+  { key: 'design-tools', label: 'Design Tools', icon: Palette },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
   { key: 'enrollments', label: 'Enrollments', icon: ClipboardList },
@@ -222,6 +231,8 @@ export function CrmCommunicationDashboard({
       {tab === 'settings' && <SettingsAdmin isAdmin={isAdmin} />}
 
       {tab === 'ai' && <AiGuide />}
+
+      {tab === 'design-tools' && <DesignToolsWorkspace projects={projects} />}
 
       {/* Brief slide-in (shared with /collab) — contains the deliverables manager */}
       {selectedId && (

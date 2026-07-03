@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useState, type ComponentType } from 'react'
-import { LayoutGrid, MessagesSquare, Settings, Bell, LayoutTemplate } from 'lucide-react'
+import dynamic from 'next/dynamic'
+import { LayoutGrid, MessagesSquare, Settings, Bell, LayoutTemplate, Palette } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ConversationChat } from './conversation-chat'
 import { PipelineBoard } from './pipeline-board'
@@ -9,10 +10,18 @@ import { ProjectBriefPanel } from './project-brief-panel'
 import { LandingEditor } from './landing-editor'
 import type { CommEnrollment, CommParticipant } from '@/lib/td-communication/types'
 
-type Section = 'projects' | 'chat' | 'landing' | 'settings'
+// Standalone Design Tools workspace. Lazy (Canvas / zip / SVG) so it never weighs
+// down /collab's first paint.
+const DesignToolsWorkspace = dynamic(
+  () => import('./design-tools/design-tools-workspace').then((m) => m.DesignToolsWorkspace),
+  { ssr: false, loading: () => <div className="p-6 text-sm text-zinc-400">Loading design tools…</div> },
+)
+
+type Section = 'projects' | 'design-tools' | 'chat' | 'landing' | 'settings'
 
 const NAV: { key: Section; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
+  { key: 'design-tools', label: 'Design Tools', icon: Palette },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
   { key: 'settings', label: 'Settings', icon: Settings },
@@ -90,7 +99,7 @@ export function CollabDashboard({
         {/* Top bar */}
         <header className="shrink-0 h-14 bg-white border-b border-zinc-200 flex items-center justify-between px-6">
           <h1 className="text-base font-semibold text-zinc-900">
-            {section === 'projects' ? 'Project Pipeline' : section === 'chat' ? 'Chat with TD' : section === 'landing' ? 'Landing Page' : 'Settings'}
+            {section === 'projects' ? 'Project Pipeline' : section === 'design-tools' ? 'Design Tools' : section === 'chat' ? 'Chat with TD' : section === 'landing' ? 'Landing Page' : 'Settings'}
           </h1>
           <button className="relative p-2 rounded-md hover:bg-zinc-100 text-zinc-500" aria-label="Notifications">
             <Bell className="h-4.5 w-4.5" />
@@ -104,6 +113,12 @@ export function CollabDashboard({
         <main className="flex-1 min-h-0 flex flex-col p-6">
           {section === 'projects' && (
             <PipelineBoard projects={projects} onSelect={setSelectedId} />
+          )}
+
+          {section === 'design-tools' && (
+            <div className="flex-1 min-h-0 overflow-y-auto -m-6 p-6">
+              <DesignToolsWorkspace projects={projects} />
+            </div>
           )}
 
           {section === 'chat' && (

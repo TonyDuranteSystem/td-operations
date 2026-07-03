@@ -177,6 +177,15 @@ pending.
   they are kept OUT of `DELIVERABLE_TYPES` (the manual-upload dropdown) — tool-only. `DESIGN_ASSET_TYPES`
   + `isDesignAssetType` in `deliverables.ts`. Migration `20260702-1600-td-comm-deliverable-asset-types.sql`
   extends the `type` CHECK (sandbox applied; **prod promotion pending — Antonio runs prod DDL**).
+- **Two surfaces:** the tools live BOTH inside a project (the brief-panel `Section`) AND as a **top-level
+  "Design Tools" tab** on the CRM dashboard (`crm-communication-dashboard.tsx`) and a nav section on
+  `/collab` (`collab-dashboard.tsx`) — so they're reachable without opening a project. The standalone
+  `design-tools/design-tools-workspace.tsx` adds a **project picker** (reads each board row's cached
+  `metadata.ai_brand_profile.color_palette` — no extra fetch) that loads the palette + targets that
+  project's Deliverables for Save; with **no project selected it is a scratchpad** (`enrollmentId=null`:
+  Palette from a base colour, Mockups/Asset Kit export/download only, Save disabled + hinted). The tools
+  (`DesignToolsSection`/`MockupPreviewer`/`AssetKitTool`/`LogoPicker`) take `enrollmentId: string | null`;
+  both the workspace and the panel lazy-load the section (`next/dynamic`, `ssr:false`).
 - **Display:** `deliverables-section.tsx` splits `mockup`/`asset_kit` rows out of the concept grouping into
   a separate **"Design tool outputs"** block (download + delete only — no client release, so the
   release→`concept_ready` path is never reached for them). **Reveal guard:**
