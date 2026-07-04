@@ -238,3 +238,20 @@ describe('Wise conversion locale seeds (2026-07-04) — the "Se han convertido" 
     expect(r.category).not.toBe('conversion')
   })
 })
+
+describe('zero-amount booking (v4, review F5)', () => {
+  it('0.00 rows book as conversion/zero_amount deterministically — never a review question', () => {
+    const { updates } = computeRecategorizationUpdates(
+      [{ id: 'z1', transaction_date: '2025-03-01', description: 'Bcascais', counterparty: '', amount: 0, currency: 'USD', balance_after: null, transaction_ref: 'z1', bank_name: 'Wise', account_type: 'USD', category: 'uncategorized', subcategory: '', is_related_party: null, notes: null, ai_lean: null, ai_bucket: null }] as never,
+      [], [], 'QA LLC',
+    )
+    expect(updates.get('z1')).toEqual({ category: 'conversion', subcategory: 'zero_amount', notes: 'auto: zero-amount' })
+  })
+  it('manual zero rows are untouched (human corrections win, always)', () => {
+    const { updates } = computeRecategorizationUpdates(
+      [{ id: 'z2', transaction_date: '2025-03-01', description: 'Bcascais', counterparty: '', amount: 0, currency: 'USD', balance_after: null, transaction_ref: 'z2', bank_name: 'Wise', account_type: 'USD', category: 'expense', subcategory: '', is_related_party: null, notes: 'manual: staff answer (business_expense)', ai_lean: null, ai_bucket: null }] as never,
+      [], [], 'QA LLC',
+    )
+    expect(updates.has('z2')).toBe(false)
+  })
+})

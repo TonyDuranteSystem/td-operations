@@ -29,7 +29,7 @@ const TIMEOUT_MS = 90_000
  *  challenged categorization is traceable to the exact prompt that made it
  *  (audit requirement for a tax product). Bump on ANY change to systemPrompt,
  *  SUGGEST_TOOL, or the apply policy. */
-export const AI_PROMPT_VERSION = "v3"
+export const AI_PROMPT_VERSION = "v4"
 
 /** Kill switch (Phase 0.4): set AI_CATEGORIZATION_DISABLED=1 on Vercel to stop
  *  the AI pass fleet-wide (both the workspace and client paths call through
@@ -152,6 +152,15 @@ function systemPrompt(ctx: AiCategorizeContext): string {
     "- 'low' for personal-looking spending on company cards (food delivery, restaurants, streaming, gyms, supermarkets): it may be a deductible business cost OR the owner's personal spending (a distribution) — only the client knows. NEVER 'high' for these; a wrong deduction corrupts a TAX RETURN, an honest 'low' just asks the client" + (ctx.grouped ? " — and in group mode this applies PER GROUP: a wrong 'high' corrupts every transaction of that merchant at once." : "."),
     ctx.grouped
       ? "GROUP MODE: each line is a MERCHANT GROUP, not a single transaction — every transaction from the same merchant, in the same direction and currency, shown as one representative with '×N (total T CUR)'. Your verdict is applied to EVERY transaction in the group. If the transactions under one merchant could plausibly mix business and personal purposes — or the name looks like a marketplace, a person, or a generic transfer rather than one specific merchant — do NOT guess: answer confidence 'low'. A wrong 'high' here corrupts N rows of a tax P&L at once; an honest 'low' asks the client once."
+      : "",
+    // Calibration pins (v4 — adjudicated from the 2026-07-04 retro-gate run):
+    ctx.grouped
+      ? (ctx.businessDescription
+        ? "Category discipline: platform/SaaS/tooling charges (e-commerce platforms, hosting, marketing tools, app subscriptions) are 'expense' — use 'cogs' ONLY when the stated business activity is physical-goods resale AND the charge is clearly supplier/inventory purchasing."
+        : "Category discipline: with no business description available, platform/SaaS/tooling charges (e-commerce platforms, hosting, marketing tools, app subscriptions) are 'expense', and NEVER exceed confidence 'medium' for the expense-vs-cogs call — the client confirms.")
+      : "",
+    ctx.grouped
+      ? "FX / EXCHANGE-RATE ADJUSTMENT FEE lines follow the purchase they ride on: business purchase → 'fee'; the owner's personal purchase → 'distribution'; when the fees in a group ride on mixed or unknown purchases, answer confidence 'low' — never 'high'."
       : "",
     ctx.buckets?.length ? `Accountant buckets — put the single best-fit SLUG in the 'bucket' field (or 'other'): ${ctx.buckets.map(b => `${b.slug} (${b.label})`).join("; ")}.` : "",
     "For EVERY transaction also set 'lean' (business/personal/unsure) and 'bucket'. These are ADVISORY hints used only to pre-sort the client's review — the client confirms, and they NEVER change the bookkeeping category. 'lean=personal' for personal-looking owner spending; 'business' for inflows, transfers, and clear business costs; 'unsure' when you truly cannot tell.",

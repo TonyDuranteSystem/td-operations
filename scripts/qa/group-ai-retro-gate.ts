@@ -51,7 +51,17 @@ async function main() {
     if (!data || data.length < 1000) break
   }
 
-  const { data: ws } = await db.from("pnl_workspaces").select("company_name").eq("id", workspaceId).single()
+  const { data: ws } = await db.from("pnl_workspaces").select("company_name, linked_account_id, tax_year").eq("id", workspaceId).single()
+  // Business description (v4, review F2): the expense-vs-cogs pin keys on it —
+  // the gate must run with the same context production runs with.
+  let businessDescription: string | undefined
+  if (ws?.linked_account_id && ws?.tax_year) {
+    const { data: sub } = await db.from("tax_return_submissions").select("submitted_data")
+      .eq("account_id", ws.linked_account_id).eq("tax_year", ws.tax_year).eq("status", "completed")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle()
+    businessDescription = (sub?.submitted_data as Record<string, unknown> | null)?.["us_business_activities"] as string | undefined
+  }
+  console.log(`business description in context: ${businessDescription ? "yes" : "no"}`)
   const { data: members } = await db.from("pnl_workspace_members").select("display_name").eq("workspace_id", workspaceId)
   const { data: bucketRows } = await db.from("catalog_entries").select("slug, label").eq("catalog_id", "expense_categories").eq("status", "active")
   const bankNames = Array.from(new Set(rows.map(r => r.bank_name ?? "").filter(Boolean)))
@@ -74,6 +84,7 @@ async function main() {
 
   const ai = await aiSuggestCategories(grouped, {
     companyName: (ws?.company_name as string) ?? "the company",
+    businessDescription,
     memberNames: ((members ?? []) as Array<{ display_name: string | null }>).map(m => m.display_name ?? "").filter(Boolean),
     bankNames,
     buckets: (bucketRows ?? []) as Array<{ slug: string; label: string }>,

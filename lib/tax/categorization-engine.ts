@@ -176,6 +176,14 @@ export function computeRecategorizationUpdates(
   for (const row of rows) {
     if ((row.notes ?? "").startsWith("manual:")) continue // human corrections win, always
     const isAiTagged = (row.notes ?? "").startsWith("ai:")
+    // Zero-amount rows (v4, review F5): card auths/reversals netting to 0
+    // cannot move any P&L/BS figure, but left 'uncategorized' they block
+    // gate 6 and spam the review as $0.00 questions. Book them into the
+    // established zero-impact class deterministically.
+    if (Number(row.amount) === 0 && (row.category ?? "uncategorized") === "uncategorized") {
+      updates.set(row.id as string, { category: "conversion", subcategory: "zero_amount", notes: "auto: zero-amount" })
+      continue
+    }
     const next = applyRules(row as unknown as ParsedTransaction, rules, memberNames, relatedEntities)
     // A re-run must never downgrade an AI-categorized row back to uncategorized
     // just because no deterministic rule covers it.

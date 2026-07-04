@@ -181,7 +181,10 @@ export interface WorkspaceAiResult {
  */
 export async function recategorizeWorkspaceAi(
   workspaceId: string,
-  opts: { companyName: string; memberNames: string[]; aiOptions?: AiCategorizeOptions },
+  // businessDescription (v4, review F2): forked workspaces pass the linked
+  // client's us_business_activities — the field the expense-vs-cogs pin keys
+  // on. Absent (blank workspaces) → the prompt caps that call at 'medium'.
+  opts: { companyName: string; memberNames: string[]; businessDescription?: string; aiOptions?: AiCategorizeOptions },
 ): Promise<WorkspaceAiResult> {
   const rows = await fetchAllWorkspaceTransactions(workspaceId)
   if (rows.length === 0) return { scanned: 0, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: 0, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
@@ -269,7 +272,7 @@ export async function recategorizeWorkspaceAi(
   // API call — a killed run (300s window) keeps everything already paid for.
   const ai = await aiSuggestCategories(
     txs,
-    { companyName: opts.companyName || "the company", memberNames: opts.memberNames, bankNames, buckets, grouped: true },
+    { companyName: opts.companyName || "the company", memberNames: opts.memberNames, businessDescription: opts.businessDescription, bankNames, buckets, grouped: true },
     {
       ...opts.aiOptions,
       onBatch: async (batchSuggestions) => {

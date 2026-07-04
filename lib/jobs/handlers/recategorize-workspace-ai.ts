@@ -54,7 +54,7 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
   // won't come back on retry — surface, don't throw).
   const { data: ws } = await db
     .from("pnl_workspaces")
-    .select("company_name")
+    .select("company_name, linked_account_id, tax_year")
     .eq("id", p.workspace_id)
     .maybeSingle()
   if (!ws) {
@@ -71,10 +71,28 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
     .map(m => (m.display_name ?? "").trim())
     .filter(n => n.length > 0)
 
+  // Linked client's business description (v4, review F2) — the field the
+  // expense-vs-cogs pin keys on; blank workspaces run without it (the prompt
+  // then caps that call at 'medium').
+  let businessDescription: string | undefined
+  if (ws.linked_account_id && ws.tax_year) {
+    const { data: sub } = await db
+      .from("tax_return_submissions")
+      .select("submitted_data")
+      .eq("account_id", ws.linked_account_id)
+      .eq("tax_year", ws.tax_year)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    businessDescription = (sub?.submitted_data as Record<string, unknown> | null)?.["us_business_activities"] as string | undefined
+  }
+
   const { recategorizeWorkspaceAi } = await import("@/lib/tax/workspace-recategorize")
   const r = await recategorizeWorkspaceAi(p.workspace_id, {
     companyName: (ws.company_name as string | null) ?? "",
     memberNames,
+    businessDescription,
     aiOptions: ctx?.deadlineAt ? { deadlineAt: ctx.deadlineAt } : undefined,
   })
 
