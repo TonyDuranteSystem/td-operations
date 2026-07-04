@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
-import { isClientVisiblePayment } from '@/lib/portal/payment-visibility'
+import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
 import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
@@ -769,7 +769,31 @@ export async function getPortalExpenses(accountId: string) {
     .order('created_at', { ascending: false })
     .limit(100)
 
-  return data ?? []
+  // TD-invoice mirrors of UNSENT drafts are staff-internal until reviewed and
+  // sent — same rule as Payment History (Kasabi incident, 2026-07-04).
+  return hideUnsentDraftMirrors(data ?? [])
+}
+
+/**
+ * Drop `client_expenses` mirror rows whose linked TD invoice is an unsent
+ * draft (Draft + Pending). One `payments` lookup for the mirrors present;
+ * pure filtering in `filterClientVisibleExpenseMirrors` (fail-open when the
+ * linked payment row is missing — never hide a real expense on data drift).
+ */
+async function hideUnsentDraftMirrors<
+  T extends { source?: string | null; td_payment_id?: string | null },
+>(rows: T[]): Promise<T[]> {
+  const paymentIds = rows
+    .filter(r => r.source === 'td_invoice' && r.td_payment_id)
+    .map(r => r.td_payment_id as string)
+  if (paymentIds.length === 0) return rows
+
+  const { data: linked } = await supabaseAdmin
+    .from('payments')
+    .select('id, invoice_status, status')
+    .in('id', paymentIds)
+
+  return filterClientVisibleExpenseMirrors(rows, linked ?? [])
 }
 
 /**
@@ -785,7 +809,8 @@ export async function getPortalExpensesByContact(contactId: string) {
     .order('created_at', { ascending: false })
     .limit(100)
 
-  return data ?? []
+  // Same unsent-draft mirror rule as getPortalExpenses.
+  return hideUnsentDraftMirrors(data ?? [])
 }
 
 /**
