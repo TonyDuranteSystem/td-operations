@@ -183,8 +183,17 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         if (error) throw new Error(`Could not capture prior state: ${error.message}`)
       }
 
-      // Guard (ii): ONE atomic UPDATE that re-evaluates the whole predicate.
-      const { data: sweptRows, error: sweepErr } = await db
+      // Guard (ii): the sweep re-evaluates the whole predicate on the UPDATE.
+      // PROD INCIDENT (2026-07-04): production's PostgREST rejects `or=` on
+      // PATCH with a phantom "column does not exist" (42703) even though the
+      // identical filter works on GET — sandbox runs a version without the
+      // bug, which is why the harness was green while every real click 500'd.
+      // Version-proof equivalent: TWO atomic UPDATEs whose simple filters
+      // union to the exact NULL-safe predicate — (notes IS NULL) ∪ (notes NOT
+      // LIKE 'manual:%', which on non-null rows is precisely the remainder).
+      // Each statement keeps every TOCTOU guard; the capture+reconcile+notes
+      // machinery already tolerates a kill between them.
+      const sweepBase = () => db
         .from('pnl_workspace_transactions')
         .update({ ...target, notes: `manual: period answer ${batchId}` })
         .eq('workspace_id', workspaceId)
@@ -193,10 +202,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         .in('loc_code', locCodes)
         .lt('amount', 0)
         .in('category', sweepable)
-        .or(NOT_MANUAL_OR)
-        .select('id, amount')
-      if (sweepErr) throw new Error(sweepErr.message)
-      const swept = (sweptRows ?? []) as Array<{ id: string; amount: number | string }>
+      const { data: sweptNull, error: err1 } = await sweepBase().is('notes', null).select('id, amount')
+      if (err1) throw new Error(err1.message)
+      const { data: sweptRest, error: err2 } = await sweepBase().not('notes', 'like', 'manual:%').select('id, amount')
+      if (err2) throw new Error(err2.message)
+      const swept = ([...(sweptNull ?? []), ...(sweptRest ?? [])]) as Array<{ id: string; amount: number | string }>
       const sweptIds = new Set(swept.map(r => r.id))
 
       // Reconcile: drop captured-but-unswept rows (answered mid-flight), stamp
