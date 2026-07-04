@@ -111,6 +111,35 @@ async function main() {
     const state1 = await chainStateForScope({ jobType: "recategorize_workspace_ai", workspaceId: WS })
     ok("chain state = idle after completion", state1.state === "idle", state1.state)
 
+    // ---- 2b: LATE CLAIM (prod incident 2026-07-04): a chunk with no room for
+    // even one batch passes the baton — never halts, never advances the index.
+    const rows1b = Array.from({ length: 20 }, (_, i) => ({
+      workspace_id: WS, tax_year: 2025, transaction_date: "2025-05-01", description: `QA late ${i}`,
+      counterparty: "", amount: -7, currency: "USD", bank_name: "Mercury", account_type: "checking",
+      transaction_ref: `qa3r-late-${i}`, category: "uncategorized", subcategory: "", notes: null,
+    }))
+    await db.from("pnl_workspace_transactions").insert(rows1b)
+    global.fetch = anthropicMock("ok")
+    await db.from("job_queue").insert({
+      job_type: "recategorize_workspace_ai", payload: { workspace_id: WS, chunk_index: 7, auto_retry: 0 },
+      priority: 8, related_entity_type: "pnl_workspace", related_entity_id: WS, created_by: "qa-3r",
+    })
+    const lateJob = await claimScope(WS)
+    const lateResult = await handleRecategorizeWorkspaceAi(lateJob!, { deadlineAt: Date.now() + 50_000 }) // < 100s allowance
+    await finish(lateJob!, lateResult)
+    ok("late claim: chunk passes the baton (never ok:false)", lateResult.ok !== false)
+    const { data: lateNext } = await db.from("job_queue").select("payload").eq("job_type", "recategorize_workspace_ai")
+      .eq("related_entity_id", WS).eq("status", "pending")
+    ok("late claim: continuation enqueued with UNCHANGED chunk_index", lateNext?.[0]?.payload?.chunk_index === 7, JSON.stringify(lateNext?.[0]?.payload))
+    // Drain the late-claim chain so section 3 starts clean.
+    for (let i = 0; i < 5; i++) {
+      const j = await claimScope(WS)
+      if (!j) break
+      const r2 = await handleRecategorizeWorkspaceAi(j, { deadlineAt: Date.now() + 250_000 })
+      await finish(j, r2)
+      if (r2.ok === false) break
+    }
+
     // ---- 3: circuit breaker — fresh candidates, dead API. ----
     const rows2 = Array.from({ length: 50 }, (_, i) => ({
       workspace_id: WS, tax_year: 2025, transaction_date: "2025-04-01", description: `QA dead ${i}`,

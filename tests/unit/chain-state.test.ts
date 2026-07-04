@@ -24,10 +24,17 @@ describe('decideChunkFollowup — the relay decision', () => {
   it('finished with progress → done', () => {
     expect(decideChunkFollowup({ stoppedOnDeadline: false, batchesSent: 4, batchesFailed: 0, progressed: true, chunkIndex: 3 })).toBe('done')
   })
-  it('zero progress ends the chain — kill-switch (0 batches), dead API (all failed), and deadline-stop alike', () => {
+  it('zero progress ends the chain — kill-switch (0 batches), dead API (all failed), and a deadline-stop that DID attempt batches', () => {
     expect(decideChunkFollowup({ stoppedOnDeadline: false, batchesSent: 0, batchesFailed: 0, progressed: false, chunkIndex: 0 })).toBe('halt_no_progress')
     expect(decideChunkFollowup({ stoppedOnDeadline: false, batchesSent: 6, batchesFailed: 6, progressed: false, chunkIndex: 2 })).toBe('halt_no_progress')
     expect(decideChunkFollowup({ stoppedOnDeadline: true, batchesSent: 3, batchesFailed: 3, progressed: false, chunkIndex: 1 })).toBe('halt_no_progress')
+  })
+
+  // Prod incident, first live chain (2026-07-04): chunk claimed 203s into a
+  // busy cron window → deadline guard refused the first batch → old logic
+  // read "no progress" and tripped the breaker. No time is not no progress.
+  it('LATE CLAIM: deadline-stop with ZERO batches attempted passes the baton, never halts', () => {
+    expect(decideChunkFollowup({ stoppedOnDeadline: true, batchesSent: 0, batchesFailed: 0, progressed: false, chunkIndex: 5 })).toBe('continue')
   })
   it('chunk cap halts even a progressing chain (cost bound, rendered distinctly)', () => {
     expect(decideChunkFollowup({ stoppedOnDeadline: true, batchesSent: 6, batchesFailed: 0, progressed: true, chunkIndex: AI_CHAIN_CHUNK_CAP })).toBe('halt_cap')

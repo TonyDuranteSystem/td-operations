@@ -93,15 +93,17 @@ export async function handleRecategorizeAi(job: Job, ctx?: JobRunContext): Promi
         .neq("id", job.id)
         .limit(1)
       if (!live || live.length === 0) {
+        // Zero-batch (late-claim) chunks don't consume cap fuel.
+        const nextChunkIndex = r.aiStats.batchesSent > 0 ? chunkIndex + 1 : chunkIndex
         const { error } = await db.from("job_queue").insert({
           job_type: "recategorize_ai",
-          payload: { account_id: p.account_id, tax_year: p.tax_year, chunk_index: chunkIndex + 1, auto_retry: 0 },
+          payload: { account_id: p.account_id, tax_year: p.tax_year, chunk_index: nextChunkIndex, auto_retry: 0 },
           priority: AI_CHAIN_JOB_PRIORITY,
           account_id: p.account_id,
           created_by: "chain",
         })
         if (error) throw new Error(error.message)
-        result.steps.push(step("chain_continuation", "ok", `chunk ${chunkIndex + 1} enqueued`))
+        result.steps.push(step("chain_continuation", "ok", `chunk ${nextChunkIndex} enqueued${r.aiStats.batchesSent === 0 ? " (late claim — no work attempted, baton passed)" : ""}`))
       } else {
         result.steps.push(step("chain_continuation", "skipped", "another chain job already live"))
       }

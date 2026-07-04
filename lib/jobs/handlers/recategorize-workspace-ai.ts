@@ -122,16 +122,19 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
         .neq("id", job.id)
         .limit(1)
       if (!live || live.length === 0) {
+        // Zero-batch (late-claim) chunks don't consume cap fuel: the index
+        // only advances when actual work happened.
+        const nextChunkIndex = r.stats.batchesSent > 0 ? chunkIndex + 1 : chunkIndex
         const { error } = await db.from("job_queue").insert({
           job_type: "recategorize_workspace_ai",
-          payload: { workspace_id: p.workspace_id, chunk_index: chunkIndex + 1, auto_retry: 0 },
+          payload: { workspace_id: p.workspace_id, chunk_index: nextChunkIndex, auto_retry: 0 },
           priority: AI_CHAIN_JOB_PRIORITY,
           related_entity_type: "pnl_workspace",
           related_entity_id: p.workspace_id,
           created_by: "chain",
         })
         if (error) throw new Error(error.message)
-        result.steps.push(step("chain_continuation", "ok", `chunk ${chunkIndex + 1} enqueued`))
+        result.steps.push(step("chain_continuation", "ok", `chunk ${nextChunkIndex} enqueued${r.stats.batchesSent === 0 ? " (late claim — no work attempted, baton passed)" : ""}`))
       } else {
         result.steps.push(step("chain_continuation", "skipped", "another chain job already live"))
       }

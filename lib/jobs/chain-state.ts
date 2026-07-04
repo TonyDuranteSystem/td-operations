@@ -61,10 +61,17 @@ export function decideChunkFollowup(r: {
   chunkIndex: number
 }): "continue" | "done" | "halt_no_progress" | "halt_cap" {
   if (r.chunkIndex >= AI_CHAIN_CHUNK_CAP) return "halt_cap"
+  // LATE CLAIM ≠ failure (prod incident, first live chain 2026-07-04): a chunk
+  // claimed near the end of a busy runner window (AI runs at priority 8,
+  // deliberately last) hits the deadline guard before its FIRST batch. It
+  // attempted nothing — pass the baton, don't trip the breaker. Costs no API
+  // call and no chunk_index (the handler doesn't increment on zero batches),
+  // so it cannot feed a loop: a chunk that actually RUNS batches and persists
+  // nothing still halts below.
+  if (r.stoppedOnDeadline && r.batchesSent === 0) return "continue"
   // Zero-progress circuit breaker (cond. 3): kill-switch/no-key chunks return
-  // zero batches; dead-API chunks fail every batch; a deadline-stop with no
-  // progress is equally futile. All three END the chain — the watchdog ladder
-  // owns retries with backoff, the chain never spins.
+  // zero batches without a deadline stop; dead-API chunks fail every batch.
+  // These END the chain — the watchdog ladder owns retries with backoff.
   if (!r.progressed) return "halt_no_progress"
   if (r.stoppedOnDeadline) return "continue"
   return "done"
