@@ -1,32 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { resolveLandingAccess } from '@/lib/td-communication/admin-auth'
+import { resolvePortfolioAccess } from '@/lib/td-communication/admin-auth'
 import { getDeliverable } from '@/lib/td-communication/deliverables-queries'
 import { copyDeliverableImageToPublic } from '@/lib/td-communication/copy-to-public'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * POST /api/td-communication/landing/portfolio-from-deliverable — copy a RELEASED
- * image deliverable out of the private td-comm-deliverables bucket into the public
- * `assets` bucket (landing-portfolio/), returning a public URL the editor drops
- * into a portfolio item. Lets Cris showcase work she already produced without
- * re-downloading/re-uploading. Editor-gated. Privacy: only released deliverables;
- * the editor still sets a public-safe client name + description.
- *
- * The copy itself is the shared helper copyDeliverableImageToPublic (extracted in
- * Phase 14 so the landing editor + the portfolio manager share one copy path).
- * Behavior/messages are unchanged from the pre-extraction route.
+ * POST /api/td-communication/admin/portfolio/copy-image — copy a RELEASED image
+ * deliverable into the public assets bucket (portfolio/) and return its public URL
+ * for use as a before/after image. canEdit (staff + scoped partner). Privacy:
+ * copyDeliverableImageToPublic enforces released_at + image-only (a "before" from a
+ * client's raw brief upload is NOT offered — the picker only lists released work).
  *
  * Body: { deliverable_id } → { publicUrl }
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const access = await resolveLandingAccess(user)
+  const access = await resolvePortfolioAccess(user)
   if (!access) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   if (!access.canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to edit the landing page.' }, { status: 403 })
+    return NextResponse.json({ error: 'You do not have permission to edit the portfolio.' }, { status: 403 })
   }
 
   const body = await req.json().catch(() => ({}))
@@ -42,7 +37,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   if (!deliverable) return NextResponse.json({ error: 'Deliverable not found.' }, { status: 404 })
 
-  const result = await copyDeliverableImageToPublic(deliverable, 'landing-portfolio')
+  const result = await copyDeliverableImageToPublic(deliverable, 'portfolio')
   if (result.ok) return NextResponse.json({ publicUrl: result.publicUrl })
   return NextResponse.json({ error: result.error ?? 'Could not copy the image.' }, { status: result.status ?? 500 })
 }

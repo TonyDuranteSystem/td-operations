@@ -30,8 +30,10 @@ import { getCommSettings } from '@/lib/td-communication/comm-settings'
 import { resolveDisclaimerText, currentDisclaimerVersion, canRevealConcept } from '@/lib/td-communication/disclaimer'
 import { hasAcceptedDisclaimer } from '@/lib/td-communication/disclaimer-queries'
 import { resolveSubject } from '@/lib/td-communication/subject'
+import { getActiveConsentForEnrollment, resolveShowcaseConsentText } from '@/lib/td-communication/showcase-consent'
 import { TdCommLanding } from '@/components/td-communication/td-comm-landing'
 import { ConceptReveal } from '@/components/td-communication/concept-reveal'
+import { ShowcaseConsentCard } from '@/components/td-communication/showcase-consent-card'
 import { BellRing, ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -91,6 +93,21 @@ export default async function TdCommunicationPage() {
 
   const hasEnrollment = !!enrollment
   const formSubmitted = !!enrollment?.metadata?.form_submitted_at
+
+  // Phase 14 — once the project is delivered, invite the client to be featured in
+  // the public portfolio (opt-in, revocable). Resolve their current consent state
+  // server-side so the card shows the right variant.
+  let consentCard: React.ReactNode = null
+  if (enrollment && enrollment.status === 'delivered') {
+    const activeConsent = await getActiveConsentForEnrollment(enrollment.id)
+    consentCard = (
+      <ShowcaseConsentCard
+        initialConsented={!!activeConsent}
+        consentText={resolveShowcaseConsentText(locale)}
+        locale={isIt ? 'it' : 'en'}
+      />
+    )
+  }
 
   // Footer copy (unchanged from the Phase 5/6 teaser).
   const ctaTitle = isIt ? 'Il tuo brand audit è pronto' : 'Your brand audit is ready'
@@ -154,7 +171,12 @@ export default async function TdCommunicationPage() {
         locale={locale}
         ctaHref={comingSoon ? undefined : WIZARD_HREF}
       />
-      {footer && <div className="px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto pb-6">{footer}</div>}
+      {(footer || consentCard) && (
+        <div className="px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto pb-6">
+          {footer}
+          {consentCard}
+        </div>
+      )}
     </div>
   )
 }

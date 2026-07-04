@@ -272,6 +272,10 @@ export interface TdCommSettings {
    *  profile). When false, both AI routes return 503 without calling the model —
    *  lets an admin disable AI from the CRM Settings tab with no deploy. */
   ai_enabled: boolean
+  /** Master on/off for the public Portfolio (Phase 14). When false, the public
+   *  `/portfolio` page shows "coming soon" and the public API returns nothing.
+   *  Default false so nothing goes public until an admin turns it on. */
+  portfolio_enabled: boolean
 }
 
 /** Aggregate stats for the enrollments admin tab. */
@@ -337,4 +341,106 @@ export interface TdCommLandingState {
 /** What the editor reads: both snapshots + whether the draft has unpublished changes. */
 export interface LandingEditorState extends TdCommLandingState {
   hasUnpublishedChanges: boolean
+}
+
+/* -------------------------------------------------------------------------- */
+/* Phase 14 — Portfolio Manager (td_comm_portfolio + td_comm_showcase_consents) */
+/* -------------------------------------------------------------------------- */
+
+/** How we came to be allowed to feature a client's brand publicly. */
+export type PortfolioConsentSource = 'client_optin' | 'written_on_file' | 'none'
+
+/** One row of the client-consent audit trail (td_comm_showcase_consents). */
+export interface ShowcaseConsent {
+  id: string
+  enrollment_id: string | null
+  contact_id: string | null
+  /** Content hash of the exact consent wording the client saw. */
+  consent_version: string
+  granted_at: string
+  /** Null until the client withdraws. */
+  revoked_at: string | null
+  ip_address: string | null
+  user_agent: string | null
+  method: 'click' | 'docusign'
+  created_at: string
+}
+
+/** One curated showcase entry (td_comm_portfolio). Full shape (curator view). */
+export interface PortfolioEntry {
+  id: string
+  /** Source project, or null for a manual/off-system entry. */
+  enrollment_id: string | null
+  title_en: string
+  title_it: string
+  /** Public-safe display name the curator sets (may be anonymized). */
+  client_name: string
+  description_en: string
+  description_it: string
+  /** Public URL (assets bucket); null when there's no "before". */
+  before_image_url: string | null
+  /** Public URL (assets bucket); required — the result. */
+  after_image_url: string
+  /** Free-text category; the filter list is derived from distinct values, not hardcoded. */
+  category: string | null
+  /** Language-neutral filter keys. */
+  tags: string[]
+  published: boolean
+  featured: boolean
+  sort_order: number
+  consent_source: PortfolioConsentSource
+  consent_id: string | null
+  attested_by: string | null
+  attested_at: string | null
+  deleted_at: string | null
+  deleted_by: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * A curator-view entry enriched with its live consent status for the badge.
+ * `consent_state` is derived at read time from the linked consent row + source.
+ */
+export interface PortfolioEntryWithConsent extends PortfolioEntry {
+  /**
+   * opted_in       — a client_optin with a live (non-revoked) consent row
+   * withdrawn      — a client_optin whose consent row was revoked (entry is auto-hidden)
+   * written_on_file — an admin attestation
+   * none           — no recorded basis
+   */
+  consent_state: 'opted_in' | 'withdrawn' | 'written_on_file' | 'none'
+}
+
+/** The write shape the curator UI/API sends when creating/updating an entry. */
+export interface PortfolioEntryInput {
+  enrollment_id?: string | null
+  title_en?: string
+  title_it?: string
+  client_name?: string
+  description_en?: string
+  description_it?: string
+  before_image_url?: string | null
+  after_image_url?: string
+  category?: string | null
+  tags?: string[]
+  featured?: boolean
+  consent_source?: PortfolioConsentSource
+  consent_id?: string | null
+}
+
+/** Public-safe subset served to the unauthenticated `/portfolio` page + public API. */
+export interface PublicPortfolioEntry {
+  id: string
+  title_en: string
+  title_it: string
+  client_name: string
+  description_en: string
+  description_it: string
+  before_image_url: string | null
+  after_image_url: string
+  category: string | null
+  tags: string[]
+  featured: boolean
 }
