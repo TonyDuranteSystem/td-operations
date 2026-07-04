@@ -658,6 +658,17 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
     })
   }
 
+  const handleSendDraft = () => {
+    // First send of a Draft invoice — same backend as the By Client tab's Send
+    // button (sendNewInvoice → sendTDInvoice: PDF + HTML email, sets Sent).
+    if (!window.confirm(`Send invoice ${invoiceNumber} to the client with PDF attached?`)) return
+    startTransition(async () => {
+      const result = await sendNewInvoice(invoiceId)
+      if (result.success) { toast.success(`Invoice ${invoiceNumber} sent to client`); router.refresh() }
+      else toast.error(result.error ?? 'Failed to send')
+    })
+  }
+
   const handleResendInvoice = () => {
     if (!window.confirm(`Resend invoice ${invoiceNumber} with PDF to the client?`)) return
     startTransition(async () => {
@@ -719,6 +730,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   return (
     <>
       <div className="flex items-center justify-center gap-0.5">
+        {status === 'Draft' && (
+          <ActionButton onClick={handleSendDraft} label="Send Invoice — email the invoice with PDF to the client (Draft → Sent)" icon={Send} color="text-blue-600" hoverBg="hover:bg-blue-100" />
+        )}
         {status !== 'Paid' && status !== 'Cancelled' && (
           <ActionButton onClick={handleMarkPaid} label="Mark as Paid — record this invoice as paid manually" icon={CheckCircle} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
         )}

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
+import { isClientVisiblePayment } from '@/lib/portal/payment-visibility'
 import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
@@ -733,7 +734,9 @@ export async function getPortalPayments(accountId: string) {
     .order('due_date', { ascending: false })
     .limit(20)
 
-  return data ?? []
+  // Unsent drafts (Draft + Pending) are staff-internal until reviewed and
+  // sent — never show them to the client (Kasabi incident, 2026-07-04).
+  return (data ?? []).filter(isClientVisiblePayment)
 }
 
 /**
@@ -750,7 +753,8 @@ export async function getPortalPaymentsByContact(contactId: string) {
     .order('due_date', { ascending: false })
     .limit(20)
 
-  return data ?? []
+  // Same unsent-draft rule as getPortalPayments.
+  return (data ?? []).filter(isClientVisiblePayment)
 }
 
 /**
