@@ -62,7 +62,7 @@ describe('rowRootKey — degenerate-description fallback (cond. 11, NOT counterp
 
   it('empty description + counterparty → counterparty; both empty → (no description)', () => {
     expect(rowRootKey('', 'XOROI BEACH')).toEqual({ key: 'xoroi beach', label: 'XOROI BEACH', source: 'counterparty' })
-    expect(rowRootKey(null, null)).toEqual({ key: '(no description)', label: '(no description)', source: 'none' })
+    expect(rowRootKey(null, null)).toEqual({ key: '(no description)', label: '(no description)', source: 'none', degenerate: true })
   })
 
   it('degenerate description with degenerate/empty counterparty keeps a stable description bucket', () => {

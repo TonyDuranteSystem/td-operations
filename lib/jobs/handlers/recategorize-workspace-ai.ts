@@ -103,7 +103,14 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
       labeled: r.labeled,
       uncategorized_remaining: r.uncategorizedRemaining,
       capped: r.stats.capped,
-      errors: [...r.aiErrors, `chunk=${chunkIndex}`, `followup=${followup}`],
+      errors: [
+        ...r.aiErrors,
+        `chunk=${chunkIndex}`,
+        `followup=${followup}`,
+        // Giant-group verdicts (review F5b): the largest blast-radius
+        // decisions of the run, queryable without touching row data.
+        ...(r.giantGroups ?? []).map(g => `giant-group: ${g.merchant} ×${g.count} ($${g.total}) → ${g.category} [${g.confidence}]`),
+      ],
     })
   } catch (e) {
     console.error("[recategorize-workspace-ai] run-record insert failed (job result unaffected):", e)

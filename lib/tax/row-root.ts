@@ -31,6 +31,10 @@ export interface RowRoot {
   label: string
   /** Where the root came from: 'description' | 'counterparty' | 'none'. */
   source: "description" | "counterparty" | "none"
+  /** TRUE when this is the last-resort DEGENERATE description bucket ("card",
+   *  "spend"…) — a stable bucket for display, but NEVER a merchant identity:
+   *  group-level AI verdicts and learned rules must not key on it. */
+  degenerate?: boolean
 }
 
 /** Payment rails — never a learnable pattern (a contains-rule on "paypal"
@@ -123,7 +127,8 @@ export function rowRootKey(description: string | null | undefined, counterparty:
     }
   }
   // Last resort: whatever the description root was (even degenerate) beats
-  // nothing — rows still need SOME stable bucket.
-  if (descRoot) return { key: descRoot.toLowerCase(), label: descRoot, source: "description" }
-  return { key: "(no description)", label: "(no description)", source: "none" }
+  // nothing — rows still need SOME stable bucket. Marked degenerate so
+  // group-AI/learning consumers can refuse to treat it as a merchant identity.
+  if (descRoot) return { key: descRoot.toLowerCase(), label: descRoot, source: "description", degenerate: true }
+  return { key: "(no description)", label: "(no description)", source: "none", degenerate: true }
 }

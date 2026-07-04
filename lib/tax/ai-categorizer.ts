@@ -29,7 +29,7 @@ const TIMEOUT_MS = 90_000
  *  challenged categorization is traceable to the exact prompt that made it
  *  (audit requirement for a tax product). Bump on ANY change to systemPrompt,
  *  SUGGEST_TOOL, or the apply policy. */
-export const AI_PROMPT_VERSION = "v2"
+export const AI_PROMPT_VERSION = "v3"
 
 /** Kill switch (Phase 0.4): set AI_CATEGORIZATION_DISABLED=1 on Vercel to stop
  *  the AI pass fleet-wide (both the workspace and client paths call through
@@ -46,6 +46,12 @@ export interface AiCategorizableTx {
   amount: number
   currency: string
   bank_name: string
+  /** Group-level candidates (Phase 3R-B): this line REPRESENTS a merchant
+   *  group of `group_count` transactions totalling `group_total` (same root,
+   *  same direction, same currency). Singletons omit both — their line renders
+   *  byte-identically to the pre-group format. */
+  group_count?: number
+  group_total?: number
 }
 
 export interface AiSuggestion {
@@ -64,6 +70,11 @@ export interface AiSuggestion {
 
 export interface AiCategorizeContext {
   companyName: string
+  /** Group-level mode (Phase 3R-B): lines are MERCHANT GROUPS, not single
+   *  transactions — adds the group instructions to the system prompt. Only
+   *  the workspace path sets this in v1 (client path gated on the rebuilt
+   *  eval fixtures, review F6c). */
+  grouped?: boolean
   /** Member/owner names — wires to these people are distributions, money from
    *  them is a contribution, NEVER revenue/expense. */
   memberNames: string[]
@@ -138,7 +149,10 @@ function systemPrompt(ctx: AiCategorizeContext): string {
     "Confidence calibration:",
     "- 'high' when the description makes the category unambiguous, OR when the merchant/counterparty clearly serves the stated business activity (e.g. e-commerce platform, marketing/ads tools, hosting, freelancer marketplaces for an online business). Recurring INFLOWS from payment processors or repeated third-party customer payments (PayPal, Stripe, ACH from non-member companies) are sales revenue for this kind of business — 'high' unless something contradicts it.",
     "- 'medium' when the category is plausible but the business context could change it.",
-    "- 'low' for personal-looking spending on company cards (food delivery, restaurants, streaming, gyms, supermarkets): it may be a deductible business cost OR the owner's personal spending (a distribution) — only the client knows. NEVER 'high' for these; a wrong deduction corrupts a TAX RETURN, an honest 'low' just asks the client.",
+    "- 'low' for personal-looking spending on company cards (food delivery, restaurants, streaming, gyms, supermarkets): it may be a deductible business cost OR the owner's personal spending (a distribution) — only the client knows. NEVER 'high' for these; a wrong deduction corrupts a TAX RETURN, an honest 'low' just asks the client" + (ctx.grouped ? " — and in group mode this applies PER GROUP: a wrong 'high' corrupts every transaction of that merchant at once." : "."),
+    ctx.grouped
+      ? "GROUP MODE: each line is a MERCHANT GROUP, not a single transaction — every transaction from the same merchant, in the same direction and currency, shown as one representative with '×N (total T CUR)'. Your verdict is applied to EVERY transaction in the group. If the transactions under one merchant could plausibly mix business and personal purposes — or the name looks like a marketplace, a person, or a generic transfer rather than one specific merchant — do NOT guess: answer confidence 'low'. A wrong 'high' here corrupts N rows of a tax P&L at once; an honest 'low' asks the client once."
+      : "",
     ctx.buckets?.length ? `Accountant buckets — put the single best-fit SLUG in the 'bucket' field (or 'other'): ${ctx.buckets.map(b => `${b.slug} (${b.label})`).join("; ")}.` : "",
     "For EVERY transaction also set 'lean' (business/personal/unsure) and 'bucket'. These are ADVISORY hints used only to pre-sort the client's review — the client confirms, and they NEVER change the bookkeeping category. 'lean=personal' for personal-looking owner spending; 'business' for inflows, transfers, and clear business costs; 'unsure' when you truly cannot tell.",
     "Always respond by calling the suggest_categories tool with one entry per transaction.",
@@ -254,7 +268,7 @@ export async function aiSuggestCategories(
     const batch = batches[bi]
     const validIds = new Set(batch.map(t => t.id))
     const lines = batch.map(t =>
-      `${t.id} | ${t.transaction_date} | ${t.bank_name} | ${t.amount > 0 ? "+" : ""}${t.amount} ${t.currency} | ${t.counterparty || "-"} | ${t.description}`,
+      `${t.id} | ${t.transaction_date} | ${t.bank_name} | ${t.amount > 0 ? "+" : ""}${t.amount} ${t.currency}${(t.group_count ?? 1) > 1 ? ` ×${t.group_count} (total ${t.group_total} ${t.currency})` : ""} | ${t.counterparty || "-"} | ${t.description}`,
     ).join("\n")
 
     try {
@@ -272,7 +286,9 @@ export async function aiSuggestCategories(
           tool_choice: { type: "tool", name: "suggest_categories" },
           messages: [{
             role: "user",
-            content: `Categorize these ${batch.length} transactions (format: id | date | bank | amount | counterparty | description):\n\n${lines}`,
+            content: ctx.grouped
+              ? `Categorize these ${batch.length} merchant groups (format: id | date | bank | amount currency [×count (total)] | counterparty | description — the id is the group's representative transaction):\n\n${lines}`
+              : `Categorize these ${batch.length} transactions (format: id | date | bank | amount | counterparty | description):\n\n${lines}`,
           }],
         }),
       })

@@ -71,8 +71,8 @@ export function deriveLearnedRules(
     // description was degenerate ("Unknown - Corporate Card…"); learning a
     // contains-rule from either side of that pair would blanket-match every
     // corporate-card row (or an MCC label like "Restaurants") on future runs.
-    const { label, source } = rowRootKey(r.description, r.counterparty)
-    if (source !== "description") continue
+    const { label, source, degenerate } = rowRootKey(r.description, r.counterparty)
+    if (source !== "description" || degenerate) continue
     const key = label.trim()
     if (key.length < MIN_LEARN_PATTERN_LENGTH) continue // skip blank/generic
     if (key.toLowerCase() === "(no description)") continue

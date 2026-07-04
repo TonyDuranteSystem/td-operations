@@ -162,6 +162,10 @@ export interface WorkspaceAiResult {
   uncategorizedRemaining: number
   /** Per-run stats for the ai_categorization_runs record (Phase 0.5). */
   stats: import("./ai-categorizer").AiRunStats
+  /** High-confidence verdicts applied to GIANT groups (≥100 rows or ≥$10k)
+   *  — listed in the per-chunk run record (review F5b: escalation-not-
+   *  discovery for the largest blast-radius decisions). */
+  giantGroups?: Array<{ merchant: string; count: number; total: number; category: string; confidence: string }>
 }
 
 /**
@@ -198,7 +202,7 @@ export async function recategorizeWorkspaceAi(
   if (toLabel.length === 0) return { scanned: rows.length, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: uncatBefore, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
 
   const bankNames = Array.from(new Set(rows.map(r => (r.bank_name as string) ?? "").filter(Boolean)))
-  const txs: AiCategorizableTx[] = toLabel.map(r => ({
+  const rawTxs: AiCategorizableTx[] = toLabel.map(r => ({
     id: r.id as string,
     transaction_date: r.transaction_date as string,
     description: (r.description as string) ?? "",
@@ -207,24 +211,34 @@ export async function recategorizeWorkspaceAi(
     currency: (r.currency as string) ?? "USD",
     bank_name: (r.bank_name as string) ?? "",
   }))
+  // Group-level candidates (Phase 3R-B): one representative line per merchant
+  // group (root+direction+currency); the verdict fans out to every member.
+  // Dynamiq: ~4,300 rows → ~700 lines → ~18 API calls instead of ~109.
+  const { buildGroupedAiCandidates, expandSuggestionMembers, GIANT_GROUP_ROWS, GIANT_GROUP_ABS_TOTAL } =
+    await import("./group-ai-candidates")
+  const { txs, expansion } = buildGroupedAiCandidates(rawTxs)
+  const groupMeta = new Map(txs.filter(t => (t.group_count ?? 1) > 1).map(t => [t.id, t]))
   const buckets = await getExpenseBuckets(db)
 
   const catById = new Map(rows.map(r => [r.id as string, r.category as string]))
   let aiCategorized = 0
   let labeled = 0
   const written = new Set<string>()
+  const giantGroups: Array<{ merchant: string; count: number; total: number; category: string; confidence: string }> = []
 
-  // Persist one suggestion. TOCTOU guard (re-review COND-3): the category write
-  // carries .eq('category','uncategorized') — a Regenerate or a staff answer
-  // landing while the AI was thinking must never be overwritten by a verdict
-  // decided on stale data. Hint-only writes are additive and unguarded.
-  const persistSuggestion = async (s: AiSuggestion) => {
+  // Persist one suggestion for ONE member row. TOCTOU guard (re-review COND-3):
+  // the category write carries .eq('category','uncategorized') — a Regenerate
+  // or a staff answer landing while the AI was thinking must never be
+  // overwritten by a verdict decided on stale data. Hint-only writes are
+  // additive and unguarded. Group-applied rows get a size-stamped note
+  // (ai:high@v3:gN — review F5a) so a challenged group verdict is auditable.
+  const persistSuggestion = async (s: AiSuggestion, groupSize = 1) => {
     const d = decideAiSuggestion(s, catById.get(s.id))
     if (!d.update) return
     const payload: Record<string, unknown> = {}
     if (d.update.category) payload.category = d.update.category
     if (d.update.subcategory !== undefined) payload.subcategory = d.update.subcategory
-    if (d.update.notes) payload.notes = d.update.notes
+    if (d.update.notes) payload.notes = groupSize > 1 ? `${d.update.notes}:g${groupSize}` : d.update.notes
     if (d.update.ai_lean !== undefined) payload.ai_lean = d.update.ai_lean
     if (d.update.ai_bucket !== undefined) payload.ai_bucket = d.update.ai_bucket
     let q = db.from("pnl_workspace_transactions").update(payload).eq("id", s.id)
@@ -236,23 +250,37 @@ export async function recategorizeWorkspaceAi(
     written.add(s.id)
   }
 
+  // Fan one suggestion out to its whole group (review F2): members INCLUDE the
+  // representative; already-written members are skipped, so BOTH the per-batch
+  // hook and the end-of-run reconcile can call this — a partial fan-out
+  // completes without double-writing.
+  const persistGroup = async (s: AiSuggestion) => {
+    const rep = groupMeta.get(s.id)
+    const groupSize = rep?.group_count ?? 1
+    const memberIds = expandSuggestionMembers(s.id, expansion, written)
+    for (const id of memberIds) await persistSuggestion({ ...s, id }, groupSize)
+    if (rep && s.confidence === "high" &&
+      (groupSize >= GIANT_GROUP_ROWS || Math.abs(rep.group_total ?? 0) >= GIANT_GROUP_ABS_TOTAL)) {
+      giantGroups.push({ merchant: rep.description.slice(0, 60), count: groupSize, total: rep.group_total ?? 0, category: s.category, confidence: s.confidence })
+    }
+  }
+
   // Per-batch persistence (Phase 0.3): each batch is written before the next
   // API call — a killed run (300s window) keeps everything already paid for.
   const ai = await aiSuggestCategories(
     txs,
-    { companyName: opts.companyName || "the company", memberNames: opts.memberNames, bankNames, buckets },
+    { companyName: opts.companyName || "the company", memberNames: opts.memberNames, bankNames, buckets, grouped: true },
     {
       ...opts.aiOptions,
       onBatch: async (batchSuggestions) => {
-        for (const s of batchSuggestions) await persistSuggestion(s)
+        for (const s of batchSuggestions) await persistGroup(s)
       },
     },
   )
-  // Reconcile: anything a failed mid-run onBatch write missed.
-  for (const s of ai.suggestions) {
-    if (!written.has(s.id)) await persistSuggestion(s)
-  }
+  // Reconcile: anything a failed mid-run onBatch write missed — persistGroup
+  // skips already-written members, so this completes partial fan-outs only.
+  for (const s of ai.suggestions) await persistGroup(s)
 
   const uncategorizedRemaining = Array.from(catById.values()).filter(c => c === "uncategorized").length
-  return { scanned: rows.length, aiCategorized, labeled, aiErrors: ai.errors, uncategorizedRemaining, stats: ai.stats }
+  return { scanned: rows.length, aiCategorized, labeled, aiErrors: ai.errors, uncategorizedRemaining, stats: ai.stats, giantGroups }
 }
