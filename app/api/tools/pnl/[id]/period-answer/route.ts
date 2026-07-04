@@ -62,16 +62,17 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: 'loc_codes, period_start, period_end, choice (business|personal), expected_row_count and expected_dollar_total are required.' }, { status: 400 })
     }
 
-    // Guard (iv) — recomputed server-side, never trusted from the client.
-    const { count: aiPending } = await supabaseAdmin
-      .from('job_queue')
-      .select('id', { count: 'exact', head: true })
-      .eq('job_type', 'recategorize_workspace_ai')
-      .eq('related_entity_id', workspaceId)
-      .in('status', ['pending', 'processing'])
-    if ((aiPending ?? 0) > 0) {
-      return NextResponse.json({ error: 'AI categorization is still running — wait for it to finish, then review the period again.' }, { status: 409 })
-    }
+    // Guard (iv), REVISED 2026-07-04 (prod incident: Antonio's period taps
+    // bounced for hours behind a running chain). The original blanket
+    // 409-while-aiPending assumed period detection depended on AI-written
+    // loc data — FALSE in shipped v1: loc_* labels are DETERMINISTIC-only
+    // (stamped at Generate; the AI chain never writes them), so a running
+    // chain cannot invalidate the detected periods. The REAL race — the AI
+    // booking rows between the modal render and the confirm — is already
+    // covered row-wise (sweep TOCTOU + manual-guard) and set-wise by guard
+    // (iii): any drift in the confirmed count/total → 409 → re-confirm with
+    // fresh numbers. Only the STALE guard (new statements after generation,
+    // where detection genuinely ran on incomplete data) remains blocking.
     const { data: wsRow } = await db.from('pnl_workspaces').select('generated_at').eq('id', workspaceId).maybeSingle()
     if (!wsRow) return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
     if (wsRow.generated_at) {

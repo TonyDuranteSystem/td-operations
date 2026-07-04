@@ -128,9 +128,16 @@ async function main() {
     let res = await http(`/api/tools/pnl/${WS}/period-answer`, { method: "POST", body: body({ expected_row_count: merged.sweepable_count - 1 }) })
     ok("409 on count mismatch", res.status === 409)
 
+    // REVISED 2026-07-04: a running AI chain must NOT block period answers
+    // (loc data is deterministic-only; the count-mismatch guard covers real
+    // drift). With a pending AI job + WRONG expected counts, the request must
+    // reach the COUNT guard (proving the aiPending blanket 409 is gone)
+    // without consuming the sweep.
     const { data: fakeJob } = await db.from("job_queue").insert({ job_type: "recategorize_workspace_ai", status: "pending", related_entity_id: WS, payload: { qa: true } }).select("id").single()
-    res = await http(`/api/tools/pnl/${WS}/period-answer`, { method: "POST", body: body() })
-    ok("409 while AI job pending (recomputed server-side)", res.status === 409)
+    res = await http(`/api/tools/pnl/${WS}/period-answer`, { method: "POST", body: body({ expected_row_count: merged.sweepable_count - 1 }) })
+    const pendingBody = await res.json()
+    ok("running AI chain does NOT block period answers (reaches count guard)",
+      res.status === 409 && !String(pendingBody.error ?? "").includes("still running"))
     await db.from("job_queue").delete().eq("id", fakeJob.id)
 
     await db.from("pnl_workspace_transactions").insert({ workspace_id: WS, tax_year: 2025, transaction_date: day("2025-09-01"), description: "late upload row", amount: -5, currency: "USD", transaction_ref: "qa2b-late", category: "uncategorized", subcategory: "" })
