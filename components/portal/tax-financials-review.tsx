@@ -150,13 +150,20 @@ const ANSWERS = [
 ]
 
 // Which answer chip is "active" given the row's current bookkeeping category.
-// (uncategorized defaults to business expense in the P&L, so it shows as such.)
+// UNDECIDED groups select NOTHING (prod incident 2026-07-04): pre-lighting
+// "Business expense" on uncategorized rows made the most natural click — tap
+// the highlighted chip to confirm — a permanently DEAD button (selected chips
+// are disabled), so a group could never be booked as business expense at all.
+// No booking = no selection; every chip stays clickable.
 const CATEGORY_TO_ANSWER: Record<string, string> = {
-  expense: 'business_expense', cogs: 'business_expense', uncategorized: 'business_expense',
+  expense: 'business_expense', cogs: 'business_expense',
   fee: 'bank_fee', distribution: 'personal_spending', income: 'business_income',
   contribution: 'owner_money_in', conversion: 'own_transfer',
 }
-const activeAnswerOf = (g: QuestionGroup) => CATEGORY_TO_ANSWER[g.current_category ?? 'uncategorized'] ?? 'business_expense'
+const activeAnswerOf = (g: QuestionGroup): string | null => {
+  const cat = g.current_category ?? 'uncategorized'
+  return cat === 'uncategorized' ? null : (CATEGORY_TO_ANSWER[cat] ?? null)
+}
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtDay = (iso: string, it: boolean) =>
