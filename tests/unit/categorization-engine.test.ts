@@ -213,3 +213,28 @@ describe('decideAiSuggestion (shared AI-apply policy)', () => {
     expect(d.update).toEqual({ ai_lean: 'unsure', ai_bucket: 'other' })
   })
 })
+
+describe('Wise conversion locale seeds (2026-07-04) — the "Se han convertido" fix', () => {
+  const seed = (pattern: string): CategorizationRule => ({
+    id: `seed-${pattern}`, pattern, match_type: 'contains', category: 'conversion',
+    subcategory: 'currency_conversion', account_id: null, priority: 40, direction: 'any',
+  })
+  it('Spanish/Portuguese/German Wise conversion lines book as conversion deterministically — both legs', () => {
+    const rules = [seed('Se han convertido'), seed('Foram convertidos'), seed('wurden umgerechnet')]
+    const cases = [
+      { description: 'Se han convertido 417,02 USD a 400,00 EUR', amount: 400 },
+      { description: 'Se han convertido 3.135,54 USD a 3.000,00 EUR', amount: -3135.54 },
+      { description: 'Foram convertidos 100,00 USD para 90,00 EUR', amount: 90 },
+      { description: '500,00 USD wurden umgerechnet in 460,00 EUR', amount: 460 },
+    ]
+    for (const c of cases) {
+      const r = applyRules({ description: c.description, counterparty: '', amount: c.amount } as never, rules)
+      expect(r.category).toBe('conversion')
+    }
+  })
+  it('a real Spanish-described purchase is NOT swept by the conversion seed', () => {
+    const rules = [seed('Se han convertido')]
+    const r = applyRules({ description: 'Compra en Mercadona Valencia', counterparty: '', amount: -25 } as never, rules)
+    expect(r.category).not.toBe('conversion')
+  })
+})
