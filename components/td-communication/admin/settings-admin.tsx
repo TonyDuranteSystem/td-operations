@@ -107,6 +107,23 @@ export function SettingsAdmin({ isAdmin }: { isAdmin: boolean }) {
           </label>
         </div>
 
+        {/* Public portfolio kill-switch (Phase 14) */}
+        <div className="border rounded-lg bg-white p-4">
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-zinc-900">Public portfolio</span>
+              <span className="block text-xs text-zinc-500">Turn the public <code className="bg-zinc-100 px-1 rounded">/portfolio</code> showcase page on or off. When off, the page shows a &quot;coming soon&quot; message and is hidden from search engines. Manage entries in the <strong className="font-medium">Portfolio</strong> tab.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-5 w-5"
+              checked={settings.portfolio_enabled}
+              disabled={disabled}
+              onChange={(e) => set('portfolio_enabled', e.target.checked)}
+            />
+          </label>
+        </div>
+
         {/* Disclaimer */}
         <div className="border rounded-lg bg-white p-4 space-y-3">
           <h4 className="text-sm font-medium text-zinc-900">Disclaimer text</h4>
