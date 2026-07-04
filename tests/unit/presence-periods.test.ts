@@ -190,3 +190,26 @@ describe('isSweepableRow — the endpoint predicate mirror', () => {
     expect(isSweepableRow({ ...base, amount: 10 })).toBe(false)
   })
 })
+
+describe('detectPresencePeriods — flat-window recount (display ≡ sweep, prod 2026-07-04)', () => {
+  it('rows in below-floor weeks INSIDE the window are counted (the endless-409 fix)', () => {
+    // 8 active weeks at floor + ONE straggler row in a quiet week inside the
+    // window: run-based counting excluded it; the sweep window includes it.
+    const rows = [...weeksOf('IT', 0, 3), ...weeksOf('IT', 6, 9), row(5, 'IT')]
+    const p = detectPresencePeriods(rows, null)
+    expect(p).toHaveLength(1)
+    expect(p[0].row_count).toBe(2 * 8 + 1)
+    expect(p[0].sweepable_count).toBe(2 * 8 + 1)
+  })
+
+  it('merged EU+country period counts EVERY located row of both codes in the union window', () => {
+    const rows = [
+      ...weeksOf('PT', 0, 7, 2),
+      ...weeksOf('EU', 0, 7, 4),
+      row(3, 'EU'), // below-floor-irrelevant: extra EU row mid-window
+    ]
+    const p = detectPresencePeriods(rows, null)
+    expect(p).toHaveLength(1)
+    expect(p[0].row_count).toBe(16 + 32 + 1)
+  })
+})

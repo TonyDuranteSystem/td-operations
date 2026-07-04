@@ -142,13 +142,19 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       : { category: 'distribution', subcategory: 'personal_draw' }
 
     // Capture prior state (undo restore source) — includes ai:high@vN notes.
-    const { data: preRows, error: preErr } = await db
-      .from('pnl_workspace_transactions')
-      .select('id, category, subcategory, notes')
-      .eq('workspace_id', workspaceId)
-      .in('id', candidates.map(c => c.id))
-    if (preErr) throw new Error(preErr.message)
-    const prior = (preRows ?? []) as Array<{ id: string; category: string; subcategory: string | null; notes: string | null }>
+    // CHUNKED (prod incident: a 957-row period's ids in one .in() blew the
+    // URL length limit → 500 — the exact 2000-id precedent guard (i) cited).
+    const prior: Array<{ id: string; category: string; subcategory: string | null; notes: string | null }> = []
+    const candidateIds = candidates.map(c => c.id)
+    for (let i = 0; i < candidateIds.length; i += 200) {
+      const { data: preRows, error: preErr } = await db
+        .from('pnl_workspace_transactions')
+        .select('id, category, subcategory, notes')
+        .eq('workspace_id', workspaceId)
+        .in('id', candidateIds.slice(i, i + 200))
+      if (preErr) throw new Error(preErr.message)
+      prior.push(...((preRows ?? []) as typeof prior))
+    }
 
     // Batch header + rows BEFORE the sweep (a swept row without restore data
     // must be impossible; the reverse — captured but unswept — reconciles away).

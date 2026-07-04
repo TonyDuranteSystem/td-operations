@@ -238,5 +238,38 @@ export function detectPresencePeriods(rows: LocatableRow[], residenceCountry: st
     if (!consumedRegions.has(rp)) out.push(toPeriod([rp.loc], rp.loc, rp.rows, rp.activeWeeks))
   }
 
-  return out.sort((a, b) => (a.start < b.start ? -1 : 1))
+  // FLAT-WINDOW recount (prod incident 2026-07-04): the sweep endpoint's
+  // predicate is date-window + loc_code — it also catches located rows in
+  // BELOW-FLOOR weeks inside the window, which the run-based rows above
+  // exclude. Card numbers must equal what the sweep will actually touch, or
+  // the count-mismatch guard rejects every confirm of an affected period
+  // (Dynamiq ES+EU: 954 run-rows vs 957 window-rows → endless 409). A quiet
+  // week inside the stay is still the stay — recount everything per period
+  // from the flat window so display ≡ sweep, exactly.
+  const recounted = out.map(p => {
+    const flat = located.filter(r =>
+      r.loc_code && p.loc_codes.includes(r.loc_code) && r.transaction_date >= p.start && r.transaction_date <= p.end)
+    const sweepable = flat.filter(isSweepableRow)
+    const merchants = new Map<string, { label: string; n: number }>()
+    const groupKeys = new Set<string>()
+    for (const r of flat) {
+      const { key, label, source } = rowRootKey(r.description, r.counterparty)
+      if (source === "none") continue
+      const e = merchants.get(key) ?? { label, n: 0 }
+      e.n++
+      merchants.set(key, e)
+      groupKeys.add(key)
+    }
+    return {
+      ...p,
+      row_count: flat.length,
+      dollar_total: flat.reduce((s, r) => s + Math.abs(r.amount), 0),
+      sweepable_count: sweepable.length,
+      sweepable_total: sweepable.reduce((s, r) => s + Math.abs(r.amount), 0),
+      top_merchants: Array.from(merchants.values()).sort((a, b) => b.n - a.n).slice(0, 5).map(m => m.label),
+      group_keys: Array.from(groupKeys),
+    }
+  })
+
+  return recounted.sort((a, b) => (a.start < b.start ? -1 : 1))
 }
