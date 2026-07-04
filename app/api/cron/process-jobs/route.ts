@@ -127,6 +127,9 @@ export async function GET(req: NextRequest) {
           summary: result.summary,
         })
       }
+      // A deferred handler had no usable window left — stop claiming so its
+      // continuation gets a FRESH invocation instead of this dying one.
+      if (result.deferRunner) break
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e)
       await failJob(job.id, errMsg)

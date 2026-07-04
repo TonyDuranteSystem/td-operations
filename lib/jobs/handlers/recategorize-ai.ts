@@ -126,6 +126,11 @@ export async function handleRecategorizeAi(job: Job, ctx?: JobRunContext): Promi
     result.summary = `AI chain hit the ${AI_CHAIN_CHUNK_CAP}-chunk cap with work remaining (${p.account_id} ${p.tax_year})`
     return result
   }
+  if (followup === "continue" && r.aiStats.batchesSent === 0) {
+    // Late-claim relay: no usable window left — stop this runner's claim loop
+    // so the continuation waits for a fresh window (see workspace twin).
+    result.deferRunner = true
+  }
   result.summary = followup === "continue"
     ? `AI chunk ${chunkIndex} done — continuing (${p.account_id} ${p.tax_year})`
     : `AI categorization done for ${p.account_id} (${p.tax_year})`

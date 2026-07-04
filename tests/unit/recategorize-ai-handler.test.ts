@@ -37,3 +37,24 @@ describe("handleRecategorizeAi", () => {
     expect(r.ok).toBe(false)
   })
 })
+
+describe("handleRecategorizeAi — late-claim defer (no-op spin fix)", () => {
+  it("zero-batch deadline stop → continuation + deferRunner, never ok:false", async () => {
+    recatMock.mockResolvedValueOnce({
+      scanned: 100, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 100,
+      aiStats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false, stoppedOnDeadline: true },
+    })
+    const r = await handleRecategorizeAi(job({ account_id: "acc-1", tax_year: 2025 }), { deadlineAt: Date.now() + 10_000 })
+    expect(r.ok).not.toBe(false)
+    expect(r.deferRunner).toBe(true)
+  })
+
+  it("a chunk that did real work does NOT defer the runner", async () => {
+    recatMock.mockResolvedValueOnce({
+      scanned: 100, recategorized: 0, transferPairs: 0, aiCategorized: 5, aiErrors: [], uncategorizedRemaining: 60,
+      aiStats: { batchesSent: 4, batchesFailed: 0, suggestionsParsed: 40, truncatedBatches: 0, capped: false, stoppedOnDeadline: true },
+    })
+    const r = await handleRecategorizeAi(job({ account_id: "acc-1", tax_year: 2025 }), { deadlineAt: Date.now() + 10_000 })
+    expect(r.deferRunner).toBeUndefined()
+  })
+})

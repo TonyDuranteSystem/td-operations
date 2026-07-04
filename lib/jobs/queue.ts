@@ -18,6 +18,13 @@ export interface JobResult {
     timestamp: string
   }>
   summary?: string
+  /** Phase 3R: the handler had NO usable window left (late claim) and handed
+   *  its work to a continuation job. The RUNNER must stop claiming after this
+   *  job — otherwise the same dying invocation immediately re-claims the
+   *  continuation and no-op-spins until its budget ends (observed on prod:
+   *  30 zero-batch relays per 2 real chunks). The next fresh invocation
+   *  (cron ≤5 min / next trigger) claims it with a full window. */
+  deferRunner?: boolean
   /**
    * Handler-reported outcome. `false` means this run reached a failure
    * path the handler chose NOT to throw on (validation refused, OCR

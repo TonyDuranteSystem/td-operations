@@ -77,6 +77,9 @@ export async function POST(request: NextRequest) {
             status: result.steps.some(s => s.status === "error") ? "completed_with_errors" : "completed",
           })
         }
+        // A deferred handler had no usable window left — stop claiming so its
+        // continuation gets a FRESH invocation instead of this dying one.
+        if (result.deferRunner) break
       } catch (e) {
         await failJob(job.id, e instanceof Error ? e.message : String(e))
         processed.push({ job_id: job.id, job_type: job.job_type, status: "failed" })

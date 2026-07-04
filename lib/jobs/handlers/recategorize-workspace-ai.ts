@@ -160,6 +160,12 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
     result.summary = `Workspace AI chain hit the ${AI_CHAIN_CHUNK_CAP}-chunk cap with work remaining (${p.workspace_id})`
     return result
   }
+  if (followup === "continue" && r.stats.batchesSent === 0) {
+    // Late-claim relay: this invocation has no usable window left — tell the
+    // runner to stop claiming so the continuation waits for a FRESH window
+    // instead of being re-claimed by this same dying one (no-op spin).
+    result.deferRunner = true
+  }
   result.summary = followup === "continue"
     ? `Workspace AI chunk ${chunkIndex} done — continuing (${p.workspace_id})`
     : `Workspace AI categorization done (${p.workspace_id})`
