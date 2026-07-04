@@ -203,6 +203,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // Location-period triage (Phase 2b): pending confirm dialog + one-by-one filter.
   const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
   const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
+  // Period-answer failures render INSIDE the period section (2026-07-04:
+  // Antonio's rejected taps surfaced only in the far-away top banner — the
+  // buttons looked dead; a rejection must be loud where the click happened).
+  const [periodError, setPeriodError] = useState<string | null>(null)
   const [catData, setCatData] = useState<Record<string, CategoryDrill>>({})
   const [catLoading, setCatLoading] = useState<string | null>(null)
   const [catError, setCatError] = useState<string | null>(null)
@@ -287,9 +291,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       }
       setPeriodConfirm(null)
       setPeriodFilter(null)
+      setPeriodError(null)
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      // Loud, LOCAL failure (R099): the message renders inside the period
+      // section, right where the click happened — never only in a distant
+      // top-of-page banner.
+      setPeriodError(e instanceof Error ? e.message : String(e))
       setPeriodConfirm(null)
       await load() // 409 = numbers moved — re-render fresh so a re-confirm is honest
     } finally {
@@ -309,9 +317,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Impossibile annullare — riprova.' : 'Could not undo — please try again.'))
       }
+      setPeriodError(null)
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setPeriodError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)
     }
@@ -1081,6 +1090,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
                     : 'No fiscal residence on file in the CRM for this client — showing every detected period.')}
               </p>
+              {periodError && (
+                <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+                  ⚠ {periodError}
+                </div>
+              )}
               <div className="space-y-3">
                 {(view.periods ?? []).map(p => {
                   const key = `period-${p.primary}-${p.start}`
