@@ -96,17 +96,23 @@ export default async function TdCommunicationPage() {
 
   // Phase 14 — once the project is delivered, invite the client to be featured in
   // the public portfolio (opt-in, revocable). Resolve their current consent state
-  // server-side so the card shows the right variant.
+  // server-side so the card shows the right variant. Wrapped defensively: a consent
+  // lookup failure (e.g. the table not yet migrated in an environment) must NEVER
+  // 500 the client's page — it just hides the (non-essential) opt-in card.
   let consentCard: React.ReactNode = null
   if (enrollment && enrollment.status === 'delivered') {
-    const activeConsent = await getActiveConsentForEnrollment(enrollment.id)
-    consentCard = (
-      <ShowcaseConsentCard
-        initialConsented={!!activeConsent}
-        consentText={resolveShowcaseConsentText(locale)}
-        locale={isIt ? 'it' : 'en'}
-      />
-    )
+    try {
+      const activeConsent = await getActiveConsentForEnrollment(enrollment.id)
+      consentCard = (
+        <ShowcaseConsentCard
+          initialConsented={!!activeConsent}
+          consentText={resolveShowcaseConsentText(locale)}
+          locale={isIt ? 'it' : 'en'}
+        />
+      )
+    } catch (err) {
+      console.error('td-communication portal — showcase consent lookup failed (card hidden):', err)
+    }
   }
 
   // Footer copy (unchanged from the Phase 5/6 teaser).
