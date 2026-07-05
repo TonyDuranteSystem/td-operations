@@ -54,12 +54,23 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const body = await request.json().catch(() => ({})) as {
       loc_codes?: string[]; period_start?: string; period_end?: string
       choice?: string; expected_row_count?: number; expected_dollar_total?: number
+      scope?: string
     }
     const locCodes = Array.isArray(body.loc_codes) ? body.loc_codes.filter(c => typeof c === 'string' && LOC_CODE_RE.test(c)) : []
-    const { period_start, period_end, choice } = body
-    if (locCodes.length === 0 || !period_start || !period_end || (choice !== 'business' && choice !== 'personal')
+    let { period_start, period_end } = body
+    const { choice } = body
+    // S3: scope 'country' = a COUNTRY-POLICY answer ("everything in Spain is
+    // business") — full tax year, and the location filter includes AI-read
+    // places (the period scope stays deterministic-only per F3). The stored
+    // full-year answer row IS the policy record S4 replays.
+    const scope: 'period' | 'country' = body.scope === 'country' ? 'country' : 'period'
+    const LOC_SOURCES = scope === 'country' ? ['text', 'map', 'ai'] : ['text', 'map']
+    if (locCodes.length === 0 || (choice !== 'business' && choice !== 'personal')
       || typeof body.expected_row_count !== 'number' || typeof body.expected_dollar_total !== 'number') {
-      return NextResponse.json({ error: 'loc_codes, period_start, period_end, choice (business|personal), expected_row_count and expected_dollar_total are required.' }, { status: 400 })
+      return NextResponse.json({ error: 'loc_codes, choice (business|personal), expected_row_count and expected_dollar_total are required.' }, { status: 400 })
+    }
+    if (scope === 'period' && (!period_start || !period_end)) {
+      return NextResponse.json({ error: 'period_start and period_end are required.' }, { status: 400 })
     }
 
     // Guard (iv), REVISED 2026-07-04 (prod incident: Antonio's period taps
@@ -73,8 +84,17 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     // (iii): any drift in the confirmed count/total → 409 → re-confirm with
     // fresh numbers. Only the STALE guard (new statements after generation,
     // where detection genuinely ran on incomplete data) remains blocking.
-    const { data: wsRow } = await db.from('pnl_workspaces').select('generated_at').eq('id', workspaceId).maybeSingle()
+    const { data: wsRow } = await db.from('pnl_workspaces').select('generated_at, tax_year').eq('id', workspaceId).maybeSingle()
     if (!wsRow) return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+    // Country scope: the range is ALWAYS the whole tax year, derived
+    // server-side — a full-year loc_codes answer row is unambiguously a
+    // country policy, never a client-supplied window.
+    if (scope === 'country') {
+      const year = Number(wsRow.tax_year)
+      if (!Number.isInteger(year)) return NextResponse.json({ error: 'Workspace has no tax year.' }, { status: 400 })
+      period_start = `${year}-01-01`
+      period_end = `${year}-12-31`
+    }
     if (wsRow.generated_at) {
       const { data: newest } = await db
         .from('pnl_workspace_transactions')
@@ -98,11 +118,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         .gte('transaction_date', period_start)
         .lte('transaction_date', period_end)
         .in('loc_code', locCodes)
-        // S2: the period pipeline is deterministic-only end to end — detection
-        // (GET) and this sweep both exclude loc_source='ai' rows, so the card's
-        // counts and the sweep's set can never diverge. AI-located rows are
-        // booked by the country-policy sweep (S4), not by period answers.
-        .in('loc_source', ['text', 'map'])
+        // S2/S3: scope-dependent sources — 'period' is deterministic-only
+        // (detection and sweep must agree, F3); 'country' includes AI-read
+        // places (that's its purpose). SAME LOC_SOURCES in all four queries
+        // INCLUDING the sweep, or the modal counts and the booked set diverge.
+        .in('loc_source', LOC_SOURCES)
         .lt('amount', 0)
         .in('category', sweepable)
         .or(NOT_MANUAL_OR)
@@ -119,7 +139,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       .gte('transaction_date', period_start)
       .lte('transaction_date', period_end)
       .in('loc_code', locCodes)
-      .in('loc_source', ['text', 'map'])
+      .in('loc_source', LOC_SOURCES)
       .lt('amount', 0)
       .like('notes', 'manual:%')
     const { count: locatedCount } = await db
@@ -129,7 +149,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       .gte('transaction_date', period_start)
       .lte('transaction_date', period_end)
       .in('loc_code', locCodes)
-      .in('loc_source', ['text', 'map'])
+      .in('loc_source', LOC_SOURCES)
       .lt('amount', 0)
 
     const total = candidates.reduce((s, r) => s + Math.abs(Number(r.amount)), 0)
@@ -208,11 +228,14 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       // machinery already tolerates a kill between them.
       const sweepBase = () => db
         .from('pnl_workspace_transactions')
-        .update({ ...target, notes: `manual: period answer ${batchId}` })
+        .update({ ...target, notes: `manual: ${scope} answer ${batchId}` })
         .eq('workspace_id', workspaceId)
         .gte('transaction_date', period_start)
         .lte('transaction_date', period_end)
         .in('loc_code', locCodes)
+        // Same sources as the candidate count — the confirmed set IS the swept
+        // set (fixes the F3 gap where the sweep lacked this filter entirely).
+        .in('loc_source', LOC_SOURCES)
         .lt('amount', 0)
         .in('category', sweepable)
       const { data: sweptNull, error: err1 } = await sweepBase().is('notes', null).select('id, amount')

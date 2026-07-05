@@ -87,8 +87,19 @@ interface View {
    *  never sends these; every use below is additionally gated on isStaff). */
   periods?: PresencePeriodView[]
   period_answers?: PeriodAnswerView[]
+  /** S3 country-policy cards (staff tool only): every non-residence country
+   *  with still-sweepable located spend — one tap books the whole country. */
+  country_cards?: CountryCardView[]
   residence_country?: string | null
   residence_on_file?: boolean
+}
+
+interface CountryCardView {
+  loc_code: string
+  count: number
+  total: number
+  merchants: string[]
+  keys: string[]
 }
 
 // Location-period triage (Phase 2b): a detected presence stretch ("~6 months
@@ -213,6 +224,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [showAllNeeds, setShowAllNeeds] = useState<Set<string>>(new Set())
   // Location-period triage (Phase 2b): pending confirm dialog + one-by-one filter.
   const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
+  // S3: country-policy confirm ("everything in Spain this year → business").
+  const [countryConfirm, setCountryConfirm] = useState<{ card: CountryCardView; choice: 'business' | 'personal' } | null>(null)
   const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
   // Period-answer failures render INSIDE the period section (2026-07-04:
   // Antonio's rejected taps surfaced only in the far-away top banner — the
@@ -377,6 +390,38 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       setPeriodError(e instanceof Error ? e.message : String(e))
       setPeriodConfirm(null)
       await load() // 409 = numbers moved — re-render fresh so a re-confirm is honest
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // S3: country-policy answer — same endpoint, scope 'country' (server derives
+  // the full-year range and includes AI-read locations). Same undo as periods.
+  const confirmCountryAnswer = async () => {
+    if (!countryConfirm) return
+    const { card, choice } = countryConfirm
+    setBusy(`country-${card.loc_code}`)
+    try {
+      const res = await fetch(`${API}/period-answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'country', loc_codes: [card.loc_code], choice,
+          expected_row_count: card.count, expected_dollar_total: card.total,
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile registrare il paese — riprova.' : 'Could not book the country — please try again.'))
+      }
+      setCountryConfirm(null)
+      setPeriodFilter(null)
+      setPeriodError(null)
+      await load()
+    } catch (e) {
+      setPeriodError(e instanceof Error ? e.message : String(e))
+      setCountryConfirm(null)
+      await load()
     } finally {
       setBusy(null)
     }
@@ -1153,7 +1198,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               Interrogative copy + top merchants so a wrong detection is
               falsifiable at a glance; answers apply ONLY from the confirm
               dialog and are fully undoable (exact prior-state restore). */}
-          {isStaff && ((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0) && (
+          {isStaff && ((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
             <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
               <h3 className="text-sm font-bold text-indigo-900 mb-1">
                 🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}
@@ -1173,6 +1218,47 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 </div>
               )}
               <div className="space-y-3">
+                {/* S3 — country-policy cards: one tap books EVERY still-open
+                    located transaction of that country for the whole year
+                    (isolated purchases too, not just travel windows). */}
+                {(view.country_cards ?? []).map(c => (
+                  <div key={`country-${c.loc_code}`} className="rounded-lg border border-indigo-300 bg-indigo-50/60 p-3 sm:p-4">
+                    <div className="text-sm font-semibold text-zinc-900">
+                      {it
+                        ? `${locLabel(c.loc_code, it)}, tutto l'anno — ${c.count} transazioni · $${fmt(c.total)}`
+                        : `${locLabel(c.loc_code, it)}, whole year — ${c.count} transactions · $${fmt(c.total)}`}
+                    </div>
+                    <div className="mt-1 text-xs text-zinc-600">
+                      {it ? 'Spese localizzate lì e ancora da decidere' : 'Spending located there, still awaiting a decision'}
+                      {c.merchants.length > 0 && (
+                        <span className="text-zinc-500"> ({it ? 'principali' : 'top merchants'}: {c.merchants.join(', ')})</span>
+                      )}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => setCountryConfirm({ card: c, choice: 'business' })}
+                        className="rounded-full border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {it ? 'Tutto aziendale' : 'All business'}
+                      </button>
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => setCountryConfirm({ card: c, choice: 'personal' })}
+                        className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        {it ? 'Tutto personale' : 'All personal'}
+                      </button>
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => setPeriodFilter({ label: `${locLabel(c.loc_code, it)} · ${it ? 'tutto l\'anno' : 'whole year'}`, keys: new Set(c.keys) })}
+                        className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+                      >
+                        {it ? 'Controllo una per una' : 'Review one-by-one'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
                 {(view.periods ?? []).map(p => {
                   const key = `period-${p.primary}-${p.start}`
                   return (
@@ -1237,6 +1323,54 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 ))}
               </div>
             </section>
+          )}
+
+          {/* S3 — country-policy confirm: exact counts, undo promise, personal
+              draw-split disclosure — never a one-click sweep. */}
+          {countryConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+              <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+                <h4 className="text-sm font-bold text-zinc-900">
+                  {countryConfirm.choice === 'business'
+                    ? (it ? `Registrare TUTTO ${locLabel(countryConfirm.card.loc_code, it)} come AZIENDALE?` : `Book EVERYTHING in ${locLabel(countryConfirm.card.loc_code, it)} as BUSINESS?`)
+                    : (it ? `Registrare TUTTO ${locLabel(countryConfirm.card.loc_code, it)} come PERSONALE?` : `Book EVERYTHING in ${locLabel(countryConfirm.card.loc_code, it)} as PERSONAL?`)}
+                </h4>
+                <p className="mt-2 text-sm text-zinc-800">
+                  {it
+                    ? <><strong>{countryConfirm.card.count}</strong> transazioni per <strong>${fmt(countryConfirm.card.total)}</strong> — l&apos;intero anno fiscale, acquisti isolati inclusi.</>
+                    : <><strong>{countryConfirm.card.count}</strong> transactions totalling <strong>${fmt(countryConfirm.card.total)}</strong> — the whole tax year, isolated purchases included.</>}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {it ? 'Le righe già decise a mano non vengono mai toccate. Trasferimenti e incassi esclusi.' : 'Hand-answered rows are never touched. Transfers and income are excluded.'}
+                </p>
+                {countryConfirm.choice === 'personal' && (
+                  <p className="mt-2 rounded-md bg-amber-50 p-2 text-xs text-amber-800">
+                    {it
+                      ? 'Nota: registrate come prelievi dei soci ripartiti per quota di proprietà.'
+                      : 'Note: recorded as owner draws split by ownership %.'}
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-zinc-500">{it ? 'Puoi annullare questa operazione in qualsiasi momento.' : 'You can undo this at any time.'}</p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => setCountryConfirm(null)}
+                    disabled={busy !== null}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                  >
+                    {it ? 'Annulla' : 'Cancel'}
+                  </button>
+                  <button
+                    onClick={() => void confirmCountryAnswer()}
+                    disabled={busy !== null}
+                    className={countryConfirm.choice === 'business'
+                      ? 'rounded-full border border-emerald-600 bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
+                      : 'rounded-full border border-amber-500 bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50'}
+                  >
+                    {busy !== null ? (it ? 'Registrazione…' : 'Booking…') : (it ? 'Conferma' : 'Confirm')}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Period-answer confirm dialog (B&P2 guard): exact counts, what's

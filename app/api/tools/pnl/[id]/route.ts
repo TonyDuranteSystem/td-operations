@@ -198,13 +198,9 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const locatedRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
       const { data, error } = await db
         .from('pnl_workspace_transactions')
-        .select('id, transaction_date, description, counterparty, amount, category, notes, loc_code')
+        .select('id, transaction_date, description, counterparty, amount, category, notes, loc_code, loc_source')
         .eq('workspace_id', workspaceId)
         .not('loc_code', 'is', null)
-        // S2: presence periods are deterministic-only — AI-located rows never
-        // create period density and never ride period sweeps (same filter in
-        // the period-answer route, keeping card counts ≡ sweep set).
-        .in('loc_source', ['text', 'map'])
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
@@ -216,17 +212,22 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       .eq('workspace_id', workspaceId)
       .order('created_at', { ascending: false })
     const periodAnswers = ((batchRows ?? []) as Array<Record<string, unknown>>).filter(b => !b.undone_at)
+    // S2/F3: period DETECTION stays deterministic-only (AI-read places never
+    // create presence density); the FULL located set (incl. loc_source='ai')
+    // feeds the S3 country cards below.
     const allPeriods = detectPresencePeriods(
-      locatedRows.map(r => ({
-        id: String(r.id),
-        transaction_date: String(r.transaction_date ?? ''),
-        description: (r.description as string | null) ?? null,
-        counterparty: (r.counterparty as string | null) ?? null,
-        amount: Number(r.amount),
-        category: (r.category as string | null) ?? null,
-        notes: (r.notes as string | null) ?? null,
-        loc_code: (r.loc_code as string | null) ?? null,
-      })),
+      locatedRows
+        .filter(r => (r.loc_source as string | null) === 'text' || (r.loc_source as string | null) === 'map')
+        .map(r => ({
+          id: String(r.id),
+          transaction_date: String(r.transaction_date ?? ''),
+          description: (r.description as string | null) ?? null,
+          counterparty: (r.counterparty as string | null) ?? null,
+          amount: Number(r.amount),
+          category: (r.category as string | null) ?? null,
+          notes: (r.notes as string | null) ?? null,
+          loc_code: (r.loc_code as string | null) ?? null,
+        })),
       residenceCountry,
     )
     // A period already covered by an active (not-undone) batch is answered —
@@ -245,10 +246,53 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         overlapDays(p.start, p.end, String(b.period_start), String(b.period_end)) / pDays >= 0.8)
     })
 
+    // S3 — country-policy cards: one card per non-residence country with
+    // still-sweepable located spend (ANY source incl. 'ai'). Counts mirror the
+    // country-scope sweep predicate EXACTLY (amount<0, sweepable category,
+    // not hand-answered) — they feed the confirm modal's expected_* guard.
+    // A country covered by an ACTIVE full-year answer (the stored policy)
+    // shows no card.
+    const { PERIOD_SWEEPABLE_CATEGORIES } = await import('@/lib/tax/presence-periods')
+    const { rowRootKey } = await import('@/lib/tax/row-root')
+    const wsYear = Number((await db.from('pnl_workspaces').select('tax_year').eq('id', workspaceId).maybeSingle()).data?.tax_year)
+    const yearStart = `${wsYear}-01-01`, yearEnd = `${wsYear}-12-31`
+    const sweepableSet = new Set<string>(PERIOD_SWEEPABLE_CATEGORIES as readonly string[])
+    const coveredCountries = new Set<string>()
+    for (const b of periodAnswers) {
+      if (String(b.period_start) <= yearStart && String(b.period_end) >= yearEnd) {
+        for (const c of (b.loc_codes as string[])) coveredCountries.add(c)
+      }
+    }
+    const byCountry = new Map<string, { count: number; total: number; merchants: Map<string, number>; keys: Set<string> }>()
+    for (const r of locatedRows) {
+      const code = (r.loc_code as string | null) ?? ''
+      if (!code || code === residenceCountry || coveredCountries.has(code)) continue
+      const amt = Number(r.amount)
+      const notes = (r.notes as string | null) ?? null
+      if (amt >= 0 || !sweepableSet.has(String(r.category)) || (notes !== null && notes.startsWith('manual:'))) continue
+      const e = byCountry.get(code) ?? { count: 0, total: 0, merchants: new Map(), keys: new Set() }
+      e.count++
+      e.total += Math.abs(amt)
+      const root = rowRootKey((r.description as string | null) ?? '', (r.counterparty as string | null) ?? null)
+      e.merchants.set(root.label, (e.merchants.get(root.label) ?? 0) + 1)
+      e.keys.add(root.key)
+      byCountry.set(code, e)
+    }
+    const country_cards = Array.from(byCountry.entries())
+      .map(([loc_code, e]) => ({
+        loc_code,
+        count: e.count,
+        total: Math.round(e.total * 100) / 100,
+        merchants: Array.from(e.merchants.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([m]) => m),
+        keys: Array.from(e.keys),
+      }))
+      .sort((a, b) => b.count - a.count)
+
     return NextResponse.json({
       ...view,
       questions,
       periods,
+      country_cards,
       period_answers: periodAnswers,
       residence_country: residenceCountry,
       residence_on_file: residenceOnFile,
