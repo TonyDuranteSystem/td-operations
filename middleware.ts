@@ -79,6 +79,13 @@ const PUBLIC_PREFIXES = [
   // marketing copy). The PATCH/POST/DELETE + upload sub-routes self-authenticate
   // via resolveLandingAccess, so the startsWith match is safe.
   '/api/td-communication/landing',
+  // TD Communication PUBLIC portfolio (Phase 14): the /portfolio showcase page +
+  // its read-only GET API. Both are single literal routes with NO public
+  // sub-routes — every mutating/curator route lives under the SEPARATE prefix
+  // /api/td-communication/admin/portfolio and self-authenticates (ensureAdmin /
+  // resolvePortfolioAccess), so this startsWith match never exposes a writer.
+  '/portfolio',
+  '/api/td-communication/portfolio',
   // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session
   // and 302s the client to the checkout URL. Token-gated, no Supabase auth.
   '/pay',

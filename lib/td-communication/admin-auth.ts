@@ -55,3 +55,29 @@ export async function resolveLandingAccess(
   // staff
   return { participant, canEdit: isAdmin(user) }
 }
+
+/**
+ * Portfolio Manager access gate (Phase 14). Same shape as resolveLandingAccess:
+ * the curation surface is shared with the partner (Cris) on /collab, so it admits
+ * a scoped partner (canEdit — it's her completed work she's showcasing) and admin
+ * staff (canEdit); team staff get read-only. Anyone else → null.
+ *
+ * NOTE: this is the gate for LIST / CREATE / EDIT / DELETE / image-copy / upload.
+ * The higher-stakes PUBLIC actions — publish, feature, reorder, and the
+ * written-permission attestation — gate on ensureAdmin instead (admin-only),
+ * because they change what the public sees or make a legal attestation. Every
+ * portfolio route self-authenticates with one of these gates: middleware does NOT
+ * protect /api/td-communication/admin/portfolio* (the partner-confinement branch
+ * whitelists the whole /api/td-communication prefix), so the in-handler gate is
+ * the only guard.
+ */
+export async function resolvePortfolioAccess(
+  user: User | null,
+): Promise<{ participant: CommParticipant; canEdit: boolean } | null> {
+  if (!user) return null
+  const participant = await resolveCommParticipant(user)
+  if (!participant) return null
+  if (participant.type === 'partner') return { participant, canEdit: true }
+  // staff
+  return { participant, canEdit: isAdmin(user) }
+}

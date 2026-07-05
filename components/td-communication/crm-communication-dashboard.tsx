@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState, type ComponentType } from 'react'
 import dynamic from 'next/dynamic'
-import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate, Sparkles, Palette, DollarSign } from 'lucide-react'
+import { LayoutGrid, MessagesSquare, Package, Clock, Boxes, HelpCircle, ClipboardList, Settings, LayoutTemplate, Sparkles, Palette, DollarSign, Images } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Standalone Design Tools workspace. Lazy (Canvas / zip / SVG) so it never weighs
@@ -30,6 +30,7 @@ import { RevenueAdmin } from './admin/revenue-admin'
 import { SettingsAdmin } from './admin/settings-admin'
 import { AiGuide } from './admin/ai-guide'
 import { LandingEditor } from './landing-editor'
+import { PortfolioManager } from './portfolio-manager'
 import { SectionReadme, SECTION_READMES } from './section-readmes'
 import type {
   CommEnrollment,
@@ -42,7 +43,7 @@ interface PartnerOption {
   partner_name: string | null
 }
 
-type Tab = 'projects' | 'deliverables' | 'design-tools' | 'chat' | 'landing' | 'enrollments' | 'revenue' | 'packages' | 'questions' | 'settings' | 'ai'
+type Tab = 'projects' | 'deliverables' | 'design-tools' | 'chat' | 'landing' | 'portfolio' | 'enrollments' | 'revenue' | 'packages' | 'questions' | 'settings' | 'ai'
 
 const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'projects', label: 'Projects', icon: LayoutGrid },
@@ -50,6 +51,7 @@ const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string 
   { key: 'design-tools', label: 'Design Tools', icon: Palette },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'landing', label: 'Landing Page', icon: LayoutTemplate },
+  { key: 'portfolio', label: 'Portfolio', icon: Images },
   { key: 'enrollments', label: 'Enrollments', icon: ClipboardList },
   { key: 'revenue', label: 'Revenue', icon: DollarSign },
   { key: 'packages', label: 'Packages', icon: Boxes },
@@ -229,6 +231,12 @@ export function CrmCommunicationDashboard({
 
       {tab === 'landing' && (
         <LandingEditor canEdit={isAdmin} />
+      )}
+
+      {tab === 'portfolio' && (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <PortfolioManager canEdit={isAdmin} isAdmin={isAdmin} />
+        </div>
       )}
 
       {tab === 'enrollments' && (
