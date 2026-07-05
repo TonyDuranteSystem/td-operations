@@ -201,6 +201,10 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         .select('id, transaction_date, description, counterparty, amount, category, notes, loc_code')
         .eq('workspace_id', workspaceId)
         .not('loc_code', 'is', null)
+        // S2: presence periods are deterministic-only — AI-located rows never
+        // create period density and never ride period sweeps (same filter in
+        // the period-answer route, keeping card counts ≡ sweep set).
+        .in('loc_source', ['text', 'map'])
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)

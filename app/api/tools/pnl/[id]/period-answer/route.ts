@@ -98,6 +98,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         .gte('transaction_date', period_start)
         .lte('transaction_date', period_end)
         .in('loc_code', locCodes)
+        // S2: the period pipeline is deterministic-only end to end — detection
+        // (GET) and this sweep both exclude loc_source='ai' rows, so the card's
+        // counts and the sweep's set can never diverge. AI-located rows are
+        // booked by the country-policy sweep (S4), not by period answers.
+        .in('loc_source', ['text', 'map'])
         .lt('amount', 0)
         .in('category', sweepable)
         .or(NOT_MANUAL_OR)
@@ -114,6 +119,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       .gte('transaction_date', period_start)
       .lte('transaction_date', period_end)
       .in('loc_code', locCodes)
+      .in('loc_source', ['text', 'map'])
       .lt('amount', 0)
       .like('notes', 'manual:%')
     const { count: locatedCount } = await db
@@ -123,6 +129,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       .gte('transaction_date', period_start)
       .lte('transaction_date', period_end)
       .in('loc_code', locCodes)
+      .in('loc_source', ['text', 'map'])
       .lt('amount', 0)
 
     const total = candidates.reduce((s, r) => s + Math.abs(Number(r.amount)), 0)

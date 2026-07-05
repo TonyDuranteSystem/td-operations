@@ -66,6 +66,14 @@ export interface AiSuggestion {
   /** ADVISORY accountant bucket slug from the live `expense_categories` catalog
    *  (or "other"). Used only to GROUP the review screen; never a tax category. */
   bucket?: string
+  /** S2 (2026-07-05): ISO-3166 alpha-2 country where the spend physically
+   *  happened, read from the DESCRIPTION — only when it carries an explicit
+   *  anchor (city, country, airport, single-country local brand). Merchant-name
+   *  LANGUAGE alone is never enough (Spanish names exist in Miami and Mexico).
+   *  Advisory: stamped as loc_source='ai', never overwrites deterministic
+   *  locations, never creates presence periods, gated by an accuracy test
+   *  before it can influence anything. */
+  place?: string
 }
 
 export interface AiCategorizeContext {
@@ -125,6 +133,10 @@ const SUGGEST_TOOL = {
               type: "string",
               description: "ADVISORY accountant bucket — the slug of the single best-fit category from the provided list, or 'other' if none fit. Used only to GROUP the review screen.",
             },
+            place: {
+              type: "string",
+              description: "ADVISORY, OPTIONAL: ISO-3166 alpha-2 country code (e.g. ES, US, PT, AE) where the transaction PHYSICALLY happened, ONLY when the description contains an explicit place anchor: a city ('Tampa', 'Cascais'), a country word, an airport code, or a local shop/brand that exists in exactly one country. The LANGUAGE of a merchant name alone is NOT an anchor — omit. Online/SaaS/global merchants (Google, Meta, Amazon, subscriptions): omit. When in ANY doubt: omit. A wrong country here is worse than none.",
+            },
           },
           required: ["id", "category", "confidence"],
         },
@@ -170,6 +182,9 @@ function systemPrompt(ctx: AiCategorizeContext): string {
       : "",
     ctx.buckets?.length ? `Accountant buckets — put the single best-fit SLUG in the 'bucket' field (or 'other'): ${ctx.buckets.map(b => `${b.slug} (${b.label})`).join("; ")}.` : "",
     "For EVERY transaction also set 'lean' (business/personal/unsure) and 'bucket'. These are ADVISORY hints used only to pre-sort the client's review — the client confirms, and they NEVER change the bookkeeping category. 'lean=personal' for personal-looking owner spending; 'business' for inflows, transfers, and clear business costs; 'unsure' when you truly cannot tell.",
+    ctx.grouped
+      ? "PLACE (optional, advisory): when the description carries an EXPLICIT place anchor, set 'place' to the ISO alpha-2 country where the spend physically happened. Anchors: city names ('Whole Foods TAMPA' → US; 'Bcascais' = Cascais → PT), country words, airport codes, or a shop type/brand that exists in exactly one country ('Estanco García' — estanco is a Spanish tobacco shop → ES). The mere LANGUAGE of a name is NOT an anchor (Spanish names exist in Miami and Mexico; 'MMI home delivery Dubai' → AE because of the word Dubai, not the brand). Online/SaaS/global merchants and card processors: OMIT. When in doubt: OMIT — a wrong country is worse than none."
+      : "",
     "Always respond by calling the suggest_categories tool with one entry per transaction.",
   ].filter(Boolean).join(" ")
 }
@@ -182,7 +197,7 @@ export function parseSuggestions(raw: unknown, validIds: Set<string>, validBucke
   const out: AiSuggestion[] = []
   for (const s of list) {
     if (!s || typeof s !== "object") continue
-    const { id, category, subcategory, confidence, lean, bucket } = s as Record<string, unknown>
+    const { id, category, subcategory, confidence, lean, bucket, place } = s as Record<string, unknown>
     if (typeof id !== "string" || !validIds.has(id)) continue
     if (typeof category !== "string" || !VALID_CATEGORIES.has(category) || category === "uncategorized") continue
     if (confidence !== "high" && confidence !== "medium" && confidence !== "low") continue
@@ -190,6 +205,10 @@ export function parseSuggestions(raw: unknown, validIds: Set<string>, validBucke
     const leanOk = lean === "business" || lean === "personal" || lean === "unsure"
     const bucketStr = typeof bucket === "string" ? bucket.trim() : ""
     const bucketOk = bucketStr.length > 0 && (!validBuckets || validBuckets.has(bucketStr) || bucketStr === "other")
+    // place (S2): garbage-tolerant — accept only a clean ISO alpha-2 shape;
+    // anything else ("Spain", "eu", "", 3 letters) is silently dropped.
+    const placeStr = typeof place === "string" ? place.trim().toUpperCase() : ""
+    const placeOk = /^[A-Z]{2}$/.test(placeStr)
     out.push({
       id,
       category: category as AiSuggestion["category"],
@@ -197,6 +216,7 @@ export function parseSuggestions(raw: unknown, validIds: Set<string>, validBucke
       confidence,
       ...(leanOk ? { lean: lean as AiSuggestion["lean"] } : {}),
       ...(bucketOk ? { bucket: bucketStr } : {}),
+      ...(placeOk ? { place: placeStr } : {}),
     })
   }
   return out

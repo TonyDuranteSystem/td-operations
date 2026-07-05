@@ -131,10 +131,15 @@ export async function recategorizeWorkspace(
     return (u?.category ?? r.category) === "uncategorized"
   }).length
 
-  // Location labeling (Phase 2b, deterministic-only v1): stamp loc_* on every
+  // Location labeling (Phase 2b deterministic + S2 guard): stamp loc_* on every
   // row where the inferred location differs from what's stored. Idempotent —
   // the extractors are pure, so re-runs converge; a row that lost its signal
   // (e.g. category became conversion) is cleared back to NULL.
+  // S2 clear-guard (review F1): the deterministic extractors are BLIND to what
+  // the AI read from language/city tokens — a no-hit here must never wipe an
+  // 'ai'-sourced label, or every deterministic re-run erases the AI's work.
+  // A fresh deterministic hit still outranks and overwrites 'ai' (deterministic
+  // is ground truth); only the CLEAR path skips ai rows.
   const { inferLocation } = await import("./merchant-locations")
   for (const r of rows) {
     const u = updates.get(r.id as string)
@@ -144,8 +149,9 @@ export async function recategorizeWorkspace(
       amount: Number(r.amount),
       category: (u?.category ?? r.category) as string | null,
     })
-    const next = hit ?? { loc_code: null, loc_source: null, loc_confidence: null }
     const cur = r as unknown as { loc_code: string | null; loc_source: string | null; loc_confidence: string | null }
+    if (!hit && cur.loc_source === "ai") continue
+    const next = hit ?? { loc_code: null, loc_source: null, loc_confidence: null }
     if (cur.loc_code === next.loc_code && cur.loc_source === next.loc_source && cur.loc_confidence === next.loc_confidence) continue
     const { error } = await db.from("pnl_workspace_transactions").update(next).eq("id", r.id)
     if (error) throw new Error(`Failed to stamp location on workspace transaction ${r.id}: ${error.message}`)
@@ -229,13 +235,28 @@ export async function recategorizeWorkspaceAi(
   const written = new Set<string>()
   const giantGroups: Array<{ merchant: string; count: number; total: number; category: string; confidence: string }> = []
 
+  // S2 (AI place, flag-gated OFF by default until the accuracy gate passes):
+  // whitelist = countries with deterministic location evidence in THIS
+  // workspace; AI stamps never overwrite deterministic labels; loc_source='ai'
+  // rows never create presence periods (period pipeline reads text/map only).
+  const aiPlaceEnabled = process.env.AI_PLACE_ENABLED === "1"
+  const { decidePlaceStamp } = await import("./ai-place")
+  const locRows = rows as unknown as Array<{ id: string; loc_code: string | null; loc_source: string | null }>
+  const deterministicCountries: ReadonlySet<string> = new Set(
+    locRows
+      .filter(r => r.loc_source === "text" || r.loc_source === "map")
+      .map(r => r.loc_code ?? "")
+      .filter(Boolean),
+  )
+  const locSourceById = new Map(locRows.map(r => [r.id, r.loc_source ?? null]))
+
   // Persist one suggestion for ONE member row. TOCTOU guard (re-review COND-3):
   // the category write carries .eq('category','uncategorized') — a Regenerate
   // or a staff answer landing while the AI was thinking must never be
   // overwritten by a verdict decided on stale data. Hint-only writes are
   // additive and unguarded. Group-applied rows get a size-stamped note
   // (ai:high@v3:gN — review F5a) so a challenged group verdict is auditable.
-  const persistSuggestion = async (s: AiSuggestion, groupSize = 1) => {
+  const persistSuggestion = async (s: AiSuggestion, groupSize = 1, stampPlace?: string) => {
     const d = decideAiSuggestion(s, catById.get(s.id))
     if (!d.update) return
     const payload: Record<string, unknown> = {}
@@ -244,6 +265,14 @@ export async function recategorizeWorkspaceAi(
     if (d.update.notes) payload.notes = groupSize > 1 ? `${d.update.notes}:g${groupSize}` : d.update.notes
     if (d.update.ai_lean !== undefined) payload.ai_lean = d.update.ai_lean
     if (d.update.ai_bucket !== undefined) payload.ai_bucket = d.update.ai_bucket
+    // S2: AI place rides the same write — only onto rows with no deterministic
+    // label (deterministic always outranks 'ai').
+    const curLocSource = locSourceById.get(s.id) ?? null
+    if (stampPlace && (curLocSource === null || curLocSource === "ai")) {
+      payload.loc_code = stampPlace
+      payload.loc_source = "ai"
+      payload.loc_confidence = "medium"
+    }
     let q = db.from("pnl_workspace_transactions").update(payload).eq("id", s.id)
     if (d.applied) q = q.eq("category", "uncategorized")
     const { error } = await q
@@ -260,8 +289,12 @@ export async function recategorizeWorkspaceAi(
   const persistGroup = async (s: AiSuggestion) => {
     const rep = groupMeta.get(s.id)
     const groupSize = rep?.group_count ?? 1
+    const stampPlace = aiPlaceEnabled && s.place &&
+      decidePlaceStamp({ place: s.place, groupSize, currency: rep?.currency ?? null, deterministicCountries: deterministicCountries })
+      ? s.place
+      : undefined
     const memberIds = expandSuggestionMembers(s.id, expansion, written)
-    for (const id of memberIds) await persistSuggestion({ ...s, id }, groupSize)
+    for (const id of memberIds) await persistSuggestion({ ...s, id }, groupSize, stampPlace)
     if (rep && s.confidence === "high" &&
       (groupSize >= GIANT_GROUP_ROWS || Math.abs(rep.group_total ?? 0) >= GIANT_GROUP_ABS_TOTAL)) {
       giantGroups.push({ merchant: rep.description.slice(0, 60), count: groupSize, total: rep.group_total ?? 0, category: s.category, confidence: s.confidence })
