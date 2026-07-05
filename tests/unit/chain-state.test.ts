@@ -30,6 +30,14 @@ describe('decideChunkFollowup — the relay decision', () => {
     expect(decideChunkFollowup({ stoppedOnDeadline: true, batchesSent: 3, batchesFailed: 3, progressed: false, chunkIndex: 1 })).toBe('halt_no_progress')
   })
 
+  // Prod incident 2026-07-05: re-Generate on a fully-hinted workspace found
+  // NOTHING to send — that is a FINISHED chain, never a no-progress failure
+  // (the old logic failed the job and burned the watchdog ladder on it).
+  it('no candidates → done, not halt', () => {
+    expect(decideChunkFollowup({ stoppedOnDeadline: false, batchesSent: 0, batchesFailed: 0, progressed: false, chunkIndex: 0, noCandidates: true })).toBe('done')
+    expect(decideChunkFollowup({ stoppedOnDeadline: false, batchesSent: 0, batchesFailed: 0, progressed: false, chunkIndex: 5, noCandidates: true })).toBe('done')
+  })
+
   // Prod incident, first live chain (2026-07-04): chunk claimed 203s into a
   // busy cron window → deadline guard refused the first batch → old logic
   // read "no progress" and tripped the breaker. No time is not no progress.

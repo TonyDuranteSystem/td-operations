@@ -53,6 +53,7 @@ export async function handleRecategorizeAi(job: Job, ctx?: JobRunContext): Promi
     batchesFailed: r.aiStats.batchesFailed,
     progressed,
     chunkIndex,
+    noCandidates: r.aiNoCandidates === true,
   })
 
   const { supabaseAdmin } = await import("@/lib/supabase-admin")

@@ -103,6 +103,7 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
     batchesFailed: r.stats.batchesFailed,
     progressed,
     chunkIndex,
+    noCandidates: r.noCandidates === true,
   })
 
   // Per-chunk observability record — written BEFORE the continuation insert

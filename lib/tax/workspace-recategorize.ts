@@ -166,6 +166,9 @@ export interface WorkspaceAiResult {
   labeled: number
   aiErrors: string[]
   uncategorizedRemaining: number
+  /** True when the candidate filter found NOTHING to send — the chain brain
+   *  treats this as DONE, never as a no-progress failure. */
+  noCandidates?: boolean
   /** Per-run stats for the ai_categorization_runs record (Phase 0.5). */
   stats: import("./ai-categorizer").AiRunStats
   /** High-confidence verdicts applied to GIANT groups (≥100 rows or ≥$10k)
@@ -193,22 +196,29 @@ export async function recategorizeWorkspaceAi(
   opts: { companyName: string; memberNames: string[]; businessDescription?: string; aiOptions?: AiCategorizeOptions },
 ): Promise<WorkspaceAiResult> {
   const rows = await fetchAllWorkspaceTransactions(workspaceId)
-  if (rows.length === 0) return { scanned: 0, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: 0, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
+  if (rows.length === 0) return { scanned: 0, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: 0, noCandidates: true, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
 
+  const aiPlaceOn = process.env.AI_PLACE_ENABLED === "1"
   // Candidate selection — same policy as the client path: label outflows booked
   // as a business cost or undecided + inflows booked as income or undecided;
   // skip manual rows and rows that already carry both hints (idempotent + cost).
+  // S2 EXCEPTION (prod incident 2026-07-05): with AI place ON, a still-
+  // uncategorized row with hints but NO location is still a candidate — hints
+  // predate place-reading, and skipping these locked the whole feature out of
+  // any workspace whose rows were hinted before S2 shipped (forks copy hints).
   const toLabel = rows.filter(r => {
     if (((r.notes as string | null) ?? "").startsWith("manual:")) return false
-    if (((r.ai_lean as string | null) ?? null) !== null && ((r.ai_bucket as string | null) ?? null) !== null) return false
     const cat = r.category as string
+    const hinted = ((r.ai_lean as string | null) ?? null) !== null && ((r.ai_bucket as string | null) ?? null) !== null
+    const needsPlace = aiPlaceOn && cat === "uncategorized" && (((r as unknown as { loc_code: string | null }).loc_code) ?? null) === null
+    if (hinted && !needsPlace) return false
     const amt = Number(r.amount)
     return amt < 0
       ? ["uncategorized", "expense", "fee", "cogs"].includes(cat)
       : ["uncategorized", "income"].includes(cat)
   })
   const uncatBefore = rows.filter(r => (r.category as string) === "uncategorized").length
-  if (toLabel.length === 0) return { scanned: rows.length, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: uncatBefore, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
+  if (toLabel.length === 0) return { scanned: rows.length, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: uncatBefore, noCandidates: true, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
 
   const bankNames = Array.from(new Set(rows.map(r => (r.bank_name as string) ?? "").filter(Boolean)))
   const rawTxs: AiCategorizableTx[] = toLabel.map(r => ({

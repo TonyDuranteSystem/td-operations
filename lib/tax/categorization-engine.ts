@@ -113,6 +113,9 @@ export interface RecategorizeResult {
   uncategorizedRemaining: number
   /** Per-run stats for the ai_categorization_runs record (Phase 0.5). */
   aiStats: AiRunStats
+  /** True when aiAssist ran but the candidate filter found NOTHING to send —
+   *  the chain brain treats this as DONE, never a no-progress failure. */
+  aiNoCandidates?: boolean
 }
 
 export interface RecategorizeOptions {
@@ -355,6 +358,7 @@ export async function recategorizeAccountYear(
   let aiCategorized = 0
   let aiErrors: string[] = []
   let aiStats = EMPTY_AI_STATS()
+  let aiNoCandidates = false
   if (opts?.aiAssist) {
     // Option B (#2): label the FULL reviewable set for advisory hints — outflows
     // booked as a business cost (expense/fee/cogs) or still undecided, and
@@ -371,6 +375,7 @@ export async function recategorizeAccountYear(
         ? ["uncategorized", "expense", "fee", "cogs"].includes(cat)
         : ["uncategorized", "income"].includes(cat)
     })
+    if (toLabel.length === 0) aiNoCandidates = true
     if (toLabel.length > 0) {
       // The client's own business-activity description (tax form) — lets the
       // AI mark business tools high-confidence instead of hedging. Note:
@@ -443,5 +448,5 @@ export async function recategorizeAccountYear(
 
   const uncategorizedRemaining = Array.from(effCat.values()).filter(c => c === "uncategorized").length
 
-  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats }
+  return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
 }

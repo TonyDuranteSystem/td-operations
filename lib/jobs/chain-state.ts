@@ -59,8 +59,14 @@ export function decideChunkFollowup(r: {
   batchesFailed: number
   progressed: boolean // labeled + applied > 0
   chunkIndex: number
+  /** True when the candidate filter produced NOTHING to send — every row is
+   *  already hinted/decided. A FINISHED chain, not a broken one (prod incident
+   *  2026-07-05: re-Generate on a fully-hinted workspace halted as no-progress
+   *  and burned the watchdog ladder for "nothing to do"). */
+  noCandidates?: boolean
 }): "continue" | "done" | "halt_no_progress" | "halt_cap" {
   if (r.chunkIndex >= AI_CHAIN_CHUNK_CAP) return "halt_cap"
+  if (r.noCandidates) return "done"
   // LATE CLAIM ≠ failure (prod incident, first live chain 2026-07-04): a chunk
   // claimed near the end of a busy runner window (AI runs at priority 8,
   // deliberately last) hits the deadline guard before its FIRST batch. It
