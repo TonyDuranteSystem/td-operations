@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { merchantRoot, groupUncategorized, categoryForAnswer, type UncategorizedRow } from "@/lib/tax/question-groups"
+import { merchantRoot, groupUncategorized, categoryForAnswer, groupKeyRoot, rowDirection, GROUP_KEY_SEP, type UncategorizedRow } from "@/lib/tax/question-groups"
 
 function row(id: string, description: string, amount: number, date = "2025-06-01"): UncategorizedRow {
   return { id, description, counterparty: null, amount, transaction_date: date, bank_name: "Mercury" }
@@ -30,9 +30,42 @@ describe("groupUncategorized", () => {
     expect(groups[1].label).toBe("Netflix")
   })
 
-  it("mixed direction when a merchant has both inflows and outflows", () => {
-    const groups = groupUncategorized([row("a", "PayPal", -10), row("b", "PayPal", 100)])
-    expect(groups[0].direction).toBe("mixed")
+  it("splits a mixed merchant into one card per direction (PayPal incident class)", () => {
+    const groups = groupUncategorized([row("a", "PayPal", -10), row("b", "PayPal", 100), row("c", "PayPal", 50)])
+    expect(groups).toHaveLength(2)
+    const inG = groups.find(g => g.direction === "in")!
+    const outG = groups.find(g => g.direction === "out")!
+    expect(inG.count).toBe(2)
+    expect(inG.total).toBe(150)
+    expect(inG.transaction_ids.sort()).toEqual(["b", "c"])
+    expect(outG.count).toBe(1)
+    expect(outG.total).toBe(-10)
+    expect(inG.label).toBe("PayPal")
+    expect(outG.label).toBe("PayPal")
+    expect(inG.group_key).not.toBe(outG.group_key)
+    expect(groupKeyRoot(inG.group_key)).toBe(groupKeyRoot(outG.group_key))
+  })
+
+  it("splits by currency so a card never sums EUR+USD into one total", () => {
+    const groups = groupUncategorized([
+      { ...row("a", "Stripe", -10), currency: "USD" },
+      { ...row("b", "Stripe", -20), currency: "USD" },
+      { ...row("c", "Stripe", -30), currency: "EUR" },
+    ])
+    expect(groups).toHaveLength(2)
+    const usd = groups.find(g => g.currency === "USD")!
+    const eur = groups.find(g => g.currency === "EUR")!
+    expect(usd.total).toBe(-30)
+    expect(eur.total).toBe(-30)
+    expect(groupKeyRoot(usd.group_key)).toBe(groupKeyRoot(eur.group_key))
+  })
+
+  it("zero-amount rows count as money in (explicit rule), and '#' in a description never truncates the root", () => {
+    expect(rowDirection(0)).toBe("in")
+    expect(rowDirection(-0.01)).toBe("out")
+    const groups = groupUncategorized([row("a", "Online Transfer transaction#: ref A", -10)])
+    expect(groupKeyRoot(groups[0].group_key)).not.toContain(GROUP_KEY_SEP)
+    expect(groupKeyRoot(groups[0].group_key).length).toBeGreaterThan("Online Transfer".length - 1)
   })
 
   it("empty description falls back to counterparty, then a placeholder", () => {
@@ -52,6 +85,7 @@ describe("categoryForAnswer", () => {
     expect(categoryForAnswer("owner_money_in")).toEqual({ category: "contribution", subcategory: "capital_contribution" })
     expect(categoryForAnswer("own_transfer")).toEqual({ category: "conversion", subcategory: "internal_transfer" })
     expect(categoryForAnswer("bank_fee")).toEqual({ category: "fee", subcategory: "bank_fee" })
+    expect(categoryForAnswer("refund")).toEqual({ category: "refund", subcategory: "client_confirmed" })
     expect(categoryForAnswer("nonsense")).toBeNull()
   })
 })

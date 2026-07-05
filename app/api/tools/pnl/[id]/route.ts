@@ -37,9 +37,13 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const reviewable = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
       const { data, error } = await db
         .from('pnl_workspace_transactions')
-        .select('id, description, counterparty, amount, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
+        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
         .eq('workspace_id', workspaceId)
-        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
+        // 'refund' included since 2026-07-05 — AI-booked refunds were invisible
+        // in the review (no-vanish violation): the client could never see or
+        // correct them. 'conversion' stays excluded on purpose (auto-detected
+        // internal transfers are not merchant decisions).
+        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
@@ -50,6 +54,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       description: String(r.description ?? ''),
       counterparty: (r.counterparty as string | null) ?? null,
       amount: Number(r.amount),
+      currency: (r.currency as string | null) ?? null,
       transaction_date: String(r.transaction_date ?? ''),
       bank_name: String(r.bank_name ?? ''),
       ai_lean: (r.ai_lean as string | null) ?? null,

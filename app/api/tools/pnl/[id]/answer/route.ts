@@ -30,11 +30,17 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (!isDashboardUser(user)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
   try {
-    const body = await request.json().catch(() => ({})) as { answer?: string; transaction_ids?: string[] }
+    const body = await request.json().catch(() => ({})) as { answer?: string; transaction_ids?: string[]; bulk?: boolean; group_labels?: string[] }
     const ids = Array.isArray(body.transaction_ids) ? body.transaction_ids.filter(Boolean) : []
     if (!body.answer || ids.length === 0) {
       return NextResponse.json({ error: 'answer and transaction_ids are required.' }, { status: 400 })
     }
+    // Bulk mode (multi-group one-tap, 2026-07-05): books rows but NEVER writes
+    // learned rules — one lazy sweep of 30 merchants must not silently
+    // auto-categorize those merchants forever (period-sweep precedent + the
+    // removed "All as:" incident). The distinct notes tag makes bulk-booked
+    // rows queryable and is the undo route's guard.
+    const isBulk = body.bulk === true
 
     const { categoryForAnswer } = await import('@/lib/tax/question-groups')
     const mapped = categoryForAnswer(body.answer)
@@ -42,26 +48,44 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
     // Override telemetry (Phase 0.5): rows the AI auto-booked (notes ai:high@vN)
     // that a human is about to re-answer are the PRODUCTION precision meter —
-    // captured BEFORE the update overwrites the notes.
-    const { data: preRows } = await db
-      .from('pnl_workspace_transactions')
-      .select('id, category, notes')
-      .eq('workspace_id', params.id)
-      .in('id', ids)
-      .like('notes', 'ai:high%')
-    const aiOverrides = (preRows ?? []) as Array<{ id: string; category: string; notes: string }>
+    // captured BEFORE the update overwrites the notes. Chunked ×200: a single
+    // .in() with ~950+ ids overflows the PostgREST URL and 500s (prod
+    // incident 2026-07-04 — the period-answer route hit the same wall).
+    const aiOverrides: Array<{ id: string; category: string; notes: string }> = []
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data: preRows, error: preErr } = await db
+        .from('pnl_workspace_transactions')
+        .select('id, category, notes')
+        .eq('workspace_id', params.id)
+        .in('id', ids.slice(i, i + 200))
+        .like('notes', 'ai:high%')
+      if (preErr) console.error('[tools/pnl] telemetry pre-select failed (answer continues):', preErr.message)
+      aiOverrides.push(...((preRows ?? []) as Array<{ id: string; category: string; notes: string }>))
+    }
 
     // Only re-file rows still in a reviewable state (never override a prior
     // manual decision by re-answering a stale group), scoped to this workspace.
-    const { data, error } = await db
-      .from('pnl_workspace_transactions')
-      .update({ category: mapped.category, subcategory: mapped.subcategory, notes: `manual: staff answer (${body.answer})` })
-      .eq('workspace_id', params.id)
-      .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
-      .in('id', ids)
-      .select('id, description, counterparty, amount')
-    if (error) throw new Error(error.message)
-    const updatedRows = (data ?? []) as Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }>
+    // 'refund' is re-answerable (a mis-booked refund must be correctable);
+    // 'conversion' stays protected. Chunked ×200 like the capture above.
+    // Partial-failure contract: accumulate successes; post-steps (telemetry,
+    // learning) still run for whatever DID change before we report the error —
+    // otherwise changed rows would be missing their bookkeeping side-effects.
+    const updatedRows: Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }> = []
+    let updateError: string | null = null
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data, error } = await db
+        .from('pnl_workspace_transactions')
+        .update({ category: mapped.category, subcategory: mapped.subcategory, notes: isBulk ? `manual: bulk staff answer (${body.answer})` : `manual: staff answer (${body.answer})` })
+        .eq('workspace_id', params.id)
+        // Bulk only books rows still awaiting a decision — it must never stomp
+        // heterogeneous prior bookings (that also keeps undo exact: prior state
+        // is uniformly 'uncategorized').
+        .in('category', isBulk ? ['uncategorized'] : ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
+        .in('id', ids.slice(i, i + 200))
+        .select('id, description, counterparty, amount')
+      if (error) { updateError = error.message; break }
+      updatedRows.push(...((data ?? []) as typeof updatedRows))
+    }
 
     // Override telemetry write (fire-and-forget): only when the human CHANGED
     // an AI-applied category — same-category confirmations are agreement.
@@ -82,8 +106,26 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       }
     }
 
+    // Bulk audit trail (fire-and-forget): who booked how many groups as what.
+    if (isBulk && updatedRows.length > 0) {
+      try {
+        await db.from('action_log').insert({
+          actor: user?.email ?? 'staff',
+          action_type: 'bulk_group_answer',
+          table_name: 'pnl_workspace_transactions',
+          record_id: params.id,
+          summary: `Bulk answer: ${updatedRows.length} row(s) booked as ${mapped.category} across ${(body.group_labels ?? []).length || 'several'} group(s)`,
+          details: { workspace_id: params.id, answer: body.answer, count: updatedRows.length, group_labels: (body.group_labels ?? []).slice(0, 50) },
+        })
+      } catch (e) {
+        console.error('[tools/pnl] bulk audit log failed (answer saved fine):', e)
+      }
+    }
+
     // Auto-learn (fire-and-forget — learning must never fail the answer).
-    if (updatedRows.length > 0) {
+    // NEVER on bulk: permanent per-merchant memory requires a per-merchant
+    // decision, not a sweep.
+    if (!isBulk && updatedRows.length > 0) {
       try {
         const { data: ws } = await db
           .from('pnl_workspaces')
@@ -107,6 +149,14 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       }
     }
 
+    if (updateError) {
+      // Post-steps already ran for the rows that DID change; report honestly.
+      console.error('[tools/pnl] answer partially failed:', updateError)
+      return NextResponse.json(
+        { error: `Saved ${updatedRows.length} of ${ids.length} transactions — please retry to finish the rest.`, updated: updatedRows.length },
+        { status: 500 },
+      )
+    }
     return NextResponse.json({ ok: true, updated: updatedRows.length })
   } catch (err) {
     console.error('[tools/pnl] answer failed:', err)

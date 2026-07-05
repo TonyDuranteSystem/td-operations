@@ -162,6 +162,12 @@ function systemPrompt(ctx: AiCategorizeContext): string {
     ctx.grouped
       ? "FX / EXCHANGE-RATE ADJUSTMENT FEE lines follow the purchase they ride on: business purchase → 'fee'; the owner's personal purchase → 'distribution'; when the fees in a group ride on mixed or unknown purchases, answer confidence 'low' — never 'high'."
       : "",
+    // Own-bank inbound pin (v4b — adjudicated 2026-07-05: 'WISE US INC ACH In'
+    // on Mercury = the company's own Wise balance topping up Mercury; the
+    // human ruling is conversion, the model kept flip-flopping to income).
+    ctx.grouped && ctx.bankNames.length
+      ? `An INBOUND transfer whose sender/description names one of the company's OWN banks listed above (e.g. an ACH arriving FROM ${ctx.bankNames[0]}) is the company moving its own money between its accounts: category 'conversion' — NEVER 'income'. Real customer revenue arrives from customers or payment processors, not from the company's own banks.`
+      : "",
     ctx.buckets?.length ? `Accountant buckets — put the single best-fit SLUG in the 'bucket' field (or 'other'): ${ctx.buckets.map(b => `${b.slug} (${b.label})`).join("; ")}.` : "",
     "For EVERY transaction also set 'lean' (business/personal/unsure) and 'bucket'. These are ADVISORY hints used only to pre-sort the client's review — the client confirms, and they NEVER change the bookkeeping category. 'lean=personal' for personal-looking owner spending; 'business' for inflows, transfers, and clear business costs; 'unsure' when you truly cannot tell.",
     "Always respond by calling the suggest_categories tool with one entry per transaction.",

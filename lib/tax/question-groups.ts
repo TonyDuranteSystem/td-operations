@@ -20,6 +20,9 @@ export interface UncategorizedRow {
   amount: number
   transaction_date: string
   bank_name: string
+  /** Statement currency — part of the group key so a card never sums EUR+USD
+   *  into one meaningless total (matches buildGroupedAiCandidates keying). */
+  currency?: string | null
   /** Advisory AI hints (#2) — present once the AI labeling pass has run. */
   ai_lean?: string | null
   ai_bucket?: string | null
@@ -29,14 +32,20 @@ export interface UncategorizedRow {
 }
 
 export interface QuestionGroup {
-  /** Stable key — the normalized merchant root. */
+  /** Stable key — merchant root + direction + currency (GROUP_KEY_SEP-joined).
+   *  Per-direction since 2026-07-05: a mixed merchant (PayPal deposits AND
+   *  withdrawals) renders as TWO cards, each with direction-pure answer chips —
+   *  "Business expense" can never appear on a money-in card again. */
   group_key: string
   /** Display label (the merchant root as seen on the statement). */
   label: string
   count: number
   total: number
-  /** 'in' | 'out' | 'mixed' — drives which answers make sense. */
-  direction: "in" | "out" | "mixed"
+  /** Statement currency of every row in this group ('' when unknown). */
+  currency: string
+  /** 'in' | 'out' — drives which answers make sense. Never 'mixed': mixed
+   *  merchants are split into one group per direction. */
+  direction: "in" | "out"
   transaction_ids: string[]
   sample: string
   /** Advisory AI hints for this merchant (#2): the dominant lean + bucket across
@@ -74,20 +83,42 @@ export function merchantRoot(description: string): string {
     .trim()
 }
 
+/** Separator inside group_key. ASCII unit separator — bank descriptions can
+ *  legitimately contain '#' / '|' / '::', but never this control character,
+ *  so splitting on it can't truncate a merchant root. */
+export const GROUP_KEY_SEP = "\u001f"
+
+/** The merchant-root component of a (possibly composite) group key. The
+ *  period one-by-one filter compares on roots (presence-periods emits bare
+ *  rowRootKey keys), so it must strip the direction/currency suffix. */
+export function groupKeyRoot(groupKey: string): string {
+  return groupKey.split(GROUP_KEY_SEP)[0]
+}
+
+/** Row direction for grouping. Explicit zero rule: only strictly-negative
+ *  amounts are money out; 0-amount rows (normally auto-booked as
+ *  conversion/zero_amount before ever reaching the review) count as 'in'. */
+export function rowDirection(amount: number): "in" | "out" {
+  return amount < 0 ? "out" : "in"
+}
+
 export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
   // Phase 3R (cond. 11-12): grouping goes through the SHARED rowRootKey —
   // description-first with degenerate-description fallback to counterparty
   // ("Unknown - Corporate Card - 6921" groups as its counterparty "Bershka").
-  const groups = new Map<string, { rows: UncategorizedRow[]; label: string }>()
+  // Split per (root, direction, currency) — same keying as the grouped AI
+  // candidates — so answer chips are direction-pure and totals single-currency.
+  const groups = new Map<string, { rows: UncategorizedRow[]; label: string; direction: "in" | "out"; currency: string }>()
   for (const r of rows) {
     const { key, label } = rowRootKey(r.description, r.counterparty)
-    if (!groups.has(key)) groups.set(key, { rows: [], label })
-    groups.get(key)!.rows.push(r)
+    const direction = rowDirection(r.amount)
+    const currency = (r.currency ?? "").toUpperCase()
+    const groupKey = key + GROUP_KEY_SEP + direction + GROUP_KEY_SEP + currency
+    if (!groups.has(groupKey)) groups.set(groupKey, { rows: [], label, direction, currency })
+    groups.get(groupKey)!.rows.push(r)
   }
   return Array.from(groups.entries())
     .map(([group_key, g]) => {
-      const ins = g.rows.filter(r => r.amount > 0).length
-      const outs = g.rows.filter(r => r.amount < 0).length
       const leanRaw = mode(g.rows.map(r => r.ai_lean))
       const lean: QuestionGroup["ai_lean"] | undefined =
         leanRaw === "business" || leanRaw === "personal" || leanRaw === "unsure" ? leanRaw : undefined
@@ -98,7 +129,8 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         label: g.label,
         count: g.rows.length,
         total: g.rows.reduce((s, r) => s + r.amount, 0),
-        direction: (ins > 0 && outs > 0 ? "mixed" : ins > 0 ? "in" : "out") as QuestionGroup["direction"],
+        currency: g.currency,
+        direction: g.direction,
         transaction_ids: g.rows.map(r => r.id),
         sample: g.rows[0].description,
         ...(lean ? { ai_lean: lean } : {}),
@@ -112,12 +144,19 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
 /** The client-facing answer choices and the category each maps to.
  *  Filtered by the group's money direction in the UI. */
 export const ANSWER_CHOICES = [
-  { value: "business_expense", category: "expense", subcategory: "client_confirmed", directions: ["out", "mixed"], label: "Business expense", labelIt: "Spesa aziendale" },
-  { value: "personal_spending", category: "distribution", subcategory: "personal_draw", directions: ["out", "mixed"], label: "Personal (owner) spending — not a business cost", labelIt: "Spesa personale (del socio) — non aziendale" },
-  { value: "business_income", category: "income", subcategory: "revenue", directions: ["in", "mixed"], label: "Business income / a sale", labelIt: "Incasso aziendale / vendita" },
-  { value: "owner_money_in", category: "contribution", subcategory: "capital_contribution", directions: ["in", "mixed"], label: "My own money put into the company", labelIt: "Soldi miei messi nella società" },
-  { value: "own_transfer", category: "conversion", subcategory: "internal_transfer", directions: ["in", "out", "mixed"], label: "Transfer between my own accounts", labelIt: "Trasferimento tra i miei conti" },
-  { value: "bank_fee", category: "fee", subcategory: "bank_fee", directions: ["out", "mixed"], label: "Bank / platform fee", labelIt: "Commissione bancaria / piattaforma" },
+  // Direction-pure since 2026-07-05 (groups are split per direction, 'mixed'
+  // no longer exists): a money-in card can never offer "Business expense".
+  { value: "business_expense", category: "expense", subcategory: "client_confirmed", directions: ["out"], label: "Business expense", labelIt: "Spesa aziendale" },
+  { value: "personal_spending", category: "distribution", subcategory: "personal_draw", directions: ["out"], label: "Personal (owner) spending — not a business cost", labelIt: "Spesa personale (del socio) — non aziendale" },
+  { value: "business_income", category: "income", subcategory: "revenue", directions: ["in"], label: "Business income / a sale", labelIt: "Incasso aziendale / vendita" },
+  { value: "owner_money_in", category: "contribution", subcategory: "capital_contribution", directions: ["in"], label: "My own money put into the company", labelIt: "Soldi miei messi nella società" },
+  // Refund books signed contra-expense (pnl-generator nets it against costs) —
+  // the right answer for money back from a merchant you buy from; tapping
+  // "Business income" there would inflate revenue. Both directions: an
+  // out-refund is you returning money to a customer.
+  { value: "refund", category: "refund", subcategory: "client_confirmed", directions: ["in", "out"], label: "Refund / money back", labelIt: "Rimborso / soldi restituiti" },
+  { value: "own_transfer", category: "conversion", subcategory: "internal_transfer", directions: ["in", "out"], label: "Transfer between my own accounts", labelIt: "Trasferimento tra i miei conti" },
+  { value: "bank_fee", category: "fee", subcategory: "bank_fee", directions: ["out"], label: "Bank / platform fee", labelIt: "Commissione bancaria / piattaforma" },
 ] as const
 
 export type AnswerValue = (typeof ANSWER_CHOICES)[number]["value"]

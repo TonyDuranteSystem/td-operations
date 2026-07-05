@@ -28,6 +28,11 @@ export async function POST(request: NextRequest) {
     const taxYear = Number(body.tax_year)
     const transactionIds = Array.isArray(body.transaction_ids) ? body.transaction_ids.map(String) : []
     const answer = String(body.answer ?? '')
+    // Bulk mode (multi-group one-tap, 2026-07-05): books rows but NEVER writes
+    // learned rules — one lazy sweep must not become permanent per-merchant
+    // memory. Distinct notes tag = undo route's guard.
+    const isBulk = body.bulk === true
+    const groupLabels: string[] = Array.isArray(body.group_labels) ? body.group_labels.map(String).slice(0, 50) : []
 
     if (!accountId || !Number.isInteger(taxYear) || transactionIds.length === 0 || !answer) {
       return NextResponse.json({ error: 'account_id, tax_year, transaction_ids and answer required' }, { status: 400 })
@@ -60,32 +65,49 @@ export async function POST(request: NextRequest) {
 
     // Override telemetry (Phase 0.5, 2026-07-03): AI-booked rows (notes
     // ai:high@vN) the client is about to re-answer are the PRODUCTION precision
-    // meter — captured BEFORE the update overwrites the notes.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: preAiRows } = await (supabaseAdmin as any)
-      .from('bank_transactions')
-      .select('id, category, notes')
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .in('id', transactionIds)
-      .like('notes', 'ai:high%')
-    const aiPre = (preAiRows ?? []) as Array<{ id: string; category: string; notes: string }>
+    // meter — captured BEFORE the update overwrites the notes. Chunked ×200: a
+    // single .in() with ~950+ ids overflows the PostgREST URL and 500s, and the
+    // request cap above is 2000.
+    const aiPre: Array<{ id: string; category: string; notes: string }> = []
+    for (let i = 0; i < transactionIds.length; i += 200) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: preAiRows, error: preErr } = await (supabaseAdmin as any)
+        .from('bank_transactions')
+        .select('id, category, notes')
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        .in('id', transactionIds.slice(i, i + 200))
+        .like('notes', 'ai:high%')
+      if (preErr) console.error('[tax-financials] telemetry pre-select failed (answer continues):', preErr.message)
+      aiPre.push(...((preAiRows ?? []) as Array<{ id: string; category: string; notes: string }>))
+    }
 
     // Option B (2026-06-18): the owner can re-decide ANY business-booked charge
     // (expense/fee/cogs/income/uncategorized) — and undo a prior client decision
     // (distribution/contribution). We never clobber an auto-detected internal
-    // transfer ('conversion') via a merchant flip.
-    const { data: updated, error } = await supabaseAdmin
-      .from('bank_transactions')
-      .update({ category: mapped.category, subcategory: mapped.subcategory, notes: `manual: client answer (${answer})` })
-      .eq('account_id', accountId)
-      .eq('tax_year', taxYear)
-      .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
-      .in('id', transactionIds)
-      .select('id, description, counterparty, amount')
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    // transfer ('conversion') via a merchant flip. 'refund' is re-answerable (a
+    // mis-booked refund must be correctable). Chunked ×200; partial-failure
+    // contract: attestation reset + telemetry + learning still run for whatever
+    // DID change before the error is reported — a stale attestation over
+    // changed rows would be worse than the failed chunk.
+    const updated: Array<{ id: string; description: string | null; counterparty: string | null; amount: number | string }> = []
+    let updateError: string | null = null
+    for (let i = 0; i < transactionIds.length; i += 200) {
+      const { data, error } = await supabaseAdmin
+        .from('bank_transactions')
+        .update({ category: mapped.category, subcategory: mapped.subcategory, notes: isBulk ? `manual: bulk client answer (${answer})` : `manual: client answer (${answer})` })
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        // Bulk only books rows still awaiting a decision — never stomps prior
+        // bookings (keeps undo exact: prior state uniformly 'uncategorized').
+        .in('category', isBulk ? ['uncategorized'] : ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
+        .in('id', transactionIds.slice(i, i + 200))
+        .select('id, description, counterparty, amount')
+      if (error) { updateError = error.message; break }
+      updated.push(...((data ?? []) as typeof updated))
+    }
 
-    const changed = (updated ?? []).length
+    const changed = updated.length
     if (changed > 0) {
       // Override telemetry write (fire-and-forget): only when the answer CHANGED
       // an AI-applied category — same-category confirmations are agreement.
@@ -112,11 +134,30 @@ export async function POST(request: NextRequest) {
       const { resetFinancialsAttestation } = await import('@/lib/tax/attestation')
       await resetFinancialsAttestation(accountId, taxYear, `answer applied to ${changed} transactions`)
 
+      // Bulk audit trail (fire-and-forget).
+      if (isBulk) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabaseAdmin as any).from('action_log').insert({
+            actor: user.email ?? 'client',
+            action_type: 'bulk_group_answer',
+            table_name: 'bank_transactions',
+            record_id: accountId,
+            account_id: accountId,
+            summary: `Client bulk answer: ${changed} row(s) booked as ${mapped.category} across ${groupLabels.length || 'several'} group(s)`,
+            details: { tax_year: taxYear, answer, count: changed, group_labels: groupLabels },
+          })
+        } catch (e) {
+          console.error('[tax-financials] bulk audit log failed (answer saved fine):', e)
+        }
+      }
+
       // LEARN a per-client rule from this answer so the same merchant
       // auto-categorizes next year / on re-runs (the engine applies per-client
       // rules before global ones). Fire-and-forget: a learning failure must
-      // NEVER break the client's answer.
-      try {
+      // NEVER break the client's answer. NEVER on bulk: permanent per-merchant
+      // memory requires a per-merchant decision, not a sweep.
+      if (!isBulk) try {
         const { upsertLearnedMerchantRules, makeSupabaseRuleStore } = await import('@/lib/tax/learned-rules')
         await upsertLearnedMerchantRules(
           makeSupabaseRuleStore(supabaseAdmin),
@@ -131,6 +172,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (updateError) {
+      // Post-steps already ran for the rows that DID change; report honestly.
+      console.error('[tax-financials] answer partially failed:', updateError)
+      return NextResponse.json(
+        { error: `Saved ${changed} of ${transactionIds.length} transactions — please retry to finish the rest.`, updated: changed },
+        { status: 500 },
+      )
+    }
     return NextResponse.json({ updated: changed })
   } catch (err) {
     console.error('[tax-financials] answer failed:', err)

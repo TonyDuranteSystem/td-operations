@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { groupKeyRoot } from '@/lib/tax/question-groups'
 
 /** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
  *  bigger — the client must understand what's going on"). One shared visual
@@ -31,7 +32,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; direction: 'in' | 'out' | 'mixed'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 
@@ -140,13 +141,17 @@ interface CategoryTx { id: string; date: string; description: string; amount: nu
 interface CategoryMerchant { merchant: string; count: number; total: number; transactions: CategoryTx[] }
 interface CategoryDrill { bucket: string; label: string; merchants: CategoryMerchant[]; total: number; total_count: number; truncated: boolean }
 
+// Direction-pure since 2026-07-05: groups are split per direction server-side
+// ('mixed' no longer exists), so a money-in card can never offer "Business
+// expense". Mirrors ANSWER_CHOICES in lib/tax/question-groups.ts.
 const ANSWERS = [
-  { value: 'business_expense', directions: ['out', 'mixed'], en: 'Business expense', it: 'Spesa aziendale' },
-  { value: 'personal_spending', directions: ['out', 'mixed'], en: 'Personal (owner) spending', it: 'Spesa personale (del socio)' },
-  { value: 'business_income', directions: ['in', 'mixed'], en: 'Business income / a sale', it: 'Incasso aziendale / vendita' },
-  { value: 'owner_money_in', directions: ['in', 'mixed'], en: 'My own money put in', it: 'Soldi miei messi nella società' },
-  { value: 'own_transfer', directions: ['in', 'out', 'mixed'], en: 'Transfer between my own accounts', it: 'Trasferimento tra i miei conti' },
-  { value: 'bank_fee', directions: ['out', 'mixed'], en: 'Bank / platform fee', it: 'Commissione bancaria' },
+  { value: 'business_expense', directions: ['out'], en: 'Business expense', it: 'Spesa aziendale' },
+  { value: 'personal_spending', directions: ['out'], en: 'Personal (owner) spending', it: 'Spesa personale (del socio)' },
+  { value: 'business_income', directions: ['in'], en: 'Business income / a sale', it: 'Incasso aziendale / vendita' },
+  { value: 'owner_money_in', directions: ['in'], en: 'My own money put in', it: 'Soldi miei messi nella società' },
+  { value: 'refund', directions: ['in', 'out'], en: 'Refund / money back', it: 'Rimborso / soldi restituiti' },
+  { value: 'own_transfer', directions: ['in', 'out'], en: 'Transfer between my own accounts', it: 'Trasferimento tra i miei conti' },
+  { value: 'bank_fee', directions: ['out'], en: 'Bank / platform fee', it: 'Commissione bancaria' },
 ]
 
 // Which answer chip is "active" given the row's current bookkeeping category.
@@ -158,7 +163,7 @@ const ANSWERS = [
 const CATEGORY_TO_ANSWER: Record<string, string> = {
   expense: 'business_expense', cogs: 'business_expense',
   fee: 'bank_fee', distribution: 'personal_spending', income: 'business_income',
-  contribution: 'owner_money_in', conversion: 'own_transfer',
+  contribution: 'owner_money_in', conversion: 'own_transfer', refund: 'refund',
 }
 const activeAnswerOf = (g: QuestionGroup): string | null => {
   const cat = g.current_category ?? 'uncategorized'
@@ -200,6 +205,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [openCat, setOpenCat] = useState<string | null>(null)
   // Triage tiers (2026-07-03): which collapsed review sections are open.
   const [openSections, setOpenSections] = useState<Set<string>>(new Set())
+  // Money in / Money out collapsibles (Antonio 2026-07-05). Default OPEN while
+  // work remains — the Confirm button stays locked until the queue is empty,
+  // and a hidden queue turns that into a dead button nobody understands
+  // (reviewer condition). Page length is handled by the 10-card cap instead.
+  const [closedNeeds, setClosedNeeds] = useState<Set<string>>(new Set())
+  const [showAllNeeds, setShowAllNeeds] = useState<Set<string>>(new Set())
   // Location-period triage (Phase 2b): pending confirm dialog + one-by-one filter.
   const [periodConfirm, setPeriodConfirm] = useState<{ period: PresencePeriodView; choice: 'business' | 'personal' } | null>(null)
   const [periodFilter, setPeriodFilter] = useState<{ label: string; keys: Set<string> } | null>(null)
@@ -261,6 +272,72 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
       }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Bulk select (Antonio 2026-07-05): pick several groups, book them with ONE
+  // tap. Confirm-always + exact undo (both reviewer conditions — the removed
+  // "All as:" buttons incident); the server books WITHOUT learned rules.
+  const [bulkSel, setBulkSel] = useState<Map<string, QuestionGroup>>(new Map())
+  const [bulkConfirm, setBulkConfirm] = useState<string | null>(null) // pending answer value
+  const [bulkUndo, setBulkUndo] = useState<{ ids: string[]; count: number } | null>(null)
+  const bulkDir = bulkSel.size > 0 ? Array.from(bulkSel.values())[0].direction : null
+  const toggleBulk = (g: QuestionGroup) => {
+    setBulkSel(prev => {
+      const n = new Map(prev)
+      if (n.has(g.group_key)) n.delete(g.group_key)
+      else n.set(g.group_key, g)
+      return n
+    })
+  }
+  const confirmBulkAnswer = async () => {
+    if (!bulkConfirm || bulkSel.size === 0) return
+    const groups = Array.from(bulkSel.values())
+    const ids = groups.flatMap(g => g.transaction_ids)
+    setBusy('bulk')
+    try {
+      const res = await fetch(`${API}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear, transaction_ids: ids,
+          answer: bulkConfirm, bulk: true, group_labels: groups.map(g => g.label),
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Risposta non salvata — riprova.' : 'Could not save your answer — please try again.'))
+      }
+      const d = await res.json().catch(() => ({})) as { updated?: number }
+      setBulkUndo({ ids, count: d.updated ?? ids.length })
+      setBulkSel(new Map())
+      setBulkConfirm(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const undoBulkAnswer = async () => {
+    if (!bulkUndo) return
+    setBusy('bulk-undo')
+    try {
+      const res = await fetch(`${API}/answer-undo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, transaction_ids: bulkUndo.ids }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile annullare — riprova.' : 'Could not undo — please try again.'))
+      }
+      setBulkUndo(null)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -1220,6 +1297,115 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </div>
           )}
 
+          {/* Bulk-select action bar: appears when groups are ticked. Chips are
+              direction-valid for the whole selection (one direction at a time). */}
+          {bulkSel.size > 0 && !bulkConfirm && (
+            <div className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-200 bg-white/95 px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)] backdrop-blur">
+              <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-zinc-800">
+                  {it
+                    ? `${bulkSel.size} gruppi · ${Array.from(bulkSel.values()).reduce((s, g) => s + g.count, 0)} transazioni`
+                    : `${bulkSel.size} groups · ${Array.from(bulkSel.values()).reduce((s, g) => s + g.count, 0)} transactions`}
+                </span>
+                <span className="text-xs text-zinc-400">{it ? 'Registra come:' : 'Book as:'}</span>
+                {ANSWERS.filter(a => bulkDir && a.directions.includes(bulkDir)).map(a => (
+                  <button
+                    key={a.value}
+                    disabled={busy !== null}
+                    onClick={() => setBulkConfirm(a.value)}
+                    className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-blue-600 hover:text-blue-700 disabled:opacity-50"
+                  >
+                    {it ? a.it : a.en}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setBulkSel(new Map())}
+                  disabled={busy !== null}
+                  className="ml-auto rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-500 hover:border-zinc-900 hover:text-zinc-900"
+                >
+                  {it ? 'Annulla selezione' : 'Clear selection'} ✕
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Bulk confirm — ALWAYS, never one-click (reviewer condition). */}
+          {bulkConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+              <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+                <h4 className="text-sm font-bold text-zinc-900">
+                  {it ? 'Registrare i gruppi selezionati come ' : 'Book the selected groups as '}
+                  “{(() => { const a = ANSWERS.find(x => x.value === bulkConfirm); return a ? (it ? a.it : a.en) : bulkConfirm })()}”?
+                </h4>
+                {(() => {
+                  const groups = Array.from(bulkSel.values())
+                  const txns = groups.reduce((s, g) => s + g.count, 0)
+                  const byCur = new Map<string, number>()
+                  for (const g of groups) byCur.set(g.currency ?? '', (byCur.get(g.currency ?? '') ?? 0) + g.total)
+                  const totals = Array.from(byCur.entries()).map(([c, t]) => `${fmt(t)}${c && c !== 'USD' ? ` ${c}` : ''}`).join(' + ')
+                  const names = groups.slice(0, 8).map(g => g.label).join(', ')
+                  return (
+                    <>
+                      <p className="mt-2 text-sm text-zinc-800">
+                        {it
+                          ? <><strong>{groups.length}</strong> gruppi · <strong>{txns}</strong> transazioni · <strong>{totals}</strong></>
+                          : <><strong>{groups.length}</strong> groups · <strong>{txns}</strong> transactions · <strong>{totals}</strong></>}
+                      </p>
+                      <p className="mt-1 text-xs text-zinc-500">{names}{groups.length > 8 ? ` +${groups.length - 8} ${it ? 'altri' : 'more'}` : ''}</p>
+                    </>
+                  )
+                })()}
+                <p className="mt-2 rounded-md bg-zinc-50 p-2 text-xs text-zinc-600">
+                  {it
+                    ? 'Vale solo per quest’anno: una risposta in blocco non viene memorizzata come regola permanente. Rispondi ai gruppi uno per uno se vuoi che il sistema li ricordi per i prossimi anni.'
+                    : 'This books this year only — a bulk answer is not remembered as a permanent rule. Answer groups one by one when you want the system to remember them for future years.'}
+                </p>
+                <p className="mt-2 text-xs text-zinc-500">{it ? 'Potrai annullare subito dopo.' : 'You can undo right after.'}</p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => setBulkConfirm(null)}
+                    disabled={busy !== null}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900"
+                  >
+                    {it ? 'Annulla' : 'Cancel'}
+                  </button>
+                  <button
+                    onClick={() => void confirmBulkAnswer()}
+                    disabled={busy !== null}
+                    className="rounded-full border border-blue-600 bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {busy !== null ? (it ? 'Registrazione…' : 'Booking…') : (it ? 'Conferma' : 'Confirm')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Bulk undo banner — one exact undo of the last bulk booking. */}
+          {bulkUndo && (
+            <div className="fixed inset-x-0 bottom-0 z-40 border-t border-emerald-200 bg-emerald-50/95 px-4 py-3 backdrop-blur">
+              <div className="mx-auto flex max-w-3xl items-center gap-3">
+                <span className="text-xs font-medium text-emerald-900">
+                  ✓ {it ? `${bulkUndo.count} transazioni registrate.` : `${bulkUndo.count} transactions booked.`}
+                </span>
+                <button
+                  onClick={() => void undoBulkAnswer()}
+                  disabled={busy !== null}
+                  className="rounded-full border border-emerald-600 bg-white px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                >
+                  {busy === 'bulk-undo' ? (it ? 'Annullamento…' : 'Undoing…') : (it ? 'Annulla' : 'Undo')}
+                </button>
+                <button
+                  onClick={() => setBulkUndo(null)}
+                  disabled={busy !== null}
+                  className="ml-auto text-xs text-emerald-700 hover:text-emerald-900"
+                >
+                  {it ? 'Chiudi' : 'Dismiss'} ✕
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* TRIAGE-FIRST REVIEW (Antonio, 2026-07-03): the screen is a WORK
               QUEUE, not an archive. Tier 1 (expanded): only groups that need a
               human decision. Tier 2 (collapsed): booked but worth a glance
@@ -1232,7 +1418,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 const bucketLabel = new Map(view.buckets.map(b => [b.slug, b.label]))
                 // Review-one-by-one period filter (zero writes): narrows every
                 // tier to the merchants seen inside the selected period.
-                const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(g.group_key)
+                // Compare on the merchant ROOT: presence-periods emits bare
+                // rowRootKey keys, while group_key now carries a
+                // direction+currency suffix (per-direction split 2026-07-05).
+                const inFilter = (g: QuestionGroup) => !periodFilter || periodFilter.keys.has(groupKeyRoot(g.group_key))
                 const needs = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') === 'uncategorized')
                 const booked = view.questions.filter(g => inFilter(g) && (g.current_category ?? 'uncategorized') !== 'uncategorized')
                 const glance = booked.filter(g => g.ai_lean === 'personal' || g.ai_lean === 'unsure' || !g.ai_lean)
@@ -1246,11 +1435,30 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     : g.ai_lean === 'business'
                       ? { txt: it ? 'Sembra aziendale' : 'Looks business', cls: 'text-emerald-700 bg-emerald-50' }
                       : { txt: it ? 'Da controllare' : 'Please check', cls: 'text-zinc-500 bg-zinc-100' }
+                  // Bulk checkbox only on still-undecided groups: bulk never
+                  // stomps prior bookings (server enforces the same rule). One
+                  // direction at a time — the action-bar chips must be valid
+                  // for everything selected.
+                  const undecided = (g.current_category ?? 'uncategorized') === 'uncategorized'
+                  const checked = bulkSel.has(g.group_key)
+                  const dirBlocked = bulkDir !== null && bulkDir !== g.direction && !checked
                   return (
-                    <div key={g.group_key} className="rounded-lg border border-zinc-200 bg-white p-3">
+                    <div key={g.group_key} className={`rounded-lg border bg-white p-3 ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-zinc-200'}`}>
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
-                        <div className="text-sm font-medium text-zinc-800">{g.label}</div>
-                        <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}</div>
+                        <div className="flex items-center gap-2">
+                          {undecided && (
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={busy !== null || dirBlocked}
+                              onChange={() => toggleBulk(g)}
+                              title={dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')}
+                              className="h-4 w-4 accent-blue-600 disabled:opacity-40"
+                            />
+                          )}
+                          <div className="text-sm font-medium text-zinc-800">{g.label}</div>
+                        </div>
+                        <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}{g.currency && g.currency !== 'USD' ? ` ${g.currency}` : ''}</div>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
                         <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
@@ -1334,24 +1542,58 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </p>
                     </div>
 
-                    {/* TIER 1 — Needs your decision (the work queue, always expanded). */}
+                    {/* TIER 1 — Needs your decision (the work queue). Money in /
+                        Money out are collapsible but START OPEN while they hold
+                        work (a hidden queue = dead Confirm button with no visible
+                        reason); an emptied section vanishes on its own. Long
+                        sections cap at 10 cards with "Show all N". */}
                     {needs.length > 0 ? (
                       <div className="mb-5 rounded-xl border-2 border-amber-300 bg-amber-50/50 p-3 sm:p-4">
                         <h3 className="text-sm font-bold text-amber-900 mb-2">
                           🖐 {it ? `Serve una tua decisione · ${needs.length}` : `Needs your decision · ${needs.length}`}
                         </h3>
-                        {needsIn.length > 0 && (
-                          <div className="mb-3">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800 mb-1.5">{it ? 'Soldi in entrata' : 'Money in'}</div>
-                            <div className="space-y-2">{needsIn.map(renderCard)}</div>
-                          </div>
-                        )}
-                        {needsOut.length > 0 && (
-                          <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800 mb-1.5">{it ? 'Spese' : 'Spending'}</div>
-                            <div className="space-y-2">{needsOut.map(renderCard)}</div>
-                          </div>
-                        )}
+                        {([
+                          { key: 'in', list: needsIn, label: it ? 'Soldi in entrata' : 'Money in' },
+                          { key: 'out', list: needsOut, label: it ? 'Soldi in uscita' : 'Money out' },
+                        ] as const).map(({ key, list, label }) => {
+                          if (list.length === 0) return null
+                          const open = !closedNeeds.has(key)
+                          const showAll = showAllNeeds.has(key)
+                          const shown = showAll ? list : list.slice(0, 10)
+                          // Net total only when the whole section is one currency —
+                          // summing EUR+USD into one number would be a lie.
+                          const curs = new Set(list.map(g => g.currency ?? ''))
+                          const net = curs.size === 1 ? list.reduce((s, g) => s + g.total, 0) : null
+                          const onlyCur = curs.size === 1 ? Array.from(curs)[0] : ''
+                          return (
+                            <div key={key} className={key === 'in' && needsOut.length > 0 ? 'mb-3' : ''}>
+                              <button
+                                type="button"
+                                onClick={() => setClosedNeeds(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })}
+                                className="flex w-full items-center justify-between py-1 text-left"
+                              >
+                                <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                                  {label} · {list.length}{net !== null ? ` · ${fmt(net)}${onlyCur && onlyCur !== 'USD' ? ` ${onlyCur}` : ''}` : ''}
+                                </span>
+                                <span className="text-amber-700 text-xs">{open ? '▲' : '▼'}</span>
+                              </button>
+                              {open && (
+                                <>
+                                  <div className="space-y-2">{shown.map(renderCard)}</div>
+                                  {list.length > shown.length && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowAllNeeds(s => new Set(s).add(key))}
+                                      className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:border-amber-500"
+                                    >
+                                      {it ? `Mostra tutte e ${list.length}` : `Show all ${list.length}`}
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     ) : (
                       <div className="mb-5 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-4 text-sm font-semibold text-emerald-900">

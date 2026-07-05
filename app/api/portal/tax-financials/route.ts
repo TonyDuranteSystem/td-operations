@@ -54,10 +54,12 @@ export async function GET(request: NextRequest) {
       // ('conversion') are excluded (not an owner spend decision).
       const { data, error } = await db
         .from('bank_transactions')
-        .select('id, description, counterparty, amount, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
+        .select('id, description, counterparty, amount, currency, transaction_date, bank_name, ai_lean, ai_bucket, category, subcategory')
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
-        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution'])
+        // 'refund' included since 2026-07-05 — AI-booked refunds were invisible
+        // in the review (no-vanish violation).
+        .in('category', ['uncategorized', 'expense', 'fee', 'cogs', 'income', 'distribution', 'contribution', 'refund'])
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
@@ -68,6 +70,7 @@ export async function GET(request: NextRequest) {
       description: String(r.description ?? ''),
       counterparty: (r.counterparty as string | null) ?? null,
       amount: Number(r.amount),
+      currency: (r.currency as string | null) ?? null,
       transaction_date: String(r.transaction_date ?? ''),
       bank_name: String(r.bank_name ?? ''),
       ai_lean: (r.ai_lean as string | null) ?? null,
