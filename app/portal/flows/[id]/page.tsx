@@ -102,7 +102,11 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   const contactId = getClientContactId(user)
   let allowed = false
   if (contactId) {
-    if (sd.contact_id && sd.contact_id === contactId) {
+    // Contact-ONLY match (account_id null = ITIN-style personal SD). Company
+    // SDs may also carry a contact_id since 2026-07-06 (person-link hygiene in
+    // createSD) — those are gated by account membership alone, so a contact
+    // later unlinked from the company doesn't keep access via the stale tag.
+    if (!sd.account_id && sd.contact_id && sd.contact_id === contactId) {
       allowed = true
     } else if (sd.account_id) {
       const accountIds = await getClientAccountIds(contactId)

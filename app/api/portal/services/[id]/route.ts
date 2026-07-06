@@ -38,10 +38,14 @@ export async function GET(
 
   if (sd) {
     // Access control: allow if the SD belongs to one of the client's accounts
-    // OR if it is a contact-scoped SD owned by the client (Phase 1 ITIN rule:
-    // ITIN SDs have account_id=null and contact_id set).
+    // OR if it is a contact-ONLY SD owned by the client (Phase 1 ITIN rule:
+    // ITIN SDs have account_id=null and contact_id set). The contact match
+    // requires account_id=null: since 2026-07-06 company SDs may ALSO carry a
+    // contact_id (person-link hygiene in createSD), and a contact later
+    // unlinked from the company must not keep access through that stale tag —
+    // company SDs are gated by account membership alone.
     const accountMatch = sd.account_id !== null && accountIds.includes(sd.account_id)
-    const contactMatch = sd.contact_id !== null && sd.contact_id === contactId
+    const contactMatch = sd.account_id === null && sd.contact_id !== null && sd.contact_id === contactId
     if (!accountMatch && !contactMatch) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }

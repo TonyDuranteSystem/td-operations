@@ -191,6 +191,23 @@ async function resolveNamedStage(
 // ─── createSD ──────────────────────────────────────────
 
 /**
+ * Primary linked contact for an account: is_primary=true first, contact_id
+ * alphabetical as a stable tiebreaker (`account_contacts` has no created_at).
+ * Shared by the ITIN forced-resolution and the non-ITIN person-link hygiene
+ * in createSD. Returns null when the account has no linked contacts.
+ */
+async function resolvePrimaryContactId(accountId: string): Promise<string | null> {
+  const { data: links } = await supabaseAdmin
+    .from("account_contacts")
+    .select("contact_id, is_primary")
+    .eq("account_id", accountId)
+    .order("is_primary", { ascending: false })
+    .order("contact_id", { ascending: true })
+    .limit(1)
+  return links?.[0]?.contact_id ?? null
+}
+
+/**
  * Create a service delivery with a validated stage.
  *
  * Replaces scattered `.from("service_deliveries").insert(...)` calls across
@@ -214,14 +231,7 @@ export async function createSD(
   // tiebreaker — `account_contacts` does not store a created_at column.
   if (params.service_type === "ITIN") {
     if (!params.contact_id && params.account_id) {
-      const { data: links } = await supabaseAdmin
-        .from("account_contacts")
-        .select("contact_id, is_primary")
-        .eq("account_id", params.account_id)
-        .order("is_primary", { ascending: false })
-        .order("contact_id", { ascending: true })
-        .limit(1)
-      const resolvedContactId = links?.[0]?.contact_id
+      const resolvedContactId = await resolvePrimaryContactId(params.account_id)
       if (!resolvedContactId) {
         throw new Error(
           `[createSD] service_type="ITIN" with account_id=${params.account_id} has no linked contacts in account_contacts. Link a contact to the account first, or pass contact_id explicitly.`,
@@ -234,6 +244,19 @@ export async function createSD(
       )
     } else if (params.account_id) {
       params = { ...params, account_id: null }
+    }
+  } else if (!params.contact_id && params.account_id) {
+    // Person-link hygiene (2026-07-06, Prowave What's New incident follow-up):
+    // non-ITIN SDs created with only an account_id also get contact_id
+    // auto-resolved (same primary-contact heuristic as the ITIN block above),
+    // KEEPING account_id set. Downstream the sd_created workflow dispatcher
+    // tags its What's New note with both ids, so the note reaches the primary
+    // contact's person thread directly instead of relying on the query-side
+    // company fan-out. Best-effort: an account with no linked contacts leaves
+    // contact_id null — never blocks SD creation.
+    const resolvedContactId = await resolvePrimaryContactId(params.account_id)
+    if (resolvedContactId) {
+      params = { ...params, contact_id: resolvedContactId }
     }
   }
 

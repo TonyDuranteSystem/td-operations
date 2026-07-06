@@ -833,3 +833,108 @@ describe("createSD — service_type_entry_id (catalog FK)", () => {
     warn.mockRestore()
   })
 })
+
+// ─── createSD — non-ITIN person-link hygiene (2026-07-06) ──────────────────
+//
+// Prowave What's New incident follow-up: company SDs created with only an
+// account_id auto-resolve contact_id from account_contacts (primary first,
+// contact_id alphabetical tiebreak) while KEEPING account_id set, so the
+// sd_created workflow note is dual-tagged and reaches the person thread.
+
+describe("createSD — non-ITIN person-link hygiene", () => {
+  const einPipeline = {
+    EIN: [{ stage_name: "SS-4 Preparation", stage_order: 1 }],
+  }
+  const einInsertResponse = {
+    data: {
+      id: "sd-ein",
+      service_type: "EIN",
+      service_name: "EIN",
+      stage: "SS-4 Preparation",
+      stage_order: 1,
+      account_id: "acct-1",
+      contact_id: "primary-contact",
+    },
+    error: null,
+  }
+
+  it("auto-fills contact_id from account_contacts, KEEPING account_id", async () => {
+    pipelineFixture = einPipeline
+    insertResponse = einInsertResponse
+    accountContactsFixture = {
+      "acct-1": [
+        { contact_id: "primary-contact", is_primary: true },
+        { contact_id: "alpha-contact", is_primary: false },
+      ],
+    }
+
+    await createSD({ service_type: "EIN", account_id: "acct-1" })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "EIN",
+      account_id: "acct-1",
+      contact_id: "primary-contact",
+    })
+  })
+
+  it("respects an explicitly passed contact_id (no lookup override)", async () => {
+    pipelineFixture = einPipeline
+    insertResponse = einInsertResponse
+    accountContactsFixture = {
+      "acct-1": [{ contact_id: "primary-contact", is_primary: true }],
+    }
+
+    await createSD({
+      service_type: "EIN",
+      account_id: "acct-1",
+      contact_id: "explicit-contact",
+    })
+
+    expect(insertCapture).toMatchObject({
+      account_id: "acct-1",
+      contact_id: "explicit-contact",
+    })
+  })
+
+  it("leaves contact_id null when the account has no linked contacts — never throws", async () => {
+    pipelineFixture = einPipeline
+    insertResponse = einInsertResponse
+    accountContactsFixture = {} // no links
+
+    await expect(
+      createSD({ service_type: "EIN", account_id: "acct-lonely" }),
+    ).resolves.toBeTruthy()
+
+    expect(insertCapture).toMatchObject({
+      account_id: "acct-lonely",
+      contact_id: null,
+    })
+  })
+
+  it("uses alphabetical tiebreak when no primary contact is flagged", async () => {
+    pipelineFixture = einPipeline
+    insertResponse = einInsertResponse
+    accountContactsFixture = {
+      "acct-1": [
+        { contact_id: "zeta", is_primary: false },
+        { contact_id: "alpha", is_primary: false },
+      ],
+    }
+
+    await createSD({ service_type: "EIN", account_id: "acct-1" })
+
+    expect(insertCapture).toMatchObject({ contact_id: "alpha" })
+  })
+
+  it("contact-only non-ITIN SD (no account_id) is untouched — no lookup possible", async () => {
+    pipelineFixture = einPipeline
+    insertResponse = einInsertResponse
+
+    await createSD({ service_type: "EIN", contact_id: "solo-contact" })
+
+    expect(insertCapture).toMatchObject({
+      account_id: null,
+      contact_id: "solo-contact",
+    })
+  })
+})

@@ -94,8 +94,11 @@ export async function GET() {
         if (sd.account_id) {
           if (!sdsByAccount[sd.account_id]) sdsByAccount[sd.account_id] = []
           sdsByAccount[sd.account_id].push(sd)
-        }
-        if (sd.contact_id) {
+        } else if (sd.contact_id) {
+          // Contact bucket = contact-ONLY SDs (ITIN-style). Company SDs may
+          // also carry a contact_id since 2026-07-06 (person-link hygiene in
+          // createSD); keep them in their company bucket only so the inbox
+          // service chips render exactly as before.
           if (!sdsByContact[sd.contact_id]) sdsByContact[sd.contact_id] = []
           sdsByContact[sd.contact_id].push(sd)
         }
