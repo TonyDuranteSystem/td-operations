@@ -169,10 +169,11 @@ export const SECTION_READMES: Record<string, ReadmeContent> = {
           <>Click <strong>New entry</strong>. Pick the finished <strong>&quot;after&quot;</strong> image — from a project&apos;s <strong>released</strong> work or a manual upload — and optionally a <strong>&quot;before&quot;</strong>.</>,
           <>Fill in the <strong>title, client name, description</strong> (English + Italian), a <strong>category</strong> and <strong>tags</strong>; optionally link the source <strong>project</strong>.</>,
           <>Entries start <strong>unpublished</strong>. When you&apos;re happy, click <strong>Publish</strong> to put it on the public page; use <strong>Feature</strong> to pin the best work first.</>,
+          <><strong>Turn the page ON (don&apos;t forget!).</strong> Even after you Publish, the public <strong>/portfolio</strong> page stays hidden until you switch <strong>Public portfolio</strong> ON in the <strong>Settings</strong> tab — it&apos;s off by default. This is the step that actually makes your published work go live (do it once).</>,
           <>Check the <strong>consent badge</strong> — green when the client opted in, grey when you&apos;ve recorded written permission. Use <strong>Mark written permission</strong> if you have it on file.</>,
         ]} />
         <GoodToKnow items={[
-          <>The public page shows <strong>only published entries</strong>, and the whole page has a master <strong>on/off switch</strong> in Settings (off by default).</>,
+          <>Nothing is public until <strong>both</strong> things are true: the entry is <strong>Published</strong> <em>and</em> the master <strong>Public portfolio</strong> switch in Settings is <strong>ON</strong> (it&apos;s off by default).</>,
           <>Consent is <strong>your call</strong> — the badge is there to inform you, it never blocks publishing — <em>but</em> if a client <strong>withdraws</strong>, their entry is <strong>automatically hidden</strong>.</>,
           <>Only <strong>released</strong> work can be pulled in — a client&apos;s raw uploaded files are never offered for the public page.</>,
           <>This is separate from the <strong>Landing Page</strong> portfolio strip (that one lives inside the logged-in client portal).</>,
