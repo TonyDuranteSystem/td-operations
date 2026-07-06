@@ -253,6 +253,64 @@ export function SocialSharingKitTool({
 
   return (
     <div className="space-y-3">
+      {/* Plain-English "How it works" — same collapsed <details> convention as the
+          Design Tools section read-me. Explains this tab specifically. */}
+      <details className="rounded-xl border border-zinc-200 bg-white text-sm text-zinc-700">
+        <summary className="cursor-pointer select-none px-3 py-2 font-medium text-zinc-800">
+          How the Social Sharing Kit works — read me
+        </summary>
+        <div className="space-y-4 border-t border-zinc-100 px-3 py-3 leading-relaxed text-[13px]">
+          <section className="space-y-1">
+            <h3 className="font-semibold text-zinc-900">What it is</h3>
+            <p>
+              The client-facing bundle. From one logo and the brand colours it builds the platform-sized
+              logo assets (profile pictures, Instagram post/story, X header, FB/LinkedIn cover, favicons){' '}
+              <em>plus</em> ready-to-post <strong>branded templates</strong> (announcement, tagline, launch)
+              with your own headline — all zipped together for the client to download.
+            </p>
+          </section>
+          <section className="space-y-1">
+            <h3 className="font-semibold text-zinc-900">How to use it</h3>
+            <ul className="list-disc pl-5 space-y-1">
+              <li>Add the final logo — drag a file in, or pick one already in the project&apos;s Deliverables.</li>
+              <li>
+                Brand colours come from the <strong>AI Brand Profile</strong> automatically; if there&apos;s
+                no profile yet, pick a base colour.
+              </li>
+              <li>
+                Choose which post templates and formats (feed / story) to include, and type an optional
+                headline / subtext — the live preview updates as you go.
+              </li>
+              <li>
+                <strong>Download ZIP</strong> to grab it yourself, or <strong>Generate &amp; send to
+                client</strong> to make it downloadable from their portal.
+              </li>
+            </ul>
+          </section>
+          <section className="space-y-1">
+            <h3 className="font-semibold text-amber-700">Good to know</h3>
+            <ul className="list-disc pl-5 space-y-1">
+              <li>
+                <strong>The client only sees the kit once the project is delivered</strong> AND the Social
+                Sharing Kit is switched on in <strong>Settings</strong>. Until then, nothing is visible to
+                them.
+              </li>
+              <li>
+                <strong>Sending never changes the project.</strong> It doesn&apos;t move the status or touch
+                the client&apos;s logo reveal — the kit is a separate, post-delivery download.
+              </li>
+              <li>
+                <strong>Sending again adds a newer version</strong> — the client always gets the latest one.
+              </li>
+              <li>
+                <strong>Transparent variants</strong> only appear when the uploaded logo actually has
+                transparency (a flat JPG has none).
+              </li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
       <LogoPicker enrollmentId={enrollmentId} onLogo={setLogo} loadedName={logo?.name} />
 
       {/* Brand colour source */}
