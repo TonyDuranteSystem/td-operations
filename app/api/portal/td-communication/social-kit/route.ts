@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/portal-auth'
-import { resolveClientActiveEnrollment } from '@/lib/td-communication/client-access'
+import { resolveClientDeliveredEnrollment } from '@/lib/td-communication/client-access'
 import { getCommSettings } from '@/lib/td-communication/comm-settings'
 import { listReleasedSocialKits } from '@/lib/td-communication/social-kit-queries'
 
@@ -34,8 +34,10 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'The social sharing kit is not available.' }, { status: 503 })
     }
 
-    const enrollment = await resolveClientActiveEnrollment(user)
-    if (!enrollment || enrollment.status !== 'delivered') {
+    // Delivered-inclusive resolver: the social kit is a POST-delivery surface,
+    // and the standard active lookup deliberately excludes delivered enrollments.
+    const enrollment = await resolveClientDeliveredEnrollment(user)
+    if (!enrollment) {
       return NextResponse.json({ available: false })
     }
 

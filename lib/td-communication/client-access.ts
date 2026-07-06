@@ -10,7 +10,7 @@
 
 import type { User } from '@supabase/supabase-js'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
-import { getClientActiveEnrollment } from './brand-audit'
+import { getClientActiveEnrollment, getClientDeliveredEnrollment } from './brand-audit'
 import type { CommEnrollmentRow } from './types'
 
 export async function resolveClientActiveEnrollment(
@@ -20,4 +20,18 @@ export async function resolveClientActiveEnrollment(
   const accountIds = contactId ? await getClientAccountIds(contactId) : []
   if (!contactId && accountIds.length === 0) return null
   return getClientActiveEnrollment(contactId, accountIds)
+}
+
+/**
+ * The client's OWN most recent delivered enrollment (Phase 15 social kit — a
+ * post-delivery surface the active lookup excludes). Same identity-scoped, no-IDOR
+ * resolution as resolveClientActiveEnrollment.
+ */
+export async function resolveClientDeliveredEnrollment(
+  user: User,
+): Promise<CommEnrollmentRow | null> {
+  const contactId = getClientContactId(user)
+  const accountIds = contactId ? await getClientAccountIds(contactId) : []
+  if (!contactId && accountIds.length === 0) return null
+  return getClientDeliveredEnrollment(contactId, accountIds)
 }

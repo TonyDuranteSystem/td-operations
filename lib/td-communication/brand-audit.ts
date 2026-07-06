@@ -105,6 +105,35 @@ export async function getClientActiveEnrollment(
   return pickActiveClientEnrollment((data ?? []) as CommEnrollmentRow[])
 }
 
+/**
+ * The client's most recent DELIVERED brand-audit enrollment, by the whole client
+ * identity. Deliberately separate from getClientActiveEnrollment (which excludes
+ * `delivered`/`cancelled`): the Phase 15 social sharing kit is a POST-delivery
+ * surface, so it needs the delivered row the active lookup filters out. Returns
+ * null when the client has no delivered project.
+ */
+export async function getClientDeliveredEnrollment(
+  contactId: string | null,
+  accountIds: string[],
+): Promise<CommEnrollmentRow | null> {
+  const orClauses: string[] = []
+  if (contactId) orClauses.push(`contact_id.eq.${contactId}`)
+  if (accountIds.length > 0) orClauses.push(`account_id.in.(${accountIds.join(',')})`)
+  if (orClauses.length === 0) return null
+
+  const { data, error } = await db
+    .from('td_comm_enrollments')
+    .select(ENROLLMENT_COLUMNS)
+    .eq('status', 'delivered')
+    .or(orClauses.join(','))
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (error) throw new Error(error.message)
+
+  const rows = (data ?? []) as CommEnrollmentRow[]
+  return rows[0] ?? null
+}
+
 export interface SubmitBrandAuditParams {
   /** Logged-in client's contact id (null for a teammate identity). */
   contactId: string | null

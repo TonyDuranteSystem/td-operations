@@ -100,12 +100,14 @@ export default async function TdCommunicationPage() {
   // server-side so the card shows the right variant. Wrapped defensively: a consent
   // lookup failure (e.g. the table not yet migrated in an environment) must NEVER
   // 500 the client's page — it just hides the (non-essential) opt-in card.
-  // Phase 15 — once delivered, the client can self-serve their social sharing kit
-  // (the card self-hides when the kill-switch is off or no kit was released).
-  let socialKitCard: React.ReactNode = null
+  // Phase 15 — the client can self-serve their social sharing kit once a project
+  // is delivered. Mounted unconditionally: the card resolves the client's DELIVERED
+  // enrollment via its own endpoint and self-hides when there's no kit, the kill-
+  // switch is off, or nothing is delivered. (The page's `enrollment` above comes
+  // from the active lookup, which excludes delivered rows, so it can't gate this.)
+  const socialKitCard: React.ReactNode = <SocialKitCard locale={isIt ? 'it' : 'en'} />
   let consentCard: React.ReactNode = null
   if (enrollment && enrollment.status === 'delivered') {
-    socialKitCard = <SocialKitCard locale={isIt ? 'it' : 'en'} />
     try {
       const activeConsent = await getActiveConsentForEnrollment(enrollment.id)
       consentCard = (
