@@ -199,18 +199,43 @@ export async function recategorizeWorkspaceAi(
   if (rows.length === 0) return { scanned: 0, aiCategorized: 0, labeled: 0, aiErrors: [], uncategorizedRemaining: 0, noCandidates: true, stats: { batchesSent: 0, batchesFailed: 0, suggestionsParsed: 0, truncatedBatches: 0, capped: false } }
 
   const aiPlaceOn = process.env.AI_PLACE_ENABLED === "1"
-  // Candidate selection — same policy as the client path: label outflows booked
-  // as a business cost or undecided + inflows booked as income or undecided;
-  // skip manual rows and rows that already carry both hints (idempotent + cost).
   // S2 EXCEPTION (prod incident 2026-07-05): with AI place ON, a still-
   // uncategorized row with hints but NO location is still a candidate — hints
   // predate place-reading, and skipping these locked the whole feature out of
   // any workspace whose rows were hinted before S2 shipped (forks copy hints).
+  // ONLY for rows in groups of ≥3 (second prod incident, same day): stamping
+  // requires groupSize ≥3, so re-sending singletons for place is pure waste —
+  // and because an unstamped row stays a candidate, singletons made the chain
+  // re-pay the same front of the list chunk after chunk. Restricting the
+  // exception to stampable groups drains the loop: the residual pool fits in
+  // one chunk and the chain finishes.
+  const { rowRootKey: rootKeyFn, RAIL_SET: railSet } = await import("./row-root")
+  const groupSizeByKey = new Map<string, number>()
+  if (aiPlaceOn) {
+    for (const r of rows) {
+      if ((r.category as string) !== "uncategorized") continue
+      if ((((r as unknown as { loc_code: string | null }).loc_code) ?? null) !== null) continue
+      if (((r.notes as string | null) ?? "").startsWith("manual:")) continue
+      const root = rootKeyFn((r.description as string) ?? "", (r.counterparty as string | null) ?? null)
+      if (root.source !== "description" || root.degenerate || railSet.has(root.key) || root.key === "(no description)" || Number(r.amount) === 0) continue
+      const sign = Number(r.amount) < 0 ? "out" : "in"
+      const gk = `${root.key} ${sign} ${(r.currency as string) || "USD"}`
+      groupSizeByKey.set(gk, (groupSizeByKey.get(gk) ?? 0) + 1)
+    }
+  }
+  // Candidate selection — same policy as the client path: label outflows booked
+  // as a business cost or undecided + inflows booked as income or undecided;
+  // skip manual rows and rows that already carry both hints (idempotent + cost).
   const toLabel = rows.filter(r => {
     if (((r.notes as string | null) ?? "").startsWith("manual:")) return false
     const cat = r.category as string
     const hinted = ((r.ai_lean as string | null) ?? null) !== null && ((r.ai_bucket as string | null) ?? null) !== null
-    const needsPlace = aiPlaceOn && cat === "uncategorized" && (((r as unknown as { loc_code: string | null }).loc_code) ?? null) === null
+    let needsPlace = false
+    if (aiPlaceOn && cat === "uncategorized" && (((r as unknown as { loc_code: string | null }).loc_code) ?? null) === null) {
+      const root = rootKeyFn((r.description as string) ?? "", (r.counterparty as string | null) ?? null)
+      const sign = Number(r.amount) < 0 ? "out" : "in"
+      needsPlace = (groupSizeByKey.get(`${root.key} ${sign} ${(r.currency as string) || "USD"}`) ?? 0) >= 3
+    }
     if (hinted && !needsPlace) return false
     const amt = Number(r.amount)
     return amt < 0
