@@ -141,6 +141,23 @@ export function SettingsAdmin({ isAdmin }: { isAdmin: boolean }) {
           </label>
         </div>
 
+        {/* Client landing page builder (Phase 16) */}
+        <div className="border rounded-lg bg-white p-4">
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-zinc-900">Client landing pages</span>
+              <span className="block text-xs text-zinc-500">Publish client landing pages built in <strong className="font-medium">Design Tools → Landing Page</strong> to their public URL, and show the client a &ldquo;your landing page is live&rdquo; card once the project is <strong className="font-medium">delivered</strong>. When off, every <code>/site/…</code> page shows &ldquo;coming soon&rdquo; and the portal card is hidden. A page goes live only when it is <strong className="font-medium">published AND</strong> this switch is on.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-5 w-5"
+              checked={settings.landing_builder_enabled}
+              disabled={disabled}
+              onChange={(e) => set('landing_builder_enabled', e.target.checked)}
+            />
+          </label>
+        </div>
+
         {/* Disclaimer */}
         <div className="border rounded-lg bg-white p-4 space-y-3">
           <h4 className="text-sm font-medium text-zinc-900">Disclaimer text</h4>

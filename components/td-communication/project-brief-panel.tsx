@@ -25,6 +25,10 @@ import type { CommParticipant } from '@/lib/td-communication/types'
 
 // Cris's design tools (Phase 12). Lazy-loaded with no SSR: the Canvas / zip / SVG
 // code must not weigh down a normal brief-panel open.
+const LandingSiteEditor = dynamic(
+  () => import('./client-landing/landing-site-editor').then((m) => m.LandingSiteEditor),
+  { ssr: false, loading: () => <div className="text-sm text-gray-500 p-2">Loading…</div> },
+)
 const DesignToolsSection = dynamic(
   () => import('./design-tools/design-tools-section').then((m) => m.DesignToolsSection),
   {
@@ -664,6 +668,15 @@ export function ProjectBriefPanel({
                   enrollmentId={project.id}
                   paletteColors={project.ai_brand_profile?.color_palette ?? []}
                   onSaved={handleDeliverableChange}
+                />
+              </Section>
+
+              {/* Client Landing Page (Phase 16) — self-gates on the package's
+                  includes_landing flag (+ admin override) inside the editor. */}
+              <Section title="Landing Page" icon={<Package className="h-3.5 w-3.5" />}>
+                <LandingSiteEditor
+                  enrollmentId={project.id}
+                  brandPalette={project.ai_brand_profile?.color_palette ?? []}
                 />
               </Section>
 

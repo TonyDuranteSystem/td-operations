@@ -21,6 +21,7 @@ interface FormState {
   sort_order: string
   includesText: string // one item per line
   upsell_from: string[]
+  includes_landing: boolean
 }
 
 function toForm(p: TdCommPackage): FormState {
@@ -39,6 +40,7 @@ function toForm(p: TdCommPackage): FormState {
     sort_order: String(p.sort_order),
     includesText: p.includes.join('\n'),
     upsell_from: p.upsell_from,
+    includes_landing: p.includes_landing,
   }
 }
 
@@ -46,6 +48,7 @@ const EMPTY_FORM: FormState = {
   slug: '', name_en: '', name_it: '', description_en: '', description_it: '',
   price_usd: '', delivery_days: '', max_revisions: '2', payment_timing: 'on_approval',
   highlighted: false, active: true, sort_order: '0', includesText: '', upsell_from: [],
+  includes_landing: false,
 }
 
 /** Build the API payload from form state (numbers parsed, includes split). */
@@ -67,6 +70,7 @@ function toPayload(f: FormState, isCreate: boolean) {
     sort_order: Number(f.sort_order || '0'),
     includes,
     upsell_from: f.upsell_from,
+    includes_landing: f.includes_landing,
   }
 }
 
@@ -348,6 +352,9 @@ function PackageModal({
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input type="checkbox" checked={form.active} onChange={(e) => set('active', e.target.checked)} /> Active
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700" title="Offers the client landing-page builder on projects with this package">
+              <input type="checkbox" checked={form.includes_landing} onChange={(e) => set('includes_landing', e.target.checked)} /> Includes landing page
             </label>
           </div>
         </div>

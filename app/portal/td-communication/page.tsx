@@ -35,6 +35,7 @@ import { TdCommLanding } from '@/components/td-communication/td-comm-landing'
 import { ConceptReveal } from '@/components/td-communication/concept-reveal'
 import { ShowcaseConsentCard } from '@/components/td-communication/showcase-consent-card'
 import { SocialKitCard } from '@/components/td-communication/social-kit-card'
+import { LandingLiveCard } from '@/components/td-communication/landing-live-card'
 import { BellRing, ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -106,6 +107,9 @@ export default async function TdCommunicationPage() {
   // switch is off, or nothing is delivered. (The page's `enrollment` above comes
   // from the active lookup, which excludes delivered rows, so it can't gate this.)
   const socialKitCard: React.ReactNode = <SocialKitCard locale={isIt ? 'it' : 'en'} />
+  // Phase 16 — self-hiding "your landing page is live" card (kill-switch +
+  // delivered + published gated in its own endpoint).
+  const landingLiveCard: React.ReactNode = <LandingLiveCard locale={isIt ? 'it' : 'en'} />
   let consentCard: React.ReactNode = null
   if (enrollment && enrollment.status === 'delivered') {
     try {
@@ -184,9 +188,10 @@ export default async function TdCommunicationPage() {
         locale={locale}
         ctaHref={comingSoon ? undefined : WIZARD_HREF}
       />
-      {(footer || socialKitCard || consentCard) && (
-        <div className="px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto pb-6">
+      {(footer || socialKitCard || consentCard || landingLiveCard) && (
+        <div className="px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto pb-6 space-y-4">
           {footer}
+          {landingLiveCard}
           {socialKitCard}
           {consentCard}
         </div>

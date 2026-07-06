@@ -86,6 +86,14 @@ const PUBLIC_PREFIXES = [
   // resolvePortfolioAccess), so this startsWith match never exposes a writer.
   '/portfolio',
   '/api/td-communication/portfolio',
+  // TD Communication PUBLIC client landing pages (Phase 16): the per-client
+  // /site/<slug> page is unauthenticated (it IS the client's shareable public
+  // site). TRAILING SLASH pins the match to /site/<slug> so it can never
+  // whitelist a sibling like /sitemap.xml. The editor/publish routes live under
+  // the SEPARATE prefix /api/td-communication/projects/[id]/landing-site and
+  // self-authenticate (resolveCommParticipant), so this never exposes a writer.
+  // The page itself gates on the landing_builder_enabled kill-switch + published.
+  '/site/',
   // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session
   // and 302s the client to the checkout URL. Token-gated, no Supabase auth.
   '/pay',

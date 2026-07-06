@@ -28,6 +28,7 @@ export interface PackageWriteInput {
   sort_order?: number
   includes?: string[]
   upsell_from?: string[]
+  includes_landing?: boolean
 }
 
 export interface ValidationResult {
@@ -114,6 +115,7 @@ export function shapePackage(row: Record<string, unknown>): TdCommPackage {
     sort_order: Number(row.sort_order ?? 0),
     includes: Array.isArray(row.includes) ? (row.includes as string[]) : [],
     upsell_from: Array.isArray(row.upsell_from) ? (row.upsell_from as string[]) : [],
+    includes_landing: Boolean(row.includes_landing),
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
   }

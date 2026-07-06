@@ -214,6 +214,9 @@ export interface TdCommPackage {
   includes: string[]
   /** Slugs this package can be upsold from. */
   upsell_from: string[]
+  /** Phase 16: does this package include a client landing page? Gates the
+   *  landing-page builder surface on an enrollment with this package. */
+  includes_landing: boolean
   created_at: string
   updated_at: string
 }
@@ -283,6 +286,12 @@ export interface TdCommSettings {
    *  Default false so nothing reaches clients until an admin turns it on
    *  (mirrors `portfolio_enabled`). */
   social_kit_enabled: boolean
+  /** Master on/off for the Phase 16 Client Landing Page builder. When false, the
+   *  public /site/[slug] page shows "coming soon" (noindex) and the portal never
+   *  shows the "your landing page is live" card. Default false so nothing goes
+   *  public until an admin turns it on (mirrors `portfolio_enabled`). Two-condition
+   *  go-live: a site must be published AND this flag on. */
+  landing_builder_enabled: boolean
 }
 
 /** Aggregate stats for the enrollments admin tab. */
@@ -450,4 +459,137 @@ export interface PublicPortfolioEntry {
   category: string | null
   tags: string[]
   featured: boolean
+}
+
+/* -------------------------------------------------------------------------- */
+/* Phase 16 — Client Landing Page Builder (td_comm_landing_sites)              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A per-CLIENT one-page landing site Cris builds as a branding deliverable and
+ * publishes to a PUBLIC path (/site/<slug>). Distinct from the Phase 9 landing
+ * editor (the singleton SERVICE marketing page). Single-language per site (the
+ * client's own audience is one language) — a site-level `locale`, flat fields.
+ */
+export type ClandLocale = 'en' | 'it'
+
+/** System-font stacks only — no webfont files, no CDN, no CSP change. */
+export type ClandFontKey = 'modern_sans' | 'elegant_serif' | 'geometric'
+
+/** The catalog of section types. Adding one = a registry entry + a renderer branch. */
+export type ClandSectionType = 'hero' | 'about' | 'services' | 'gallery' | 'contact' | 'custom_text'
+
+/** Frozen-at-publish visual theme. Colors seed from ai_brand_profile then freeze. */
+export interface ClandTheme {
+  /** 6-digit hex. */
+  primary: string
+  secondary: string
+  accent: string
+  /** Body text color (hex). */
+  text: string
+  font_key: ClandFontKey
+  /** PUBLIC assets-bucket URL (copied logo), or null. Never a private signed URL. */
+  logo_url: string | null
+}
+
+interface ClandSectionBase {
+  id: string
+  type: ClandSectionType
+  enabled: boolean
+}
+export interface ClandHeroSection extends ClandSectionBase {
+  type: 'hero'
+  headline: string
+  subheadline: string
+  cta_label: string
+  /** Sanitized to http(s)/mailto/tel only. */
+  cta_href: string
+}
+export interface ClandAboutSection extends ClandSectionBase {
+  type: 'about'
+  heading: string
+  body: string
+}
+export interface ClandServiceItem {
+  title: string
+  description: string
+}
+export interface ClandServicesSection extends ClandSectionBase {
+  type: 'services'
+  heading: string
+  items: ClandServiceItem[]
+}
+export interface ClandGalleryImage {
+  /** PUBLIC assets-bucket URL (pinned to our origin on sanitize). */
+  image_url: string
+  caption: string
+}
+export interface ClandGallerySection extends ClandSectionBase {
+  type: 'gallery'
+  heading: string
+  images: ClandGalleryImage[]
+}
+export interface ClandContactLink {
+  label: string
+  /** Sanitized to http(s)/mailto/tel only. */
+  href: string
+}
+export interface ClandContactSection extends ClandSectionBase {
+  type: 'contact'
+  heading: string
+  email: string
+  phone: string
+  links: ClandContactLink[]
+}
+export interface ClandCustomTextSection extends ClandSectionBase {
+  type: 'custom_text'
+  heading: string
+  body: string
+}
+export type ClandSection =
+  | ClandHeroSection
+  | ClandAboutSection
+  | ClandServicesSection
+  | ClandGallerySection
+  | ClandContactSection
+  | ClandCustomTextSection
+
+/** The full editable content of a client landing site (draft or published snapshot). */
+export interface ClientLandingContent {
+  locale: ClandLocale
+  theme: ClandTheme
+  sections: ClandSection[]
+}
+
+/** A td_comm_landing_sites row, shaped (content parsed/validated). */
+export interface ClientLandingSite {
+  id: string
+  enrollment_id: string | null
+  slug: string
+  title: string
+  content: ClientLandingContent
+  published_content: ClientLandingContent | null
+  published: boolean
+  published_at: string | null
+  published_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** What the editor reads: the site + derived flags + the public URL. */
+export interface ClientLandingEditorState {
+  site: ClientLandingSite
+  hasUnpublishedChanges: boolean
+  /** Full public URL of the published site (APP_BASE_URL + /site/<slug>). */
+  publicUrl: string
+}
+
+/** Public-safe projection served to the unauthenticated /site/[slug] page. */
+export interface PublicClientLanding {
+  /** Public-safe brand name (page title / OG). */
+  title: string
+  locale: ClandLocale
+  theme: ClandTheme
+  /** Only ENABLED sections — disabled content never reaches the browser. */
+  sections: ClandSection[]
 }

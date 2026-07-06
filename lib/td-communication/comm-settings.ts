@@ -21,6 +21,7 @@ export const DEFAULT_COMM_SETTINGS: TdCommSettings = {
   ai_enabled: true,
   portfolio_enabled: false,
   social_kit_enabled: false,
+  landing_builder_enabled: false,
 }
 
 /** Pure: layer a (possibly partial / malformed) stored value over the defaults. */
@@ -39,6 +40,10 @@ export function mergeCommSettings(stored: Partial<TdCommSettings> | null | undef
       typeof s.portfolio_enabled === 'boolean' ? s.portfolio_enabled : DEFAULT_COMM_SETTINGS.portfolio_enabled,
     social_kit_enabled:
       typeof s.social_kit_enabled === 'boolean' ? s.social_kit_enabled : DEFAULT_COMM_SETTINGS.social_kit_enabled,
+    landing_builder_enabled:
+      typeof s.landing_builder_enabled === 'boolean'
+        ? s.landing_builder_enabled
+        : DEFAULT_COMM_SETTINGS.landing_builder_enabled,
   }
 }
 

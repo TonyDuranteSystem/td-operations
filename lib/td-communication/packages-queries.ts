@@ -17,7 +17,7 @@ import type { TdCommPackage } from './types'
 const db = supabaseAdmin as any
 
 const COLUMNS =
-  'slug, name_en, name_it, description_en, description_it, price_usd, delivery_days, max_revisions, payment_timing, highlighted, active, sort_order, includes, upsell_from, created_at, updated_at'
+  'slug, name_en, name_it, description_en, description_it, price_usd, delivery_days, max_revisions, payment_timing, highlighted, active, sort_order, includes, upsell_from, includes_landing, created_at, updated_at'
 
 /** Postgres unique-violation code. */
 const PG_UNIQUE_VIOLATION = '23505'
@@ -49,6 +49,7 @@ export async function createPackage(input: PackageWriteInput): Promise<TdCommPac
     sort_order: input.sort_order ?? 0,
     includes: input.includes ?? [],
     upsell_from: input.upsell_from ?? [],
+    includes_landing: input.includes_landing ?? false,
     created_at: now,
     updated_at: now,
   }
@@ -68,6 +69,7 @@ export async function updatePackage(slug: string, input: PackageWriteInput): Pro
   const fields: (keyof PackageWriteInput)[] = [
     'name_en', 'name_it', 'description_en', 'description_it', 'price_usd', 'delivery_days',
     'max_revisions', 'payment_timing', 'highlighted', 'active', 'sort_order', 'includes', 'upsell_from',
+    'includes_landing',
   ]
   for (const f of fields) {
     if (input[f] !== undefined) patch[f] = input[f]
