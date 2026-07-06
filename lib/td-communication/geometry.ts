@@ -20,8 +20,8 @@ import { escapeXmlAttr } from './mockup-templates'
 /** Bump when the LogoGeometry shape changes in a non-backward-compatible way. */
 export const GEOMETRY_SCHEMA_VERSION = 1
 
-/** Corner treatment KIND. (`notch`/concave is a future preset — registry-extensible.) */
-export type CornerStyle = 'round' | 'bevel'
+/** Corner treatment KIND: rounded, outward chamfer (bevel), or inward concave cut (notch). */
+export type CornerStyle = 'round' | 'bevel' | 'notch'
 
 /**
  * The durable, structured geometry decision. Normalized + versioned so a future
@@ -61,6 +61,7 @@ export const GEOMETRY_PRESETS: readonly GeometryPreset[] = [
   { id: 'pill', label: 'Pill', corner_style: 'round', corner_radius: 1, edge_sharpness: 0 },
   { id: 'bevelled', label: 'Bevelled', corner_style: 'bevel', corner_radius: 0.3, edge_sharpness: 0.5 },
   { id: 'chiseled', label: 'Chiseled', corner_style: 'bevel', corner_radius: 0.55, edge_sharpness: 1 },
+  { id: 'notched', label: 'Notched', corner_style: 'notch', corner_radius: 0.35, edge_sharpness: 0.6 },
 ] as const
 
 export const GEOMETRY_PRESET_IDS: readonly string[] = GEOMETRY_PRESETS.map((p) => p.id)
@@ -80,7 +81,12 @@ export const clampRadius = clamp01
 export const clampSharpness = clamp01
 
 function isCornerStyle(v: unknown): v is CornerStyle {
-  return v === 'round' || v === 'bevel'
+  return v === 'round' || v === 'bevel' || v === 'notch'
+}
+
+/** Whether the edge-sharpness axis applies to a style (bevel + notch cut depth; inert for round). */
+export function sharpnessApplies(style: CornerStyle): boolean {
+  return style === 'bevel' || style === 'notch'
 }
 
 /* ------------------------------ construct/coerce -------------------------- */
@@ -155,7 +161,7 @@ export function geometrySummary(geo: LogoGeometry): string {
   const name = preset ? preset.label : geo.preset_id
   const pct = (n: number) => `${Math.round(n * 100)}%`
   const tuned = geo.source === 'custom' ? ' (custom)' : ''
-  return `${name}${tuned} · ${geo.corner_style} · radius ${pct(geo.corner_radius)}${geo.corner_style === 'bevel' ? ` · sharpness ${pct(geo.edge_sharpness)}` : ''}`
+  return `${name}${tuned} · ${geo.corner_style} · radius ${pct(geo.corner_radius)}${sharpnessApplies(geo.corner_style) ? ` · sharpness ${pct(geo.edge_sharpness)}` : ''}`
 }
 
 /* ---------------------------- SVG specimen render ------------------------ */
@@ -186,6 +192,26 @@ export function cornerPathD(style: CornerStyle, w: number, h: number, radiusPx: 
       `H${round(k)}`,
       `L0,${round(h - k)}`,
       `V${round(k)}`,
+      'Z',
+    ].join(' ')
+  }
+  if (style === 'notch') {
+    // Concave inward square cut at each corner (distinct from the outward bevel).
+    const cut = round(c * (0.6 + 0.4 * clamp01(sharpness)))
+    const k = Math.min(cut, Math.min(w, h) / 2)
+    return [
+      `M${round(k)},0`,
+      `H${round(w - k)}`,
+      `L${round(w - k)},${round(k)}`,
+      `L${round(w)},${round(k)}`,
+      `V${round(h - k)}`,
+      `L${round(w - k)},${round(h - k)}`,
+      `L${round(w - k)},${round(h)}`,
+      `H${round(k)}`,
+      `L${round(k)},${round(h - k)}`,
+      `L0,${round(h - k)}`,
+      `V${round(k)}`,
+      `L${round(k)},${round(k)}`,
       'Z',
     ].join(' ')
   }

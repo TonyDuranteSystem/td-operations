@@ -10,17 +10,21 @@ import {
   renderMockupSvg,
 } from '@/lib/td-communication/mockup-templates'
 import { normalizeHex, type NamedColor } from '@/lib/td-communication/color-tools'
+import type { LogoGeometry } from '@/lib/td-communication/geometry'
 import { LogoPicker } from './logo-picker'
 import { svgToPngBlob, saveDesignAsset, downloadBlob, type LoadedLogo } from './logo-utils'
 
 export function MockupPreviewer({
   enrollmentId,
   paletteColors,
+  geometry,
   onSaved,
 }: {
   /** null = scratchpad: preview + Export only, Save disabled. */
   enrollmentId: string | null
   paletteColors: NamedColor[]
+  /** The project's chosen logo geometry — themes the container corners when applied. */
+  geometry?: LogoGeometry | null
   onSaved?: () => void
 }) {
   const [logo, setLogo] = useState<LoadedLogo | null>(null)
@@ -29,6 +33,9 @@ export function MockupPreviewer({
   const template = getMockupTemplate(templateId)!
   const [bg, setBg] = useState<string>(template.recommendedBg)
   const [busy, setBusy] = useState<null | 'export' | 'save'>(null)
+  // When a brand geometry exists, follow its corner radius by default (opt-out).
+  const [useGeometry, setUseGeometry] = useState(true)
+  const cornerRadius = geometry && useGeometry ? geometry.corner_radius : undefined
 
   const bgSwatches = useMemo(() => {
     const fromPalette = paletteColors.map((c) => normalizeHex(c.hex)).filter((h): h is string => !!h)
@@ -36,8 +43,8 @@ export function MockupPreviewer({
   }, [paletteColors])
 
   const svg = useMemo(
-    () => renderMockupSvg(templateId, { bg, logoHref: logo?.dataUrl ?? null, logoScale: scale }),
-    [templateId, bg, logo, scale],
+    () => renderMockupSvg(templateId, { bg, logoHref: logo?.dataUrl ?? null, logoScale: scale, cornerRadius }),
+    [templateId, bg, logo, scale, cornerRadius],
   )
 
   async function makeBlob(): Promise<Blob> {
@@ -130,6 +137,12 @@ export function MockupPreviewer({
           onChange={(e) => setScale(Number(e.target.value))}
           className="w-28"
         />
+        {geometry && (
+          <label className="text-xs text-zinc-500 inline-flex items-center gap-1 ml-2" title="Round the card / website-frame corners to match the brand geometry chosen in the Geometry tab">
+            <input type="checkbox" checked={useGeometry} onChange={(e) => setUseGeometry(e.target.checked)} />
+            Match brand geometry
+          </label>
+        )}
       </div>
 
       {/* Preview */}

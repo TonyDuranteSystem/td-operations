@@ -10,6 +10,7 @@ import {
   withGeometryOverride,
   coerceGeometry,
   geometrySummary,
+  sharpnessApplies,
   cornerPathD,
   renderGeometrySvg,
   geometryFileName,
@@ -20,6 +21,15 @@ describe('presets + clamps', () => {
     expect(new Set(GEOMETRY_PRESET_IDS).size).toBe(GEOMETRY_PRESETS.length)
     for (const id of GEOMETRY_PRESET_IDS) expect(getGeometryPreset(id)).toBeTruthy()
     expect(getGeometryPreset('nope')).toBeUndefined()
+  })
+  it('includes a concave notch preset', () => {
+    const n = getGeometryPreset('notched')
+    expect(n?.corner_style).toBe('notch')
+  })
+  it('sharpnessApplies to bevel + notch, not round', () => {
+    expect(sharpnessApplies('round')).toBe(false)
+    expect(sharpnessApplies('bevel')).toBe(true)
+    expect(sharpnessApplies('notch')).toBe(true)
   })
   it('clamp01 bounds and rejects NaN/non-numbers', () => {
     expect(clamp01(-1)).toBe(0)
@@ -99,6 +109,13 @@ describe('cornerPathD', () => {
   })
   it('bevel style emits straight cut lines, no arcs', () => {
     const d = cornerPathD('bevel', 200, 120, 30, 0.5)
+    expect(d).toContain('L')
+    expect(d).not.toContain('A')
+  })
+  it('notch style emits a valid closed concave path, no arcs', () => {
+    const d = cornerPathD('notch', 200, 120, 30, 0.6)
+    expect(d.startsWith('M')).toBe(true)
+    expect(d.endsWith('Z')).toBe(true)
     expect(d).toContain('L')
     expect(d).not.toContain('A')
   })

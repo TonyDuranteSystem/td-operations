@@ -12,6 +12,7 @@ import {
   renderGeometrySvg,
   geometryFileName,
   geometrySummary,
+  sharpnessApplies,
   defaultGeometry,
   type LogoGeometry,
   type CornerStyle,
@@ -125,6 +126,7 @@ export function GeometryTool({
   const STYLES: { id: CornerStyle; label: string }[] = [
     { id: 'round', label: 'Round' },
     { id: 'bevel', label: 'Bevel' },
+    { id: 'notch', label: 'Notch' },
   ]
 
   return (
@@ -171,9 +173,9 @@ export function GeometryTool({
           <input type="range" min={0} max={1} step={0.01} value={geo.corner_radius} onChange={(e) => patch({ corner_radius: Number(e.target.value) })} className="w-28" />
           <span className="tabular-nums w-8">{Math.round(geo.corner_radius * 100)}%</span>
         </label>
-        <label className={cn('flex items-center gap-1', geo.corner_style !== 'bevel' && 'opacity-40')}>
+        <label className={cn('flex items-center gap-1', !sharpnessApplies(geo.corner_style) && 'opacity-40')}>
           Sharpness
-          <input type="range" min={0} max={1} step={0.01} value={geo.edge_sharpness} disabled={geo.corner_style !== 'bevel'} onChange={(e) => patch({ edge_sharpness: Number(e.target.value) })} className="w-28" />
+          <input type="range" min={0} max={1} step={0.01} value={geo.edge_sharpness} disabled={!sharpnessApplies(geo.corner_style)} onChange={(e) => patch({ edge_sharpness: Number(e.target.value) })} className="w-28" />
           <span className="tabular-nums w-8">{Math.round(geo.edge_sharpness * 100)}%</span>
         </label>
       </div>

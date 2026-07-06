@@ -81,6 +81,17 @@ describe('renderMockupSvg', () => {
     const svg = renderMockupSvg('website', { bg: '#ffffff', logoHref: null })
     expect(svg).not.toContain('<image')
   })
+  it('keeps the default container radius when no brand geometry is given', () => {
+    const svg = renderMockupSvg('business_card', { bg: '#ffffff', logoHref: null })
+    expect(svg).toContain('rx="24"') // unchanged default behaviour
+  })
+  it('drives the container corner radius from a brand cornerRadius (opt-in)', () => {
+    const square = renderMockupSvg('business_card', { bg: '#ffffff', logoHref: null, cornerRadius: 0 })
+    expect(square).toContain('rx="0"')
+    const round = renderMockupSvg('business_card', { bg: '#ffffff', logoHref: null, cornerRadius: 1 })
+    expect(round).toContain('rx="240"') // 1 * min(930,480)/2
+    expect(round).not.toContain('rx="24"')
+  })
   it('falls back to the recommended bg on an invalid colour', () => {
     const svg = renderMockupSvg('social_post', { bg: 'not-a-color', logoHref: null })
     // social_post recommendedBg = #111111

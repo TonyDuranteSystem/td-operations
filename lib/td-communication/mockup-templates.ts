@@ -45,6 +45,23 @@ export interface RenderOptions {
   logoHref: string | null
   /** Multiplier on the logo area (centred), clamped to [0.5, 1.5]. Default 1. */
   logoScale?: number
+  /**
+   * OPTIONAL brand corner radius 0..1 (from the project's logo_geometry). When set,
+   * the brand-container corners (business card, website frame) follow it instead of
+   * their default rx. Undefined = unchanged default behaviour (existing mockups).
+   */
+  cornerRadius?: number
+}
+
+/**
+ * Resolve a container's corner radius in px. Undefined brand radius → the
+ * template's baked default (behaviour unchanged). Otherwise a fraction of the
+ * container's shorter side, capped so it never exceeds a rounded look.
+ */
+function brandRx(cornerRadius: number | undefined, fallback: number, minSide: number): number {
+  if (typeof cornerRadius !== 'number' || !Number.isFinite(cornerRadius)) return fallback
+  const r = Math.max(0, Math.min(1, cornerRadius))
+  return round(Math.min(r * (minSide / 2), minSide / 2))
 }
 
 const NEUTRAL_SURFACE = '#e7e7ea'
@@ -153,15 +170,18 @@ function textLines(
 /* Scene renderers                                                             */
 /* -------------------------------------------------------------------------- */
 
-function renderScene(t: MockupTemplate, bg: string, scale: number, logoHref: string | null): string {
+function renderScene(t: MockupTemplate, bg: string, scale: number, logoHref: string | null, cornerRadius?: number): string {
   const ink = bestTextColor(bg)
   const logo = logoTag(t.logoArea, scale, logoHref)
 
   switch (t.id) {
     case 'business_card': {
+      const cw = t.width - 120
+      const ch = t.height - 120
+      const rx = brandRx(cornerRadius, 24, Math.min(cw, ch))
       return [
         `<rect x="0" y="0" width="${t.width}" height="${t.height}" fill="${NEUTRAL_SURFACE}" />`,
-        `<rect x="60" y="60" width="${t.width - 120}" height="${t.height - 120}" rx="24" fill="${bg}" />`,
+        `<rect x="60" y="60" width="${cw}" height="${ch}" rx="${rx}" fill="${bg}" />`,
         logo,
         textLines(ink, 90, 360, [300, 240, 200]),
       ].join('')
@@ -183,11 +203,12 @@ function renderScene(t: MockupTemplate, bg: string, scale: number, logoHref: str
       ].join('')
     }
     case 'website': {
+      const rx = brandRx(cornerRadius, 16, 64) // cap to the chrome-bar height so the top stays clean
       return [
         `<rect x="0" y="0" width="${t.width}" height="${t.height}" fill="${NEUTRAL_SURFACE}" />`,
-        `<rect x="40" y="40" width="${t.width - 80}" height="${t.height - 80}" rx="16" fill="${bg}" />`,
+        `<rect x="40" y="40" width="${t.width - 80}" height="${t.height - 80}" rx="${rx}" fill="${bg}" />`,
         // browser chrome
-        `<rect x="40" y="40" width="${t.width - 80}" height="64" rx="16" fill="${ink}" opacity="0.06" />`,
+        `<rect x="40" y="40" width="${t.width - 80}" height="64" rx="${rx}" fill="${ink}" opacity="0.06" />`,
         `<circle cx="78" cy="72" r="8" fill="${ink}" opacity="0.25" />`,
         `<circle cx="106" cy="72" r="8" fill="${ink}" opacity="0.25" />`,
         `<circle cx="134" cy="72" r="8" fill="${ink}" opacity="0.25" />`,
@@ -210,6 +231,6 @@ export function renderMockupSvg(templateId: string, opts: RenderOptions): string
   if (!t) return ''
   const bg = normalizeHex(opts.bg) ?? t.recommendedBg
   const scale = clampScale(opts.logoScale)
-  const scene = renderScene(t, bg, scale, opts.logoHref ?? null)
+  const scene = renderScene(t, bg, scale, opts.logoHref ?? null, opts.cornerRadius)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${t.width} ${t.height}" width="${t.width}" height="${t.height}">${scene}</svg>`
 }

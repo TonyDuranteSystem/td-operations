@@ -177,7 +177,7 @@ export function DesignToolsSection({
 
       {tab === 'palette' && <ColorPaletteTool initialColors={paletteColors} />}
       {tab === 'mockups' && (
-        <MockupPreviewer enrollmentId={enrollmentId} paletteColors={paletteColors} onSaved={onSaved} />
+        <MockupPreviewer enrollmentId={enrollmentId} paletteColors={paletteColors} geometry={initialGeometry} onSaved={onSaved} />
       )}
       {tab === 'geometry' && (
         <GeometryTool
