@@ -19,6 +19,7 @@ import {
   deriveThemeFromProfile,
 } from '@/lib/td-communication/client-landing'
 import { ClientLandingRenderer } from './client-landing-renderer'
+import { SectionReadme } from '../section-readmes'
 import type {
   ClientLandingContent,
   ClientLandingSite,
@@ -261,14 +262,56 @@ export function LandingSiteEditor({
     [content, state?.site.title],
   )
 
+  const readme = (
+    <SectionReadme title="How the Landing Page builder works — read me">
+      <section className="space-y-1">
+        <h3 className="font-semibold text-zinc-900">What it is</h3>
+        <p>
+          A simple one-page <strong>public website</strong> for this client, built from their brand. You add
+          sections (hero, about, services, gallery, contact, custom text), theme it with their colours, font and
+          logo, then <strong>Publish</strong> it to a shareable web address (<code>…/site/&lt;name&gt;</code>). Once
+          the project is delivered, the client sees a &ldquo;your landing page is live&rdquo; card in their portal.
+          This is the client&rsquo;s <strong>own</strong> site — different from the TD Communication marketing page.
+        </p>
+      </section>
+      <section className="space-y-1">
+        <h3 className="font-semibold text-zinc-900">How to use it</h3>
+        <ol className="list-decimal pl-5 space-y-1">
+          <li><strong>Create landing page</strong> to start from a default layout (hero → about → services → contact).</li>
+          <li>Set the <strong>theme</strong> — colours (or &ldquo;Use brand colours&rdquo;), a font, and upload the <strong>logo</strong>.</li>
+          <li>Edit each <strong>section</strong>: fill the text, add/remove items, use ↑/↓ to reorder, and untick <em>shown</em> to hide one. Add more sections from the buttons at the bottom.</li>
+          <li>Watch the <strong>live preview</strong> (Desktop / Mobile). Everything <strong>autosaves</strong> as a draft.</li>
+          <li><strong>Publish</strong> when it&rsquo;s ready, then <strong>Copy</strong> the public URL to share it. Use <strong>Rename</strong> to change the web address.</li>
+        </ol>
+      </section>
+      <section className="space-y-1">
+        <h3 className="font-semibold text-amber-700">Good to know</h3>
+        <ul className="list-disc pl-5 space-y-1">
+          <li><strong>Two things must be true for the page to be live:</strong> you&rsquo;ve <strong>Published</strong> it <em>and</em> an admin has turned on <strong>&ldquo;Client landing pages&rdquo;</strong> in Settings. Until then the address shows &ldquo;coming soon&rdquo;.</li>
+          <li>The public page only shows text and <strong>images hosted by us</strong> (the logo you upload, or released work) — nothing private from the brief.</li>
+          <li><strong>Publishing freezes a snapshot.</strong> Later edits don&rsquo;t change the live page until you Publish again.</li>
+          <li><strong>Delete</strong> stops the public URL working. The address survives even if the project is later removed.</li>
+          <li>Only packages that <strong>include a landing page</strong> show this section (admins can enable it anyway).</li>
+        </ul>
+      </section>
+    </SectionReadme>
+  )
+
   if (loading) return <div className="text-sm text-gray-500 p-2">Loading landing page…</div>
 
   // --- gate: no site yet ---
   if (!state || !content) {
     if (!includesLanding && !isAdmin) {
-      return <div className="text-sm text-gray-500 p-3 border rounded bg-gray-50">This package doesn&rsquo;t include a landing page.</div>
+      return (
+        <div className="space-y-3">
+          {readme}
+          <div className="text-sm text-gray-500 p-3 border rounded bg-gray-50">This package doesn&rsquo;t include a landing page.</div>
+        </div>
+      )
     }
     return (
+      <div className="space-y-3">
+      {readme}
       <div className="p-3 border rounded bg-white space-y-2">
         <p className="text-sm text-gray-700">Build a one-page landing site for this client from their brand.</p>
         {!includesLanding && isAdmin ? (
@@ -278,6 +321,7 @@ export function LandingSiteEditor({
           {busy ? 'Creating…' : 'Create landing page'}
         </button>
       </div>
+      </div>
     )
   }
 
@@ -285,6 +329,7 @@ export function LandingSiteEditor({
 
   return (
     <div className="space-y-3">
+      {readme}
       {conflict ? (
         <div className="p-2 rounded bg-amber-50 border border-amber-300 text-sm text-amber-800 flex items-center justify-between gap-2">
           <span>This page was changed elsewhere. Reload to get the latest version (your unsaved edits will be lost).</span>
