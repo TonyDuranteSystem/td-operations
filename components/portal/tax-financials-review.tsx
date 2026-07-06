@@ -395,6 +395,94 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
+  // One merchant-group question card (chips, bucket select, bulk checkbox).
+  // COMPONENT-scope since 2026-07-06 so the country/period cards can render it
+  // INLINE ("Review one-by-one" opens in the same card — Antonio).
+  const renderQuestionCard = (g: QuestionGroup) => {
+    const lean = g.ai_lean === 'personal'
+      ? { txt: it ? 'Sembra personale' : 'Looks personal', cls: 'text-amber-700 bg-amber-50' }
+      : g.ai_lean === 'business'
+        ? { txt: it ? 'Sembra aziendale' : 'Looks business', cls: 'text-emerald-700 bg-emerald-50' }
+        : { txt: it ? 'Da controllare' : 'Please check', cls: 'text-zinc-500 bg-zinc-100' }
+    // Bulk checkbox only on still-undecided groups: bulk never stomps prior
+    // bookings (server enforces the same rule). One direction at a time — the
+    // action-bar chips must be valid for everything selected.
+    const undecided = (g.current_category ?? 'uncategorized') === 'uncategorized'
+    const checked = bulkSel.has(g.group_key)
+    const dirBlocked = bulkDir !== null && bulkDir !== g.direction && !checked
+    return (
+      <div key={g.group_key} className={`rounded-lg border bg-white p-3 ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-zinc-200'}`}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {undecided && (
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={busy !== null || dirBlocked}
+                onChange={() => toggleBulk(g)}
+                title={dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')}
+                className="h-4 w-4 accent-blue-600 disabled:opacity-40"
+              />
+            )}
+            <div className="text-sm font-medium text-zinc-800">{g.label}</div>
+          </div>
+          <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}{g.currency && g.currency !== 'USD' ? ` ${g.currency}` : ''}</div>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
+          <select
+            value={g.ai_bucket ?? ''}
+            disabled={busy !== null}
+            onChange={e => void setBucket(g, e.target.value)}
+            className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
+          >
+            <option value="">{it ? '— categoria —' : '— category —'}</option>
+            {view?.buckets.map(b => <option key={b.slug} value={b.slug}>{b.label}</option>)}
+          </select>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
+          {visibleAnswers(g).map(a => {
+            const selected = a.value === activeAnswerOf(g)
+            return (
+              <button
+                key={a.value}
+                disabled={busy !== null || selected}
+                onClick={() => void answer(g, a.value)}
+                aria-pressed={selected}
+                className={selected
+                  ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
+                  : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
+              >
+                {selected ? '✓ ' : ''}{it ? a.it : a.en}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  // "Review one-by-one" opens INSIDE the tapped card (Antonio 2026-07-06) —
+  // which country/period card is expanded inline, and its undecided groups.
+  const [inlineReview, setInlineReview] = useState<string | null>(null)
+  const inlineGroupsFor = (keys: string[] | Set<string>): QuestionGroup[] => {
+    const keySet = keys instanceof Set ? keys : new Set(keys)
+    return (view?.questions ?? []).filter(g =>
+      (g.current_category ?? 'uncategorized') === 'uncategorized' && keySet.has(groupKeyRoot(g.group_key)))
+  }
+  const renderInlineReview = (cardId: string, keys: string[] | Set<string>) => {
+    if (inlineReview !== cardId) return null
+    const groups = inlineGroupsFor(keys)
+    return (
+      <div className="mt-3 space-y-2 border-t border-indigo-200 pt-3">
+        {groups.length === 0
+          ? <p className="text-xs text-zinc-500">{it ? 'Niente da decidere qui — tutto già registrato.' : 'Nothing left to decide here — everything is booked.'}</p>
+          : groups.map(renderQuestionCard)}
+      </div>
+    )
+  }
+
   // S3: country-policy answer — same endpoint, scope 'country' (server derives
   // the full-year range and includes AI-read locations). Same undo as periods.
   const confirmCountryAnswer = async () => {
@@ -1251,12 +1339,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       </button>
                       <button
                         disabled={busy !== null}
-                        onClick={() => setPeriodFilter({ label: `${locLabel(c.loc_code, it)} · ${it ? 'tutto l\'anno' : 'whole year'}`, keys: new Set(c.keys) })}
+                        onClick={() => setInlineReview(k => k === `country-${c.loc_code}` ? null : `country-${c.loc_code}`)}
                         className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                       >
-                        {it ? 'Controllo una per una' : 'Review one-by-one'}
+                        {it ? 'Controllo una per una' : 'Review one-by-one'} {inlineReview === `country-${c.loc_code}` ? '▲' : '▼'}
                       </button>
                     </div>
+                    {renderInlineReview(`country-${c.loc_code}`, c.keys)}
                   </div>
                 ))}
                 {(view.periods ?? []).map(p => {
@@ -1293,12 +1382,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                         </button>
                         <button
                           disabled={busy !== null}
-                          onClick={() => setPeriodFilter({ label: `${periodLabel(p, it)} · ${fmtDay(p.start, it)} – ${fmtDay(p.end, it)}`, keys: new Set(p.group_keys) })}
+                          onClick={() => setInlineReview(k => k === key ? null : key)}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
-                          {it ? 'Controllo una per una' : 'Review one-by-one'}
+                          {it ? 'Controllo una per una' : 'Review one-by-one'} {inlineReview === key ? '▲' : '▼'}
                         </button>
                       </div>
+                      {renderInlineReview(key, p.group_keys)}
                     </div>
                   )
                 })}
@@ -1563,71 +1653,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 const needsIn = needs.filter(g => g.direction !== 'out')
                 const needsOut = needs.filter(g => g.direction === 'out')
 
-                const renderCard = (g: QuestionGroup) => {
-                  const lean = g.ai_lean === 'personal'
-                    ? { txt: it ? 'Sembra personale' : 'Looks personal', cls: 'text-amber-700 bg-amber-50' }
-                    : g.ai_lean === 'business'
-                      ? { txt: it ? 'Sembra aziendale' : 'Looks business', cls: 'text-emerald-700 bg-emerald-50' }
-                      : { txt: it ? 'Da controllare' : 'Please check', cls: 'text-zinc-500 bg-zinc-100' }
-                  // Bulk checkbox only on still-undecided groups: bulk never
-                  // stomps prior bookings (server enforces the same rule). One
-                  // direction at a time — the action-bar chips must be valid
-                  // for everything selected.
-                  const undecided = (g.current_category ?? 'uncategorized') === 'uncategorized'
-                  const checked = bulkSel.has(g.group_key)
-                  const dirBlocked = bulkDir !== null && bulkDir !== g.direction && !checked
-                  return (
-                    <div key={g.group_key} className={`rounded-lg border bg-white p-3 ${checked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-zinc-200'}`}>
-                      <div className="flex flex-wrap items-baseline justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          {undecided && (
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={busy !== null || dirBlocked}
-                              onChange={() => toggleBulk(g)}
-                              title={dirBlocked ? (it ? 'Prima completa la selezione nell’altra sezione' : 'Finish your selection in the other section first') : (it ? 'Seleziona per rispondere in blocco' : 'Select to answer together')}
-                              className="h-4 w-4 accent-blue-600 disabled:opacity-40"
-                            />
-                          )}
-                          <div className="text-sm font-medium text-zinc-800">{g.label}</div>
-                        </div>
-                        <div className="text-xs text-zinc-500">{g.count}× · {fmt(g.total)}{g.currency && g.currency !== 'USD' ? ` ${g.currency}` : ''}</div>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${lean.cls}`}>{lean.txt}</span>
-                        <select
-                          value={g.ai_bucket ?? ''}
-                          disabled={busy !== null}
-                          onChange={e => void setBucket(g, e.target.value)}
-                          className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 disabled:opacity-50"
-                        >
-                          <option value="">{it ? '— categoria —' : '— category —'}</option>
-                          {view.buckets.map(b => <option key={b.slug} value={b.slug}>{b.label}</option>)}
-                        </select>
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
-                        {visibleAnswers(g).map(a => {
-                          const selected = a.value === activeAnswerOf(g)
-                          return (
-                            <button
-                              key={a.value}
-                              disabled={busy !== null || selected}
-                              onClick={() => void answer(g, a.value)}
-                              aria-pressed={selected}
-                              className={selected
-                                ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
-                                : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
-                            >
-                              {selected ? '✓ ' : ''}{it ? a.it : a.en}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )
-                }
+                const renderCard = renderQuestionCard
 
                 const toggle = (key: string) => setOpenSections(s => {
                   const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n
