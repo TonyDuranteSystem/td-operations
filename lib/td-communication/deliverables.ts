@@ -43,6 +43,7 @@ export const DELIVERABLE_TYPE_LABELS: Record<DeliverableType, string> = {
   other: 'Other',
   mockup: 'Mockup',
   asset_kit: 'Asset Kit',
+  social_kit: 'Social Sharing Kit',
 }
 
 /** Tool-only deliverable types (Phase 12), saved via the design-assets route. */

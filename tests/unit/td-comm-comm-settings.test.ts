@@ -21,6 +21,14 @@ describe('mergeCommSettings', () => {
     expect(mergeCommSettings({ ai_enabled: 'nope' as unknown as boolean }).ai_enabled).toBe(true)
   })
 
+  it('social_kit_enabled defaults false and honors a stored override', () => {
+    expect(DEFAULT_COMM_SETTINGS.social_kit_enabled).toBe(false)
+    expect(mergeCommSettings({}).social_kit_enabled).toBe(false)
+    expect(mergeCommSettings({ social_kit_enabled: true }).social_kit_enabled).toBe(true)
+    // non-boolean falls back to the default (false)
+    expect(mergeCommSettings({ social_kit_enabled: 'yes' as unknown as boolean }).social_kit_enabled).toBe(false)
+  })
+
   it('applies stored overrides', () => {
     const r = mergeCommSettings({ enabled: false, disclaimer_en: 'Hi', default_sla_days: 14 })
     expect(r.enabled).toBe(false)

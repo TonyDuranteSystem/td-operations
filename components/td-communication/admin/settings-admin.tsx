@@ -124,6 +124,23 @@ export function SettingsAdmin({ isAdmin }: { isAdmin: boolean }) {
           </label>
         </div>
 
+        {/* Social sharing kit kill-switch (Phase 15) */}
+        <div className="border rounded-lg bg-white p-4">
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-zinc-900">Social sharing kit</span>
+              <span className="block text-xs text-zinc-500">Let clients download their social sharing kit from the portal after a project is <strong className="font-medium">delivered</strong>. When off, the portal card is hidden even if a kit was sent. Generate &amp; send a kit from the <strong className="font-medium">Design Tools → Social Kit</strong> tab.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-5 w-5"
+              checked={settings.social_kit_enabled}
+              disabled={disabled}
+              onChange={(e) => set('social_kit_enabled', e.target.checked)}
+            />
+          </label>
+        </div>
+
         {/* Disclaimer */}
         <div className="border rounded-lg bg-white p-4 space-y-3">
           <h4 className="text-sm font-medium text-zinc-900">Disclaimer text</h4>

@@ -151,6 +151,7 @@ export type DeliverableType =
   | 'other'
   | 'mockup'
   | 'asset_kit'
+  | 'social_kit'
 
 /**
  * A creative deliverable uploaded against an enrollment. Lives in the private
@@ -276,6 +277,12 @@ export interface TdCommSettings {
    *  `/portfolio` page shows "coming soon" and the public API returns nothing.
    *  Default false so nothing goes public until an admin turns it on. */
   portfolio_enabled: boolean
+  /** Master on/off for the client-facing Social Sharing Kit (Phase 15). When
+   *  false, the portal never shows the "Your social sharing kit" download card
+   *  and the client download endpoint returns 503 — even if a kit was released.
+   *  Default false so nothing reaches clients until an admin turns it on
+   *  (mirrors `portfolio_enabled`). */
+  social_kit_enabled: boolean
 }
 
 /** Aggregate stats for the enrollments admin tab. */

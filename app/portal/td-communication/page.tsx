@@ -34,6 +34,7 @@ import { getActiveConsentForEnrollment, resolveShowcaseConsentText } from '@/lib
 import { TdCommLanding } from '@/components/td-communication/td-comm-landing'
 import { ConceptReveal } from '@/components/td-communication/concept-reveal'
 import { ShowcaseConsentCard } from '@/components/td-communication/showcase-consent-card'
+import { SocialKitCard } from '@/components/td-communication/social-kit-card'
 import { BellRing, ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -99,8 +100,12 @@ export default async function TdCommunicationPage() {
   // server-side so the card shows the right variant. Wrapped defensively: a consent
   // lookup failure (e.g. the table not yet migrated in an environment) must NEVER
   // 500 the client's page — it just hides the (non-essential) opt-in card.
+  // Phase 15 — once delivered, the client can self-serve their social sharing kit
+  // (the card self-hides when the kill-switch is off or no kit was released).
+  let socialKitCard: React.ReactNode = null
   let consentCard: React.ReactNode = null
   if (enrollment && enrollment.status === 'delivered') {
+    socialKitCard = <SocialKitCard locale={isIt ? 'it' : 'en'} />
     try {
       const activeConsent = await getActiveConsentForEnrollment(enrollment.id)
       consentCard = (
@@ -177,9 +182,10 @@ export default async function TdCommunicationPage() {
         locale={locale}
         ctaHref={comingSoon ? undefined : WIZARD_HREF}
       />
-      {(footer || consentCard) && (
+      {(footer || socialKitCard || consentCard) && (
         <div className="px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto pb-6">
           {footer}
+          {socialKitCard}
           {consentCard}
         </div>
       )}

@@ -1,19 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { Palette, LayoutTemplate, Package } from 'lucide-react'
+import { Palette, LayoutTemplate, Package, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { NamedColor } from '@/lib/td-communication/color-tools'
 import { ColorPaletteTool } from './color-palette-tool'
 import { MockupPreviewer } from './mockup-previewer'
 import { AssetKitTool } from './asset-kit-tool'
+import { SocialSharingKitTool } from './social-sharing-kit-tool'
 
-type Tab = 'palette' | 'mockups' | 'kit'
+type Tab = 'palette' | 'mockups' | 'kit' | 'social'
 
 const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: 'palette', label: 'Palette', icon: Palette },
   { id: 'mockups', label: 'Mockups', icon: LayoutTemplate },
   { id: 'kit', label: 'Asset Kit', icon: Package },
+  { id: 'social', label: 'Social Kit', icon: Share2 },
 ]
 
 /**
@@ -79,6 +81,13 @@ export function DesignToolsSection({
                 <strong>Asset Kit</strong> — from one logo, generate all the common social sizes (profile,
                 Instagram post/story, X header, FB/LinkedIn cover), light/dark/transparent background
                 variations, and favicons — bundled into a ZIP with a README. Download it or Save it.
+              </li>
+              <li>
+                <strong>Social Kit</strong> — the client-facing bundle: the logo assets above{' '}
+                <em>plus</em> ready-to-post <strong>branded templates</strong> (announcement, tagline,
+                launch) built from the brand colours and logo, with your own headline. Download it, or{' '}
+                <strong>Generate &amp; send to client</strong> so they can grab it from their portal once
+                the project is delivered.
               </li>
             </ul>
           </section>
@@ -151,6 +160,9 @@ export function DesignToolsSection({
         <MockupPreviewer enrollmentId={enrollmentId} paletteColors={paletteColors} onSaved={onSaved} />
       )}
       {tab === 'kit' && <AssetKitTool enrollmentId={enrollmentId} onSaved={onSaved} />}
+      {tab === 'social' && (
+        <SocialSharingKitTool enrollmentId={enrollmentId} paletteColors={paletteColors} onSaved={onSaved} />
+      )}
     </div>
   )
 }

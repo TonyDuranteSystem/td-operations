@@ -20,6 +20,7 @@ export const DEFAULT_COMM_SETTINGS: TdCommSettings = {
   default_sla_days: 7,
   ai_enabled: true,
   portfolio_enabled: false,
+  social_kit_enabled: false,
 }
 
 /** Pure: layer a (possibly partial / malformed) stored value over the defaults. */
@@ -36,6 +37,8 @@ export function mergeCommSettings(stored: Partial<TdCommSettings> | null | undef
     ai_enabled: typeof s.ai_enabled === 'boolean' ? s.ai_enabled : DEFAULT_COMM_SETTINGS.ai_enabled,
     portfolio_enabled:
       typeof s.portfolio_enabled === 'boolean' ? s.portfolio_enabled : DEFAULT_COMM_SETTINGS.portfolio_enabled,
+    social_kit_enabled:
+      typeof s.social_kit_enabled === 'boolean' ? s.social_kit_enabled : DEFAULT_COMM_SETTINGS.social_kit_enabled,
   }
 }
 
