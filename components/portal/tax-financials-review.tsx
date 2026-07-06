@@ -444,17 +444,23 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <span className="text-xs text-zinc-400">{it ? 'Impostato come:' : 'Set as:'}</span>
           {visibleAnswers(g).map(a => {
             const selected = a.value === activeAnswerOf(g)
+            // Batch-by-intent (Antonio 2026-07-06: "what is the sense to
+            // check them if I can't categorize in batch"): when THIS card is
+            // among the ticked ones, its chips act on the WHOLE selection —
+            // through the same confirm modal. Unticked cards keep
+            // single-card behavior.
+            const actsOnSelection = checked && bulkSel.size > 1
             return (
               <button
                 key={a.value}
                 disabled={busy !== null || selected}
-                onClick={() => void answer(g, a.value)}
+                onClick={() => { if (actsOnSelection) setBulkConfirm(a.value); else void answer(g, a.value) }}
                 aria-pressed={selected}
                 className={selected
                   ? 'rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
                   : 'rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50'}
               >
-                {selected ? '✓ ' : ''}{it ? a.it : a.en}
+                {selected ? '✓ ' : ''}{it ? a.it : a.en}{actsOnSelection ? ` (${bulkSel.size})` : ''}
               </button>
             )
           })}
