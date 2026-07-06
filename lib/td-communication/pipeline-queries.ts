@@ -18,6 +18,7 @@ import { signBriefUploads } from './brief-uploads'
 import { ensureDeadlineAt } from './sla'
 import { lockEarningIfEligible } from './earning'
 import { hashAnswers, type BrandProfile, type CachedBrandProfile } from './brand-profile'
+import { coerceGeometry, type LogoGeometry } from './geometry'
 import type { CommEnrollment, CommEnrollmentRow, EnrollmentStatus } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,6 +51,9 @@ export interface CommEnrollmentDetail extends CommEnrollment {
   /** True when the cached profile's source_hash no longer matches the current
    *  answers (client re-submitted) — the panel prompts a regenerate. */
   ai_brand_profile_stale: boolean
+  /** Cris's chosen logo geometry (metadata.logo_geometry) — a DURABLE decision,
+   *  stored on its own sibling key so an AI profile regenerate never destroys it. */
+  logo_geometry: LogoGeometry | null
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,7 +189,42 @@ export async function getEnrollment(id: string): Promise<CommEnrollmentDetail | 
     uploads,
     ai_brand_profile: cached,
     ai_brand_profile_stale: aiBrandProfileStale,
+    logo_geometry: readGeometry(row.metadata),
   }
+}
+
+/** Read the chosen logo geometry out of metadata, defensively (null if absent/malformed). */
+function readGeometry(metadata: Record<string, unknown>): LogoGeometry | null {
+  return coerceGeometry(metadata?.logo_geometry)
+}
+
+/**
+ * Persist Cris's chosen logo geometry into metadata under its OWN sibling key
+ * (metadata.logo_geometry) — safe-merge so notes/deadline/ai_brand_profile are
+ * preserved. Stored separately from ai_brand_profile ON PURPOSE: it is a durable
+ * human decision, not a regenerable AI output, so an AI-profile regenerate (which
+ * replaces metadata.ai_brand_profile wholesale) must never touch it. Coerced
+ * before write so a malformed value can't land. Returns the saved geometry.
+ */
+export async function saveGeometry(id: string, geo: unknown): Promise<LogoGeometry> {
+  const clean = coerceGeometry(geo)
+  if (!clean) throw new Error('Invalid geometry.')
+  const { data, error } = await db
+    .from('td_comm_enrollments')
+    .select('metadata')
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Enrollment not found.')
+
+  const metadata = asObject(data.metadata)
+  const nextMeta = { ...metadata, logo_geometry: clean, logo_geometry_updated_at: new Date().toISOString() }
+  const { error: upErr } = await db
+    .from('td_comm_enrollments')
+    .update({ metadata: nextMeta, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (upErr) throw new Error(upErr.message)
+  return clean
 }
 
 /** Read a cached brand profile out of metadata, defensively (null if absent/malformed). */

@@ -44,10 +44,11 @@ export const DELIVERABLE_TYPE_LABELS: Record<DeliverableType, string> = {
   mockup: 'Mockup',
   asset_kit: 'Asset Kit',
   social_kit: 'Social Sharing Kit',
+  geometry: 'Geometry',
 }
 
-/** Tool-only deliverable types (Phase 12), saved via the design-assets route. */
-export const DESIGN_ASSET_TYPES = ['mockup', 'asset_kit'] as const
+/** Tool-only deliverable types (Phase 12+), saved via the design-assets route. */
+export const DESIGN_ASSET_TYPES = ['mockup', 'asset_kit', 'geometry'] as const
 export type DesignAssetType = (typeof DESIGN_ASSET_TYPES)[number]
 
 export function isDesignAssetType(v: unknown): v is DesignAssetType {

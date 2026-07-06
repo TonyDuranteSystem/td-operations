@@ -15,13 +15,19 @@ import { getExtension, isDesignAssetType, type DesignAssetType } from './deliver
 export const DESIGN_ASSET_MAX_MB = 100
 export const DESIGN_ASSET_MAX_BYTES = DESIGN_ASSET_MAX_MB * 1024 * 1024
 
-/** Only what the tools actually produce: PNG (mockups) + ZIP (asset kits). */
-export const DESIGN_ASSET_ALLOWED_EXTENSIONS = new Set<string>(['png', 'zip'])
+/**
+ * Only what the tools actually produce: PNG (mockups) + ZIP (asset kits) + SVG/PNG
+ * (geometry specimens). SVG is allowed ONLY for the geometry type — it is generated
+ * exclusively from the pure XML-escaped template (renderGeometrySvg), never from
+ * user input, and is served inline via <img> (script-inert) from the private bucket.
+ */
+export const DESIGN_ASSET_ALLOWED_EXTENSIONS = new Set<string>(['png', 'zip', 'svg'])
 
 /** Which extension each tool type is allowed to save (defense in depth). */
 const TYPE_EXTENSIONS: Record<DesignAssetType, ReadonlySet<string>> = {
   mockup: new Set(['png']),
   asset_kit: new Set(['zip']),
+  geometry: new Set(['svg', 'png']),
 }
 
 /**
@@ -43,10 +49,12 @@ export function validateDesignAsset(
   }
   const ext = getExtension(fileName)
   if (!ext || !DESIGN_ASSET_ALLOWED_EXTENSIONS.has(ext)) {
-    return 'Only PNG (mockups) and ZIP (asset kits) can be saved from the design tools.'
+    return 'Only PNG, SVG and ZIP files can be saved from the design tools.'
   }
   if (!TYPE_EXTENSIONS[type].has(ext)) {
-    return `A ${type === 'mockup' ? 'mockup must be a PNG' : 'asset kit must be a ZIP'}.`
+    const allowed = Array.from(TYPE_EXTENSIONS[type]).map((e) => e.toUpperCase()).join(' or ')
+    const label = type === 'mockup' ? 'A mockup' : type === 'asset_kit' ? 'An asset kit' : 'A geometry export'
+    return `${label} must be a ${allowed}.`
   }
   return null
 }

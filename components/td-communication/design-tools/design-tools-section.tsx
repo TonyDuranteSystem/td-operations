@@ -1,19 +1,22 @@
 'use client'
 
 import { useState } from 'react'
-import { Palette, LayoutTemplate, Package, Share2 } from 'lucide-react'
+import { Palette, LayoutTemplate, Package, Share2, Shapes } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { NamedColor } from '@/lib/td-communication/color-tools'
+import type { LogoGeometry } from '@/lib/td-communication/geometry'
 import { ColorPaletteTool } from './color-palette-tool'
 import { MockupPreviewer } from './mockup-previewer'
 import { AssetKitTool } from './asset-kit-tool'
 import { SocialSharingKitTool } from './social-sharing-kit-tool'
+import { GeometryTool } from './geometry-tool'
 
-type Tab = 'palette' | 'mockups' | 'kit' | 'social'
+type Tab = 'palette' | 'mockups' | 'kit' | 'social' | 'geometry'
 
 const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: 'palette', label: 'Palette', icon: Palette },
   { id: 'mockups', label: 'Mockups', icon: LayoutTemplate },
+  { id: 'geometry', label: 'Geometry', icon: Shapes },
   { id: 'kit', label: 'Asset Kit', icon: Package },
   { id: 'social', label: 'Social Kit', icon: Share2 },
 ]
@@ -27,12 +30,21 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
 export function DesignToolsSection({
   enrollmentId,
   paletteColors,
+  brandName,
+  initialGeometry,
   onSaved,
+  onGeometrySaved,
 }: {
   /** The project to save into. null = scratchpad (Save disabled, export only). */
   enrollmentId: string | null
   paletteColors: NamedColor[]
+  /** Public-safe brand name for exported file names (optional). */
+  brandName?: string
+  /** The project's saved logo geometry, to seed the Geometry tool (optional). */
+  initialGeometry?: LogoGeometry | null
   onSaved?: () => void
+  /** Called after the Geometry tool writes the choice to the brand profile. */
+  onGeometrySaved?: (g: LogoGeometry) => void
 }) {
   const [tab, setTab] = useState<Tab>('palette')
 
@@ -76,6 +88,14 @@ export function DesignToolsSection({
                 Deliverables) and preview it on a business card, letterhead, social post, and website
                 frame, themed to any palette colour. Adjust the size, then <strong>Export PNG</strong> or{' '}
                 <strong>Save to Deliverables</strong>.
+              </li>
+              <li>
+                <strong>Geometry</strong> — decide the logo&apos;s shape language: pick a corner style
+                (squared, rounded, pill, bevelled, chiseled) and fine-tune it with the{' '}
+                <strong>radius</strong> and <strong>sharpness</strong> sliders, themed in a brand colour.{' '}
+                <strong>Export SVG/PNG</strong>, <strong>Save to Deliverables</strong>, and{' '}
+                <strong>Save to brand</strong> so the choice sticks with the project (and a future logo
+                generator can read it).
               </li>
               <li>
                 <strong>Asset Kit</strong> — from one logo, generate all the common social sizes (profile,
@@ -158,6 +178,16 @@ export function DesignToolsSection({
       {tab === 'palette' && <ColorPaletteTool initialColors={paletteColors} />}
       {tab === 'mockups' && (
         <MockupPreviewer enrollmentId={enrollmentId} paletteColors={paletteColors} onSaved={onSaved} />
+      )}
+      {tab === 'geometry' && (
+        <GeometryTool
+          enrollmentId={enrollmentId}
+          paletteColors={paletteColors}
+          brandName={brandName}
+          initialGeometry={initialGeometry}
+          onSaved={onSaved}
+          onGeometrySaved={onGeometrySaved}
+        />
       )}
       {tab === 'kit' && <AssetKitTool enrollmentId={enrollmentId} onSaved={onSaved} />}
       {tab === 'social' && (

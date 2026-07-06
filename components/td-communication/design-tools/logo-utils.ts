@@ -222,7 +222,7 @@ async function putBlob(url: string, blob: Blob): Promise<void> {
  */
 export async function saveDesignAsset(
   enrollmentId: string,
-  type: 'mockup' | 'asset_kit',
+  type: 'mockup' | 'asset_kit' | 'geometry',
   blob: Blob,
   fileName: string,
 ): Promise<void> {

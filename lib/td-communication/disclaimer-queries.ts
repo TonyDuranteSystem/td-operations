@@ -116,11 +116,11 @@ export async function listReleasedConceptsForClient(
     .eq('enrollment_id', enrollmentId)
     .not('released_at', 'is', null)
     .is('deleted_at', null)
-    // Phase 12/15: never surface design-tool outputs (mockups / asset kits) or the
-    // Phase 15 social kit in the client's logo reveal — it is for logo concepts only
-    // (defense in depth; the social kit reaches the client via its OWN portal
-    // endpoint, and it's a zip that would never pass the image filter anyway).
-    .not('type', 'in', '("mockup","asset_kit","social_kit")')
+    // Phase 12/15/geometry: never surface design-tool outputs (mockups / asset kits /
+    // geometry specimens) or the Phase 15 social kit in the client's logo reveal — it
+    // is for logo concepts only (defense in depth; geometry specimens are also never
+    // released, and the social kit reaches the client via its OWN portal endpoint).
+    .not('type', 'in', '("mockup","asset_kit","social_kit","geometry")')
     .order('concept_number', { ascending: true })
     .order('version_number', { ascending: false })
   if (error) throw new Error(error.message)

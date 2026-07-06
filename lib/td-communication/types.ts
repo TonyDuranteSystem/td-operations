@@ -152,6 +152,7 @@ export type DeliverableType =
   | 'mockup'
   | 'asset_kit'
   | 'social_kit'
+  | 'geometry'
 
 /**
  * A creative deliverable uploaded against an enrollment. Lives in the private

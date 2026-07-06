@@ -18,6 +18,7 @@ import {
   ENROLLMENT_STATUSES,
 } from '@/lib/td-communication/pipeline'
 import { isImageThumbnailable } from '@/lib/td-communication/deliverables'
+import { geometrySummary, type LogoGeometry } from '@/lib/td-communication/geometry'
 import dynamic from 'next/dynamic'
 import { ConversationChat } from './conversation-chat'
 import { DeliverablesSection } from './deliverables-section'
@@ -67,6 +68,8 @@ interface ProjectDetail {
   ai_brand_profile?: AiBrandProfile | null
   /** True when the cached profile is out of date vs the current answers. */
   ai_brand_profile_stale?: boolean
+  /** Cris's chosen logo geometry (durable, its own metadata key). */
+  logo_geometry?: LogoGeometry | null
 }
 interface Upload {
   name: string
@@ -524,6 +527,15 @@ export function ProjectBriefPanel({
                 hasAnswers={brief.sections.length > 0}
               />
 
+              {/* Chosen logo geometry (set in Design Tools → Geometry). A durable
+                  decision stored on its own key — shown here so it's readable guidance. */}
+              {project.logo_geometry && (
+                <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
+                  <span className="font-medium text-zinc-800">Logo geometry:</span>{' '}
+                  {geometrySummary(project.logo_geometry)}
+                </div>
+              )}
+
               {/* Client info */}
               <Section title="Client Info" icon={<Building2 className="h-3.5 w-3.5" />}>
                 <dl className="space-y-2 text-sm">
@@ -667,7 +679,10 @@ export function ProjectBriefPanel({
                 <DesignToolsSection
                   enrollmentId={project.id}
                   paletteColors={project.ai_brand_profile?.color_palette ?? []}
+                  brandName={project.subject?.name}
+                  initialGeometry={project.logo_geometry ?? null}
                   onSaved={handleDeliverableChange}
+                  onGeometrySaved={refreshProject}
                 />
               </Section>
 
