@@ -1,5 +1,36 @@
 import { describe, it, expect } from "vitest"
-import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
+import { extractItinFromOcr, parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
+
+describe("extractItinFromOcr", () => {
+  it("extracts a dash-separated ITIN from real CP565 OCR text", () => {
+    const ocrText = `IRS Notice CP565
+Case Reference Number: 20294-058-26617-6
+You've been assigned an Individual Taxpayer Identification Number (ITIN)
+This notice confirms your assigned ITIN 904-62-7931.`
+
+    expect(extractItinFromOcr(ocrText)).toBe("904-62-7931")
+  })
+
+  it("normalizes a space-separated ITIN", () => {
+    expect(extractItinFromOcr("assigned ITIN 904 62 7931 on the notice")).toBe("904-62-7931")
+  })
+
+  it("formats an unseparated 9-digit ITIN", () => {
+    expect(extractItinFromOcr("ITIN 904627931 assigned")).toBe("904-62-7931")
+  })
+
+  it("returns null when the number does not start with 9 (SSN, not ITIN)", () => {
+    expect(extractItinFromOcr("SSN 812-34-5678 on file")).toBeNull()
+  })
+
+  it("returns null when no ITIN-shaped number exists", () => {
+    expect(extractItinFromOcr("Case Reference Number: 20294-058-26617-6, no ITIN here")).toBeNull()
+  })
+
+  it("does not match a 9 inside a longer digit run", () => {
+    expect(extractItinFromOcr("tracking 420946279315566")).toBeNull()
+  })
+})
 
 describe("parseItinIssueDateFromOcr", () => {
   it("extracts date from real CP565 OCR text", () => {

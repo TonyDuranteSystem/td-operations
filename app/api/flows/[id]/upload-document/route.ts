@@ -69,7 +69,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // 1. Resolve the SD → account/contact + current stage (fallback for flow_stage).
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, account_id, contact_id, stage')
+      .select('id, account_id, contact_id, stage, service_type')
       .eq('id', serviceDeliveryId)
       .single()
 
@@ -87,6 +87,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const contactId = (sd.contact_id as string | null) ?? null
     const flowStage = flowStageInput ?? (sd.stage as string | null) ?? null
 
+    // ITIN approval letter (CP565) uploaded at the terminal "ITIN Approved"
+    // stage → after filing, OCR it, stamp the contact's ITIN fields, notify
+    // the client, and complete the flow (lib/itin/finalize-approval.ts).
+    // Also the one flow upload that is client-visible from birth: the letter
+    // IS the client's deliverable.
+    const isItinApprovalUpload = sd.service_type === 'ITIN' && flowStage === 'ITIN Approved'
+
     // 2. Download from Storage.
     const { data: blob, error: dlErr } = await supabaseAdmin.storage
       .from('onboarding-uploads')
@@ -99,7 +106,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    const buffer = Buffer.from(await blob.arrayBuffer())
+    const rawContent = await blob.arrayBuffer()
+    const buffer = Buffer.from(rawContent)
     const fileMime = mimeType || blob.type || 'application/pdf'
 
     // 3. Decide where the canonical copy lives.
@@ -175,7 +183,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         contact_id: contactId,
         service_delivery_id: serviceDeliveryId,
         flow_stage: flowStage,
-        portal_visible: false,
+        portal_visible: isItinApprovalUpload,
       })
     }
 
@@ -191,6 +199,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       details: { file_name: fileName, service_delivery_id: serviceDeliveryId, flow_stage: flowStage },
     })
 
+    // 6b. ITIN approval letter: OCR → stamp contact ITIN fields → notify the
+    // client → complete the flow. Best-effort by design — the letter is
+    // already filed; failures surface as staff-facing warnings in `detail`.
+    let itinFinalize: import('@/lib/itin/finalize-approval').ItinFinalizeResult | null = null
+    if (isItinApprovalUpload && contactId) {
+      const { finalizeItinApproval } = await import('@/lib/itin/finalize-approval')
+      itinFinalize = await finalizeItinApproval({
+        serviceDeliveryId,
+        contactId,
+        fileName,
+        content: rawContent,
+        mimeType: fileMime,
+      })
+    } else if (isItinApprovalUpload && !contactId) {
+      itinFinalize = {
+        attempted: false,
+        finalized: false,
+        warnings: ['Flow has no contact linked — ITIN not extracted. Link a contact, then enter the ITIN manually.'],
+      }
+    }
+
     // 7. Auto-advance the SD to the next stage. advanceServiceDelivery owns all
     // stage-advance side effects (stage_history, auto-tasks, portal notify, and
     // the +1-year renewal-date bump for RA Renewal / Annual Report on the
@@ -200,7 +229,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let advance: { success: boolean; to_stage?: string; is_completed?: boolean; error?: string } = {
       success: false,
     }
-    if (autoAdvance) {
+    // isItinApprovalUpload: "ITIN Approved" is terminal — the finalize step
+    // (6b) owns completion; there is no next stage to advance to.
+    if (autoAdvance && !isItinApprovalUpload) {
       try {
         const result = await advanceServiceDelivery({
           delivery_id: serviceDeliveryId,
@@ -228,11 +259,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
     }
 
+    // Staff-facing summary: what the ITIN finalize actually did (or why not).
+    let detail = `${fileName} uploaded`
+    if (itinFinalize) {
+      if (itinFinalize.finalized) {
+        detail += ` — ITIN ${itinFinalize.itin_number} saved to the contact (issued ${itinFinalize.itin_issue_date}), client notified, flow completed.`
+      }
+      if (itinFinalize.warnings.length) {
+        detail += ` — ⚠️ ${itinFinalize.warnings.join(' ')}`
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      detail: `${fileName} uploaded`,
+      detail,
       driveFileId: docFileId,
       advance,
+      itin_finalize: itinFinalize,
     })
   } catch (e) {
     console.error('[flow-upload-document] Error:', e)

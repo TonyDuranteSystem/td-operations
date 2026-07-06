@@ -123,7 +123,9 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     if (!apiRes.ok || !data.success) {
       throw new Error(data.detail || data.error || 'Upload failed — please try again.')
     }
-    setDone(`${fileName} uploaded`)
+    // Prefer the server's summary — for ITIN approval letters it reports the
+    // OCR/finalize outcome (ITIN saved + client notified, or a warning).
+    setDone(typeof data.detail === 'string' && data.detail ? data.detail : `${fileName} uploaded`)
     clearPick()
     stagedPathRef.current = null
     window.dispatchEvent(

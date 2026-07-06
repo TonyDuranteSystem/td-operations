@@ -1025,11 +1025,10 @@ export async function POST(req: NextRequest) {
             if (parsed.expiryDate) ocrSideEffects.push(`Expiry: ${parsed.expiryDate}`)
 
           } else if (docType.includes("itin")) {
-            const itinMatch = ocrResult.fullText.match(/\b(9\d{2}[- ]?\d{2}[- ]?\d{4})\b/)
-            if (itinMatch) {
-              const rawItin = itinMatch[1].replace(/[- ]/g, "")
-              const itinFormatted = `${rawItin.slice(0, 3)}-${rawItin.slice(3, 5)}-${rawItin.slice(5)}`
-
+            // ITIN number extraction (shared parser, format 9XX-XX-XXXX)
+            const { extractItinFromOcr } = await import("@/lib/ocr-helpers")
+            const itinFormatted = extractItinFromOcr(ocrResult.fullText)
+            if (itinFormatted) {
               // Extract issue date from CP565 OCR text (format: "Month DD, YYYY")
               const issueDate = parseItinIssueDateFromOcr(ocrResult.fullText)
 

@@ -53,3 +53,18 @@ export function parseItinIssueDateFromOcr(ocrText: string): string {
 
   return `${year}-${month}-${day}`
 }
+
+/**
+ * Extract an ITIN number from OCR text and return it formatted 9XX-XX-XXXX.
+ *
+ * Same pattern the CRM upload routes have always used (9 digits starting
+ * with 9, optionally dash/space separated) — extracted here so every caller
+ * (CRM contact upload, contact-actions OCR, ITIN workspace finalize) shares
+ * one implementation. Returns null when no ITIN-shaped number is present.
+ */
+export function extractItinFromOcr(ocrText: string): string | null {
+  const match = ocrText.match(/\b(9\d{2}[- ]?\d{2}[- ]?\d{4})\b/)
+  if (!match) return null
+  const raw = match[1].replace(/[- ]/g, "")
+  return `${raw.slice(0, 3)}-${raw.slice(3, 5)}-${raw.slice(5)}`
+}

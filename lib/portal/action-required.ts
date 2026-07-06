@@ -84,6 +84,10 @@ export interface ActionRequiredParams {
    * email (e.g. the invoice mailer attaches the PDF). Chat + bell/push still
    * dispatch. */
   skipEmail?: boolean
+  /** Email CTA button label, per locale. Defaults to the generic
+   * "Take action" / "Vai all'azione" — override for informational dispatches
+   * (e.g. "View document" when delivering an ITIN letter). */
+  ctaLabel?: LocalizedText
 }
 
 export interface ActionRequiredResult {
@@ -275,7 +279,7 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
           const html = buildActionEmailHtml({
             greeting,
             message: params.message[r.locale],
-            ctaLabel: isIt ? 'Vai all’azione' : 'Take action',
+            ctaLabel: params.ctaLabel ? params.ctaLabel[r.locale] : (isIt ? 'Vai all’azione' : 'Take action'),
             ctaUrl: absoluteUrl,
             footerText: isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal',
           })

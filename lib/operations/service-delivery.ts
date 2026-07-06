@@ -697,6 +697,66 @@ export async function completeSD(
   })
 }
 
+// ─── completeSDInPlace ────────────────────────────────
+
+/**
+ * Mark a service delivery completed WITHOUT changing its stage.
+ *
+ * For flows whose terminal stage is not named "Completed" (e.g. ITIN, whose
+ * last stage is "ITIN Approved"), `advanceServiceDelivery` never flips
+ * status=completed — its completion rule keys off the stage NAME. Re-advancing
+ * into the same stage is not an option either: it would re-fire the generic
+ * "status updated" client notification. This helper completes the SD in
+ * place: status → completed, end_date stamped, a stage_history entry appended.
+ *
+ * TOCTOU-guarded on status='active' — returns { completed: false } when the
+ * SD was already completed/cancelled (or completed concurrently), so callers
+ * can gate one-shot side effects (client notifications) on the winning call.
+ */
+export async function completeSDInPlace(
+  deliveryId: string,
+  opts: { actor?: string; notes?: string } = {},
+): Promise<{ completed: boolean }> {
+  const { data: sd, error: sdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("id, status, stage, stage_order, stage_history")
+    .eq("id", deliveryId)
+    .single()
+
+  if (sdErr || !sd) {
+    throw new Error(`[completeSDInPlace] SD ${deliveryId} not found: ${sdErr?.message || "unknown"}`)
+  }
+  if (sd.status !== "active") return { completed: false }
+
+  const historyEntry = {
+    from_stage: sd.stage || "New",
+    from_order: sd.stage_order ?? null,
+    to_stage: sd.stage || "New",
+    to_order: sd.stage_order ?? null,
+    advanced_at: new Date().toISOString(),
+    advanced_by: opts.actor ?? "system",
+    notes: opts.notes ?? "Completed in place (terminal stage)",
+  }
+  const stageHistory = Array.isArray(sd.stage_history) ? [...sd.stage_history, historyEntry] : [historyEntry]
+
+  const rows = await dbWrite(
+    supabaseAdmin
+      .from("service_deliveries")
+      .update({
+        status: "completed",
+        end_date: new Date().toISOString().split("T")[0],
+        stage_history: stageHistory,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", deliveryId)
+      .eq("status", "active")
+      .select("id"),
+    "service_deliveries.update.complete_in_place",
+  )
+
+  return { completed: Array.isArray(rows) && rows.length > 0 }
+}
+
 // ─── repairContactId (P3.3) ───────────────────────────
 
 export interface RepairContactIdParams {
