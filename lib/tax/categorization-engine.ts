@@ -191,9 +191,14 @@ export function computeRecategorizationUpdates(
       continue
     }
     const next = applyRules(row as unknown as ParsedTransaction, rules, memberNames, relatedEntities)
-    // A re-run must never downgrade an AI-categorized row back to uncategorized
-    // just because no deterministic rule covers it.
-    if (isAiTagged && next.category === "uncategorized") continue
+    // A re-run must never downgrade an AI- OR auto-categorized row back to
+    // uncategorized just because no deterministic rule covers it. The auto:
+    // guard closes the zero-amount oscillation (dev_task 40b02405): the zero
+    // rule above fires only on uncategorized rows, so without this guard every
+    // OTHER re-run flipped booked zero rows back open (legacy fallback returns
+    // uncategorized), stale note and all — proven by the 3-run repro.
+    const isAutoTagged = (row.notes ?? "").startsWith("auto:")
+    if ((isAiTagged || isAutoTagged) && next.category === "uncategorized") continue
     if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
       // When a rule overrides an AI suggestion, the "ai:" tag no longer applies.
       updates.set(row.id as string, { category: next.category, subcategory: next.subcategory, ...(isAiTagged ? { notes: "" } : {}) })

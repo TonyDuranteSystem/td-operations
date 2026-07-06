@@ -133,6 +133,30 @@ describe('applyRules', () => {
 // (parity guarantee). recategorizeAccountYear now delegates to this — these
 // tests pin the passes (rules → transfer pairs → own-entity) + determinism.
 describe('computeRecategorizationUpdates (parity core)', () => {
+  describe('zero-amount stability across re-runs (oscillation fix, dev_task 40b02405)', () => {
+    it('run 1 books an open zero row as conversion/zero_amount', () => {
+      const row = crow({ amount: 0 })
+      const { updates } = computeRecategorizationUpdates([row], [], [], '')
+      expect(updates.get('row-x')).toMatchObject({ category: 'conversion', subcategory: 'zero_amount', notes: 'auto: zero-amount' })
+    })
+    it('run 2 (row now booked, auto: note) does NOT downgrade back to uncategorized', () => {
+      const booked = crow({ amount: 0, category: 'conversion', subcategory: 'zero_amount', notes: 'auto: zero-amount' })
+      const { updates } = computeRecategorizationUpdates([booked], [], [], '')
+      expect(updates.get('row-x')).toBeUndefined() // stable — no write at all
+    })
+    it('a matching rule can still re-categorize an auto-booked row (guard blocks only downgrades)', () => {
+      const booked = crow({ amount: 0, category: 'conversion', subcategory: 'zero_amount', notes: 'auto: zero-amount', description: 'STRIPE FEE' })
+      const rules = [{ id: 'r1', pattern: 'stripe', match_type: 'contains', category: 'fee', subcategory: 'processor', account_id: null, priority: 100, direction: 'any' } as CategorizationRule]
+      const { updates } = computeRecategorizationUpdates([booked], rules, [], '')
+      expect(updates.get('row-x')).toMatchObject({ category: 'fee' })
+    })
+    it('manual zero rows remain untouchable', () => {
+      const manual = crow({ amount: 0, category: 'expense', notes: 'manual: group answer x' })
+      const { updates } = computeRecategorizationUpdates([manual], [], [], '')
+      expect(updates.get('row-x')).toBeUndefined()
+    })
+  })
+
   // A bank_transactions-shaped row (the columns the engine reads).
   const crow = (over: Partial<{
     id: string; transaction_date: string; description: string | null; counterparty: string | null;

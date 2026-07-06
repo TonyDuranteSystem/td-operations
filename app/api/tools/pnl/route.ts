@@ -15,6 +15,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { fetchAllBankTransactionsByYear } from '@/lib/bank-transactions-fetch'
+import { deriveFirstYearFromFormation } from '@/lib/tax/workspace-prior-return'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -98,7 +99,7 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
 
   const { data: account, error: acctErr } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, ein_number, entity_type')
+    .select('company_name, ein_number, entity_type, formation_date')
     .eq('id', input.sourceAccountId)
     .maybeSingle()
   if (acctErr) throw new Error(acctErr.message)
@@ -130,7 +131,12 @@ async function createFork(input: { actor: string; taxYear: number; sourceAccount
       entity_type: 'MMLLC',
       company_name: account.company_name ?? null,
       ein: account.ein_number ?? null,
-      prior_return_snapshot: sub?.prior_return_extracted ?? null,
+      // No wizard answer? A company formed IN/AFTER the filing year cannot
+      // have a prior return — auto-derive first_year from the CRM formation
+      // date instead of nagging staff for an answer that can never exist
+      // (2026-07-06; positive confirmation only, no formation date = null).
+      prior_return_snapshot: sub?.prior_return_extracted
+        ?? deriveFirstYearFromFormation((account.formation_date as string | null) ?? null, input.taxYear),
     })
     .select('id')
     .single()

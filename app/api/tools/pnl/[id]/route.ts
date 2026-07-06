@@ -155,7 +155,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // the rendered totals no longer match the data → the UI asks to Regenerate.
     const { data: wsRow } = await db
       .from('pnl_workspaces')
-      .select('generated_at, linked_account_id')
+      .select('generated_at, linked_account_id, prior_return_snapshot')
       .eq('id', workspaceId)
       .maybeSingle()
     const generatedAt = (wsRow?.generated_at as string | null) ?? null
@@ -319,6 +319,12 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       attested: false, // workspaces have no attestation
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
       generated_at: generatedAt,
+      // Staff prior-return control (2026-07-06): case+status only — the UI
+      // decides whether to show the set/clear buttons (never over a validated
+      // extraction; the endpoint enforces the same server-side).
+      prior_return: wsRow?.prior_return_snapshot
+        ? { case: (wsRow.prior_return_snapshot as { case?: string }).case ?? null, status: (wsRow.prior_return_snapshot as { status?: string }).status ?? null }
+        : null,
       stale,
       aiPending: aiPendingCount ?? 0,
       aiState,

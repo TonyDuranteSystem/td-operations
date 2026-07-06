@@ -56,6 +56,8 @@ interface View {
     notes: string[]
   }
   gates: Gate[]
+  /** Staff workspace only: the stored prior-return answer (case+status). */
+  prior_return?: { case: string | null; status: string | null } | null
   canConfirm: boolean
   transactionCount: number
   /** Per-file ingest jobs still running for this account+year. While > 0 the
@@ -472,6 +474,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // "Review one-by-one" opens INSIDE the tapped card (Antonio 2026-07-06) —
   // which country/period card is expanded inline, and its undecided groups.
   const [inlineReview, setInlineReview] = useState<string | null>(null)
+  // Re-run confirm (2026-07-06): re-generation is safe but not free (an AI
+  // pass may run) — always confirm, never one-click.
+  const [rerunConfirm, setRerunConfirm] = useState(false)
   const inlineGroupsFor = (keys: string[] | Set<string>): QuestionGroup[] => {
     const keySet = keys instanceof Set ? keys : new Set(keys)
     return (view?.questions ?? []).filter(g =>
@@ -783,6 +788,30 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
     }
   }
 
+  // Staff workspace only (2026-07-06): set/clear the prior-return answer —
+  // first-year companies can never produce a prior return; the server
+  // cross-checks first_year against the linked client's formation date.
+  const setPriorReturn = async (choice: 'first_year' | 'never_filed' | 'clear') => {
+    setBusy(`prior-return-${choice}`)
+    setError(null)
+    try {
+      const res = await fetch(`${API}/prior-return`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ choice }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not save the prior-return answer — please try again.')
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const gateIcon = (g: Gate) => g.status === 'pass' ? '✓' : g.status === 'na' ? '—' : '!'
   const gateColor = (g: Gate) => g.status === 'pass' ? 'text-emerald-600 bg-emerald-50' : g.status === 'na' ? 'text-zinc-500 bg-zinc-100' : 'text-amber-700 bg-amber-50'
 
@@ -942,9 +971,25 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
-          {it ? `Conto Economico e Stato Patrimoniale ${taxYear}` : `Profit & Loss and Balance Sheet ${taxYear}`}
-        </h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">
+            {it ? `Conto Economico e Stato Patrimoniale ${taxYear}` : `Profit & Loss and Balance Sheet ${taxYear}`}
+          </h1>
+          {/* Always-visible re-run (2026-07-06, Antonio) — same guarded
+              /generate machinery as the first run: deterministic pass +
+              AI chain if anything is open. Human answers are immune by
+              design; ships together with the zero-amount oscillation fix. */}
+          {isStaff && (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => setRerunConfirm(true)}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
+            >
+              {busy === 'generate' ? 'Re-running…' : '↻ Re-run P&L'}
+            </button>
+          )}
+        </div>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">
           {it
             ? 'Preparati da noi sui tuoi estratti conto — controlla, rispondi alle domande rimaste e conferma.'
@@ -1139,6 +1184,40 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   <div>
                     <div className="text-sm font-medium text-zinc-800">{g.title}</div>
                     <div className="text-xs text-zinc-500">{g.detail}</div>
+                    {/* Gate 2 staff control (2026-07-06): a first-year company can
+                        never produce a prior return — answer it here instead of
+                        the gate nagging forever. Hidden over extracted returns
+                        (endpoint enforces the same). */}
+                    {isStaff && g.id === 2 && (!view.prior_return || view.prior_return.status === 'failed') && (
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={busy !== null}
+                          onClick={() => void setPriorReturn('first_year')}
+                          className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
+                        >
+                          {busy === 'prior-return-first_year' ? 'Saving…' : 'First year — no prior return'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy !== null}
+                          onClick={() => void setPriorReturn('never_filed')}
+                          className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
+                        >
+                          {busy === 'prior-return-never_filed' ? 'Saving…' : 'No prior return was ever filed'}
+                        </button>
+                      </div>
+                    )}
+                    {isStaff && g.id === 2 && (view.prior_return?.case === 'first_year' || view.prior_return?.case === 'never_filed') && (
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => void setPriorReturn('clear')}
+                        className="mt-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-xs text-zinc-500 hover:border-red-300 hover:text-red-600 disabled:opacity-50"
+                      >
+                        {busy === 'prior-return-clear' ? 'Clearing…' : 'Clear this answer'}
+                      </button>
+                    )}
                   </div>
                 </li>
               ))}
@@ -1428,6 +1507,38 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 ))}
               </div>
             </section>
+          )}
+
+          {/* Re-run confirm (2026-07-06) */}
+          {rerunConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+              <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+                <h4 className="text-sm font-bold text-zinc-900">Re-run the P&amp;L?</h4>
+                <p className="mt-2 text-sm text-zinc-700">
+                  Re-applies every rule and everything the system has learned over all transactions, then runs the AI on whatever is still open.
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Every answer you or the client gave is kept — re-running never undoes a human decision.
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRerunConfirm(false)}
+                    className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => { setRerunConfirm(false); void generate() }}
+                    className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    Re-run
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* S3 — country-policy confirm: exact counts, undo promise, personal
