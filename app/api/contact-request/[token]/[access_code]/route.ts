@@ -6,7 +6,10 @@ export const dynamic = "force-dynamic"
 
 /** Surface a contact-request submission in the staff What's New feed. Fire-and-
  *  forget — a notification failure must never fail the client's submission.
- *  Prefers the account thread when the form is account-linked, else the contact. */
+ *  Tagged with BOTH the account and the contact so the note is visible on the
+ *  account thread AND the person thread's What's New feed (2026-07-06 fix —
+ *  dropping the contact on account-linked forms made the note unreachable on
+ *  person-level threads). */
 async function notifyContactUpdated(opts: {
   formId: string
   accountId: string | null
@@ -16,7 +19,7 @@ async function notifyContactUpdated(opts: {
   try {
     await emitClientChatEvent({
       account_id: opts.accountId,
-      contact_id: opts.accountId ? null : opts.contactId,
+      contact_id: opts.contactId,
       topic: "Contact",
       message: opts.message,
       source: { table: "contact_request_forms", id: opts.formId },
@@ -207,8 +210,11 @@ export async function POST(
 
     await notifyContactUpdated({
       formId: form.id,
+      // Tag the RECIPIENT (the client the form was sent to — the person staff
+      // talks to), not the freshly created contact, so the note lands on the
+      // right person thread. Fallback to the new contact if no recipient.
       accountId: form.account_id ?? null,
-      contactId,
+      contactId: form.recipient_contact_id ?? contactId,
       message: `The client added a new contact via the form: ${fullName} (${roleEntry.display_name}).`,
     })
 

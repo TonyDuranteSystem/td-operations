@@ -25,6 +25,12 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { suggestedStepFor } from "@/lib/notifications/whats-new-defaults"
+import { getClientAccountIds } from "@/lib/portal-auth"
+import {
+  bucketWhatsNewCounts,
+  contactThreadOrFilter,
+  linkedContactIdsByAccount,
+} from "@/lib/portal/thread-scope"
 
 export const dynamic = "force-dynamic"
 
@@ -142,24 +148,20 @@ export async function GET(req: NextRequest) {
       if (error) throw error
       const notes = (data ?? []) as RawNote[]
       const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(notes)])
-      const by_account: Record<string, number> = {}
-      const by_contact: Record<string, number> = {}
-      let total = 0
-      for (const n of notes) {
+      // Hidden only if explicitly toggled off; unknown/unresolved keys show.
+      const visible = notes.filter((n) => {
         const key = keys.get(n)
-        // Hidden only if explicitly toggled off; unknown/unresolved keys show.
-        if (key && config.get(key)?.visible === false) continue
-        // A note can carry BOTH account_id and contact_id (e.g. a payment on an
-        // account that is also linked to a contact). Such a note surfaces in
-        // BOTH the account-keyed and the contact-keyed thread view, so it must
-        // be counted in EACH relevant bucket — otherwise a contact-keyed thread
-        // (single-member client) shows 0 while its panel lists the note.
-        // `total` still counts each distinct note once (for the global sidebar).
-        if (n.account_id) by_account[n.account_id] = (by_account[n.account_id] ?? 0) + 1
-        if (n.contact_id) by_contact[n.contact_id] = (by_contact[n.contact_id] ?? 0) + 1
-        if (n.account_id || n.contact_id) total += 1
-      }
-      return NextResponse.json({ by_account, by_contact, total })
+        return !(key && config.get(key)?.visible === false)
+      })
+      // Company-ONLY notes (contact_id null) must also light the dot on every
+      // linked contact's person thread — the person thread is a superset view,
+      // mirroring the Messages feed (see lib/portal/thread-scope.ts). Resolve
+      // the account → contacts map only for the notes that need it.
+      const accountOnlyIds = Array.from(
+        new Set(visible.filter((n) => n.account_id && !n.contact_id).map((n) => n.account_id as string)),
+      )
+      const contactsByAccount = await linkedContactIdsByAccount(accountOnlyIds)
+      return NextResponse.json(bucketWhatsNewCounts(visible, contactsByAccount))
     }
 
     if (wantNotes) {
@@ -180,8 +182,16 @@ export async function GET(req: NextRequest) {
         .is("deleted_at", null)
         .order("created_at", { ascending: false })
         .limit(limit)
-      if (accountId) q = q.eq("account_id", accountId)
-      else q = q.eq("contact_id", contactId as string)
+      if (accountId) {
+        q = q.eq("account_id", accountId)
+      } else {
+        // Person thread = contact-tagged notes PLUS company-only notes on the
+        // contact's linked accounts — the same superset rule the Messages feed
+        // applies, via the shared helper so the two can't drift (2026-07-06:
+        // member-info notes were company-only and invisible here).
+        const linked = await getClientAccountIds(contactId as string)
+        q = q.or(contactThreadOrFilter(contactId as string, linked))
+      }
       const { data, error } = await q
       if (error) throw error
       const notes = (data ?? []) as RawNote[]

@@ -37,10 +37,10 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: request, error: reqErr } = await (supabaseAdmin as any)
     .from('member_info_requests')
-    .select('id, account_id, status, company_name')
+    .select('id, account_id, contact_id, status, company_name')
     .eq('token', token)
     .eq('access_code', access_code)
-    .single() as { data: { id: string; account_id: string; status: string; company_name: string } | null; error: unknown }
+    .single() as { data: { id: string; account_id: string; contact_id: string | null; status: string; company_name: string } | null; error: unknown }
 
   if (reqErr || !request) {
     return NextResponse.json({ error: 'Invalid or expired link.' }, { status: 404 })
@@ -195,6 +195,10 @@ export async function POST(
   try {
     await emitClientChatEvent({
       account_id: accountId,
+      // Tag the recipient contact too (stored on the request at creation) so
+      // the note is visible on their person-level thread's What's New feed,
+      // not only on the account thread (2026-07-06 Prowave LLC fix).
+      contact_id: request.contact_id ?? null,
       topic: 'Members',
       message: `The client submitted the member information form — ${members.length} member${members.length === 1 ? '' : 's'} for ${request.company_name || 'this company'}.`,
       source: { table: 'member_info_requests', id: request.id },

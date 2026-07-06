@@ -102,19 +102,20 @@ export async function emitClientChatEvent(
   const marker = buildMarker(params.source, params.event_kind)
 
   // Idempotency: search portal_messages for an existing row whose body
-  // contains this exact marker AND targets the same recipient. Cheap because
-  // the marker is unique by construction.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let dedupQuery: any = supabaseAdmin
+  // contains this exact marker. The marker alone is unique by construction
+  // (event kind + source table:id), so match on it GLOBALLY — do NOT also
+  // filter by contact_id/account_id: an older copy of the same event may carry
+  // different recipient tags (e.g. account-only rows written before the
+  // 2026-07-06 dual-tagging fix), and a webhook retry must still dedup
+  // against it instead of double-posting.
+  const { data: existing } = await supabaseAdmin
     .from("portal_messages")
     .select("id")
     .eq("sender_type", "system")
     .like("message", `%${marker}%`)
     .is("deleted_at", null)
     .limit(1)
-  if (params.contact_id) dedupQuery = dedupQuery.eq("contact_id", params.contact_id)
-  if (params.account_id) dedupQuery = dedupQuery.eq("account_id", params.account_id)
-  const { data: existing } = await dedupQuery.maybeSingle()
+    .maybeSingle()
   if (existing) {
     return { emitted: false, reason: "already_emitted", message_id: existing.id as string }
   }

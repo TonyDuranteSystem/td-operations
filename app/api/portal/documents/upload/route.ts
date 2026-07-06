@@ -146,9 +146,13 @@ export async function POST(request: NextRequest) {
     // on documents.id (re-runs of webhook retries dedup).
     try {
       const { emitDocumentUploadedEvent } = await import('@/lib/portal/chat-events')
+      const { getClientContactId } = await import('@/lib/portal-auth')
       await emitDocumentUploadedEvent({
         document_id: doc.id as string,
-        contact_id: null,  // upload route is account-scoped today (account_id only)
+        // Tag the authenticated uploader so the note reaches their person
+        // thread's What's New feed too (2026-07-06 fix). Staff uploads have
+        // no client contact → stays account-only, as before.
+        contact_id: getClientContactId(user),
         account_id: accountId,
         file_name: fileName,
         document_type_name: typeName,

@@ -11,6 +11,7 @@ import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { contactThreadOrFilter } from '@/lib/portal/thread-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -152,21 +153,12 @@ export async function GET(request: NextRequest) {
     // For admin users, look them up now from account_contacts.
     let threadAccountIds = clientAccountIds
     if (!isClientUser && threadAccountIds.length === 0) {
-      const { data: acRows } = await supabaseAdmin
-        .from('account_contacts')
-        .select('account_id')
-        .eq('contact_id', contactIdParam)
-      threadAccountIds = (acRows ?? []).map(r => r.account_id)
+      threadAccountIds = await getClientAccountIds(contactIdParam)
     }
 
-    if (threadAccountIds.length > 0) {
-      const acctList = threadAccountIds.join(',')
-      query = query.or(
-        `contact_id.eq.${contactIdParam},and(contact_id.is.null,account_id.in.(${acctList}))`
-      )
-    } else {
-      query = query.eq('contact_id', contactIdParam)
-    }
+    // Superset rule shared with the What's New feed via lib/portal/thread-scope
+    // so the two thread definitions can never drift.
+    query = query.or(contactThreadOrFilter(contactIdParam, threadAccountIds))
   } else if (accountId) {
     query = query.eq('account_id', accountId)
   }
