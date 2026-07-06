@@ -78,12 +78,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const { inserts, diffs } = decideFxImport(parsed.rates, existing ?? [])
 
     let inserted = 0
+    const insertFailures: Array<{ tax_year: number; currency: string; error: string }> = []
     if (inserts.length > 0) {
-      const { error: insErr } = await db.from("irs_exchange_rates").insert(
-        inserts.map(r => ({ ...r, source_url: IRS_FX_URL, fetched_at: new Date().toISOString() })),
-      )
-      if (insErr) throw new Error(`rates insert failed: ${insErr.message}`)
-      inserted = inserts.length
+      const rows = inserts.map(r => ({ ...r, source_url: IRS_FX_URL, fetched_at: new Date().toISOString() }))
+      const { error: insErr } = await db.from("irs_exchange_rates").insert(rows)
+      if (!insErr) {
+        inserted = inserts.length
+      } else {
+        // One unstorable rate must never block the others (real case: prod's
+        // rate_to_usd was numeric(10,6) — Venezuela/Lebanon overflow it until
+        // the column-widening DDL runs). Fall back to per-row inserts and
+        // report the stragglers instead of failing the whole run.
+        for (const row of rows) {
+          const { error: rowErr } = await db.from("irs_exchange_rates").insert(row)
+          if (rowErr) insertFailures.push({ tax_year: row.tax_year, currency: row.currency, error: rowErr.message })
+          else inserted++
+        }
+      }
       try {
         await db.from("action_log").insert({
           actor: "system:irs-fx-import",
@@ -127,7 +138,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         `<p>These cells on the IRS page don't parse as usable rates and we have no stored value for them — skipped, not guessed. Add the correct value manually with a documented source if a return needs it.</p><ul>${blockingBadCells.map(b => `<li>${b.key} ${b.tax_year}: "${b.raw}"</li>`).join("")}</ul><p>Source: <a href="${IRS_FX_URL}">${IRS_FX_URL}</a></p>`,
       )
     }
-    const summary = { years: parsed.years, parsed: parsed.rates.length, inserted, diffs: diffs.length, unmapped: parsed.unmapped.length, bad_cells: parsed.badCells.length }
+    if (insertFailures.length > 0) {
+      await sendAlert(
+        `IRS FX rates: ${insertFailures.length} rate(s) could not be stored — action needed`,
+        `<p>These parsed rates failed to insert (the others saved fine). Known cause: the rate_to_usd column is numeric(10,6) — run the widening line from scripts/migrations/20260706-2100-irs-exchange-rates-full-seed.sql in the Supabase dashboard (<code>ALTER TABLE irs_exchange_rates ALTER COLUMN rate_to_usd TYPE numeric;</code>) and the next run self-fills them.</p><ul>${insertFailures.map(f => `<li>${f.currency} ${f.tax_year}: ${f.error}</li>`).join("")}</ul>`,
+      )
+    }
+    const summary = { years: parsed.years, parsed: parsed.rates.length, inserted, insert_failures: insertFailures.length, diffs: diffs.length, unmapped: parsed.unmapped.length, bad_cells: parsed.badCells.length }
     logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - start, details: summary })
     return NextResponse.json({ ok: true, ...summary })
   } catch (err) {

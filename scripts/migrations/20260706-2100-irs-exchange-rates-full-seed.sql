@@ -7,6 +7,15 @@
 -- Upsert: corrects the 2 hand-entered GBP rows that diverge from the official
 -- table (2025: 0.795 -> 0.759; 2024: 0.782 -> 0.783); EUR rows already match.
 
+-- PRODUCTION CAP (discovered at prod apply, 2026-07-06): prod's rate_to_usd is
+-- numeric(10,6) — max 9,999.999999 — while sandboxes are unbounded numeric.
+-- Venezuela (all years) and Lebanon (2023-2025) overflow it; they were skipped
+-- at the prod seed. Widen to plain numeric so ALL published currencies fit;
+-- the monthly cron then self-fills the missing rows (insert-only). On prod
+-- this ALTER runs in the Supabase dashboard (execute_sql DDL is blocked);
+-- on the sandboxes it is a harmless no-op.
+ALTER TABLE irs_exchange_rates ALTER COLUMN rate_to_usd TYPE numeric;
+
 -- Schema alignment first: production carries UNIQUE(tax_year, currency) (added
 -- by hand at some point); both sandboxes were missing it — the upsert below
 -- depends on it. Idempotent: no-op where it already exists.
