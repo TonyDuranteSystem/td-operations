@@ -45,7 +45,10 @@ export interface CategorizationRule {
 function ruleMatches(rule: CategorizationRule, tx: ParsedTransaction): boolean {
   if (rule.direction === "in" && tx.amount <= 0) return false
   if (rule.direction === "out" && tx.amount >= 0) return false
-  const haystacks = [tx.description, tx.counterparty]
+  // NULL-safe: the type says string, but DB rows cast into ParsedTransaction
+  // can carry NULL (ingestion writes '' — direct inserts/tools don't). Flagged
+  // 2026-07-05, hit live 2026-07-06 during the S4 repro work.
+  const haystacks = [tx.description ?? "", tx.counterparty ?? ""]
   switch (rule.match_type) {
     case "exact":
       return haystacks.some(h => h.trim().toLowerCase() === rule.pattern.trim().toLowerCase())

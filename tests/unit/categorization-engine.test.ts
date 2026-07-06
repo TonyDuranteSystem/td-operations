@@ -19,6 +19,33 @@ const rule = (over: Partial<CategorizationRule>): CategorizationRule => ({
   account_id: null, priority: 100, direction: 'any', ...over,
 })
 
+describe('applyRules — NULL-safe text fields (2026-07-06 crash fix)', () => {
+  // The type says string, but DB rows cast into ParsedTransaction can carry
+  // NULL (ingestion writes '' — direct inserts/tools don't). Hit live during
+  // the S4 repro: ruleMatches threw on counterparty=null.
+  const nullish = (over: Partial<ParsedTransaction>) =>
+    tx('Google', -25, { counterparty: null as unknown as string, ...over })
+
+  it('contains rule matches on description with NULL counterparty — no crash', () => {
+    const r = rule({ pattern: 'google', category: 'expense', subcategory: 'software' })
+    expect(applyRules(nullish({}), [r]).category).toBe('expense')
+  })
+  it('exact and regex rules survive NULL counterparty', () => {
+    expect(applyRules(nullish({}), [rule({ pattern: 'Google', match_type: 'exact' })]).category).toBe('expense')
+    expect(applyRules(nullish({}), [rule({ pattern: '^goo', match_type: 'regex' })]).category).toBe('expense')
+  })
+  it('NULL description too — falls through to uncategorized, no crash', () => {
+    const row = tx('x', -25, { description: null as unknown as string, counterparty: null as unknown as string })
+    expect(applyRules(row, [rule({ pattern: 'google' })]).category).toBe('uncategorized')
+  })
+  it('legacy member/related-party scan survives NULL counterparty', () => {
+    const row = nullish({ description: 'Transfer to John Smith dividend' })
+    const out = applyRules(row, [], ['John Smith'], ['Acme FZCO'])
+    expect(out.is_related_party).toBe(true)
+    expect(out.category).toBe('distribution')
+  })
+})
+
 describe('applyRules', () => {
   it('direction gating: STRIPE inflow is revenue, STRIPE outflow is not', () => {
     const stripe = rule({ pattern: 'STRIPE', category: 'income', subcategory: 'revenue', direction: 'in' })

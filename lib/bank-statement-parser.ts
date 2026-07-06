@@ -114,9 +114,14 @@ export function categorizeTransaction(
   let is_related_party = false
   let notes = ""
 
+  // NULL-safe: the type says string, but DB rows cast into ParsedTransaction
+  // can carry NULL (ingestion writes '' — direct inserts/tools don't).
+  const desc = tx.description ?? ""
+  const cp = tx.counterparty ?? ""
+
   // Check rules in order — first match wins
   for (const rule of CATEGORY_RULES) {
-    if (rule.pattern.test(tx.description)) {
+    if (rule.pattern.test(desc)) {
       category = rule.category
       subcategory = rule.subcategory
       break
@@ -125,13 +130,13 @@ export function categorizeTransaction(
 
   // Override: if outgoing payment to a member → distribution
   if (tx.amount < 0 && memberNames.length > 0) {
-    const lowerDesc = tx.description.toLowerCase()
-    const lowerCounterparty = tx.counterparty.toLowerCase()
+    const lowerDesc = desc.toLowerCase()
+    const lowerCounterparty = cp.toLowerCase()
     for (const name of memberNames) {
       const lowerName = name.toLowerCase()
       if (lowerDesc.includes(lowerName) || lowerCounterparty.includes(lowerName)) {
         // Check if it's explicitly marked as distribution/dividends
-        if (/dividend|distribu/i.test(tx.description)) {
+        if (/dividend|distribu/i.test(desc)) {
           category = "distribution"
           subcategory = "member_distribution"
         }
@@ -144,8 +149,8 @@ export function categorizeTransaction(
 
   // Check for related entities (e.g., Dubai FZCO owned by same members)
   if (relatedEntities.length > 0) {
-    const lowerDesc = tx.description.toLowerCase()
-    const lowerCounterparty = tx.counterparty.toLowerCase()
+    const lowerDesc = desc.toLowerCase()
+    const lowerCounterparty = cp.toLowerCase()
     for (const entity of relatedEntities) {
       const lowerEntity = entity.toLowerCase()
       if (lowerDesc.includes(lowerEntity) || lowerCounterparty.includes(lowerEntity)) {
