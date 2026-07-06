@@ -186,6 +186,39 @@ export async function handleRecategorizeWorkspaceAi(job: Job, ctx?: JobRunContex
     result.summary = `Workspace AI chain hit the ${AI_CHAIN_CHUNK_CAP}-chunk cap with work remaining (${p.workspace_id})`
     return result
   }
+  if (followup === "done") {
+    // S4: the chain is complete — every AI place stamp for this generation
+    // exists, so NOW is when standing country policies replay over new/late
+    // located rows. Separate job (generic 3-attempt retry + Exception Center);
+    // dedupe-guarded like the continuation insert. Failure here never fails
+    // the finished chain — the next Generate/chain-done re-enqueues anyway.
+    try {
+      const { data: liveSweep } = await db
+        .from("job_queue")
+        .select("id")
+        .eq("job_type", "country_policy_sweep")
+        .eq("related_entity_id", p.workspace_id)
+        .in("status", ["pending", "processing"])
+        .limit(1)
+      if (!liveSweep || liveSweep.length === 0) {
+        const { error } = await db.from("job_queue").insert({
+          job_type: "country_policy_sweep",
+          payload: { workspace_id: p.workspace_id },
+          priority: AI_CHAIN_JOB_PRIORITY,
+          related_entity_type: "pnl_workspace",
+          related_entity_id: p.workspace_id,
+          created_by: "chain",
+        })
+        if (error) throw new Error(error.message)
+        result.steps.push(step("country_policy_sweep_enqueue", "ok", "sweep job enqueued at chain completion"))
+      } else {
+        result.steps.push(step("country_policy_sweep_enqueue", "skipped", "sweep job already live"))
+      }
+    } catch (e) {
+      console.error("[recategorize-workspace-ai] country-policy sweep enqueue failed (chain still done):", e)
+      result.steps.push(step("country_policy_sweep_enqueue", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
   if (followup === "continue" && r.stats.batchesSent === 0) {
     // Late-claim relay: this invocation has no usable window left — tell the
     // runner to stop claiming so the continuation waits for a FRESH window

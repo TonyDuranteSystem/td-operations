@@ -1401,20 +1401,29 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                 {(view.period_answers ?? []).map(b => (
                   <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
                     <span>
-                      ✓ {b.actor_role === 'client'
-                        ? (it ? 'Il cliente ha attestato' : 'Client attested')
-                        : (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')}
+                      ✓ {b.actor_role === 'system'
+                        ? (it ? 'Registrato automaticamente secondo la regola fissa del paese' : 'Booked automatically under the standing country policy')
+                        : b.actor_role === 'client'
+                          ? (it ? 'Il cliente ha attestato' : 'Client attested')
+                          : (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')}
                       {': '}
                       <strong className="text-zinc-800">{b.loc_codes.map(c => locLabel(c, it)).join(' / ')} {fmtDay(b.period_start, it)} – {fmtDay(b.period_end, it)} = {b.choice === 'business' ? (it ? 'aziendale' : 'business') : (it ? 'personale' : 'personal')}</strong>
                       {` (${b.row_count} ${it ? 'righe' : 'rows'}, $${fmt(b.dollar_total)})`}
                     </span>
-                    <button
-                      disabled={busy !== null}
-                      onClick={() => void undoPeriodAnswer(b.id)}
-                      className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
-                    >
-                      {it ? 'Annulla' : 'Undo'}
-                    </button>
+                    <span className="flex items-center gap-2">
+                      {b.actor_role === 'system' && (
+                        <span className="text-[11px] text-zinc-400">
+                          {it ? 'Annullare ferma anche la regola fissa' : 'Undo also stops the standing policy'}
+                        </span>
+                      )}
+                      <button
+                        disabled={busy !== null}
+                        onClick={() => void undoPeriodAnswer(b.id)}
+                        className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+                      >
+                        {it ? 'Annulla' : 'Undo'}
+                      </button>
+                    </span>
                   </div>
                 ))}
               </div>

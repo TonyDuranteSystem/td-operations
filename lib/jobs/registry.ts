@@ -16,6 +16,7 @@ import { handleIngestBankStatement } from "./handlers/ingest-bank-statement"
 import { handleIngestWorkspaceStatement } from "./handlers/ingest-workspace-statement"
 import { handleRecategorizeAi } from "./handlers/recategorize-ai"
 import { handleRecategorizeWorkspaceAi } from "./handlers/recategorize-workspace-ai"
+import { handleCountryPolicySweep } from "./handlers/country-policy-sweep"
 import { handleEsignSendEmail } from "./handlers/esign-send-email"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
@@ -54,6 +55,9 @@ const handlers: Record<string, JobHandler> = {
   // Added 2026-07-02 — workspace twin of recategorize_ai, enqueued by the
   // Generate P&L action (one AI pass per generation, never on a partial set).
   recategorize_workspace_ai: handleRecategorizeWorkspaceAi,
+  // Added 2026-07-06 (S4) — replays standing country policies after the AI
+  // chain completes; enqueued by the chain's DONE branch.
+  country_policy_sweep: handleCountryPolicySweep,
   // Added 2026-06-27 — e-sign signer-invite emails (durable, retried).
   esign_send_email: handleEsignSendEmail,
 }

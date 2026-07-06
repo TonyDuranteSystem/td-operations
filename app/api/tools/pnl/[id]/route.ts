@@ -208,7 +208,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     })
     const { data: batchRows } = await db
       .from('pnl_period_answers')
-      .select('id, loc_codes, period_start, period_end, choice, actor_role, row_count, dollar_total, created_at, undone_at')
+      .select('id, loc_codes, period_start, period_end, choice, actor_role, row_count, dollar_total, created_at, undone_at, policy_revoked_at')
       .eq('workspace_id', workspaceId)
       .order('created_at', { ascending: false })
     const periodAnswers = ((batchRows ?? []) as Array<Record<string, unknown>>).filter(b => !b.undone_at)
@@ -259,9 +259,23 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const sweepableSet = new Set<string>(PERIOD_SWEEPABLE_CATEGORIES as readonly string[])
     const coveredCountries = new Set<string>()
     for (const b of periodAnswers) {
+      // S4: a REVOKED full-year answer is still booked (its attestation line
+      // stays) but no longer a standing policy — its country card returns.
+      if (b.policy_revoked_at) continue
       if (String(b.period_start) <= yearStart && String(b.period_end) >= yearEnd) {
         for (const c of (b.loc_codes as string[])) coveredCountries.add(c)
       }
+    }
+    // S4: the linked account's standing policies also cover their countries —
+    // no card flashes between Generate and the chain-end auto-sweep for a
+    // country the sweep is about to book anyway.
+    if (wsRow?.linked_account_id) {
+      const { data: acctPolicies } = await db
+        .from('account_location_policies')
+        .select('loc_code')
+        .eq('account_id', wsRow.linked_account_id)
+        .eq('active', true)
+      for (const p of (acctPolicies ?? []) as Array<{ loc_code: string }>) coveredCountries.add(p.loc_code)
     }
     const byCountry = new Map<string, { count: number; total: number; merchants: Map<string, number>; keys: Set<string> }>()
     for (const r of locatedRows) {

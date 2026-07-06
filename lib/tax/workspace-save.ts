@@ -237,6 +237,55 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     console.error("[workspace-save] learned-rule promotion failed (rows saved fine):", e)
   }
 
+  // Country-policy promotion (S4, 2026-07-06): the workspace's active
+  // full-year country answers become the client's STANDING policies —
+  // next year's workspace replays them with zero taps (the location half of
+  // the year-over-year memory; merchant rules cover the other half above).
+  // Same contract as rule promotion: fire-and-forget, never fails the save.
+  let promotedPolicies = 0
+  try {
+    const { data: wsMeta } = await db
+      .from("pnl_workspaces")
+      .select("tax_year")
+      .eq("id", workspaceId)
+      .maybeSingle()
+    const wsTaxYear = Number(wsMeta?.tax_year)
+    if (Number.isInteger(wsTaxYear)) {
+      const { resolveCountryPolicies, resolveAccountResidenceIso } = await import("./country-policy-sweep")
+      const { data: answerRows } = await db
+        .from("pnl_period_answers")
+        .select("id, loc_codes, period_start, period_end, choice, actor_role, created_at, undone_at, policy_revoked_at")
+        .eq("workspace_id", workspaceId)
+      const residenceCountry = await resolveAccountResidenceIso(targetAccountId)
+      // Workspace-level policies only: account-level ones already live on the
+      // account (promoting them back to themselves would be a no-op loop).
+      const policies = resolveCountryPolicies({
+        workspaceAnswers: (answerRows ?? []) as never,
+        accountPolicies: [],
+        taxYear: wsTaxYear,
+        residenceCountry,
+      })
+      for (const pol of policies) {
+        const { error } = await db
+          .from("account_location_policies")
+          .upsert({
+            account_id: targetAccountId,
+            loc_code: pol.loc_code,
+            choice: pol.choice,
+            active: true,
+            promoted_from_workspace: workspaceId,
+            promoted_batch_id: pol.source_id,
+            created_by: actor,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "account_id,loc_code" })
+        if (error) throw new Error(error.message)
+        promotedPolicies++
+      }
+    }
+  } catch (e) {
+    console.error("[workspace-save] country-policy promotion failed (rows saved fine):", e)
+  }
+
   // Client-path follow-ups (called, never modified).
   try {
     await recategorizeAccountYear(targetAccountId, taxYear)
@@ -258,8 +307,8 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
       table_name: "bank_transactions",
       record_id: workspaceId,
       account_id: targetAccountId,
-      summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""}${promotedRules ? `, ${promotedRules} learned rule(s) promoted` : ""} for tax year ${taxYear}`,
-      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, backup_path: backupPath ?? null, promoted_rules: promotedRules },
+      summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""}${promotedRules ? `, ${promotedRules} learned rule(s) promoted` : ""}${promotedPolicies ? `, ${promotedPolicies} country polic${promotedPolicies === 1 ? "y" : "ies"} promoted` : ""} for tax year ${taxYear}`,
+      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, backup_path: backupPath ?? null, promoted_rules: promotedRules, promoted_policies: promotedPolicies },
     } as never)
   } catch (e) {
     console.error("[workspace-save] audit log insert failed (save already applied):", e)
