@@ -138,74 +138,6 @@ export type Database = {
           },
         ]
       }
-      account_location_policies: {
-        Row: {
-          account_id: string
-          active: boolean
-          choice: string
-          created_at: string
-          created_by: string
-          id: string
-          loc_code: string
-          promoted_batch_id: string | null
-          promoted_from_workspace: string | null
-          updated_at: string
-        }
-        Insert: {
-          account_id: string
-          active?: boolean
-          choice: string
-          created_at?: string
-          created_by: string
-          id?: string
-          loc_code: string
-          promoted_batch_id?: string | null
-          promoted_from_workspace?: string | null
-          updated_at?: string
-        }
-        Update: {
-          account_id?: string
-          active?: boolean
-          choice?: string
-          created_at?: string
-          created_by?: string
-          id?: string
-          loc_code?: string
-          promoted_batch_id?: string | null
-          promoted_from_workspace?: string | null
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "account_location_policies_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "account_location_policies_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v_account_detail"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "account_location_policies_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v_client_full"
-            referencedColumns: ["account_id"]
-          },
-          {
-            foreignKeyName: "account_location_policies_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v_sla_monitor"
-            referencedColumns: ["account_id"]
-          },
-        ]
-      }
       accounts: {
         Row: {
           account_type: string | null
@@ -230,8 +162,6 @@ export type Database = {
           drive_folder_id: string | null
           dunning_escalation_email: string | null
           dunning_pause: boolean | null
-          dunning_pause_reason: string | null
-          dunning_pause_until: string | null
           dunning_reminder_1_days: number | null
           dunning_reminder_2_days: number | null
           ein_number: string | null
@@ -313,8 +243,6 @@ export type Database = {
           drive_folder_id?: string | null
           dunning_escalation_email?: string | null
           dunning_pause?: boolean | null
-          dunning_pause_reason?: string | null
-          dunning_pause_until?: string | null
           dunning_reminder_1_days?: number | null
           dunning_reminder_2_days?: number | null
           ein_number?: string | null
@@ -400,8 +328,6 @@ export type Database = {
           drive_folder_id?: string | null
           dunning_escalation_email?: string | null
           dunning_pause?: boolean | null
-          dunning_pause_reason?: string | null
-          dunning_pause_until?: string | null
           dunning_reminder_1_days?: number | null
           dunning_reminder_2_days?: number | null
           ein_number?: string | null
@@ -879,71 +805,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
-      }
-      ai_categorization_runs: {
-        Row: {
-          account_id: string | null
-          applied: number
-          batches_failed: number
-          batches_sent: number
-          capped: boolean
-          created_at: string
-          errors: Json
-          id: string
-          labeled: number
-          model: string
-          prompt_version: string
-          suggestions_parsed: number
-          tax_year: number | null
-          truncated_batches: number
-          uncategorized_remaining: number | null
-          workspace_id: string | null
-        }
-        Insert: {
-          account_id?: string | null
-          applied?: number
-          batches_failed?: number
-          batches_sent?: number
-          capped?: boolean
-          created_at?: string
-          errors?: Json
-          id?: string
-          labeled?: number
-          model: string
-          prompt_version: string
-          suggestions_parsed?: number
-          tax_year?: number | null
-          truncated_batches?: number
-          uncategorized_remaining?: number | null
-          workspace_id?: string | null
-        }
-        Update: {
-          account_id?: string | null
-          applied?: number
-          batches_failed?: number
-          batches_sent?: number
-          capped?: boolean
-          created_at?: string
-          errors?: Json
-          id?: string
-          labeled?: number
-          model?: string
-          prompt_version?: string
-          suggestions_parsed?: number
-          tax_year?: number | null
-          truncated_batches?: number
-          uncategorized_remaining?: number | null
-          workspace_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "ai_categorization_runs_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       ai_delegations: {
         Row: {
@@ -1581,7 +1442,6 @@ export type Database = {
           source: string
           subcategory: string
           updated_at: string
-          workspace_id: string | null
         }
         Insert: {
           account_id?: string | null
@@ -1598,7 +1458,6 @@ export type Database = {
           source?: string
           subcategory?: string
           updated_at?: string
-          workspace_id?: string | null
         }
         Update: {
           account_id?: string | null
@@ -1615,7 +1474,6 @@ export type Database = {
           source?: string
           subcategory?: string
           updated_at?: string
-          workspace_id?: string | null
         }
         Relationships: [
           {
@@ -1645,13 +1503,6 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_sla_monitor"
             referencedColumns: ["account_id"]
-          },
-          {
-            foreignKeyName: "bank_categorization_rules_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_workspaces"
-            referencedColumns: ["id"]
           },
         ]
       }
@@ -3614,7 +3465,6 @@ export type Database = {
           default_invoice_target: string
           default_payout_model: string
           default_payout_rate: number | null
-          display_title: string | null
           id: string
           is_test: boolean | null
           label: string | null
@@ -3636,7 +3486,6 @@ export type Database = {
           default_invoice_target?: string
           default_payout_model?: string
           default_payout_rate?: number | null
-          display_title?: string | null
           id?: string
           is_test?: boolean | null
           label?: string | null
@@ -3658,7 +3507,6 @@ export type Database = {
           default_invoice_target?: string
           default_payout_model?: string
           default_payout_rate?: number | null
-          display_title?: string | null
           id?: string
           is_test?: boolean | null
           label?: string | null
@@ -6301,7 +6149,6 @@ export type Database = {
           created_at: string
           decline_reason: string | null
           declined_at: string | null
-          delivery_channel: string
           email: string | null
           envelope_id: string
           id: string
@@ -6330,7 +6177,6 @@ export type Database = {
           created_at?: string
           decline_reason?: string | null
           declined_at?: string | null
-          delivery_channel?: string
           email?: string | null
           envelope_id: string
           id?: string
@@ -6359,7 +6205,6 @@ export type Database = {
           created_at?: string
           decline_reason?: string | null
           declined_at?: string | null
-          delivery_channel?: string
           email?: string | null
           envelope_id?: string
           id?: string
@@ -9620,7 +9465,6 @@ export type Database = {
           invoice_date: string | null
           invoice_number: string | null
           invoice_status: string | null
-          is_legacy: boolean
           is_test: boolean | null
           issue_date: string | null
           last_reminder_at: string | null
@@ -9682,7 +9526,6 @@ export type Database = {
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_status?: string | null
-          is_legacy?: boolean
           is_test?: boolean | null
           issue_date?: string | null
           last_reminder_at?: string | null
@@ -9744,7 +9587,6 @@ export type Database = {
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_status?: string | null
-          is_legacy?: boolean
           is_test?: boolean | null
           issue_date?: string | null
           last_reminder_at?: string | null
@@ -10082,325 +9924,6 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: []
-      }
-      pnl_period_answer_rows: {
-        Row: {
-          batch_id: string
-          prev_category: string | null
-          prev_notes: string | null
-          prev_subcategory: string | null
-          transaction_id: string
-        }
-        Insert: {
-          batch_id: string
-          prev_category?: string | null
-          prev_notes?: string | null
-          prev_subcategory?: string | null
-          transaction_id: string
-        }
-        Update: {
-          batch_id?: string
-          prev_category?: string | null
-          prev_notes?: string | null
-          prev_subcategory?: string | null
-          transaction_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pnl_period_answer_rows_batch_id_fkey"
-            columns: ["batch_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_period_answers"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pnl_period_answer_rows_transaction_id_fkey"
-            columns: ["transaction_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_workspace_transactions"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      pnl_period_answers: {
-        Row: {
-          actor_id: string
-          actor_role: string
-          choice: string
-          created_at: string
-          dollar_total: number
-          id: string
-          loc_codes: string[]
-          member_id: string | null
-          period_end: string
-          period_start: string
-          policy_revoked_at: string | null
-          row_count: number
-          source_account_policy_id: string | null
-          source_policy_batch_id: string | null
-          undone_at: string | null
-          workspace_id: string
-        }
-        Insert: {
-          actor_id: string
-          actor_role: string
-          choice: string
-          created_at?: string
-          dollar_total?: number
-          id?: string
-          loc_codes: string[]
-          member_id?: string | null
-          period_end: string
-          period_start: string
-          policy_revoked_at?: string | null
-          row_count?: number
-          source_account_policy_id?: string | null
-          source_policy_batch_id?: string | null
-          undone_at?: string | null
-          workspace_id: string
-        }
-        Update: {
-          actor_id?: string
-          actor_role?: string
-          choice?: string
-          created_at?: string
-          dollar_total?: number
-          id?: string
-          loc_codes?: string[]
-          member_id?: string | null
-          period_end?: string
-          period_start?: string
-          policy_revoked_at?: string | null
-          row_count?: number
-          source_account_policy_id?: string | null
-          source_policy_batch_id?: string | null
-          undone_at?: string | null
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pnl_period_answers_source_account_policy_id_fkey"
-            columns: ["source_account_policy_id"]
-            isOneToOne: false
-            referencedRelation: "account_location_policies"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pnl_period_answers_source_policy_batch_id_fkey"
-            columns: ["source_policy_batch_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_period_answers"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pnl_period_answers_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      pnl_workspace_members: {
-        Row: {
-          created_at: string
-          details: Json
-          display_name: string
-          id: string
-          member_type: string
-          ownership_pct: number | null
-          workspace_id: string
-        }
-        Insert: {
-          created_at?: string
-          details?: Json
-          display_name: string
-          id?: string
-          member_type: string
-          ownership_pct?: number | null
-          workspace_id: string
-        }
-        Update: {
-          created_at?: string
-          details?: Json
-          display_name?: string
-          id?: string
-          member_type?: string
-          ownership_pct?: number | null
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pnl_workspace_members_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      pnl_workspace_transactions: {
-        Row: {
-          account_type: string | null
-          ai_bucket: string | null
-          ai_lean: string | null
-          amount: number
-          balance_after: number | null
-          bank_name: string | null
-          category: string | null
-          counterparty: string | null
-          created_at: string
-          currency: string | null
-          description: string | null
-          id: string
-          is_related_party: boolean | null
-          loc_code: string | null
-          loc_confidence: string | null
-          loc_source: string | null
-          notes: string | null
-          source_file_id: string | null
-          subcategory: string | null
-          tax_year: number
-          transaction_date: string
-          transaction_ref: string
-          workspace_id: string
-        }
-        Insert: {
-          account_type?: string | null
-          ai_bucket?: string | null
-          ai_lean?: string | null
-          amount: number
-          balance_after?: number | null
-          bank_name?: string | null
-          category?: string | null
-          counterparty?: string | null
-          created_at?: string
-          currency?: string | null
-          description?: string | null
-          id?: string
-          is_related_party?: boolean | null
-          loc_code?: string | null
-          loc_confidence?: string | null
-          loc_source?: string | null
-          notes?: string | null
-          source_file_id?: string | null
-          subcategory?: string | null
-          tax_year: number
-          transaction_date: string
-          transaction_ref: string
-          workspace_id: string
-        }
-        Update: {
-          account_type?: string | null
-          ai_bucket?: string | null
-          ai_lean?: string | null
-          amount?: number
-          balance_after?: number | null
-          bank_name?: string | null
-          category?: string | null
-          counterparty?: string | null
-          created_at?: string
-          currency?: string | null
-          description?: string | null
-          id?: string
-          is_related_party?: boolean | null
-          loc_code?: string | null
-          loc_confidence?: string | null
-          loc_source?: string | null
-          notes?: string | null
-          source_file_id?: string | null
-          subcategory?: string | null
-          tax_year?: number
-          transaction_date?: string
-          transaction_ref?: string
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pnl_workspace_transactions_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "pnl_workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      pnl_workspaces: {
-        Row: {
-          company_name: string | null
-          created_at: string
-          created_by: string | null
-          ein: string | null
-          entity_type: string
-          generated_at: string | null
-          id: string
-          label: string | null
-          linked_account_id: string | null
-          prior_return_snapshot: Json | null
-          status: string
-          tax_year: number
-          updated_at: string
-        }
-        Insert: {
-          company_name?: string | null
-          created_at?: string
-          created_by?: string | null
-          ein?: string | null
-          entity_type?: string
-          generated_at?: string | null
-          id?: string
-          label?: string | null
-          linked_account_id?: string | null
-          prior_return_snapshot?: Json | null
-          status?: string
-          tax_year: number
-          updated_at?: string
-        }
-        Update: {
-          company_name?: string | null
-          created_at?: string
-          created_by?: string | null
-          ein?: string | null
-          entity_type?: string
-          generated_at?: string | null
-          id?: string
-          label?: string | null
-          linked_account_id?: string | null
-          prior_return_snapshot?: Json | null
-          status?: string
-          tax_year?: number
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pnl_workspaces_linked_account_id_fkey"
-            columns: ["linked_account_id"]
-            isOneToOne: false
-            referencedRelation: "accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pnl_workspaces_linked_account_id_fkey"
-            columns: ["linked_account_id"]
-            isOneToOne: false
-            referencedRelation: "v_account_detail"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pnl_workspaces_linked_account_id_fkey"
-            columns: ["linked_account_id"]
-            isOneToOne: false
-            referencedRelation: "v_client_full"
-            referencedColumns: ["account_id"]
-          },
-          {
-            foreignKeyName: "pnl_workspaces_linked_account_id_fkey"
-            columns: ["linked_account_id"]
-            isOneToOne: false
-            referencedRelation: "v_sla_monitor"
-            referencedColumns: ["account_id"]
-          },
-        ]
       }
       portal_announcements: {
         Row: {
@@ -12995,537 +12518,6 @@ export type Database = {
           },
         ]
       }
-      td_comm_deliverables: {
-        Row: {
-          concept_number: number
-          created_at: string
-          deleted_at: string | null
-          deleted_by: string | null
-          drive_file_id: string | null
-          enrollment_id: string
-          file_name: string
-          file_size: number | null
-          file_url: string | null
-          id: string
-          is_draft: boolean
-          mime_type: string | null
-          released_at: string | null
-          released_by: string | null
-          type: string
-          version_number: number
-          watermark_applied: boolean
-        }
-        Insert: {
-          concept_number?: number
-          created_at?: string
-          deleted_at?: string | null
-          deleted_by?: string | null
-          drive_file_id?: string | null
-          enrollment_id: string
-          file_name: string
-          file_size?: number | null
-          file_url?: string | null
-          id?: string
-          is_draft?: boolean
-          mime_type?: string | null
-          released_at?: string | null
-          released_by?: string | null
-          type: string
-          version_number?: number
-          watermark_applied?: boolean
-        }
-        Update: {
-          concept_number?: number
-          created_at?: string
-          deleted_at?: string | null
-          deleted_by?: string | null
-          drive_file_id?: string | null
-          enrollment_id?: string
-          file_name?: string
-          file_size?: number | null
-          file_url?: string | null
-          id?: string
-          is_draft?: boolean
-          mime_type?: string | null
-          released_at?: string | null
-          released_by?: string | null
-          type?: string
-          version_number?: number
-          watermark_applied?: boolean
-        }
-        Relationships: [
-          {
-            foreignKeyName: "td_comm_deliverables_enrollment_id_fkey"
-            columns: ["enrollment_id"]
-            isOneToOne: false
-            referencedRelation: "td_comm_enrollments"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      td_comm_disclaimers: {
-        Row: {
-          accepted_at: string
-          contact_id: string | null
-          created_at: string
-          disclaimer_version: string
-          enrollment_id: string
-          id: string
-          ip_address: string | null
-          method: string
-          user_agent: string | null
-        }
-        Insert: {
-          accepted_at?: string
-          contact_id?: string | null
-          created_at?: string
-          disclaimer_version: string
-          enrollment_id: string
-          id?: string
-          ip_address?: string | null
-          method?: string
-          user_agent?: string | null
-        }
-        Update: {
-          accepted_at?: string
-          contact_id?: string | null
-          created_at?: string
-          disclaimer_version?: string
-          enrollment_id?: string
-          id?: string
-          ip_address?: string | null
-          method?: string
-          user_agent?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "td_comm_disclaimers_enrollment_id_fkey"
-            columns: ["enrollment_id"]
-            isOneToOne: false
-            referencedRelation: "td_comm_enrollments"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      td_comm_enrollments: {
-        Row: {
-          account_id: string | null
-          client_paid_override_at: string | null
-          client_paid_override_by: string | null
-          client_payment_id: string | null
-          client_type: string | null
-          contact_id: string | null
-          conversation_id: string | null
-          created_at: string
-          deadline_at: string | null
-          earning_locked_at: string | null
-          form_data: Json
-          id: string
-          lead_id: string | null
-          metadata: Json
-          package_slug: string | null
-          partner_amount_usd: number | null
-          partner_id: string | null
-          service_delivery_id: string | null
-          status: string
-          updated_at: string
-          worker_partner_id: string | null
-        }
-        Insert: {
-          account_id?: string | null
-          client_paid_override_at?: string | null
-          client_paid_override_by?: string | null
-          client_payment_id?: string | null
-          client_type?: string | null
-          contact_id?: string | null
-          conversation_id?: string | null
-          created_at?: string
-          deadline_at?: string | null
-          earning_locked_at?: string | null
-          form_data?: Json
-          id?: string
-          lead_id?: string | null
-          metadata?: Json
-          package_slug?: string | null
-          partner_amount_usd?: number | null
-          partner_id?: string | null
-          service_delivery_id?: string | null
-          status?: string
-          updated_at?: string
-          worker_partner_id?: string | null
-        }
-        Update: {
-          account_id?: string | null
-          client_paid_override_at?: string | null
-          client_paid_override_by?: string | null
-          client_payment_id?: string | null
-          client_type?: string | null
-          contact_id?: string | null
-          conversation_id?: string | null
-          created_at?: string
-          deadline_at?: string | null
-          earning_locked_at?: string | null
-          form_data?: Json
-          id?: string
-          lead_id?: string | null
-          metadata?: Json
-          package_slug?: string | null
-          partner_amount_usd?: number | null
-          partner_id?: string | null
-          service_delivery_id?: string | null
-          status?: string
-          updated_at?: string
-          worker_partner_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "td_comm_enrollments_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v_account_detail"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v_client_full"
-            referencedColumns: ["account_id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v_sla_monitor"
-            referencedColumns: ["account_id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_client_payment_id_fkey"
-            columns: ["client_payment_id"]
-            isOneToOne: false
-            referencedRelation: "payments"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_client_payment_id_fkey"
-            columns: ["client_payment_id"]
-            isOneToOne: false
-            referencedRelation: "v_overdue_payments"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_contact_id_fkey"
-            columns: ["contact_id"]
-            isOneToOne: false
-            referencedRelation: "contacts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_contact_id_fkey"
-            columns: ["contact_id"]
-            isOneToOne: false
-            referencedRelation: "v_client_full"
-            referencedColumns: ["contact_id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_conversation_id_fkey"
-            columns: ["conversation_id"]
-            isOneToOne: false
-            referencedRelation: "comm_conversations"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_lead_id_fkey"
-            columns: ["lead_id"]
-            isOneToOne: false
-            referencedRelation: "leads"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_partner_id_fkey"
-            columns: ["partner_id"]
-            isOneToOne: false
-            referencedRelation: "client_partners"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_service_delivery_id_fkey"
-            columns: ["service_delivery_id"]
-            isOneToOne: false
-            referencedRelation: "service_deliveries"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_service_delivery_id_fkey"
-            columns: ["service_delivery_id"]
-            isOneToOne: false
-            referencedRelation: "v_active_service_deliveries"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_enrollments_worker_partner_id_fkey"
-            columns: ["worker_partner_id"]
-            isOneToOne: false
-            referencedRelation: "client_partners"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      td_comm_packages: {
-        Row: {
-          active: boolean
-          created_at: string
-          delivery_days: number | null
-          description_en: string | null
-          description_it: string | null
-          highlighted: boolean
-          includes: Json
-          max_revisions: number
-          name_en: string
-          name_it: string | null
-          payment_timing: string
-          price_usd: number | null
-          slug: string
-          sort_order: number
-          updated_at: string
-          upsell_from: string[]
-        }
-        Insert: {
-          active?: boolean
-          created_at?: string
-          delivery_days?: number | null
-          description_en?: string | null
-          description_it?: string | null
-          highlighted?: boolean
-          includes?: Json
-          max_revisions?: number
-          name_en: string
-          name_it?: string | null
-          payment_timing?: string
-          price_usd?: number | null
-          slug: string
-          sort_order?: number
-          updated_at?: string
-          upsell_from?: string[]
-        }
-        Update: {
-          active?: boolean
-          created_at?: string
-          delivery_days?: number | null
-          description_en?: string | null
-          description_it?: string | null
-          highlighted?: boolean
-          includes?: Json
-          max_revisions?: number
-          name_en?: string
-          name_it?: string | null
-          payment_timing?: string
-          price_usd?: number | null
-          slug?: string
-          sort_order?: number
-          updated_at?: string
-          upsell_from?: string[]
-        }
-        Relationships: []
-      }
-      td_comm_portfolio: {
-        Row: {
-          after_image_url: string
-          attested_at: string | null
-          attested_by: string | null
-          before_image_url: string | null
-          category: string | null
-          client_name: string
-          consent_id: string | null
-          consent_source: string
-          created_at: string
-          created_by: string | null
-          deleted_at: string | null
-          deleted_by: string | null
-          description_en: string
-          description_it: string
-          enrollment_id: string | null
-          featured: boolean
-          id: string
-          published: boolean
-          sort_order: number
-          tags: string[]
-          title_en: string
-          title_it: string
-          updated_at: string
-        }
-        Insert: {
-          after_image_url: string
-          attested_at?: string | null
-          attested_by?: string | null
-          before_image_url?: string | null
-          category?: string | null
-          client_name?: string
-          consent_id?: string | null
-          consent_source?: string
-          created_at?: string
-          created_by?: string | null
-          deleted_at?: string | null
-          deleted_by?: string | null
-          description_en?: string
-          description_it?: string
-          enrollment_id?: string | null
-          featured?: boolean
-          id?: string
-          published?: boolean
-          sort_order?: number
-          tags?: string[]
-          title_en?: string
-          title_it?: string
-          updated_at?: string
-        }
-        Update: {
-          after_image_url?: string
-          attested_at?: string | null
-          attested_by?: string | null
-          before_image_url?: string | null
-          category?: string | null
-          client_name?: string
-          consent_id?: string | null
-          consent_source?: string
-          created_at?: string
-          created_by?: string | null
-          deleted_at?: string | null
-          deleted_by?: string | null
-          description_en?: string
-          description_it?: string
-          enrollment_id?: string | null
-          featured?: boolean
-          id?: string
-          published?: boolean
-          sort_order?: number
-          tags?: string[]
-          title_en?: string
-          title_it?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "td_comm_portfolio_consent_id_fkey"
-            columns: ["consent_id"]
-            isOneToOne: false
-            referencedRelation: "td_comm_showcase_consents"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "td_comm_portfolio_enrollment_id_fkey"
-            columns: ["enrollment_id"]
-            isOneToOne: false
-            referencedRelation: "td_comm_enrollments"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      td_comm_questions: {
-        Row: {
-          active: boolean
-          ai_assist: boolean
-          audience: string
-          created_at: string
-          id: string
-          key: string
-          label_en: string
-          label_it: string | null
-          options: Json
-          required: boolean
-          sort_order: number
-          step: number
-          type: string
-          updated_at: string
-        }
-        Insert: {
-          active?: boolean
-          ai_assist?: boolean
-          audience?: string
-          created_at?: string
-          id?: string
-          key: string
-          label_en: string
-          label_it?: string | null
-          options?: Json
-          required?: boolean
-          sort_order?: number
-          step?: number
-          type?: string
-          updated_at?: string
-        }
-        Update: {
-          active?: boolean
-          ai_assist?: boolean
-          audience?: string
-          created_at?: string
-          id?: string
-          key?: string
-          label_en?: string
-          label_it?: string | null
-          options?: Json
-          required?: boolean
-          sort_order?: number
-          step?: number
-          type?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      td_comm_showcase_consents: {
-        Row: {
-          consent_version: string
-          contact_id: string | null
-          created_at: string
-          enrollment_id: string | null
-          granted_at: string
-          id: string
-          ip_address: string | null
-          method: string
-          revoked_at: string | null
-          user_agent: string | null
-        }
-        Insert: {
-          consent_version: string
-          contact_id?: string | null
-          created_at?: string
-          enrollment_id?: string | null
-          granted_at?: string
-          id?: string
-          ip_address?: string | null
-          method?: string
-          revoked_at?: string | null
-          user_agent?: string | null
-        }
-        Update: {
-          consent_version?: string
-          contact_id?: string | null
-          created_at?: string
-          enrollment_id?: string | null
-          granted_at?: string
-          id?: string
-          ip_address?: string | null
-          method?: string
-          revoked_at?: string | null
-          user_agent?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "td_comm_showcase_consents_enrollment_id_fkey"
-            columns: ["enrollment_id"]
-            isOneToOne: false
-            referencedRelation: "td_comm_enrollments"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       td_expense_items: {
         Row: {
           amount: number
@@ -14729,6 +13721,16 @@ export type Database = {
       }
     }
     Functions: {
+      toggle_message_reaction: {
+        Args: {
+          p_message_id: string
+          p_emoji: string
+          p_reactor_id: string
+          p_reactor_type: string
+          p_reactor_name: string | null
+        }
+        Returns: Json
+      }
       calculate_client_health: {
         Args: never
         Returns: {
@@ -14925,16 +13927,6 @@ export type Database = {
       submit_member_info: {
         Args: { p_account_id: string; p_members: Json }
         Returns: undefined
-      }
-      toggle_message_reaction: {
-        Args: {
-          p_emoji: string
-          p_message_id: string
-          p_reactor_id: string
-          p_reactor_name: string
-          p_reactor_type: string
-        }
-        Returns: Json
       }
       update_client_health: { Args: never; Returns: number }
       viewas_restore_last_sign_in: {
