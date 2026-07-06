@@ -39,6 +39,9 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/approval-executor": "*/5 * * * *",
   "/api/cron/hermes-health": "*/5 * * * *",
   "/api/cron/invoice-overdue": "0 9 * * *",
+  // Monthly IRS yearly-average FX rate import (2026-07-06) — insert-only,
+  // fail-closed; see lib/tax/irs-fx-import.ts.
+  "/api/cron/irs-fx-rates": "0 7 2 * *",
   "/api/cron/faxage-ss4-confirm": "0 */2 * * *",
   "/api/cron/portal-digest": "*/5 * * * *",
   "/api/cron/plaid-sync": "0 */6 * * *",
