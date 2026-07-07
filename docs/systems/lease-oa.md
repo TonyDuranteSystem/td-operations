@@ -1,5 +1,6 @@
 # Lease & Operating Agreement (OA)
-_Last verified against code: 2026-07-07 — Claude (Drive duplicate-upload sweep, LT Program incident class — the lease-signed and oa-signed webhooks' signed-PDF uploads (+ both lease-regen routes) switched from `uploadBinaryToDrive` to `uploadBinaryToDriveUpsert` (stable file name → a retry/re-run refreshes the ONE existing Drive file in place instead of adding a copy). No other behavior in this subsystem touched; full sweep rationale in `documents.md` (2026-07-07b). Branch `claude/objective-cohen-b75f61`, SANDBOX — Antonio ships.)_
+_Last verified against code: 2026-07-07b — Claude (MMLLC entity-type normalization fix + portal self-service OA + Intercompany Agreement wiring — see the OA/ICA sections below; branch `claude/optimistic-dhawan-f7595e`)_
+_Prior: 2026-07-07 — Claude (Drive duplicate-upload sweep, LT Program incident class — the lease-signed and oa-signed webhooks' signed-PDF uploads (+ both lease-regen routes) switched from `uploadBinaryToDrive` to `uploadBinaryToDriveUpsert` (stable file name → a retry/re-run refreshes the ONE existing Drive file in place instead of adding a copy). No other behavior in this subsystem touched; full sweep rationale in `documents.md` (2026-07-07b). Branch `claude/objective-cohen-b75f61`.)_
 _Prior: 2026-06-24 — Claude (oa-signed webhook: corrected stale v2 stage name "Post-Formation" → "Articles Received" in the post-formation milestone breadcrumb; prior full read 2026-05-29 of lib/mcp/tools/lease.ts, lib/mcp/tools/oa.ts)_
 
 ## What it is
@@ -20,6 +21,18 @@ Both follow the same pattern: create a record → send a tokenized link via Gmai
 - Tools (`lib/mcp/tools/oa.ts`): `oa_create` (from CRM account data; SMLLC or MMLLC), `oa_get`, `oa_send` (Gmail + tracking, `safeSend`), `oa_agreements`, `oa_id`, `oa_signatures`.
 - **Only supported states** — `OA_SUPPORTED_STATES` (`lib/types/oa-templates.ts`) gates which states have an OA template.
 - Tokenized link + access code. Signed webhook: `app/api/oa-signed/route.ts`.
+- **Three creation paths** (all insert `oa_agreements`):
+  1. MCP `oa_create` (staff, free-form members params for MMLLC).
+  2. CRM button (`app/api/crm/admin-actions/generate-document/route.ts::generateOA`) — MMLLC members come from the **`members` table** (real `ownership_pct`, company members included; individual address falls back to `contacts.residency`). Errors if an MMLLC has no members rows or ownership ≠ 100%. Never fabricates an even split (Datavora incident, 2026-05-25).
+  3. Portal self-service (`app/api/portal/operating-agreement/create/route.ts`) — client "Create & Send for Signing" in `/portal/documents/generate`. MMLLC: reads `members` table, requires every member to have `contact_id` (they must sign), ownership must total 100%, creates one `oa_signatures` row per member and portal-chats each a per-signer link.
+
+### ⚠️ Entity-type normalization — MANDATORY invariant
+`accounts.entity_type` stores **long form** ("Single Member LLC" / "Multi Member LLC" / "C-Corp Elected") — the value 'MMLLC' NEVER appears in accounts. `oa_agreements.entity_type` stores the **short code** ('SMLLC'/'MMLLC'). ANY comparison of an entity type string against 'MMLLC' MUST go through `normalizeEntityType()` (`lib/portal/entity-type.ts`). **Precedent (2026-07-07, Umberto Moretti / Azarexa):** the portal create route compared raw `accounts.entity_type === 'MMLLC'` — false for every account — so every portal-generated OA was built single-member with the primary contact at 100%, ignoring the members table; Datavora LLC signed a legally wrong OA. Fixed in: portal create route, `app/operating-agreement/[token]/[code]/page.tsx`, `app/portal/sign/page.tsx`, `app/portal/sign/oa/page.tsx`, `generate-documents-client.tsx`.
+
+## Intercompany Transfer Agreement (ICA)
+- Generator: `lib/pdf/intercompany-agreement-pdf.ts` (operating LLC ↔ treasury/holding member company). CRM wiring: `lib/operations/intercompany.ts` — `assembleIntercompanyInput()` (pure, unit-tested) + `generateIntercompanyForAccount()`.
+- **All data from CRM**: operating company from `accounts`; treasury from the `members` row with `member_type='company'` (ownership_pct, address, EIN) with fallback to the treasury company's own `accounts` row matched by name (EIN / address / state_of_formation). Missing data → hard error naming the field, never a default.
+- Entry points: CRM account page → Documents to Sign panel → "Intercompany Agreement" row (only shown for MMLLC accounts) → `generate_intercompany` action in `generate-document/route.ts`. Output: PDF filed to the account Drive folder + portal-visible `documents` row.
 
 ## Business rules
 - **R037** — `lease_send` / `oa_send` go through `safeSend()` (idempotency check → send → status update after).

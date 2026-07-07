@@ -29,7 +29,7 @@ docs/systems/error-auto-audit.md|lib/system-errors.ts,app/api/system-errors/,app
 docs/systems/documents.md|lib/google-drive.ts,lib/docai.ts,lib/classifier.ts,lib/pdf/,lib/mcp/tools/doc.ts,lib/mcp/tools/classify.ts,lib/mcp/tools/drive.ts,lib/mcp/tools/storage.ts,lib/portal/auto-save-document.ts
 docs/systems/compliance-renewals.md|lib/harbor-compliance/,lib/mcp/tools/harbor-compliance.ts,lib/mcp/tools/deadlines.ts,lib/mcp/tools/calendar.ts,app/api/cron/ra-renewal-check/,app/api/cron/annual-report-check/
 docs/systems/onboarding.md|lib/mcp/tools/onboarding.ts,lib/mcp/tools/welcome-package.ts,lib/mcp/tools/member-info.ts,app/api/onboarding-form-completed/,app/api/portal/onboarding-complete/
-docs/systems/lease-oa.md|lib/mcp/tools/lease.ts,lib/mcp/tools/oa.ts,lib/types/oa-templates.ts,app/api/lease-signed/,app/api/oa-signed/
+docs/systems/lease-oa.md|lib/mcp/tools/lease.ts,lib/mcp/tools/oa.ts,lib/types/oa-templates.ts,app/api/lease-signed/,app/api/oa-signed/,app/api/portal/operating-agreement/,app/operating-agreement/,lib/operations/intercompany.ts,lib/pdf/intercompany-agreement-pdf.ts,app/api/crm/admin-actions/generate-document/
 docs/systems/mcp-tools.md|app/api/[transport]/route.ts,lib/mcp/instructions.ts,lib/mcp/safe-send.ts,lib/mcp/reminder.ts,lib/mcp/action-log.ts
 docs/systems/partners-team.md|lib/partners/,app/(dashboard)/partners/,app/portal/partner/
 docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/

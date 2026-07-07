@@ -16,6 +16,7 @@ import {
   getFiscalYearOptions,
   formatDocumentAmount,
 } from '@/lib/portal/document-templates'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 
 interface HistoryItem {
   id: string
@@ -160,7 +161,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const fiscalYearOptions = getFiscalYearOptions()
 
   const isOA = selectedType === 'operating_agreement'
-  const isMMLC = account.entityType === 'MMLLC'
+  // DB stores "Multi Member LLC" (long form) — normalize before comparing
+  const isMMLC = normalizeEntityType(account.entityType) === 'MMLLC'
 
   // Pre-flight validation for MMLLC OA — runs whenever OA is selected
   const oaPreflight = isMMLC ? (() => {

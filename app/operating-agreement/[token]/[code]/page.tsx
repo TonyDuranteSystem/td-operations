@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -113,8 +114,8 @@ function OperatingAgreementCodeContent() {
   // Signature images fetched from storage (for already-signed members)
   const [sigImages, setSigImages] = useState<Record<number, string>>({})
 
-  // Derived
-  const entityType = oa?.entity_type || 'SMLLC'
+  // Derived — normalize: legacy rows can store "Multi Member LLC" (long form)
+  const entityType = normalizeEntityType(oa?.entity_type) || 'SMLLC'
   const isMMLLC = entityType === 'MMLLC'
   const members: OAMember[] = (isMMLLC && oa?.members) ? oa.members : []
   const managerName = oa?.manager_name || oa?.member_name || ''
@@ -168,7 +169,7 @@ function OperatingAgreementCodeContent() {
     setAllSigned(!!isFullySigned)
 
     // Load signatures for MMLLC
-    const isMulti = (data.entity_type === 'MMLLC') && (data.total_signers || 1) > 1
+    const isMulti = (normalizeEntityType(data.entity_type) === 'MMLLC') && (data.total_signers || 1) > 1
     if (isMulti) {
       const { data: sigs } = await supabasePublic
         .from('oa_signatures')

@@ -36,6 +36,8 @@ interface DocumentsPanelProps {
   onGenerateOA: () => void
   onGenerateLease: () => void
   onGenerateSS4: () => void
+  /** Provided only for multi-member accounts with a treasury company member. */
+  onGenerateIntercompany?: () => void
   onRegenLease: (leaseId: string, data: { signedAt?: string | null; termStartDate?: string | null; termEndDate?: string | null }) => void
 }
 
@@ -58,7 +60,7 @@ function formatDate(d: string | null | undefined): string {
   }
 }
 
-export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLease, onGenerateSS4, onRegenLease }: DocumentsPanelProps) {
+export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLease, onGenerateSS4, onGenerateIntercompany, onRegenLease }: DocumentsPanelProps) {
   const router = useRouter()
   const [statuses, setStatuses] = useState<DocumentStatuses | null>(null)
   const [loading, setLoading] = useState(true)
@@ -152,6 +154,16 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
       canSend: false,
       onGenerate: onGenerateSS4,
     },
+    // Intercompany Agreement is generate-on-demand (each run files a new PDF
+    // from current CRM data) — only offered for multi-member accounts.
+    ...(onGenerateIntercompany ? [{
+      key: 'intercompany',
+      label: 'Intercompany Agreement',
+      data: null,
+      canGenerate: true,
+      canSend: false,
+      onGenerate: onGenerateIntercompany,
+    }] : []),
     {
       key: 'relay',
       label: 'Banking (Relay USD)',
@@ -297,7 +309,9 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                   </>
                 ) : (
                   <>
-                    <span className="text-xs text-muted-foreground">Not created</span>
+                    <span className="text-xs text-muted-foreground">
+                      {doc.key === 'intercompany' ? 'Generated from CRM data' : 'Not created'}
+                    </span>
                     {doc.canGenerate && doc.onGenerate && (
                       <button
                         onClick={doc.onGenerate}

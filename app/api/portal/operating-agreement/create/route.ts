@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { APP_BASE_URL } from '@/lib/config'
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
@@ -53,14 +54,18 @@ export async function POST(request: NextRequest) {
   // ── 1. FETCH ACCOUNT DETAILS ──
   const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_provider, registered_agent_address, physical_address, member_count')
+    .select('id, company_name, entity_type, member_structure, state_of_formation, formation_date, ein_number, registered_agent_provider, registered_agent_address, physical_address, member_count')
     .eq('id', account_id)
     .single()
 
   if (!account) return NextResponse.json({ error: 'Account not found' }, { status: 404 })
 
-  const entityType = (account.entity_type as string | null) ?? 'SMLLC'
-  const isMMLC = entityType === 'MMLLC'
+  // The DB stores "Multi Member LLC" (long form) — normalize before comparing,
+  // and let member_structure catch entity types the normalizer passes through
+  // (e.g. a multi-member "C-Corp Elected" LLC).
+  const isMMLC = normalizeEntityType(account.entity_type as string | null) === 'MMLLC'
+    || account.member_structure === 'multi_member'
+  const entityType = isMMLC ? 'MMLLC' : 'SMLLC'
 
   // ── 2. FETCH MEMBERS (MMLLC only) ──
   let membersRows: Array<{
@@ -72,16 +77,25 @@ export async function POST(request: NextRequest) {
     is_primary: boolean | null
     contact_id: string | null
     member_type: string
+    address_street: string | null
+    address_city: string | null
+    address_state: string | null
+    address_zip: string | null
+    address_country: string | null
   }> = []
 
   if (isMMLC) {
     const { data: rows } = await supabaseAdmin
       .from('members')
-      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type')
+      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, address_street, address_city, address_state, address_zip, address_country')
       .eq('account_id', account_id)
       .order('is_primary', { ascending: false })
 
     membersRows = rows ?? []
+
+    if (membersRows.length === 0) {
+      return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
+    }
 
     // MMLLC validation: all members must have contact_id to sign
     const missingPortal = membersRows.filter(m => !m.contact_id).map(m => m.full_name ?? m.company_name ?? 'Unknown')
@@ -91,8 +105,13 @@ export async function POST(request: NextRequest) {
       }, { status: 422 })
     }
 
-    if (membersRows.length === 0) {
-      return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
+    // Ownership must be complete and total 100% — an OA with wrong percentages
+    // is a legally incorrect document, so fail loud instead of generating it.
+    const ownershipTotal = membersRows.reduce((s, m) => s + (Number(m.ownership_pct) || 0), 0)
+    if (Math.abs(ownershipTotal - 100) > 0.01) {
+      return NextResponse.json({
+        error: `Cannot create OA — member ownership percentages total ${ownershipTotal}% instead of 100%. Contact support to correct the member records.`,
+      }, { status: 422 })
     }
   }
 
@@ -132,11 +151,16 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 6. BUILD MEMBERS JSON FOR MMLLC ──
+  // Address priority: CRM members row → caller-provided member_addresses[i].
+  const composeMemberAddress = (m: (typeof membersRows)[number]): string | null => {
+    const parts = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean)
+    return parts.length > 0 ? parts.join(', ') : null
+  }
   const totalSigners = isMMLC ? membersRows.length : 1
   const membersJson = isMMLC
     ? membersRows.map((m, i) => ({
         name: m.full_name ?? m.company_name ?? 'Unknown',
-        address: member_addresses[i] ?? null,
+        address: composeMemberAddress(m) ?? member_addresses[i] ?? null,
         email: m.email ?? null,
         ownership_pct: m.ownership_pct ?? 0,
         initial_contribution: '$1,000 USD',

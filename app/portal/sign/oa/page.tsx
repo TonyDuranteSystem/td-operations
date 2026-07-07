@@ -23,6 +23,7 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { APP_BASE_URL } from '@/lib/config'
 import { PortalOAClient } from './portal-oa-client'
 import { cookies } from 'next/headers'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 
 export default async function PortalSignOAPage() {
   const supabase = createClient()
@@ -108,7 +109,7 @@ export default async function PortalSignOAPage() {
     )
   }
 
-  const isMultiSigner = oa.entity_type === 'MMLLC' && (oa.total_signers || 1) > 1
+  const isMultiSigner = normalizeEntityType(oa.entity_type) === 'MMLLC' && (oa.total_signers || 1) > 1
 
   // For MMLLC: find this user's signature record
   let signerParam = ''

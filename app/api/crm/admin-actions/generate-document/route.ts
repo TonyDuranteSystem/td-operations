@@ -82,7 +82,7 @@ async function fetchAccountAndContact(accountId: string) {
 async function generateOA(accountId: string, params: Record<string, unknown>) {
   const result = await fetchAccountAndContact(accountId)
   if ("error" in result) return { error: result.error }
-  const { account, contact, contactLinks } = result
+  const { account, contact } = result
 
   const entityType = (params.entity_type as string) || (() => {
     const raw = (account.entity_type || "").toUpperCase().trim()
@@ -126,26 +126,45 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
   const year = new Date().getFullYear()
   const token = `${slugify(account.company_name)}-oa-${year}`
 
-  // For MMLLC, auto-build members from account_contacts
+  // For MMLLC, build members from the CRM members table — the single source of
+  // truth for ownership. Never fabricate percentages: an OA with invented
+  // splits is a legally incorrect document (Datavora incident, 2026-05-25).
   let membersJson = null
-  if (entityType === "MMLLC" && contactLinks!.length >= 2) {
-    const contactIds = contactLinks!.map(cl => cl.contact_id)
-    const { data: allContacts } = await supabaseAdmin
-      .from("contacts")
-      .select("id, full_name, email, residency")
-      .in("id", contactIds)
+  if (entityType === "MMLLC") {
+    const { data: memberRows } = await supabaseAdmin
+      .from("members")
+      .select("full_name, company_name, email, ownership_pct, member_type, contact_id, address_street, address_city, address_state, address_zip, address_country")
+      .eq("account_id", accountId)
+      .order("is_primary", { ascending: false })
 
-    if (allContacts) {
-      const pct = Math.floor(100 / allContacts.length)
-      const remainder = 100 - (pct * allContacts.length)
-      membersJson = allContacts.map((c, i) => ({
-        name: c.full_name,
-        email: c.email || null,
-        address: c.residency || null,
-        ownership_pct: i === 0 ? pct + remainder : pct,
-        initial_contribution: "$0.00",
-      }))
+    if (!memberRows?.length) {
+      return { error: `"${account.company_name}" is a Multi Member LLC but has no rows in its Members section. Add the members with their real ownership percentages first.` }
     }
+
+    const ownershipTotal = memberRows.reduce((s, m) => s + (Number(m.ownership_pct) || 0), 0)
+    if (Math.abs(ownershipTotal - 100) > 0.01) {
+      return { error: `Members ownership for "${account.company_name}" totals ${ownershipTotal}% — it must total 100%. Fix the Members section first.` }
+    }
+
+    // Individual members missing an address on their member row fall back to
+    // their contact's residency.
+    const contactIds = memberRows.map(m => m.contact_id).filter((id): id is string => !!id)
+    const { data: memberContacts } = contactIds.length
+      ? await supabaseAdmin.from("contacts").select("id, residency, email").in("id", contactIds)
+      : { data: [] as Array<{ id: string; residency: string | null; email: string | null }> }
+    const contactById = new Map((memberContacts ?? []).map(c => [c.id, c]))
+
+    membersJson = memberRows.map(m => {
+      const c = m.contact_id ? contactById.get(m.contact_id) : undefined
+      const memberAddress = [m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean).join(", ")
+      return {
+        name: m.full_name ?? m.company_name ?? "Unknown",
+        email: m.email ?? c?.email ?? null,
+        address: memberAddress || c?.residency || null,
+        ownership_pct: Number(m.ownership_pct),
+        initial_contribution: "$0.00",
+      }
+    })
   }
 
   const { data: oa, error: insertErr } = await supabaseAdmin
@@ -553,6 +572,17 @@ export async function POST(request: Request) {
         const result = await generateSS4(account_id, { regenerate: params.regenerate === true })
         if ("error" in result) return NextResponse.json({ error: result.error }, { status: 400 })
         if ("exists" in result) return NextResponse.json({ error: `SS-4 already exists (token: ${result.token}, status: ${result.status}). Use Regenerate to refresh an unsigned SS-4 from the account's current data.`, exists: true, token: result.token, status: result.status }, { status: 409 })
+        return NextResponse.json(result)
+      }
+
+      case "generate_intercompany": {
+        if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
+        const { generateIntercompanyForAccount } = await import("@/lib/operations/intercompany")
+        const result = await generateIntercompanyForAccount(account_id, {
+          effective_date: params.effective_date as string | undefined,
+          actor: "crm-admin",
+        })
+        if (result.error) return NextResponse.json({ error: result.error }, { status: 400 })
         return NextResponse.json(result)
       }
 

@@ -22,6 +22,8 @@ import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/gen
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
 import { RegenLeasePdfDialog } from '@/app/(dashboard)/accounts/[id]/components/regen-lease-pdf-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
+import { GenerateIntercompanyDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-intercompany-dialog'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { type ServiceDeliveryForStepper } from './service-deliveries-section'
 import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
@@ -587,6 +589,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
+  const [showIntercompanyDialog, setShowIntercompanyDialog] = useState(false)
   const [regenLeaseData, setRegenLeaseData] = useState<{
     leaseId: string
     signedAt?: string | null
@@ -759,6 +762,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         onGenerateOA={() => setShowOADialog(true)}
         onGenerateLease={() => setShowLeaseDialog(true)}
         onGenerateSS4={() => setShowSS4Dialog(true)}
+        onGenerateIntercompany={normalizeEntityType(account.entity_type) === 'MMLLC' ? () => setShowIntercompanyDialog(true) : undefined}
         onRegenLease={(leaseId, data) => setRegenLeaseData({ leaseId, ...data })}
       />
 
@@ -787,6 +791,12 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       <GenerateLeaseDialog
         open={showLeaseDialog}
         onClose={() => setShowLeaseDialog(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+      />
+      <GenerateIntercompanyDialog
+        open={showIntercompanyDialog}
+        onClose={() => setShowIntercompanyDialog(false)}
         accountId={account.id}
         companyName={account.company_name}
       />

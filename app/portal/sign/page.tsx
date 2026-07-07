@@ -13,6 +13,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
+import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { SignDocumentsClient } from './sign-documents-client'
 
 export interface SignableDocument {
@@ -164,7 +165,7 @@ export default async function PortalSignPage() {
   // (or voided) OA was never sent — it must not appear on the client's sign page.
   if (oaResult.data && oaResult.data.status !== 'draft' && oaResult.data.status !== 'voided') {
     const oa = oaResult.data as typeof oaResult.data & { total_signers?: number; signed_count?: number; entity_type?: string; id?: string }
-    const isMultiSigner = oa.entity_type === 'MMLLC' && (oa.total_signers || 1) > 1
+    const isMultiSigner = normalizeEntityType(oa.entity_type) === 'MMLLC' && (oa.total_signers || 1) > 1
     let oaStatus: SignableDocument['status'] = oa.status === 'signed' ? 'signed' : 'awaiting'
 
     // For MMLLC: check if the current user has already signed
