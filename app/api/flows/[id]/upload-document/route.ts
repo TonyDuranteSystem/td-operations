@@ -205,6 +205,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         docRegisterWarning =
           `Document record could NOT be saved (${insertError.message}). The file was uploaded, ` +
           'but it will not appear in document lists — upload it again.'
+        // Fingerprint + auto-diagnose via the error-audit system (Martin
+        // Csordas 2026-07-07: this failure recurred with no retrievable error
+        // text — Vercel logs are the only historical copy). Best-effort.
+        try {
+          const { reportSystemError } = await import('@/lib/system-errors')
+          await reportSystemError({
+            source: 'server',
+            route: '/api/flows/[id]/upload-document',
+            method: 'POST',
+            message: `documents insert failed twice: ${insertError.message}`,
+            context: {
+              service_delivery_id: serviceDeliveryId,
+              drive_file_id: docFileId,
+              flow_stage: flowStage,
+              contact_id: contactId,
+              account_id: accountId,
+              portal_visible: isItinApprovalUpload,
+            },
+          })
+        } catch {
+          // Never let error reporting break the upload response.
+        }
       }
     }
 
