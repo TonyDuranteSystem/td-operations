@@ -97,7 +97,21 @@ export default async function PortalDocumentsPage() {
         .eq('portal_visible', true)
         .order('created_at', { ascending: false })
         .limit(50)
-      myDocs = (mdData ?? []) as unknown as DocRow[]
+      // PLUS the contact's person-level documents (account_id NULL — e.g. an
+      // ITIN letter; the ITIN flow is contact-scoped by design). Before this
+      // query, an LLC-owning client could never see them: every query in this
+      // branch filtered by the selected account (Martin Csordas, 2026-07-07).
+      // Non-flow rows only — flow-stamped ones join the flow groups below.
+      const { data: pdData } = await supabaseAdmin
+        .from('documents')
+        .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
+        .is('account_id', null)
+        .eq('contact_id', contactId)
+        .is('service_delivery_id', null)
+        .eq('portal_visible', true)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      myDocs = [...((mdData ?? []) as unknown as DocRow[]), ...((pdData ?? []) as unknown as DocRow[])]
     }
 
     // Flow-linked docs — queried independently of category so any SD-stamped
@@ -115,7 +129,20 @@ export default async function PortalDocumentsPage() {
       .not('service_delivery_id', 'is', null)
       .order('created_at', { ascending: false })
       .limit(200)
-    const flowDocsRaw = (flowData ?? []) as (DocRow & { flow_stage: string | null; portal_visible: boolean | null })[]
+    // PLUS the contact's person-level flow docs (contact-scoped SDs: ITIN,
+    // in-flight formation). Same curated visibility below applies.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: contactFlowData } = contactId
+      ? await (supabaseAdmin as any)
+          .from('documents')
+          .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
+          .is('account_id', null)
+          .eq('contact_id', contactId)
+          .not('service_delivery_id', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(100)
+      : { data: [] }
+    const flowDocsRaw = ([...(flowData ?? []), ...(contactFlowData ?? [])]) as (DocRow & { flow_stage: string | null; portal_visible: boolean | null })[]
 
     if (flowDocsRaw.length > 0) {
       // Resolve each SD's type + a client-facing title ("Tax Return 2025").

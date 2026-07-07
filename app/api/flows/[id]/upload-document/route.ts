@@ -111,20 +111,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const fileMime = mimeType || blob.type || 'application/pdf'
 
     // 3. Decide where the canonical copy lives.
-    //    Production: copy to the account's Google Drive folder (canonical store).
+    //    Production, account-scoped SD: the account's Drive folder (400 if the
+    //    account has none — staff must link one first).
+    //    Production, contact-scoped SD (ITIN, in-flight formation): borrow the
+    //    contact's primary linked account's Drive folder when one exists
+    //    (Martin Csordas 2026-07-07: his ITIN letter never reached Drive). The
+    //    documents row stays contact-scoped — only the binary's home borrows
+    //    the company folder. No linked folder → Supabase Storage fallback.
     //    Sandbox (SANDBOX_MODE=1): Drive writes are mocked AND many seeded
-    //    accounts have no Drive folder, so we KEEP the file in Supabase Storage
-    //    (onboarding-uploads) and reference it directly — no Drive round-trip and
-    //    no Drive-folder requirement. The documents row + stage advance happen
+    //    accounts have no Drive folder, so the file always stays in Supabase
+    //    Storage (onboarding-uploads). The documents row + stage advance happen
     //    identically, so the flow works end-to-end in sandbox.
-    // Storage fallback when there's no Drive target: sandbox (mocked Drive) OR a
-    // contact-scoped SD with no account yet (in-flight formation — no Drive folder).
-    const useStorageFallback = process.env.SANDBOX_MODE === '1' || !accountId
+    let driveFolderId: string | null = null
+    if (process.env.SANDBOX_MODE !== '1') {
+      const { extractDriveFolderId, resolveContactLinkedDriveFolder } = await import('@/lib/flows/flow-drive-folder')
+      if (accountId) {
+        const { data: account } = await supabaseAdmin
+          .from('accounts')
+          .select('drive_folder_id, gdrive_folder_url')
+          .eq('id', accountId)
+          .single()
+        driveFolderId = extractDriveFolderId(account)
+        if (!driveFolderId) {
+          return NextResponse.json(
+            { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
+            { status: 400 },
+          )
+        }
+      } else if (contactId) {
+        driveFolderId = await resolveContactLinkedDriveFolder(contactId)
+      }
+    }
+    const useStorageFallback = !driveFolderId
 
     let docFileId: string
     let docLink: string
 
-    if (useStorageFallback) {
+    if (!driveFolderId) {
       // The file already lives in onboarding-uploads from the signed-URL PUT —
       // keep it (do NOT delete it in step 8). Synthetic, per-upload-unique
       // drive_file_id (the column is NOT NULL) that doubles as the idempotency
@@ -136,25 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
       docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
     } else {
-      // Production: resolve the account's Drive folder and copy the file there.
-      const { data: account } = await supabaseAdmin
-        .from('accounts')
-        .select('drive_folder_id, gdrive_folder_url')
-        .eq('id', accountId)
-        .single()
-
-      let driveFolderId: string | null = (account?.drive_folder_id as string | null) ?? null
-      if (!driveFolderId && account?.gdrive_folder_url) {
-        const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-        if (match) driveFolderId = match[1]
-      }
-      if (!driveFolderId) {
-        return NextResponse.json(
-          { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
-          { status: 400 },
-        )
-      }
-
+      // Production: copy the file into the resolved Drive folder.
       const { uploadBinaryToDrive } = await import('@/lib/google-drive')
       const driveFile = (await uploadBinaryToDrive(fileName, buffer, fileMime, driveFolderId)) as {
         id: string
@@ -171,8 +176,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .eq('drive_file_id', docFileId)
       .limit(1)
 
+    // The insert result was historically DISCARDED — an intermittent failure
+    // left the file uploaded but invisible in every document list (Martin
+    // Csordas 2026-07-07; also seen 2026-07-01), with zero trace. Now: check,
+    // retry once, and on double failure log + surface a staff-facing warning.
+    let docRegisterWarning: string | null = null
     if (!existingDoc?.length) {
-      await adminUntyped.from('documents').insert({
+      const docRow = {
         file_name: fileName,
         drive_file_id: docFileId,
         drive_link: docLink,
@@ -184,7 +194,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         service_delivery_id: serviceDeliveryId,
         flow_stage: flowStage,
         portal_visible: isItinApprovalUpload,
-      })
+      }
+      let insertError = (await adminUntyped.from('documents').insert(docRow)).error
+      if (insertError) {
+        console.error('[flow-upload-document] documents insert failed, retrying once:', insertError.message)
+        insertError = (await adminUntyped.from('documents').insert(docRow)).error
+      }
+      if (insertError) {
+        console.error('[flow-upload-document] documents insert failed twice:', insertError.message)
+        docRegisterWarning =
+          `Document record could NOT be saved (${insertError.message}). The file was uploaded, ` +
+          'but it will not appear in document lists — upload it again.'
+      }
     }
 
     // 6. Audit log, scoped to the flow.
@@ -261,6 +282,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // Staff-facing summary: what the ITIN finalize actually did (or why not).
     let detail = `${fileName} uploaded`
+    if (docRegisterWarning) {
+      detail += ` — ⚠️ ${docRegisterWarning}`
+    }
     if (itinFinalize) {
       if (itinFinalize.finalized) {
         detail += ` — ITIN ${itinFinalize.itin_number} saved to the contact (issued ${itinFinalize.itin_issue_date}), client notified, flow completed.`

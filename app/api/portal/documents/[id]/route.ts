@@ -55,9 +55,31 @@ export async function GET(
     recordDocumentView(doc.id, contactId).catch(() => {})
   }
 
-  // Download from Drive and stream to client
+  // Download and stream to client. Flow uploads on contact-scoped SDs live in
+  // Supabase Storage under a synthetic `storage:<path>` id (same shape the
+  // staff preview route handles) — e.g. an ITIN approval letter. Everything
+  // else streams from Google Drive.
   try {
-    const { buffer, mimeType, fileName } = await downloadFileBinary(doc.drive_file_id)
+    let buffer: Buffer
+    let mimeType: string | null = null
+    let fileName: string | null = null
+
+    if (doc.drive_file_id.startsWith('storage:')) {
+      const path = doc.drive_file_id.slice('storage:'.length)
+      const { data, error: dlErr } = await supabaseAdmin.storage
+        .from('onboarding-uploads')
+        .download(path)
+      if (dlErr || !data) {
+        return NextResponse.json({ error: 'Document file not found' }, { status: 404 })
+      }
+      buffer = Buffer.from(await data.arrayBuffer())
+      mimeType = data.type || null
+    } else {
+      const drive = await downloadFileBinary(doc.drive_file_id)
+      buffer = drive.buffer
+      mimeType = drive.mimeType
+      fileName = drive.fileName
+    }
 
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
