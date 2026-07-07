@@ -46,8 +46,14 @@ Function.
   → `sendEmail` (`lib/operations/email.ts`) — brand shell, duplicate check,
   tracking, CRM linkage.
 - **Actions**: `app/api/inbox/email-actions/route.ts` (archive/trash/star/
-  mark-unread/move-to-label, single + bulk, mailbox-aware).
+  mark-unread/move-to-label/set_color, single + bulk, mailbox-aware).
   `app/api/inbox/mark-read/route.ts` removes UNREAD per message on open.
+- **Color marks**: `lib/inbox/color-marks.ts`. A mark is a Gmail label named
+  `Marked/<Color>` on the thread (created on first use; per-mailbox; one color
+  per thread — `set_color` removes the other `Marked/*` labels). The
+  conversations route maps mark label IDs → `colorMark` on each row; the list
+  shows a colored dot + left edge, the thread header has the palette picker.
+  No DB storage — the mark lives in Gmail and is visible/filterable there too.
 - **Unread badges**: `app/api/inbox/stats/route.ts` returns
   `{ gmail, whatsapp, total }` (support@ INBOX unread + messaging groups).
   Consumed by `inbox-header.tsx` and the dashboard `unread-messages.tsx` card

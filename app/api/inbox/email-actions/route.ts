@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
+import { COLOR_MARKS, MARK_LABEL_PREFIX } from "@/lib/inbox/color-marks"
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_unread" | "move_to_label"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_unread" | "move_to_label" | "set_color"
 
 function resolveMailbox(mailbox?: string): string {
   return mailbox === 'antonio'
@@ -14,7 +15,7 @@ function resolveMailbox(mailbox?: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox } = body as {
+    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color } = body as {
       threadId?: string
       threadIds?: string[]
       action: EmailAction | 'mark_read'
@@ -22,6 +23,8 @@ export async function POST(req: NextRequest) {
       labelId?: string
       bulk?: boolean
       mailbox?: string
+      /** set_color: mark key ('red' | …) or null to clear */
+      color?: string | null
     }
 
     const asUser = resolveMailbox(mailbox)
@@ -104,7 +107,7 @@ export async function POST(req: NextRequest) {
           const hasTrash = verifyThread.messages?.some(m => m.labelIds?.includes('TRASH'))
           const hasInbox = verifyThread.messages?.some(m => m.labelIds?.includes('INBOX'))
           verified = !!hasTrash && !hasInbox
-          console.log(`[Inbox] Trash thread ${threadId}: TRASH=${hasTrash}, INBOX=${hasInbox}, verified=${verified}`)
+          console.warn(`[Inbox] Trash thread ${threadId}: TRASH=${hasTrash}, INBOX=${hasInbox}, verified=${verified}`)
         } catch {
           // Thread might not be accessible after trash — that's OK
           verified = true
@@ -146,6 +149,52 @@ export async function POST(req: NextRequest) {
         }
         await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: [labelId] }, asUser)
         return NextResponse.json({ success: true, action: "labeled" })
+      }
+
+      case "set_color": {
+        // Marks are Gmail labels named Marked/<Color> — one color per thread.
+        if (color && !COLOR_MARKS.some((m) => m.key === color)) {
+          return NextResponse.json({ error: `Unknown color: ${color}` }, { status: 400 })
+        }
+
+        const labelsRes = (await gmailGet("/labels", {}, asUser)) as {
+          labels?: Array<{ id: string; name: string }>
+        }
+        const markLabels = (labelsRes.labels ?? []).filter((l) =>
+          l.name.startsWith(MARK_LABEL_PREFIX)
+        )
+
+        let addId: string | undefined
+        if (color) {
+          const def = COLOR_MARKS.find((m) => m.key === color)!
+          const existing = markLabels.find((l) => l.name === def.labelName)
+          if (existing) {
+            addId = existing.id
+          } else {
+            // Create the label on first use. Gmail only accepts colors from its
+            // fixed palette — fall back to a colorless label if rejected.
+            const base = {
+              name: def.labelName,
+              labelListVisibility: "labelShow",
+              messageListVisibility: "show",
+            }
+            let created: { id: string }
+            try {
+              created = (await gmailPost("/labels", { ...base, color: def.gmailColor }, asUser)) as { id: string }
+            } catch {
+              created = (await gmailPost("/labels", base, asUser)) as { id: string }
+            }
+            addId = created.id
+          }
+        }
+
+        const removeIds = markLabels.map((l) => l.id).filter((id) => id !== addId)
+        await gmailPost(`/threads/${threadId}/modify`, {
+          ...(addId ? { addLabelIds: [addId] } : {}),
+          ...(removeIds.length > 0 ? { removeLabelIds: removeIds } : {}),
+        }, asUser)
+
+        return NextResponse.json({ success: true, action: "color_set", color: color ?? null })
       }
 
       case "forward": {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
+import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
 import type { InboxConversation } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -122,6 +123,19 @@ export async function GET(req: NextRequest) {
           if (!listResult.nextPageToken) break
         }
 
+        // Mark labels (Marked/Red, …): map label ID → name for color resolution
+        const markLabelNames = new Map<string, string>()
+        try {
+          const labelsRes = (await gmailGet("/labels", {}, gmailUser)) as {
+            labels?: Array<{ id: string; name: string }>
+          }
+          for (const l of labelsRes.labels ?? []) {
+            if (l.name.startsWith(MARK_LABEL_PREFIX)) markLabelNames.set(l.id, l.name)
+          }
+        } catch {
+          // Color marks are cosmetic — never fail the list over them
+        }
+
         // Wait for email lookup to complete
         const emailLookup = await emailLookupPromise
 
@@ -221,6 +235,16 @@ export async function GET(req: NextRequest) {
               m.payload?.mimeType === 'multipart/related'
             )
 
+            // Resolve color mark from the thread's Marked/* labels
+            const threadMarkNames: string[] = []
+            for (const m of thread.messages) {
+              for (const lid of m.labelIds ?? []) {
+                const name = markLabelNames.get(lid)
+                if (name) threadMarkNames.push(name)
+              }
+            }
+            const colorMark = markFromLabelNames(threadMarkNames)
+
             // Match external email to CRM account
             const accountMatch = emailLookup.get(externalEmail)
 
@@ -249,6 +273,7 @@ export async function GET(req: NextRequest) {
               accountId: accountMatch?.accountId ?? null,
               accountName: accountMatch?.accountName ?? null,
               hasAttachment,
+              colorMark: colorMark?.key ?? null,
             })
           }
         }

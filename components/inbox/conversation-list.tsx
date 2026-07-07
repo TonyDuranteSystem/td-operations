@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Mail, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { markByKey } from '@/lib/inbox/color-marks'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
 interface ConversationListProps {
@@ -157,10 +158,12 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         const isSelected = selectedId === conv.id
         const isChecked = selectedIds.has(conv.id)
         const showCheckbox = !isWhatsApp && (bulkMode || conv.channel === 'gmail')
+        const mark = markByKey(conv.colorMark)
 
         return (
           <div
             key={conv.id}
+            style={mark && !isSelected ? { boxShadow: `inset 3px 0 0 0 ${mark.hex}` } : undefined}
             className={cn(
               'group w-full text-left px-4 py-3 border-b transition-colors hover:bg-zinc-50 flex items-start gap-2',
               isSelected && 'bg-blue-50 border-l-2 border-l-blue-500',
@@ -218,6 +221,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   {conv.preview}
                 </p>
                 <div className="flex items-center gap-1 shrink-0 ml-2">
+                  {mark && (
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: mark.hex }}
+                      title={`Marked ${mark.label}`}
+                    />
+                  )}
                   {conv.hasAttachment && (
                     <Paperclip className="h-3 w-3 text-zinc-400" />
                   )}

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { WhatsappThread } from './whatsapp-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
+import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
@@ -46,6 +47,7 @@ export function InboxShell() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
+  const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
   const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
@@ -111,18 +113,33 @@ export function InboxShell() {
   }
 
   const emailActionMutation = useMutation({
-    mutationFn: async ({ action, forwardTo }: { action: string; forwardTo?: string }) => {
+    mutationFn: async ({ action, forwardTo, color }: { action: string; forwardTo?: string; color?: string | null }) => {
       if (!selected) return
       const threadId = selected.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId, action, forwardTo, mailbox: activeMailbox }),
+        body: JSON.stringify({ threadId, action, forwardTo, color, mailbox: activeMailbox }),
       })
       if (!res.ok) throw new Error('Action failed')
       return res.json()
     },
     onSuccess: (_, variables) => {
+      if (variables.action === 'set_color') {
+        // Optimistically paint the list row + the open conversation
+        const colorMark = variables.color ?? null
+        if (selected) {
+          queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
+            { queryKey: ['inbox-conversations'] },
+            (old) => old
+              ? { ...old, conversations: old.conversations.map(c => c.id === selected.id ? { ...c, colorMark } : c) }
+              : old
+          )
+          setSelected(prev => prev ? { ...prev, colorMark } : prev)
+        }
+        toast.success(colorMark ? `Marked ${markByKey(colorMark)?.label ?? colorMark}` : 'Mark removed')
+        return
+      }
       if (variables.action === 'archive' || variables.action === 'trash') {
         if (selected) {
           handleEmailDeleted(selected.id)
@@ -583,6 +600,55 @@ export function InboxShell() {
                         >
                           <Star className="h-4 w-4" />
                         </button>
+                        <div className="relative">
+                          <button
+                            onClick={() => setColorMenuOpen(!colorMenuOpen)}
+                            disabled={emailActionMutation.isPending}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                            title="Mark with color"
+                          >
+                            {selected.colorMark ? (
+                              <span
+                                className="block h-4 w-4 rounded-full border border-white shadow-sm"
+                                style={{ backgroundColor: markByKey(selected.colorMark)?.hex }}
+                              />
+                            ) : (
+                              <Palette className="h-4 w-4" />
+                            )}
+                          </button>
+                          {colorMenuOpen && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setColorMenuOpen(false)} />
+                              <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg shadow-xl border border-zinc-200 p-2 flex items-center gap-1.5">
+                                {COLOR_MARKS.map(m => (
+                                  <button
+                                    key={m.key}
+                                    onClick={() => {
+                                      setColorMenuOpen(false)
+                                      emailActionMutation.mutate({ action: 'set_color', color: m.key })
+                                    }}
+                                    className={cn(
+                                      'h-5 w-5 rounded-full hover:scale-110 transition-transform',
+                                      selected.colorMark === m.key && 'ring-2 ring-offset-1 ring-zinc-400'
+                                    )}
+                                    style={{ backgroundColor: m.hex }}
+                                    title={m.label}
+                                  />
+                                ))}
+                                <button
+                                  onClick={() => {
+                                    setColorMenuOpen(false)
+                                    emailActionMutation.mutate({ action: 'set_color', color: null })
+                                  }}
+                                  className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
+                                  title="Remove mark"
+                                >
+                                  <Ban className="h-3 w-3" />
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                         <button
                           onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
                           disabled={emailActionMutation.isPending}

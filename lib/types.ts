@@ -523,6 +523,8 @@ export interface InboxConversation {
   // Gmail-specific
   subject?: string
   hasAttachment?: boolean
+  /** Color-mark key ('red' | 'orange' | …) from the thread's Marked/* Gmail label */
+  colorMark?: string | null
 }
 
 export interface InboxAttachment {
