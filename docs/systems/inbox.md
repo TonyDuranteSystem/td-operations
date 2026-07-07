@@ -1,5 +1,5 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
-_Last verified against code: 2026-07-07 — Claude (inbox audit + Phase 1 rendering fixes)_
+_Last verified against code: 2026-07-08 — Claude (inbox audit + rendering/threading/color-marks overhaul; responsive thread header)_
 
 ## What it is
 

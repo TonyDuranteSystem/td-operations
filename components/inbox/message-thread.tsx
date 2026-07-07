@@ -117,7 +117,7 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
       {data?.subject && (
         <div className="text-center py-2">
-          <span className="text-xs font-medium text-zinc-500 bg-zinc-100 px-3 py-1 rounded-full">
+          <span className="inline-block max-w-full break-words text-xs font-medium text-zinc-500 bg-zinc-100 px-3 py-1 rounded-xl">
             {data.subject}
           </span>
         </div>

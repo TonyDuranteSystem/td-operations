@@ -516,8 +516,10 @@ export function InboxShell() {
         >
           {selected ? (
             <>
-              {/* Thread header with actions */}
-              <div className="flex items-center gap-3 px-4 py-3 border-b bg-white shrink-0">
+              {/* Thread header with actions. flex-wrap + basis on the title:
+                  on narrow windows/mobile the button cluster wraps to its own
+                  row instead of crushing the subject to one word per line. */}
+              <div className="flex items-center gap-x-3 gap-y-1.5 px-4 py-2.5 border-b bg-white shrink-0 flex-wrap">
                 <button onClick={handleBack} className="lg:hidden p-1 rounded hover:bg-zinc-100">
                   <ArrowLeft className="h-5 w-5" />
                 </button>
@@ -528,11 +530,11 @@ export function InboxShell() {
                   return <Icon className={`h-4 w-4 shrink-0 ${iconClass}`} />
                 })()}
 
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-44">
                   <p className="text-sm font-semibold text-zinc-900 truncate">
                     {selected.name}
                   </p>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-zinc-500 truncate">
                     {channelLabels[selected.channel]}
                     {selected.subject && ` — ${selected.subject}`}
                   </p>
@@ -540,7 +542,7 @@ export function InboxShell() {
 
                 {/* Action buttons — not shown for WhatsApp (read-only) */}
                 {!isWhatsApp && (
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
                     <button
                       onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
                       className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
