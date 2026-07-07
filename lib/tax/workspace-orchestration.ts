@@ -23,7 +23,13 @@ import { type FinancialsView } from "./financials-orchestration"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-export async function getWorkspaceFinancialsView(workspaceId: string): Promise<FinancialsView> {
+/** The staff workspace view = the shared FinancialsView + Validation Mode
+ *  (staff-only; the portal's getFinancialsView never carries it). */
+export type WorkspaceFinancialsView = FinancialsView & {
+  validation: import("./validation-breakdown").ValidationBreakdown
+}
+
+export async function getWorkspaceFinancialsView(workspaceId: string): Promise<WorkspaceFinancialsView> {
   // 1. Workspace meta — tax year, company name, prior-return snapshot.
   const { data: ws, error: wsErr } = await db
     .from("pnl_workspaces")
@@ -39,7 +45,9 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<F
   const txRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
     const { data, error } = await db
       .from("pnl_workspace_transactions")
-      .select("id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, balance_after")
+      // notes + is_related_party ride the SAME fetch for Validation Mode
+      // (provenance split / related-party summary) — one pass, no re-query.
+      .select("id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, balance_after, notes, is_related_party")
       .eq("workspace_id", workspaceId)
       .order("id", { ascending: true })
       .range(from, to)
@@ -99,5 +107,27 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<F
   const missingFxCurrencies = foreignCurrencies.filter(c => !fxRates || !(fxRates[c] > 0))
   const completeness = buildCompletenessSummary({ gates, draft, missingFxCurrencies })
 
-  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length }
+  // Validation Mode (2026-07-06): the breakdown is a BY-PRODUCT of this same
+  // pass — same rows, same rates, same draft — so its runtime invariant
+  // (breakdown totals ≡ draft totals) can only fail on a genuine engine bug,
+  // never on a data race between two loads.
+  const { buildValidationBreakdown } = await import("./validation-breakdown")
+  const validation = buildValidationBreakdown({
+    rows: txRows.map(r => ({
+      id: String(r.id),
+      description: (r.description as string | null) ?? null,
+      counterparty: (r.counterparty as string | null) ?? null,
+      amount: Number(r.amount),
+      currency: (r.currency as string | null) ?? null,
+      category: String(r.category ?? "uncategorized"),
+      notes: (r.notes as string | null) ?? null,
+      is_related_party: (r.is_related_party as boolean | null) ?? null,
+    })),
+    draft,
+    fxRates,
+    priorReturn,
+    ownership,
+  })
+
+  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, validation }
 }

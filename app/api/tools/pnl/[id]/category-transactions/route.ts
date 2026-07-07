@@ -23,13 +23,57 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   const { data: { user } } = await supabase.auth.getUser()
   if (!isDashboardUser(user)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
-  const bucket = (new URL(request.url).searchParams.get('bucket') ?? '').trim()
-  if (!bucket) return NextResponse.json({ error: 'bucket is required' }, { status: 400 })
+  const url = new URL(request.url)
+  const bucket = (url.searchParams.get('bucket') ?? '').trim()
+  // Validation Mode (2026-07-06): section=income|distribution drills a whole
+  // P&L line (these aren't expense buckets — no ai_bucket keying). Same
+  // response shape as the bucket drill-down so the UI reuses one renderer.
+  const section = (url.searchParams.get('section') ?? '').trim()
+  if (!bucket && !section) return NextResponse.json({ error: 'bucket or section is required' }, { status: 400 })
+  if (section && section !== 'income' && section !== 'distribution') {
+    return NextResponse.json({ error: "section must be 'income' or 'distribution'." }, { status: 400 })
+  }
 
   try {
     const { getExpenseBuckets, isOperatingExpenseRow, bucketSlugForRow, OTHER_BUCKET_SLUG, OTHER_BUCKET_LABEL } =
       await import('@/lib/tax/expense-buckets')
     const { merchantRoot } = await import('@/lib/tax/question-groups')
+
+    if (section) {
+      const rows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
+        const { data, error } = await db
+          .from('pnl_workspace_transactions')
+          .select('id, description, counterparty, amount, transaction_date, bank_name, category')
+          .eq('workspace_id', params.id)
+          .eq('category', section)
+          .order('id', { ascending: true })
+          .range(from, to)
+        if (error) throw new Error(error.message)
+        return (data ?? []) as Record<string, unknown>[]
+      })
+      interface Tx { id: string; date: string; description: string; amount: number }
+      const groups = new Map<string, { merchant: string; count: number; total: number; transactions: Tx[] }>()
+      let totalCount = 0, total = 0, pushed = 0
+      for (const r of rows) {
+        const abs = Math.abs(Number(r.amount))
+        const desc = String(r.description ?? '')
+        const root = merchantRoot(desc || String(r.counterparty ?? '')) || '(no description)'
+        const key = root.toLowerCase()
+        totalCount++; total += abs
+        let g = groups.get(key)
+        if (!g) { g = { merchant: root, count: 0, total: 0, transactions: [] }; groups.set(key, g) }
+        g.count++; g.total += abs
+        if (pushed < MAX_TX) { g.transactions.push({ id: String(r.id), date: String(r.transaction_date ?? ''), description: desc, amount: abs }); pushed++ }
+      }
+      const merchants = Array.from(groups.values())
+        .map(g => ({ ...g, transactions: g.transactions.sort((a, b) => b.amount - a.amount) }))
+        .sort((a, b) => b.total - a.total)
+      return NextResponse.json({
+        bucket: section,
+        label: section === 'income' ? 'Revenue' : 'Distributions',
+        merchants, total, total_count: totalCount, truncated: pushed < totalCount,
+      })
+    }
 
     const buckets = await getExpenseBuckets(db)
     const validSlugs = new Set(buckets.map(b => b.slug))

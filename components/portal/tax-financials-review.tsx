@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { groupKeyRoot } from '@/lib/tax/question-groups'
+import ValidationBreakdownPanel from './validation-breakdown'
 
 /** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
  *  bigger — the client must understand what's going on"). One shared visual
@@ -58,6 +59,8 @@ interface View {
   gates: Gate[]
   /** Staff workspace only: the stored prior-return answer (case+status). */
   prior_return?: { case: string | null; status: string | null } | null
+  /** Staff workspace only: Validation Mode breakdown (same engine pass). */
+  validation?: import('./validation-breakdown').ValidationBreakdownView
   canConfirm: boolean
   transactionCount: number
   /** Per-file ingest jobs still running for this account+year. While > 0 the
@@ -477,6 +480,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // Re-run confirm (2026-07-06): re-generation is safe but not free (an AI
   // pass may run) — always confirm, never one-click.
   const [rerunConfirm, setRerunConfirm] = useState(false)
+  // Validation Mode toggle (V1, staff-only): shows how every number was made.
+  const [validationMode, setValidationMode] = useState(false)
   const inlineGroupsFor = (keys: string[] | Set<string>): QuestionGroup[] => {
     const keySet = keys instanceof Set ? keys : new Set(keys)
     return (view?.questions ?? []).filter(g =>
@@ -980,14 +985,28 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               AI chain if anything is open. Human answers are immune by
               design; ships together with the zero-amount oscillation fix. */}
           {isStaff && (
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => setRerunConfirm(true)}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
-            >
-              {busy === 'generate' ? 'Re-running…' : '↻ Re-run P&L'}
-            </button>
+            <span className="flex gap-2">
+              {view.validation && (
+                <button
+                  type="button"
+                  onClick={() => setValidationMode(v => !v)}
+                  aria-pressed={validationMode}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-50 ${validationMode
+                    ? 'border-indigo-500 bg-indigo-600 text-white hover:bg-indigo-700'
+                    : 'border-zinc-300 bg-white text-zinc-700 hover:border-indigo-400 hover:text-indigo-700'}`}
+                >
+                  🔍 Validation mode
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => setRerunConfirm(true)}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50"
+              >
+                {busy === 'generate' ? 'Re-running…' : '↻ Re-run P&L'}
+              </button>
+            </span>
           )}
         </div>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">
@@ -1332,6 +1351,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               </dl>
             </section>
           </div>
+
+          {/* Validation Mode (V1, staff-only): how every number was made,
+              recomputed in the same engine pass and invariant-checked. */}
+          {isStaff && validationMode && view.validation && (
+            <ValidationBreakdownPanel validation={view.validation} api={API} />
+          )}
 
           {/* Members */}
           {view.draft.members.length > 0 && (
