@@ -57,6 +57,15 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       document_type_name: documentType,
       category,
       drive_file_id: driveFileId || null,
+      // The CRM account Documents tab and portal viewers render a clickable
+      // link ONLY from drive_link — rows without it show a dead "No link"
+      // (171 such rows existed before the 2026-07-07 fix + backfill). The
+      // Drive view URL is derived from the file id. Sentinel ids (they carry
+      // a ':', e.g. "storage:<path>" / "ss4-live:<token>") are NOT Drive
+      // files — never fabricate a drive.google.com URL for them.
+      drive_link: driveFileId && !driveFileId.includes(':')
+        ? `https://drive.google.com/file/d/${driveFileId}/view`
+        : null,
       status: 'classified',
       // Must be one of 'high' | 'medium' | 'low' — the production `documents`
       // table has a CHECK constraint (documents_confidence_check) enforcing

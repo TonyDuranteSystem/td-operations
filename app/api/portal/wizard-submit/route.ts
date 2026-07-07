@@ -354,19 +354,27 @@ export async function POST(req: NextRequest) {
               companyName: compName,
             })
 
-            // Create document record for the summary PDF
+            // Create document record for the summary PDF. Routed through
+            // autoSaveDocument (2026-07-07) so the row gets a drive_link
+            // (the raw insert here produced "No link" rows in the CRM
+            // Documents tab) and so a resubmit can't insert a second row
+            // for the same Drive file (the upsert save keeps the id stable;
+            // autoSaveDocument dedupes on drive_file_id).
             if (result.summaryFileId) {
               const slug = compName.replace(/\s+/g, '_')
-              await supabaseAdmin.from('documents').insert({
-                file_name: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
-                drive_file_id: result.summaryFileId,
-                document_type_name: 'Banking Application',
+              const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
+              const saved = await autoSaveDocument({
+                accountId: capturedAccountId || undefined,
+                contactId: capturedContactId || undefined,
+                fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
+                documentType: 'Banking Application',
                 category: 4, // Banking
-                confidence: 'high',
-                status: 'classified',
-                account_id: capturedAccountId || null,
-                contact_id: capturedContactId || null,
+                driveFileId: result.summaryFileId,
+                portalVisible: false,
               })
+              if (saved.error) {
+                console.error('[wizard-submit] Banking document record error:', saved.error)
+              }
             }
           } catch (e) {
             console.error('[wizard-submit] Banking PDF/Drive error:', e)

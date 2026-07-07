@@ -120,3 +120,42 @@ describe('autoSaveDocument — Phase B contact-only support', () => {
     expect(insertCapture).toBeNull()
   })
 })
+
+describe('autoSaveDocument — drive_link (2026-07-07 "No link" fix)', () => {
+  it('derives drive_link from a real Drive file id', async () => {
+    await autoSaveDocument({
+      accountId: 'acct-1',
+      fileName: 'Lease.pdf',
+      documentType: 'Lease Agreement',
+      category: 1,
+      driveFileId: '1AbCdEfGh',
+    })
+
+    expect((insertCapture as unknown as { drive_link: string }).drive_link)
+      .toBe('https://drive.google.com/file/d/1AbCdEfGh/view')
+  })
+
+  it('never fabricates a Drive URL for sentinel ids (storage:/ss4-live:)', async () => {
+    for (const sentinel of ['storage:onboarding/x/y.pdf', 'ss4-live:ss4-token-2026']) {
+      insertCapture = null
+      await autoSaveDocument({
+        accountId: 'acct-1',
+        fileName: 'Doc.pdf',
+        documentType: 'Form SS-4 (Signed)',
+        category: 1,
+        driveFileId: sentinel,
+      })
+      expect((insertCapture as unknown as { drive_link: unknown }).drive_link).toBeNull()
+    }
+  })
+
+  it('leaves drive_link null when there is no drive file id', async () => {
+    await autoSaveDocument({
+      accountId: 'acct-1',
+      fileName: 'Doc.pdf',
+      documentType: 'Lease Agreement',
+      category: 1,
+    })
+    expect((insertCapture as unknown as { drive_link: unknown }).drive_link).toBeNull()
+  })
+})
