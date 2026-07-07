@@ -33,8 +33,23 @@ export async function GET(req: NextRequest) {
     // System labels we want to show
     const systemLabels = ['INBOX', 'SENT', 'DRAFT', 'STARRED', 'TRASH', 'SPAM']
 
-    const labels = (result.labels || [])
-      .filter(l => systemLabels.includes(l.id) || l.type === 'user')
+    const shown = (result.labels || []).filter(
+      l => systemLabels.includes(l.id) || l.type === 'user'
+    )
+
+    // labels.list does NOT populate count fields — only labels.get does.
+    // Without this, every unread badge is silently 0.
+    const counted = await Promise.all(
+      shown.map(async (l) => {
+        try {
+          return (await gmailGet(`/labels/${l.id}`, undefined, asUser)) as GmailLabel
+        } catch {
+          return l // count stays 0 — never fail the sidebar over one label
+        }
+      })
+    )
+
+    const labels = counted
       .map(l => ({
         id: l.id,
         name: l.name,

@@ -17,6 +17,8 @@ interface Label {
 interface InboxSidebarProps {
   activeLabel: string | null
   onLabelChange: (labelId: string | null) => void
+  /** Which Gmail mailbox is being viewed — labels and counts are per-mailbox */
+  mailbox?: string
 }
 
 const systemIcons: Record<string, React.ElementType> = {
@@ -35,14 +37,14 @@ const systemNames: Record<string, string> = {
   TRASH: 'Trash',
 }
 
-export function InboxSidebar({ activeLabel, onLabelChange }: InboxSidebarProps) {
+export function InboxSidebar({ activeLabel, onLabelChange, mailbox }: InboxSidebarProps) {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const queryClient = useQueryClient()
 
   const { data } = useQuery<{ labels: Label[] }>({
-    queryKey: ['gmail-labels'],
-    queryFn: () => fetch('/api/inbox/labels').then(r => r.json()),
+    queryKey: ['gmail-labels', mailbox],
+    queryFn: () => fetch(`/api/inbox/labels${mailbox ? `?mailbox=${mailbox}` : ''}`).then(r => r.json()),
     refetchInterval: 60_000,
   })
 
@@ -51,7 +53,7 @@ export function InboxSidebar({ activeLabel, onLabelChange }: InboxSidebarProps) 
       const res = await fetch('/api/inbox/labels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, mailbox }),
       })
       if (!res.ok) throw new Error('Failed to create folder')
       return res.json()
@@ -70,7 +72,7 @@ export function InboxSidebar({ activeLabel, onLabelChange }: InboxSidebarProps) 
       const res = await fetch('/api/inbox/labels', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ labelId }),
+        body: JSON.stringify({ labelId, mailbox }),
       })
       if (!res.ok) throw new Error('Failed to delete folder')
       return res.json()

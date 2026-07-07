@@ -57,7 +57,11 @@ Function.
 - **Unread badges**: `app/api/inbox/stats/route.ts` returns
   `{ gmail, whatsapp, total }` (support@ INBOX unread + messaging groups).
   Consumed by `inbox-header.tsx` and the dashboard `unread-messages.tsx` card
-  (reads `total`).
+  (reads `total`). Sidebar folder counts come from `app/api/inbox/labels` —
+  Gmail's `labels.list` does NOT return counts, so the route calls
+  `labels.get` per shown label (mailbox-aware; badge uses `threadsUnread`).
+- **Bulk bar** (checkbox selection): Delete / Archive / Mark Read /
+  Mark Unread / Move to folder — all via `email-actions` bulk branch.
 - **AI surfaces**: `ai-suggest` (draft reply), `ai-compose`,
   `components/dashboard/cards/email-intelligence.tsx` +
   `app/api/crm/email-intelligence/route.ts` (AI triage of unread, support@

@@ -85,8 +85,8 @@ export function InboxShell() {
   const bulkMode = selectedIds.size > 0
 
   const { data: labelsData } = useQuery<{ labels: GmailLabel[] }>({
-    queryKey: ['gmail-labels'],
-    queryFn: () => fetch('/api/inbox/labels').then(r => r.json()),
+    queryKey: ['gmail-labels', activeMailbox],
+    queryFn: () => fetch(`/api/inbox/labels?mailbox=${activeMailbox}`).then(r => r.json()),
     refetchInterval: 60_000,
     enabled: !isWhatsApp,
   })
@@ -201,12 +201,21 @@ export function InboxShell() {
         )
         if (selected && selectedIds.has(selected.id)) setSelected(null)
       }
+      // Optimistic unread badges — Gmail's index lags label changes
+      if (variables.action === 'mark_read' || variables.action === 'mark_unread') {
+        const v = variables.action === 'mark_read' ? 0 : 1
+        setUnreadOverrides(prev => {
+          const next = new Map(prev)
+          selectedIds.forEach(id => next.set(id, v))
+          return next
+        })
+      }
       clearSelection()
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
       queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
 
-      const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : 'moved'
+      const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : variables.action === 'mark_unread' ? 'marked as unread' : 'moved'
       toast.success(`${count} email${count > 1 ? 's' : ''} ${actionLabel}`)
     },
   })
@@ -430,6 +439,14 @@ export function InboxShell() {
               <MailOpen className="h-3.5 w-3.5" />
               Mark Read
             </button>
+            <button
+              onClick={() => bulkActionMutation.mutate({ action: 'mark_unread' })}
+              disabled={bulkActionMutation.isPending}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
+            >
+              <Mail className="h-3.5 w-3.5" />
+              Mark Unread
+            </button>
             <div className="relative">
               <button
                 onClick={() => setMoveToOpen(!moveToOpen)}
@@ -479,6 +496,7 @@ export function InboxShell() {
             <InboxSidebar
               activeLabel={activeLabel}
               onLabelChange={handleLabelChange}
+              mailbox={activeMailbox}
             />
           </div>
         )}

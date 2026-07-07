@@ -47,6 +47,9 @@ export async function POST(req: NextRequest) {
                 gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] }, asUser)
               )
             )
+          } else if (action === 'mark_unread') {
+            // threads.modify applies to every message in the thread
+            await gmailPost(`/threads/${tid}/modify`, { addLabelIds: ['UNREAD'] }, asUser)
           } else if (action === 'move_to_label' && labelId) {
             await gmailPost(`/threads/${tid}/modify`, { addLabelIds: [labelId] }, asUser)
           }
