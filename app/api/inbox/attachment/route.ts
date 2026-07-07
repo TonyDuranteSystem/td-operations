@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getGmailAttachment } from "@/lib/gmail"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 
 export const dynamic = "force-dynamic"
 
@@ -14,6 +15,9 @@ export async function GET(req: NextRequest) {
     const filename = req.nextUrl.searchParams.get("filename") || "attachment"
     const mimeType = req.nextUrl.searchParams.get("mimeType") || "application/octet-stream"
     const mailbox = req.nextUrl.searchParams.get("mailbox")
+    if (!(await checkMailboxAccess(mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+    }
 
     if (!messageId || !attachmentId) {
       return NextResponse.json(

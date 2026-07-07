@@ -68,6 +68,19 @@ Function.
   only), `app/api/cron/email-monitor/` (every 5 min: emails from contacts tied
   to open tasks → `agent_decisions` proposals).
 
+## Access control
+
+- `/inbox` and `/api/inbox/*` require a dashboard user (middleware); clients
+  and partners are blocked entirely.
+- **antonio@ is Antonio's PERSONAL mailbox — admin only** (2026-07-08 audit:
+  it was readable by any team login before). Enforced SERVER-SIDE in every
+  route that accepts `mailbox` via `checkMailboxAccess`
+  (`lib/inbox/mailbox-access.ts`); the UI toggle is additionally hidden for
+  non-admins (`app/(dashboard)/inbox/page.tsx` passes
+  `canUsePersonalMailbox`). Any NEW inbox route that accepts a `mailbox`
+  parameter MUST call `checkMailboxAccess` first — hiding UI is not a
+  security boundary.
+
 ## Rules / gotchas
 
 - **Thread and message IDs are per-mailbox.** Any Gmail API call for a thread

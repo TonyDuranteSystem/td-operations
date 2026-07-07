@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 
 export const dynamic = "force-dynamic"
 
@@ -18,6 +19,10 @@ export async function POST(req: NextRequest) {
         { error: "conversationId and message are required" },
         { status: 400 }
       )
+    }
+
+    if (!(await checkMailboxAccess(mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
     }
 
     // ─── Gmail reply ─────────────────────────────────

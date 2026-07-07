@@ -9,6 +9,7 @@ import {
   type GmailAPIMessage,
 } from "@/lib/gmail"
 import { rewriteCidSources } from "@/lib/inbox/email-html"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import type { InboxMessage } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -24,6 +25,9 @@ export async function GET(
       200
     )
     const mailbox = req.nextUrl.searchParams.get("mailbox")
+    if (!(await checkMailboxAccess(mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+    }
     const asUser = mailbox === 'antonio'
       ? 'antonio.durante@tonydurante.us'
       : 'support@tonydurante.us'

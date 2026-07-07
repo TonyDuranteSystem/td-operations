@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { gmailGet, gmailPost, gmailDelete } from '@/lib/gmail'
+import { checkMailboxAccess } from '@/lib/inbox/mailbox-access'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,6 +24,9 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const mailbox = req.nextUrl.searchParams.get('mailbox')
+  if (!(await checkMailboxAccess(mailbox))) {
+    return NextResponse.json({ error: 'Not authorized for this mailbox' }, { status: 403 })
+  }
   const asUser = mailbox === 'antonio'
     ? 'antonio.durante@tonydurante.us'
     : 'support@tonydurante.us'
@@ -88,6 +92,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Label name is required' }, { status: 400 })
   }
 
+  if (!(await checkMailboxAccess(mailbox))) {
+    return NextResponse.json({ error: 'Not authorized for this mailbox' }, { status: 403 })
+  }
   const asUserPost = mailbox === 'antonio'
     ? 'antonio.durante@tonydurante.us'
     : 'support@tonydurante.us'
@@ -122,6 +129,9 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'labelId is required' }, { status: 400 })
   }
 
+  if (!(await checkMailboxAccess(delMailbox))) {
+    return NextResponse.json({ error: 'Not authorized for this mailbox' }, { status: 403 })
+  }
   const asUserDel = delMailbox === 'antonio'
     ? 'antonio.durante@tonydurante.us'
     : 'support@tonydurante.us'

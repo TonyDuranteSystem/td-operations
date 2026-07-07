@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, gmailPost } from "@/lib/gmail"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 
 export const dynamic = "force-dynamic"
 
@@ -20,6 +21,10 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    if (!(await checkMailboxAccess(mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+    }
+
     const asUser = mailbox === 'antonio'
       ? 'antonio.durante@tonydurante.us'
       : 'support@tonydurante.us'
@@ -37,9 +42,9 @@ export async function POST(req: NextRequest) {
       const unreadMsgs = allMsgs.filter(m => m.labelIds?.includes('UNREAD'))
 
       // Debug: log what Gmail returned
-      console.log(`[MarkRead] Thread ${threadId}: ${allMsgs.length} messages, ${unreadMsgs.length} unread`)
+      console.warn(`[MarkRead] Thread ${threadId}: ${allMsgs.length} messages, ${unreadMsgs.length} unread`)
       if (allMsgs.length > 0) {
-        console.log(`[MarkRead] First message labels: ${JSON.stringify(allMsgs[0].labelIds)}`)
+        console.warn(`[MarkRead] First message labels: ${JSON.stringify(allMsgs[0].labelIds)}`)
       }
 
       if (unreadMsgs.length > 0) {
@@ -51,7 +56,7 @@ export async function POST(req: NextRequest) {
       } else if (allMsgs.length > 0) {
         // Fallback: if no UNREAD labels found but messages exist,
         // try removing UNREAD from ALL messages anyway
-        console.log(`[MarkRead] Fallback: removing UNREAD from all ${allMsgs.length} messages`)
+        console.warn(`[MarkRead] Fallback: removing UNREAD from all ${allMsgs.length} messages`)
         await Promise.all(
           allMsgs.map(m =>
             gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] }, asUser)

@@ -34,7 +34,13 @@ interface GmailLabel {
   type: 'system' | 'user'
 }
 
-export function InboxShell() {
+interface InboxShellProps {
+  /** Admin only — shows the antonio@ personal-mailbox toggle. The API routes
+   *  enforce this server-side regardless. */
+  canUsePersonalMailbox?: boolean
+}
+
+export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [activeChannel, setActiveChannel] = useState<InboxChannel | null>('gmail')
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
@@ -350,8 +356,8 @@ export function InboxShell() {
         </div>
       </div>
 
-      {/* Mailbox selector — Gmail only */}
-      {!isWhatsApp && (
+      {/* Mailbox selector — Gmail only; antonio@ is personal (admin only) */}
+      {!isWhatsApp && canUsePersonalMailbox && (
         <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
           <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
           {(['support', 'antonio'] as const).map(mb => (

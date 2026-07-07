@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { COLOR_MARKS, MARK_LABEL_PREFIX } from "@/lib/inbox/color-marks"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 
 export const dynamic = "force-dynamic"
 
@@ -27,6 +28,9 @@ export async function POST(req: NextRequest) {
       color?: string | null
     }
 
+    if (!(await checkMailboxAccess(mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+    }
     const asUser = resolveMailbox(mailbox)
 
     // Bulk operations

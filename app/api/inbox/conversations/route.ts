@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
+import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import type { InboxConversation } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -44,6 +45,9 @@ export async function GET(req: NextRequest) {
     const labelFilter = req.nextUrl.searchParams.get("label") // Gmail label ID filter
     const pageToken = req.nextUrl.searchParams.get("pageToken") // Gmail pagination
     const mailbox = req.nextUrl.searchParams.get("mailbox") // support | antonio | null (support default)
+    if (!(await checkMailboxAccess(mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+    }
     const limit = Math.min(
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
       500
