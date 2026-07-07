@@ -37,9 +37,11 @@ Function.
     for height measurement + authed same-origin image loads). Chat channels
     keep the bubble layout.
 - **Reply**: `components/inbox/compose-reply.tsx` → `app/api/inbox/reply/route.ts`.
-  Plain-text reply with proper `In-Reply-To`/`References` + `threadId`, sent
-  **through the mailbox being viewed** (`mailbox` param — thread IDs are
-  mailbox-scoped; support@ is the default).
+  Plain-text reply with proper `In-Reply-To`/`References` + `threadId`,
+  Gmail-style quoted history of the last message (capped 10k chars,
+  best-effort), base64 CTE (UTF-8 safe), sent **through the mailbox being
+  viewed** (`mailbox` param — thread IDs are mailbox-scoped; support@ is the
+  default).
 - **Compose / forward**: `compose-dialog.tsx` → `app/api/inbox/compose/route.ts`
   → `sendEmail` (`lib/operations/email.ts`) — brand shell, duplicate check,
   tracking, CRM linkage.
@@ -72,11 +74,15 @@ Function.
 - Notification-style senders (Stripe, ShipStation, banks…) can be threaded
   together **by Gmail itself** (same sender + subject) — that part is
   Gmail-side behaviour, not our code.
-- Known debt (audit 2026-07-07): subject-based "related thread merging" in
-  `messages/[id]/route.ts` can mix same-sender threads across clients
-  (Phase 2 removes it); email→account lookup is last-write-wins for contacts
-  on multiple accounts; 30s polling refetches up to ~200 threads + the whole
-  `account_contacts` table.
+- **One view = one Gmail thread.** The subject-based "related thread merging"
+  (added `c7afbe79`, guard `106ada77`) was REMOVED 2026-07-07: Gmail `subject:`
+  search is contains-match, so same-sender notifications and templated
+  subjects merged threads across clients. Do not reintroduce display-time
+  merging — if outbound senders fragment a conversation, fix the sender to
+  pass `reply_to_message_id` / proper `In-Reply-To`.
+- Known debt (audit 2026-07-07): email→account lookup is last-write-wins for
+  contacts on multiple accounts; 30s polling refetches up to ~200 threads +
+  the whole `account_contacts` table.
 
 ## How to verify current state
 

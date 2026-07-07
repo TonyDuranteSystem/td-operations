@@ -28,7 +28,13 @@ export async function GET(
       ? 'antonio.durante@tonydurante.us'
       : 'support@tonydurante.us'
 
-    // ─── Gmail thread (with related thread merging) ──
+    // ─── Gmail thread ────────────────────────────────
+    // One view = one Gmail thread, exactly like the Gmail UI. The old
+    // subject-based "related thread merging" (c7afbe79) is intentionally
+    // GONE: Gmail's subject: search is contains-match, so same-sender
+    // notifications and templated subjects merged threads ACROSS clients
+    // (audit 2026-07-07). Gmail's native References-based threading is the
+    // source of truth; our compose/reply paths set proper headers.
     if (id.startsWith("gmail:")) {
       const threadId = id.replace("gmail:", "")
 
@@ -45,88 +51,9 @@ export async function GET(
         "Subject"
       )
 
-      // Collect all Gmail messages — start with this thread's messages
       const allGmailMessages: GmailAPIMessage[] = [...thread.messages]
-      const seenMessageIds = new Set(thread.messages.map(m => m.id))
 
-      // Find related threads: same subject, different thread ID
-      // Strip "Re: " / "Fwd: " prefixes for matching
-      const baseSubject = subject
-        .replace(/^(Re|Fwd|FW|RE):\s*/gi, '')
-        .replace(/^(Re|Fwd|FW|RE):\s*/gi, '') // double strip for "Re: Re:"
-        .trim()
-
-      // Helper: extract the external (non-Tony Durant) email from a message
-      const getExternalEmail = (msg: GmailAPIMessage): string => {
-        const from = getHeader(msg.payload.headers, "From")
-        const to = getHeader(msg.payload.headers, "To")
-        const isOutbound =
-          from.includes("support@tonydurante.us") ||
-          from.includes("antonio.durante@tonydurante.us")
-        return isOutbound ? to : from
-      }
-
-      // Current thread's external contact (use first message)
-      const currentExternalEmail = thread.messages[0]
-        ? getExternalEmail(thread.messages[0])
-        : ""
-
-      if (baseSubject.length > 3) {
-        try {
-          const searchResult = (await gmailGet("/threads", {
-            q: `subject:"${baseSubject}"`,
-            maxResults: "10",
-          }, asUser)) as {
-            threads?: Array<{ id: string }>
-          }
-
-          // Fetch related threads (different ID, same subject)
-          const relatedThreadIds = (searchResult.threads || [])
-            .map(t => t.id)
-            .filter(tid => tid !== threadId)
-            .slice(0, 5) // max 5 related threads
-
-          if (relatedThreadIds.length > 0) {
-            const relatedResults = await Promise.allSettled(
-              relatedThreadIds.map(tid =>
-                gmailGet(`/threads/${tid}`, { format: "full" }, asUser) as Promise<{
-                  id: string
-                  messages: GmailAPIMessage[]
-                }>
-              )
-            )
-
-            for (const result of relatedResults) {
-              if (result.status !== "fulfilled") continue
-              const relatedMsgs = result.value.messages
-              if (!relatedMsgs || relatedMsgs.length === 0) continue
-
-              // Only merge threads that share the same external email address.
-              // This prevents outbound emails to DIFFERENT recipients (same subject)
-              // from being incorrectly grouped together in the inbox.
-              const relatedExternalEmail = getExternalEmail(relatedMsgs[0])
-              if (
-                currentExternalEmail &&
-                relatedExternalEmail &&
-                currentExternalEmail !== relatedExternalEmail
-              ) {
-                continue
-              }
-
-              for (const msg of relatedMsgs) {
-                if (!seenMessageIds.has(msg.id)) {
-                  seenMessageIds.add(msg.id)
-                  allGmailMessages.push(msg)
-                }
-              }
-            }
-          }
-        } catch {
-          // If related search fails, just use the original thread
-        }
-      }
-
-      // Sort all messages chronologically
+      // Sort messages chronologically
       allGmailMessages.sort((a, b) => {
         const dateA = parseInt(a.internalDate || "0")
         const dateB = parseInt(b.internalDate || "0")

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { gmailGet, gmailPost, getHeader, type GmailAPIMessage } from "@/lib/gmail"
+import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 
 export const dynamic = "force-dynamic"
 
@@ -31,10 +31,9 @@ export async function POST(req: NextRequest) {
         ? "antonio.durante@tonydurante.us"
         : "support@tonydurante.us"
 
-      // Get the last message in thread to reply to
+      // Get the last message in thread to reply to (full — we quote its body)
       const thread = (await gmailGet(`/threads/${threadId}`, {
-        format: "metadata",
-        metadataHeaders: ["From", "To", "Subject", "Message-ID", "References"],
+        format: "full",
       }, asUser)) as { messages: GmailAPIMessage[] }
 
       const lastMsg = thread.messages[thread.messages.length - 1]
@@ -42,10 +41,34 @@ export async function POST(req: NextRequest) {
       const subject = getHeader(lastMsg.payload.headers, "Subject")
       const messageId = getHeader(lastMsg.payload.headers, "Message-ID")
       const references = getHeader(lastMsg.payload.headers, "References")
+      const lastDate = getHeader(lastMsg.payload.headers, "Date")
 
       // Build RFC 2822 reply
       const replyTo = from // Reply to whoever sent last message
       const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
+
+      // Gmail-style quoted history: "On <date>, <sender> wrote:" + "> " lines.
+      // Capped so a long chain doesn't balloon every reply.
+      let quoted = ""
+      try {
+        const lastBody = extractBody(lastMsg.payload).slice(0, 10000).trimEnd()
+        if (lastBody) {
+          const quoteDate = lastDate
+            ? new Date(lastDate).toLocaleString("en-US", {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })
+            : ""
+          quoted =
+            `\r\n\r\nOn ${quoteDate}, ${from} wrote:\r\n` +
+            lastBody
+              .split("\n")
+              .map((line) => `> ${line}`)
+              .join("\r\n")
+        }
+      } catch {
+        // Quoting is best-effort — never block the reply on it
+      }
 
       const encodedReplySubject = `=?utf-8?B?${Buffer.from(replySubject).toString("base64")}?=`
       const headers = [
@@ -54,10 +77,13 @@ export async function POST(req: NextRequest) {
         `Subject: ${encodedReplySubject}`,
         `In-Reply-To: ${messageId}`,
         `References: ${references ? references + " " : ""}${messageId}`,
+        "MIME-Version: 1.0",
         "Content-Type: text/plain; charset=utf-8",
+        "Content-Transfer-Encoding: base64",
       ]
 
-      const raw = headers.join("\r\n") + "\r\n\r\n" + message
+      const bodyBase64 = Buffer.from(message + quoted, "utf-8").toString("base64")
+      const raw = headers.join("\r\n") + "\r\n\r\n" + bodyBase64
       const encodedRaw = Buffer.from(raw).toString("base64url")
 
       const result = await gmailPost("/messages/send", {
