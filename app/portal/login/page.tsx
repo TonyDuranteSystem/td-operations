@@ -83,7 +83,9 @@ export default function PortalLoginPage() {
     // client-facing access.
     const role = data.user?.app_metadata?.role
     if (role !== 'client' && role !== 'partner') {
-      await supabase.auth.signOut()
+      // scope:'local' — discard only the session just minted by this rejected
+      // login; global would also revoke the person's sessions on other devices.
+      await supabase.auth.signOut({ scope: 'local' })
       setError('This account does not have portal access')
       setLoading(false)
       return
@@ -95,7 +97,7 @@ export default function PortalLoginPage() {
     if (role === 'partner') {
       const allowed = await partnerLoginAllowed()
       if (!allowed) {
-        await supabase.auth.signOut()
+        await supabase.auth.signOut({ scope: 'local' })
         setError('This account does not have portal access')
         setLoading(false)
         return

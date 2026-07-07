@@ -59,6 +59,38 @@ export interface SaveToClientInput {
   mode?: SaveMode
   /** Staff identity for the audit trail. */
   actor: string
+  /** Suppress the client "your P&L is ready" dispatch — for mid-rework
+   * re-saves where staff will announce manually. Default: notify. */
+  skipClientNotification?: boolean
+  /** DI seam for tests. */
+  notifyFn?: (params: {
+    account_id: string
+    title: { en: string; it: string }
+    message: { en: string; it: string }
+    link: string
+  }) => Promise<unknown>
+}
+
+/** PURE — the client-facing "your P&L is ready" copy for a save. The link is
+ * year-scoped: it lands on the right tab of the portal year picker AND gives
+ * the action-required engine a per-year dedup scope (two years saved the same
+ * day both announce). */
+export function buildSaveToClientNotification(taxYear: number): {
+  title: { en: string; it: string }
+  message: { en: string; it: string }
+  link: string
+} {
+  return {
+    title: {
+      en: `Review your Profit & Loss — ${taxYear}`,
+      it: `Controlla il tuo Conto Economico — ${taxYear}`,
+    },
+    message: {
+      en: `We've prepared your ${taxYear} Profit & Loss and Balance Sheet from your bank statements. Please open it in the portal, answer the few items that need your decision, and confirm the numbers so we can move forward.`,
+      it: `Abbiamo preparato il tuo Conto Economico e Stato Patrimoniale ${taxYear} dai tuoi estratti conto. Aprilo nel portale, rispondi alle voci che richiedono una tua decisione e conferma i numeri così possiamo procedere.`,
+    },
+    link: `/portal/tax-financials?year=${taxYear}`,
+  }
 }
 
 export interface SaveToClientResult {
@@ -312,6 +344,23 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     } as never)
   } catch (e) {
     console.error("[workspace-save] audit log insert failed (save already applied):", e)
+  }
+
+  // Client dispatch (Phase B, 2026-07-08): publishing a P&L to a client's books
+  // is a CLIENT ACTION (review + answer + confirm), so it announces itself —
+  // chat + bell + email via the shared action-required engine (per-recipient
+  // locale, 10-min dedup on the year-scoped link). Fire-and-forget: a
+  // notification failure must never fail the save. The wizard path has its own
+  // equivalent (lib/jobs/ingest-complete-notify.ts) — this covers the
+  // staff-workspace publish path that bypasses ingest jobs.
+  if (!input.skipClientNotification) {
+    try {
+      const notify = input.notifyFn
+        ?? (await import("@/lib/portal/action-required")).notifyClientActionRequired
+      await notify({ account_id: targetAccountId, ...buildSaveToClientNotification(taxYear) })
+    } catch (e) {
+      console.error("[workspace-save] client notification failed (save already applied):", e)
+    }
   }
 
   return { ok: true, action: decision.action, inserted, deleted, backupPath }

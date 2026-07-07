@@ -132,6 +132,20 @@ export async function handleRecategorizeAi(job: Job, ctx?: JobRunContext): Promi
     // so the continuation waits for a fresh window (see workspace twin).
     result.deferRunner = true
   }
+  if (followup === "done") {
+    // Phase B (2026-07-08): the "Needs your decision" queue is only FINAL when
+    // the chain lands cleanly — announce open questions to the client now.
+    // Self-gating + never throws (see lib/jobs/questions-ready-notify.ts);
+    // halted chains (cap / no-progress) return above and never notify.
+    const { notifyQuestionsReady } = await import("../questions-ready-notify")
+    const n = await notifyQuestionsReady({
+      accountId: p.account_id,
+      taxYear: p.tax_year,
+      remaining: r.uncategorizedRemaining,
+    })
+    result.steps.push(step("client_questions_notify", "ok", n.notified ? "dispatched" : `skipped: ${n.reason}`))
+  }
+
   result.summary = followup === "continue"
     ? `AI chunk ${chunkIndex} done — continuing (${p.account_id} ${p.tax_year})`
     : `AI categorization done for ${p.account_id} (${p.tax_year})`

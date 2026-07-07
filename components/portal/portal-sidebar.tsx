@@ -282,7 +282,10 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   const handleLogout = async () => {
     const supabase = createClient()
-    await supabase.auth.signOut()
+    // scope:'local' — sign out THIS browser only. The default (global) revokes
+    // every refresh token for the user, logging them out of their phone and
+    // other devices too (real-client hazard found 2026-07-07).
+    await supabase.auth.signOut({ scope: 'local' })
     router.push('/portal/login')
     router.refresh()
   }
