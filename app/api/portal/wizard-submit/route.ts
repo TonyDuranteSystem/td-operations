@@ -599,7 +599,26 @@ export async function POST(req: NextRequest) {
         payload.changed_fields = null // Portal wizard doesn't track diffs
       }
 
-      const job = await enqueueJob({
+      // Duplicate-submission guard (LT Program incident 2026-07-07): a client
+      // retrying the same submit must NOT enqueue a twin job — reuse the
+      // recent one. A resubmission with any changed field hashes differently
+      // and enqueues normally. See lib/portal/wizard-job-dedupe.ts.
+      const { buildWizardJobDedupeKey, findRecentDuplicateJob } = await import('@/lib/portal/wizard-job-dedupe')
+      const dedupeKey = buildWizardJobDedupeKey({
+        wizardType: wizard_type,
+        accountId: account_id,
+        contactId: contact_id,
+        leadId: lead_id,
+        data,
+      })
+      payload.dedupe_key = dedupeKey
+
+      const duplicate = await findRecentDuplicateJob(jobType, dedupeKey)
+      if (duplicate) {
+        jobId = duplicate.id
+        console.warn(`[wizard-submit] Duplicate ${jobType} submit for ${clientName} — reusing job ${jobId} (status: ${duplicate.status})`)
+      } else {
+        const job = await enqueueJob({
           job_type: jobType,
           payload,
           priority: 3, // Higher priority than default (lower number = higher)
@@ -607,8 +626,9 @@ export async function POST(req: NextRequest) {
           created_by: 'portal',
         })
 
-      jobId = job.id
-      console.warn(`[wizard-submit] Enqueued ${jobType} job ${jobId} for ${clientName}`)
+        jobId = job.id
+        console.warn(`[wizard-submit] Enqueued ${jobType} job ${jobId} for ${clientName}`)
+      }
 
       // company_info scoped reorder: mark wizard_progress as submitted AFTER job enqueue succeeds.
       // If enqueue failed (threw above), this never runs — portal shows company_info wizard for retry.

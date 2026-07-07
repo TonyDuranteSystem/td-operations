@@ -21,7 +21,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { uploadBinaryToDrive } from "@/lib/google-drive"
+import { uploadBinaryToDrive, uploadBinaryToDriveUpsert, folderFileNameMap } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
@@ -363,11 +363,28 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       let passportDriveId: string | null = null
       let passportMimeType: string | null = null
       if (uploads && uploads.length > 0 && driveFolderId) {
+        // Duplicate-upload guard (LT Program incident 2026-06-16: a re-run
+        // loop piled 200+ copies of every wizard upload into the folder).
+        // Upload file names embed a per-upload hash segment, so a name that
+        // already exists IS the same stored object — skip it. A null map
+        // means the listing failed: default to uploading (stray duplicate
+        // beats silently missing file).
+        const existingNames = await folderFileNameMap(driveFolderId)
         let copied = 0
         let failed = 0
+        let skipped = 0
         for (const filePath of uploads) {
           try {
             const cleanPath = filePath.replace(/^\/+/, "")
+            const fileName = cleanPath.split("/").pop() || `file-${Date.now()}`
+            if (existingNames?.has(fileName)) {
+              // Already on Drive from a previous run of this job. Passport
+              // OCR writeback for it also ran then, so we don't re-capture
+              // passportDriveId here.
+              result.steps.push(step(`doc_copy:${fileName}`, "skipped", `Already on Drive (${existingNames.get(fileName)})`))
+              skipped++
+              continue
+            }
             const { data: blob, error: dlErr } = await supabaseAdmin.storage
               .from("onboarding-uploads")
               .download(cleanPath)
@@ -380,7 +397,6 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
             const arrayBuffer = await blob.arrayBuffer()
             const fileData = Buffer.from(arrayBuffer)
-            const fileName = cleanPath.split("/").pop() || `file-${Date.now()}`
             const mimeType = blob.type || "application/pdf"
 
             const driveResult = await uploadBinaryToDrive(fileName, fileData, mimeType, driveFolderId) as { id: string; name: string }
@@ -400,7 +416,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             failed++
           }
         }
-        result.steps.push(step("doc_copy_summary", copied > 0 ? "ok" : "error", `${copied} copied, ${failed} failed`))
+        result.steps.push(step("doc_copy_summary", copied > 0 || skipped > 0 ? "ok" : "error", `${copied} copied, ${failed} failed, ${skipped} already on Drive`))
       } else {
         result.steps.push(step("doc_copy", "skipped", "No uploads"))
       }
@@ -436,7 +452,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             uploadCount: (p.upload_paths || []).length,
           })
           const slug = company_name.replace(/\s+/g, "_")
-          const uploadResult = await uploadBinaryToDrive(
+          // Stable file name → UPSERT: a re-run refreshes the one existing
+          // summary PDF in place instead of adding a copy.
+          const uploadResult = await uploadBinaryToDriveUpsert(
             `Onboarding_Data_${slug}.pdf`,
             Buffer.from(summaryPdf),
             "application/pdf",

@@ -382,7 +382,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
         if (driveResult.summaryFileId) {
           result.steps.push(step("drive_save", "ok",
-            `Tax Organizer PDF saved (${driveResult.summaryFileId}), ${driveResult.copied.length} files copied`))
+            `Tax Organizer PDF saved (${driveResult.summaryFileId}), ${driveResult.copied.length} files copied${driveResult.skipped.length > 0 ? `, ${driveResult.skipped.length} already on Drive (skipped)` : ""}`))
         }
         if (driveResult.errors.length > 0) {
           result.steps.push(step("drive_save", "error", driveResult.errors.join(", ")))
@@ -402,7 +402,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
   if ((entityType === "MMLLC" || entityType === "Corp") && p.account_id && taxYear) {
     try {
-      const { listFolder, uploadBinaryToDrive, downloadFileBinary } = await import("@/lib/google-drive")
+      const { listFolder, uploadBinaryToDriveUpsert, downloadFileBinary } = await import("@/lib/google-drive")
       const { data: acc } = await supabaseAdmin
         .from("accounts")
         .select("drive_folder_id")
@@ -501,8 +501,9 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
                 const { generatePnlExcel } = await import("@/lib/pnl-generator")
                 const pnl = await generatePnlExcel(p.account_id!, taxYear)
 
-                // Upload P&L to Drive
-                await uploadBinaryToDrive(
+                // Upload P&L to Drive. Stable file name → UPSERT: a re-run
+                // refreshes the one existing workbook instead of adding a copy.
+                await uploadBinaryToDriveUpsert(
                   pnl.fileName,
                   pnl.buffer,
                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

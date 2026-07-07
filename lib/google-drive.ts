@@ -610,6 +610,120 @@ export async function uploadBinaryToDrive(
 }
 
 /**
+ * Build a name → fileId map of every non-trashed FILE directly inside a
+ * folder (folders excluded, first occurrence of a name wins). Paginates past
+ * the listFolder 100-item cap so the map is complete even for large folders.
+ *
+ * Returns null when the listing fails. Callers use this for duplicate-upload
+ * guards (LT Program incident, 2026-07-07) and MUST treat null as "unknown"
+ * and default to uploading — a stray duplicate beats a silently missing file.
+ */
+export async function folderFileNameMap(folderId: string): Promise<Map<string, string> | null> {
+  try {
+    const map = new Map<string, string>()
+    let pageToken: string | undefined
+    do {
+      const params: Record<string, string> = {
+        q: `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
+        driveId: SHARED_DRIVE_ID(),
+        corpora: "drive",
+        fields: "nextPageToken,files(id,name)",
+        pageSize: "1000",
+      }
+      if (pageToken) params.pageToken = pageToken
+      const result = await driveGet("/files", params) as { nextPageToken?: string; files?: { id: string; name: string }[] }
+      for (const f of result.files || []) {
+        if (!map.has(f.name)) map.set(f.name, f.id)
+      }
+      pageToken = result.nextPageToken
+    } while (pageToken)
+    return map
+  } catch (e) {
+    console.warn(`[folderFileNameMap] listing failed for folder ${folderId}: ${e instanceof Error ? e.message : String(e)}`)
+    return null
+  }
+}
+
+/**
+ * Replace the CONTENT of an existing Drive file with new binary data
+ * (files.update). Name, id, and folder stay the same — this is the
+ * overwrite-in-place primitive for regenerated artifacts (P&L Excel,
+ * form-summary PDFs) whose file name is stable across runs.
+ */
+export async function updateBinaryFile(fileId: string, data: Buffer, mimeType: string) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'updateBinaryFile', fileId })
+    return { id: fileId, name: 'sandbox-mock' }
+  }
+  const token = await getAccessToken()
+  const boundary = "----DriveUpdateBinaryBoundary"
+
+  const metadataPart = Buffer.from(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{}\r\n`
+  )
+  const contentHeader = Buffer.from(
+    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
+  )
+  const ending = Buffer.from(`\r\n--${boundary}--`)
+  const body = Buffer.concat([metadataPart, contentHeader, data, ending])
+
+  const res = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&supportsAllDrives=true`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body: new Uint8Array(body),
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive binary update ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
+/**
+ * Idempotent upload for GENERATED artifacts with a stable file name: if a
+ * file with the same name already exists in the folder, its content is
+ * overwritten in place (one file, fresh content); otherwise a new file is
+ * created. Pass a pre-fetched folderFileNameMap to avoid re-listing when
+ * upserting several files into the same folder.
+ *
+ * Failure posture: if the existence lookup OR the in-place update fails, we
+ * fall through to a plain create — never silently omit the artifact.
+ */
+export async function uploadBinaryToDriveUpsert(
+  fileName: string,
+  data: Buffer,
+  mimeType: string,
+  parentFolderId: string,
+  existingNames?: Map<string, string> | null,
+): Promise<{ id: string; name: string; action: "created" | "overwritten" }> {
+  let names = existingNames
+  if (names === undefined) names = await folderFileNameMap(parentFolderId)
+  const existingId = names?.get(fileName)
+
+  if (existingId) {
+    try {
+      const updated = await updateBinaryFile(existingId, data, mimeType) as { id: string; name?: string }
+      return { id: updated.id, name: updated.name || fileName, action: "overwritten" }
+    } catch (e) {
+      console.warn(`[uploadBinaryToDriveUpsert] in-place update failed for ${fileName} (${existingId}), falling back to create: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const created = await uploadBinaryToDrive(fileName, data, mimeType, parentFolderId) as { id: string; name?: string }
+  return { id: created.id, name: created.name || fileName, action: "created" }
+}
+
+/**
  * Download file as binary Buffer (for attachments, PDFs, images).
  * Returns { buffer, mimeType, fileName }
  */

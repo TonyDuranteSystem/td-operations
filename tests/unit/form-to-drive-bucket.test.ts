@@ -40,6 +40,8 @@ vi.mock('@/lib/google-drive', () => ({
   listFolder: vi.fn(async () => ({ files: [] })),
   createFolder: vi.fn(async (_parent: string, name: string) => ({ id: `folder-${name}` })),
   uploadBinaryToDrive: vi.fn(async () => ({ id: 'drive-file-id' })),
+  uploadBinaryToDriveUpsert: vi.fn(async () => ({ id: 'drive-file-id', name: 'f', action: 'created' })),
+  folderFileNameMap: vi.fn(async () => new Map()),
 }))
 
 import { saveFormToDrive } from '@/lib/form-to-drive'

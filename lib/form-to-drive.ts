@@ -769,17 +769,51 @@ export async function copyUploadsToDrive(
   uploadPaths: string[],
   bucket: string,
   targetFolderId: string,
-  fileMapping?: Record<string, string> // optional: map category prefixes to Drive subfolders
-): Promise<{ copied: string[]; failed: string[] }> {
-  const { uploadBinaryToDrive } = await import("@/lib/google-drive")
+  fileMapping?: Record<string, string>, // optional: map category prefixes to Drive subfolders
+  opts?: { existingNames?: Map<string, string> | null } // optional pre-fetched folderFileNameMap for targetFolderId
+): Promise<{ copied: string[]; failed: string[]; skipped: string[] }> {
+  const { uploadBinaryToDrive, folderFileNameMap } = await import("@/lib/google-drive")
   const copied: string[] = []
   const failed: string[] = []
+  const skipped: string[] = []
+
+  // Duplicate-upload guard (LT Program incident, 2026-07-07): a re-run of the
+  // same job (or a duplicate submission) must not pile a second copy of an
+  // already-copied file into the folder. Upload file names embed a per-upload
+  // hash segment, so name-equality means the same stored object — skipping is
+  // lossless. A null map means the listing failed: default to uploading
+  // (worst case a stray duplicate, never a silently missing file).
+  const namesByFolder = new Map<string, Map<string, string> | null>()
+  if (opts?.existingNames !== undefined) namesByFolder.set(targetFolderId, opts.existingNames)
+  const existingNamesFor = async (folderId: string): Promise<Map<string, string> | null> => {
+    if (!namesByFolder.has(folderId)) namesByFolder.set(folderId, await folderFileNameMap(folderId))
+    return namesByFolder.get(folderId) ?? null
+  }
 
   const MAX_RETRIES = 3
   const RETRY_DELAYS = [0, 1000, 3000] // immediate, 1s, 3s
 
   for (const path of uploadPaths) {
     const fileName = path.split("/").pop() || "document.pdf"
+
+    // Destination depends only on the file name — resolve it up front so the
+    // skip check runs before the (potentially retried) download.
+    let destFolder = targetFolderId
+    if (fileMapping) {
+      for (const [prefix, folderId] of Object.entries(fileMapping)) {
+        if (fileName.toLowerCase().startsWith(prefix.toLowerCase())) {
+          destFolder = folderId
+          break
+        }
+      }
+    }
+
+    const existing = await existingNamesFor(destFolder)
+    if (existing?.has(fileName)) {
+      skipped.push(fileName)
+      continue
+    }
+
     let downloaded = false
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -812,16 +846,6 @@ export async function copyUploadsToDrive(
         const buf = Buffer.from(await fileData.arrayBuffer())
         const mimeType = fileData.type || "application/octet-stream"
 
-        let destFolder = targetFolderId
-        if (fileMapping) {
-          for (const [prefix, folderId] of Object.entries(fileMapping)) {
-            if (fileName.toLowerCase().startsWith(prefix.toLowerCase())) {
-              destFolder = folderId
-              break
-            }
-          }
-        }
-
         await uploadBinaryToDrive(fileName, buf, mimeType, destFolder)
         copied.push(fileName)
         downloaded = true
@@ -839,7 +863,7 @@ export async function copyUploadsToDrive(
     }
   }
 
-  return { copied, failed }
+  return { copied, failed, skipped }
 }
 
 // ─── Tax-return payload normalization for the summary PDF ───
@@ -981,7 +1005,7 @@ export async function saveFormToDrive(
    * no P&L/Balance Sheet. Pass the bucket the files were actually uploaded to.
    */
   opts?: { bucket?: string },
-): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }> {
+): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; skipped: string[]; errors: string[] }> {
   // Tax wizard payloads arrive with flattened repeater keys and alias
   // duplicates — normalize them for the accountant PDF (fold member/RPT
   // repeaters into renderable arrays, drop exact-duplicate alias keys).
@@ -990,11 +1014,11 @@ export async function saveFormToDrive(
   }
   const config = FORM_CONFIGS[formType]
   if (!config) {
-    return { summaryFileId: null, copied: [], failed: [], errors: [`Unknown form type: ${formType}`] }
+    return { summaryFileId: null, copied: [], failed: [], skipped: [], errors: [`Unknown form type: ${formType}`] }
   }
   const bucket = opts?.bucket || config.bucket
 
-  const { listFolder, createFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+  const { listFolder, createFolder, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
   const errors: string[] = []
 
   // Find or create subfolder
@@ -1031,7 +1055,13 @@ export async function saveFormToDrive(
     errors.push(`Subfolder error: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  // Generate summary PDF
+  // One listing of the target folder feeds both the summary-PDF upsert and
+  // the upload skip-guard below (LT Program duplicate incident, 2026-07-07).
+  const existingNames = await folderFileNameMap(targetFolderId)
+
+  // Generate summary PDF. The file name is stable across runs, so this is an
+  // UPSERT: a re-run or resubmission refreshes the one existing PDF in place
+  // instead of piling up copies.
   let summaryFileId: string | null = null
   try {
     const summaryPdf = await generateFormSummaryPDF(config, submittedData, {
@@ -1039,23 +1069,27 @@ export async function saveFormToDrive(
       uploadCount: uploadPaths.length,
     })
     const slug = (meta.companyName || meta.token).replace(/\s+/g, "_")
-    const result = await uploadBinaryToDrive(
+    const result = await uploadBinaryToDriveUpsert(
       `${config.filePrefix}_${slug}.pdf`,
       Buffer.from(summaryPdf),
       "application/pdf",
-      targetFolderId
+      targetFolderId,
+      existingNames
     )
     summaryFileId = result.id
   } catch (e) {
     errors.push(`Summary PDF error: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  // Copy uploaded files (bucket may be overridden — see opts.bucket docblock)
-  const { copied, failed } = await copyUploadsToDrive(
+  // Copy uploaded files (bucket may be overridden — see opts.bucket docblock).
+  // Already-present file names are skipped, not re-uploaded.
+  const { copied, failed, skipped } = await copyUploadsToDrive(
     uploadPaths,
     bucket,
-    targetFolderId
+    targetFolderId,
+    undefined,
+    { existingNames }
   )
 
-  return { summaryFileId, copied, failed, errors }
+  return { summaryFileId, copied, failed, skipped, errors }
 }

@@ -376,7 +376,8 @@ export function WizardClient({
             guided.isUserMessage = true
             throw guided
           }
-          return null
+          // Funnel into the catch below so the failure is error-audited too.
+          throw new Error(`mint-path failed (HTTP ${res.status})`)
         }
         const { path } = await res.json()
         if (!path) return null
@@ -405,6 +406,22 @@ export function WizardClient({
         // Guided server messages (R099) propagate to the field UI; anything
         // else stays a silent null → generic "Upload failed" fallback.
         if (err instanceof Error && (err as Error & { isUserMessage?: boolean }).isUserMessage) throw err
+        // Fire-and-forget error-audit capture: an upload failure was only
+        // visible in the CLIENT's browser console, so staff never saw why a
+        // client reported "it won't upload my documents" (LT Program,
+        // 2026-07-07). This lands it in system_errors for the 15-min AI
+        // diagnosis cron.
+        void fetch('/api/system-errors/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            route: 'portal-wizard-file-upload',
+            method: 'POST',
+            page_path: window.location.pathname,
+            message: msg,
+            context: { fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType },
+          }),
+        }).catch(() => { /* reporting must never break the wizard */ })
         return null
       }
     },
