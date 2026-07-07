@@ -16,7 +16,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { downloadFileBinary, listFolder, uploadBinaryToDrive, findTaxFolder } from "@/lib/google-drive"
+import { downloadFileBinary, listFolder, uploadBinaryToDriveUpsert, findTaxFolder } from "@/lib/google-drive"
 import { parseBankStatement, categorizeTransaction, type CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
 
@@ -402,7 +402,8 @@ export function registerBankStatementTools(server: McpServer) {
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)
           const targetFolder = taxFolderId || ctx.driveFolderId
 
-          const uploaded = (await uploadBinaryToDrive(
+          // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
+          const uploaded = (await uploadBinaryToDriveUpsert(
             fileName, buffer,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             targetFolder,

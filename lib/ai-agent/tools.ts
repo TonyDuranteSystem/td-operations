@@ -1448,8 +1448,11 @@ async function gmailGetAttachmentsTool(p: any) {
   // If save_to_drive requested, download each and upload
   if (p.save_to_drive && p.drive_folder_id) {
     const { getGmailAttachment } = await import('@/lib/gmail')
-    const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+    const { uploadBinaryToDriveUpsert, folderFileNameMap } = await import('@/lib/google-drive')
 
+    // Duplicate-upload guard (LT Program incident class): attachment names are
+    // stable per email -> upsert refreshes in place on an agent retry.
+    const attNames = await folderFileNameMap(p.drive_folder_id)
     const uploaded: Array<{ filename: string; drive_file_id: string }> = []
     const failed: Array<{ filename: string; error: string }> = []
 
@@ -1457,7 +1460,7 @@ async function gmailGetAttachmentsTool(p: any) {
       try {
         const attData = await getGmailAttachment(p.message_id, att.attachmentId)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const driveFile = await uploadBinaryToDrive(att.filename, attData.data, att.mimeType, p.drive_folder_id) as any
+        const driveFile = await uploadBinaryToDriveUpsert(att.filename, attData.data, att.mimeType, p.drive_folder_id, attNames) as any
         uploaded.push({ filename: att.filename, drive_file_id: driveFile.id })
       } catch (err) {
         failed.push({ filename: att.filename, error: err instanceof Error ? err.message : 'Unknown error' })

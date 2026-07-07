@@ -645,6 +645,31 @@ export async function folderFileNameMap(folderId: string): Promise<Map<string, s
 }
 
 /**
+ * Cheap single-file duplicate check: is there already a non-trashed file with
+ * this exact name directly inside the folder? Returns `{ exists: true, id }`
+ * when found, `{ exists: false }` when absent — AND on lookup error (callers
+ * treat unknown as "upload anyway"; a stray duplicate beats a missing file).
+ * Use this for single-file guards; use folderFileNameMap for loops.
+ */
+export async function fileExistsInFolder(folderId: string, fileName: string): Promise<{ exists: boolean; id?: string }> {
+  try {
+    const escaped = fileName.replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+    const result = await driveGet("/files", {
+      q: `'${folderId}' in parents and name = '${escaped}' and trashed = false`,
+      driveId: SHARED_DRIVE_ID(),
+      corpora: "drive",
+      fields: "files(id,name)",
+      pageSize: "1",
+    }) as { files?: { id: string }[] }
+    const f = result.files?.[0]
+    return f ? { exists: true, id: f.id } : { exists: false }
+  } catch (e) {
+    console.warn(`[fileExistsInFolder] lookup failed for "${fileName}" in ${folderId}: ${e instanceof Error ? e.message : String(e)}`)
+    return { exists: false }
+  }
+}
+
+/**
  * Replace the CONTENT of an existing Drive file with new binary data
  * (files.update). Name, id, and folder stay the same — this is the
  * overwrite-in-place primitive for regenerated artifacts (P&L Excel,

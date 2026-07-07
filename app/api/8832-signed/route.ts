@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
     // ─── 1. CREATE TASK FOR LUCA ───
     if (form.account_id) {
       try {
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write (predates P2.4); untouched by the Drive-dedup change
         await supabaseAdmin.from("tasks").insert({
           task_title: `Mail Form 8832 to IRS: ${form.company_name}`,
           description: `The Form 8832 (C-Corp Election) for ${form.company_name} has been signed. Download from Drive and mail to IRS.\n\nMailing address (FL-based):\nDepartment of the Treasury\nInternal Revenue Service\nOgden, UT 84201\n\nAlso attach a copy to the entity's federal tax return.`,
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
             f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
@@ -94,7 +95,8 @@ export async function POST(req: NextRequest) {
               attachmentBytes = new Uint8Array(arrayBuffer)
               const fileData = Buffer.from(arrayBuffer)
 
-              const driveResult = await uploadBinaryToDrive(attachmentName, fileData, "application/pdf", targetFolderId) as { id: string }
+              // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+              const driveResult = await uploadBinaryToDriveUpsert(attachmentName, fileData, "application/pdf", targetFolderId) as { id: string }
 
               await supabaseAdmin
                 .from("form_8832_applications")

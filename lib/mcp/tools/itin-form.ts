@@ -632,23 +632,28 @@ export function registerITINFormTools(server: McpServer) {
         // 6. Upload to Drive
         const uploadedIds: { name: string; id: string }[] = []
         if (itinFolderId) {
-          const { uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { uploadBinaryToDrive, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
           const slug = clientName.replace(/\s+/g, "_")
 
-          const w7Upload = await uploadBinaryToDrive(
-            `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", itinFolderId
+          // Duplicate-upload guard (LT Program incident class): generated PDFs
+          // have stable names → UPSERT in place; passport copies are verbatim
+          // uploads → skip when the name already exists. One listing feeds all.
+          const itinNames = await folderFileNameMap(itinFolderId)
+
+          const w7Upload = await uploadBinaryToDriveUpsert(
+            `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", itinFolderId, itinNames
           )
           uploadedIds.push({ name: "W-7", id: w7Upload.id })
           results.push(`📤 W-7 uploaded to Drive (${w7Upload.id})`)
 
-          const nrUpload = await uploadBinaryToDrive(
-            `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", itinFolderId
+          const nrUpload = await uploadBinaryToDriveUpsert(
+            `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", itinFolderId, itinNames
           )
           uploadedIds.push({ name: "1040-NR", id: nrUpload.id })
           results.push(`📤 1040-NR uploaded to Drive (${nrUpload.id})`)
 
-          const oiUpload = await uploadBinaryToDrive(
-            `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", itinFolderId
+          const oiUpload = await uploadBinaryToDriveUpsert(
+            `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", itinFolderId, itinNames
           )
           uploadedIds.push({ name: "Schedule OI", id: oiUpload.id })
           results.push(`📤 Schedule OI uploaded to Drive (${oiUpload.id})`)
@@ -659,6 +664,10 @@ export function registerITINFormTools(server: McpServer) {
             for (const path of uploads) {
               try {
                 const fileName = path.split("/").pop() || "passport.pdf"
+                if (itinNames?.has(fileName)) {
+                  results.push(`⏭️ ${fileName} already on Drive (${itinNames.get(fileName)}) — skipped`)
+                  continue
+                }
                 const { data: fileData } = await supabaseAdmin.storage
                   .from("onboarding-uploads")
                   .download(path)

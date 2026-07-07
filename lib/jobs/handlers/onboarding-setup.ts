@@ -629,6 +629,15 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             if (memberPassportPath && driveFolderId) {
               try {
                 const cleanPath = memberPassportPath.replace(/^\/+/, '')
+                // Duplicate-upload guard (LT Program incident): re-run must not
+                // re-copy — the prior run also did OCR + the documents insert.
+                const dupName = cleanPath.split('/').pop() || `passport_member_${i + 1}.pdf`
+                const { fileExistsInFolder } = await import('@/lib/google-drive')
+                const dup = await fileExistsInFolder(driveFolderId, dupName)
+                if (dup.exists) {
+                  result.steps.push(step(`member_${i + 1}_passport`, 'skipped', `Already on Drive (${dup.id})`))
+                  continue
+                }
                 const { data: blob, error: dlErr } = await supabaseAdmin.storage
                   .from('onboarding-uploads').download(cleanPath)
                 if (dlErr || !blob) {

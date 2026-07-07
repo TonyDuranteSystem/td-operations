@@ -169,6 +169,15 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           const contactsSubfolder = folderResult.subfolders["2. Contacts"]
           if (contactsSubfolder) {
             const cleanPath = passportPath.replace(/^\/+/, "")
+            // Duplicate-upload guard (LT Program incident): a re-run of this
+            // job must not add a second Drive copy. The prior run also did
+            // the OCR writeback + documents insert, so skip the whole block.
+            const dupCheckName = cleanPath.split("/").pop() || "passport.pdf"
+            const { fileExistsInFolder } = await import("@/lib/google-drive")
+            const dup = await fileExistsInFolder(contactsSubfolder, dupCheckName)
+            if (dup.exists) {
+              result.steps.push(step("passport_copy", "skipped", `Already on Drive (${dup.id})`))
+            } else {
             const { data: blob, error: dlErr } = await supabaseAdmin.storage
               .from("onboarding-uploads")
               .download(cleanPath)
@@ -212,6 +221,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
                 portal_visible: true,
               })
               result.steps.push(step("passport_doc_record", "ok", "Document record created"))
+            }
             }
           } else {
             result.steps.push(step("passport_copy", "error", "No '2. Contacts' subfolder found"))

@@ -418,7 +418,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (contract?.pdf_path && driveFolderId) {
-        const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+        const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
 
         // Find "1. Company" subfolder
         const folderResult = await listFolder(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
@@ -437,7 +437,8 @@ export async function POST(req: NextRequest) {
           const fileData = Buffer.from(arrayBuffer)
           const fileName = `Contract - ${offer.client_name} (Signed).pdf`
 
-          const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+          // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+          const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
           driveUploadResult = `ok: ${driveResult.id}`
           console.warn(`[offer-signed] Uploaded contract PDF to Drive: ${driveResult.id}`)
 

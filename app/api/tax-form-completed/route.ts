@@ -30,7 +30,7 @@ import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { APP_BASE_URL } from "@/lib/config"
-import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
+import { listFolder, uploadBinaryToDriveUpsert, downloadFileBinary } from "@/lib/google-drive"
 import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
@@ -490,7 +490,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
       try {
         // Wait for Drive save to complete (files need to be in Drive first)
         // Then trigger bank statement processing + P&L generation
-        // downloadFileBinary, listFolder, uploadBinaryToDrive imported at top
+        // downloadFileBinary, listFolder, uploadBinaryToDriveUpsert imported at top
         const { parseBankStatement, categorizeTransaction } = await import("@/lib/bank-statement-parser")
 
         const { data: acc } = await supabaseAdmin
@@ -618,7 +618,9 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
                       return yf?.id || tf.id
                     })()
 
-                    await uploadBinaryToDrive(
+                    // Stable file name → UPSERT: a re-run refreshes the one
+                    // existing workbook instead of adding a copy.
+                    await uploadBinaryToDriveUpsert(
                       pnl.fileName,
                       pnl.buffer,
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

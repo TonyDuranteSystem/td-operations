@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
             f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
@@ -184,7 +184,8 @@ export async function POST(req: NextRequest) {
               const fileData = Buffer.from(arrayBuffer)
               const fileName = `Form SS-4 - ${ss4.company_name} - Signed.pdf`
 
-              const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+              // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
+              const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
 
               // Update ss4_applications with Drive file ID
               await supabaseAdmin
@@ -288,7 +289,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (acct?.drive_folder_id) {
-          const { listFolder, downloadFileBinary, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { listFolder, downloadFileBinary, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
 
           // Find Articles of Organization in Drive (in "1. Company" subfolder)
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
@@ -339,7 +340,8 @@ export async function POST(req: NextRequest) {
               // Upload combined PDF to Drive
               const targetFolderId = companyFolder?.id || acct.drive_folder_id
               mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
-              const driveResult = await uploadBinaryToDrive(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
+              // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
+              const driveResult = await uploadBinaryToDriveUpsert(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
 
               results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles uploaded: ${driveResult.id} (${ss4Pages.length + articlesPages.length} pages)` })
             } else {

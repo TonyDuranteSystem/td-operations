@@ -383,7 +383,7 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
           const { data: pdfData } = await supabaseAdmin.storage.from(SIGNED_BUCKET).download(env.signed_pdf_path)
           if (pdfData) {
             const buffer = Buffer.from(await pdfData.arrayBuffer())
-            const { uploadBinaryToDrive, listFolder } = await import("@/lib/google-drive")
+            const { uploadBinaryToDriveUpsert, listFolder } = await import("@/lib/google-drive")
             let targetFolderId: string = account.drive_folder_id
             try {
               const contents = await listFolder(account.drive_folder_id)
@@ -392,7 +392,8 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
             } catch {
               /* fall back to the account root folder */
             }
-            const driveResult = await uploadBinaryToDrive(fileName, buffer, "application/pdf", targetFolderId)
+            // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+            const driveResult = await uploadBinaryToDriveUpsert(fileName, buffer, "application/pdf", targetFolderId)
             const driveFileId = (driveResult as { id?: string })?.id
             if (driveFileId) {
               const { autoSaveDocument } = await import("@/lib/portal/auto-save-document")

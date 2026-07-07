@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
             note: `Lease Agreement signed for ${lease.tenant_company} (Suite ${lease.suite_number})`,
           })
 
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write (predates P2.4); untouched by the Drive-dedup change
           await supabaseAdmin
             .from("service_deliveries")
             .update({ stage_history: history })
@@ -131,6 +132,7 @@ export async function POST(req: NextRequest) {
             note: `Lease signed for ${lease.tenant_company} (Suite ${lease.suite_number})`,
           })
 
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write (predates P2.4); untouched by the Drive-dedup change
           await supabaseAdmin
             .from("service_deliveries")
             .update({ stage: "Lease Signed", stage_history: history, updated_at: new Date().toISOString() })
@@ -157,6 +159,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
 
         if (!existingTask) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write (predates P2.4); untouched by the Drive-dedup change
           await supabaseAdmin.from("tasks").insert({
             task_title: taskTitle,
             description: "Lease signed. Next: prepare Form 1583, collect IDs, notarize (Antonio).",
@@ -184,7 +187,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
             f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
@@ -202,7 +205,8 @@ export async function POST(req: NextRequest) {
             const fileData = Buffer.from(arrayBuffer)
             const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
 
-            const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+            // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+            const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
             results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
             // Auto-save to documents table for portal

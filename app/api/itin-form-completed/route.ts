@@ -298,7 +298,7 @@ export async function POST(req: NextRequest) {
 
         // Upload all 3 to Drive
         if (driveFolderId) {
-          const { uploadBinaryToDrive, listFolder: lf, createFolder: cf } = await import("@/lib/google-drive")
+          const { uploadBinaryToDriveUpsert, folderFileNameMap, listFolder: lf, createFolder: cf } = await import("@/lib/google-drive")
 
           // Find or create ITIN subfolder
           const contents = await lf(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
@@ -314,9 +314,13 @@ export async function POST(req: NextRequest) {
           const w7Name = `W-7_${slug}.pdf`
           const nrName = `1040-NR_${slug}.pdf`
           const oiName = `Schedule_OI_${slug}.pdf`
-          const w7Upload = await uploadBinaryToDrive(w7Name, w7Buffer, "application/pdf", itinFolder.id) as { id?: string }
-          const nrUpload = await uploadBinaryToDrive(nrName, nrBuffer, "application/pdf", itinFolder.id) as { id?: string }
-          const oiUpload = await uploadBinaryToDrive(oiName, oiBuffer, "application/pdf", itinFolder.id) as { id?: string }
+          // Stable file names → UPSERT: a re-run/regenerate refreshes the one
+          // existing PDF in place instead of piling up copies (LT Program
+          // Drive-duplicate incident class). One folder listing feeds all 3.
+          const itinNames = await folderFileNameMap(itinFolder.id)
+          const w7Upload = await uploadBinaryToDriveUpsert(w7Name, w7Buffer, "application/pdf", itinFolder.id, itinNames) as { id?: string }
+          const nrUpload = await uploadBinaryToDriveUpsert(nrName, nrBuffer, "application/pdf", itinFolder.id, itinNames) as { id?: string }
+          const oiUpload = await uploadBinaryToDriveUpsert(oiName, oiBuffer, "application/pdf", itinFolder.id, itinNames) as { id?: string }
 
           docsGenerated = true
 

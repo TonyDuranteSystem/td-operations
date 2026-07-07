@@ -17,7 +17,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { harborCompliance } from "@/lib/harbor-compliance"
 import { logAction } from "@/lib/mcp/action-log"
-import { uploadBinaryToDrive } from "@/lib/google-drive"
+import { uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 
 export function registerHarborComplianceTools(server: McpServer) {
 
@@ -388,7 +388,8 @@ The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
 
         // Upload to Drive
         const fileName = `HC_${delivery.document_type?.name || "Document"}_${delivery.name || params.delivery_id}.pdf`
-        const driveFile = await uploadBinaryToDrive(
+        // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
+        const driveFile = await uploadBinaryToDriveUpsert(
           fileName,
           pdfBuffer,
           "application/pdf",

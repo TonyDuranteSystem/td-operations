@@ -1,5 +1,6 @@
 # Compliance, Renewals & Deadlines
-_Last verified against code: 2026-05-29 — Claude (read harbor-compliance/client.ts, ra-renewal-check cron, service-delivery.ts)_
+_Last verified against code: 2026-07-07 — Claude (Drive duplicate-upload sweep, LT Program incident class — the HC delivery download-to-Drive (`lib/mcp/tools/harbor-compliance.ts`) and renewal receipts (`lib/operations/file-renewal.ts`) switched from `uploadBinaryToDrive` to `uploadBinaryToDriveUpsert` (stable file name → a retry/re-run refreshes the ONE existing Drive file in place instead of adding a copy). No other behavior in this subsystem touched; full sweep rationale in `documents.md` (2026-07-07b). Branch `claude/objective-cohen-b75f61`, SANDBOX — Antonio ships.)_
+_Prior: 2026-05-29 — Claude (read harbor-compliance/client.ts, ra-renewal-check cron, service-delivery.ts)_
 
 ## What it is
 Keeping clients' companies in good standing: the Harbor Compliance integration (registered agent + state filings), the recurring renewals (RA renewal, state annual report), the deadline register, and the calendar.

@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateLeasePDF } from '@/lib/lease-pdf'
-import { listFolder, uploadBinaryToDrive } from '@/lib/google-drive'
+import { listFolder, uploadBinaryToDriveUpsert } from '@/lib/google-drive'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -89,7 +89,8 @@ export async function POST(req: NextRequest) {
 
     // Upload to Drive
     const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
-    const driveResult = await uploadBinaryToDrive(
+    // Stable name -> UPSERT: regeneration refreshes the one existing file in place (LT Program incident class).
+    const driveResult = await uploadBinaryToDriveUpsert(
       fileName, Buffer.from(pdfBytes), 'application/pdf', targetFolderId
     ) as { id: string }
 

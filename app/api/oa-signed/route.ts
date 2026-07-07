@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
             f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
@@ -183,7 +183,8 @@ export async function POST(req: NextRequest) {
                 const fileData = Buffer.from(arrayBuffer)
                 const fileName = `Operating Agreement - ${oa.company_name} (Signed).pdf`
 
-                const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+                // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+                const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
                 results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
                 if (oa.account_id) {

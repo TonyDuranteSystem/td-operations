@@ -20,7 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { ensureDrivePath, uploadBinaryToDrive } from "@/lib/google-drive"
+import { ensureDrivePath, uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 import { completeSD, createSD } from "@/lib/operations/service-delivery"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
@@ -165,7 +165,8 @@ export async function fileRenewal(
 
       // 3. Upload receipt with SOP filename
       const targetFilename = buildRenewalFilename(params.kind, year)
-      const upload = (await uploadBinaryToDrive(
+      // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
+      const upload = (await uploadBinaryToDriveUpsert(
         targetFilename,
         params.receipt.data,
         params.receipt.mime_type || "application/pdf",

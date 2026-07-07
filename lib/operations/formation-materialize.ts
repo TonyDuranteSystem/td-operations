@@ -607,6 +607,14 @@ export async function materializeFormationCompany(
         if (ownerPassportPath && companyContactsSubfolderId) {
           try {
             const cleanPath = ownerPassportPath.replace(/^\/+/, "")
+            // Duplicate-upload guard (LT Program incident class): a re-run
+            // must not re-copy — the prior run already relinked/inserted the
+            // documents row, so skip the whole block.
+            const { fileExistsInFolder } = await import("@/lib/google-drive")
+            const ownerDup = await fileExistsInFolder(companyContactsSubfolderId, cleanPath.split("/").pop() || "passport.pdf")
+            if (ownerDup.exists) {
+              steps.push({ step: "owner_passport_copy", status: "skipped", detail: `Already on Drive (${ownerDup.id})` })
+            } else {
             const { data: blob, error: dlErr } = await supabaseAdmin.storage
               .from("onboarding-uploads")
               .download(cleanPath)
@@ -645,6 +653,7 @@ export async function materializeFormationCompany(
               }
               steps.push({ step: "owner_passport_copy", status: "ok", detail: `Owner passport placed in company 2.Contacts (${driveFile.id})` })
             }
+            }
           } catch (e) {
             steps.push({ step: "owner_passport_copy", status: "error", detail: e instanceof Error ? e.message : String(e) })
           }
@@ -672,9 +681,18 @@ export async function materializeFormationCompany(
 
     // 9b. Member passports (after company folder exists).
     if (companyContactsSubfolderId && pendingMemberPassports.length > 0) {
+      // Duplicate-upload guard (LT Program incident class): skip files already
+      // on Drive — the prior run also inserted their documents rows.
+      const { folderFileNameMap } = await import("@/lib/google-drive")
+      const contactsNames = await folderFileNameMap(companyContactsSubfolderId)
       for (const mp of pendingMemberPassports) {
         try {
           const cleanPath = mp.storage_path.replace(/^\/+/, "")
+          const dupName = cleanPath.split("/").pop() || `passport_member_${mp.index}.pdf`
+          if (contactsNames?.has(dupName)) {
+            steps.push({ step: `member_${mp.index}_passport`, status: "skipped", detail: `Already on Drive (${contactsNames.get(dupName)})` })
+            continue
+          }
           const { data: blob, error: dlErr } = await supabaseAdmin.storage
             .from("onboarding-uploads")
             .download(cleanPath)

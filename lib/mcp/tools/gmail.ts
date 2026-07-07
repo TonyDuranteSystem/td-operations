@@ -899,8 +899,9 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
         // If save_to_drive_folder_id provided, upload to Drive automatically
         if (save_to_drive_folder_id) {
           try {
-            const { uploadBinaryToDrive } = await import("@/lib/google-drive")
-            const driveFile = await uploadBinaryToDrive(filename, buffer, mimeType, save_to_drive_folder_id)
+            const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
+            const driveFile = await uploadBinaryToDriveUpsert(filename, buffer, mimeType, save_to_drive_folder_id)
             const driveId = (driveFile as { id: string }).id
 
             logAction({

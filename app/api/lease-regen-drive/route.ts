@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Account has no Drive folder' }, { status: 400 })
     }
 
-    const { listFolder, uploadBinaryToDrive } = await import('@/lib/google-drive')
+    const { listFolder, uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
     const folderResult = await listFolder(acct.drive_folder_id) as {
       files?: { id: string; name: string; mimeType: string }[]
     }
@@ -53,7 +53,8 @@ export async function POST(req: NextRequest) {
     const fileData = Buffer.from(arrayBuffer)
     const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
 
-    const driveResult = await uploadBinaryToDrive(
+    // Stable name -> UPSERT: regeneration refreshes the one existing file in place (LT Program incident class).
+    const driveResult = await uploadBinaryToDriveUpsert(
       fileName, fileData, 'application/pdf', targetFolderId
     ) as { id: string }
 
