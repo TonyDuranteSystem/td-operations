@@ -128,17 +128,26 @@ export function categorizeTransaction(
     }
   }
 
-  // Override: if outgoing payment to a member → distribution
-  if (tx.amount < 0 && memberNames.length > 0) {
+  // Override: money moving to/from a MEMBER is an equity movement, always
+  // (2026-07-07, Antonio — Dynamiq 2024 incident: 35 plain wires to a member
+  // sat in the review as "Needs your decision" because the old rule only
+  // booked draws when the description literally said dividend/distribution).
+  // Outflow to a member → distribution (owner draw); inflow from a member →
+  // contribution (owner money in). Member identity outranks the generic
+  // keyword rules above; learned rules / AI / manual answers still outrank
+  // this whole function via applyRules' precedence and the manual: guard.
+  if (tx.amount !== 0 && memberNames.length > 0) {
     const lowerDesc = desc.toLowerCase()
     const lowerCounterparty = cp.toLowerCase()
     for (const name of memberNames) {
       const lowerName = name.toLowerCase()
       if (lowerDesc.includes(lowerName) || lowerCounterparty.includes(lowerName)) {
-        // Check if it's explicitly marked as distribution/dividends
-        if (/dividend|distribu/i.test(desc)) {
+        if (tx.amount < 0) {
           category = "distribution"
           subcategory = "member_distribution"
+        } else {
+          category = "contribution"
+          subcategory = "member_contribution"
         }
         is_related_party = true
         notes = `Member: ${name}`

@@ -144,11 +144,31 @@ export interface BuildValidationInput {
   fxRates?: FxRates
   priorReturn: PriorReturnCaseRecord | null
   ownership: OwnershipResolution
+  /** Member display names — used to EXCLUDE owner movements from the
+   *  related-party panel (2026-07-07, Dynamiq incident: is_related_party is
+   *  set for MEMBER matches too, but a member's money is an equity movement
+   *  shown in the capital section — never a "related-party transaction"). */
+  memberNames: string[]
+}
+
+/** Same substring rule the categorizer uses to flag members — the exclusion
+ *  must mirror the inclusion, or rows leak between the two views. */
+export function matchesMemberName(row: Pick<ValidationRow, "description" | "counterparty">, memberNames: string[]): boolean {
+  if (memberNames.length === 0) return false
+  const d = (row.description ?? "").toLowerCase()
+  const c = (row.counterparty ?? "").toLowerCase()
+  return memberNames.some(n => {
+    const ln = n.toLowerCase()
+    return ln.length > 0 && (d.includes(ln) || c.includes(ln))
+  })
 }
 
 export function buildValidationBreakdown(input: BuildValidationInput): ValidationBreakdown {
-  const { rows, draft, fxRates, priorReturn, ownership } = input
+  const { rows, draft, fxRates, priorReturn, ownership, memberNames } = input
   const rates: FxRates = fxRates ?? {}
+  /** Related-party = flagged AND NOT an owner (owners live in the capital section). */
+  const isTrueRelatedParty = (r: ValidationRow) =>
+    r.is_related_party === true && !matchesMemberName(r, memberNames)
 
   // ── Shared converter — IDENTICAL to the draft's normalization ──
   const usdOf = (r: ValidationRow) => toUsd(Number(r.amount), r.currency, rates)
@@ -184,7 +204,7 @@ export function buildValidationBreakdown(input: BuildValidationInput): Validatio
     return Array.from(m.values()).sort((a, b) => b.total_usd - a.total_usd).slice(0, 5)
   }
   const relatedIn = (list: ValidationRow[]) => {
-    const rel = list.filter(r => r.is_related_party === true)
+    const rel = list.filter(isTrueRelatedParty)
     return { count: rel.length, total_usd: rel.reduce((s, r) => s + Math.abs(usdOf(r).usd), 0) }
   }
   const signedSum = (list: ValidationRow[]) => list.reduce((s, r) => s + usdOf(r).usd, 0)
@@ -282,8 +302,8 @@ export function buildValidationBreakdown(input: BuildValidationInput): Validatio
     .filter(c => provMap.has(c))
     .map(c => ({ class: c, label: PROVENANCE_LABELS[c], ...provMap.get(c)! }))
 
-  // ── Related-party (workspace-wide) ──
-  const relRows = rows.filter(r => r.is_related_party === true)
+  // ── Related-party (workspace-wide) — owners excluded by definition ──
+  const relRows = rows.filter(isTrueRelatedParty)
 
   // ── Invariant: the breakdown must reproduce the draft, or say so loudly ──
   const mismatches: ValidationBreakdown["invariant"]["mismatches"] = []

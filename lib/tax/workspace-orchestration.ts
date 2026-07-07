@@ -127,6 +127,9 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
     fxRates,
     priorReturn,
     ownership,
+    // Same name list the categorizer flags members with — the panel's
+    // owner-exclusion must mirror the flag's inclusion (2026-07-07).
+    memberNames: wizardMembers.map(m => m.name),
   })
 
   return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, validation }

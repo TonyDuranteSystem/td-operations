@@ -19,6 +19,29 @@ const rule = (over: Partial<CategorizationRule>): CategorizationRule => ({
   account_id: null, priority: 100, direction: 'any', ...over,
 })
 
+describe('member equity auto-booking (2026-07-07 — Dynamiq: wires to members must be draws)', () => {
+  it('a plain outflow to a member books as distribution/member_distribution — no dividend keyword needed', () => {
+    const out = applyRules(tx('Wire transfer', -4464.27, { counterparty: 'Donato Renato Berini' }), [], ['Donato Renato Berini', 'Sofia Marinoni'])
+    expect(out.category).toBe('distribution')
+    expect(out.subcategory).toBe('member_distribution')
+    expect(out.is_related_party).toBe(true)
+  })
+  it('an inflow from a member books as contribution/member_contribution', () => {
+    const out = applyRules(tx('Incoming wire Sofia Marinoni', 5000), [], ['Sofia Marinoni'])
+    expect(out.category).toBe('contribution')
+    expect(out.subcategory).toBe('member_contribution')
+  })
+  it('member identity outranks generic keyword rules; learned rules still outrank members', () => {
+    const memberRow = tx('Stripe payment to Donato Renato Berini', -100)
+    expect(applyRules(memberRow, [], ['Donato Renato Berini']).category).toBe('distribution')
+    const learned = rule({ pattern: 'donato renato berini', category: 'expense', subcategory: 'contractors' })
+    expect(applyRules(memberRow, [learned], ['Donato Renato Berini']).category).toBe('expense')
+  })
+  it('non-member counterparties are untouched', () => {
+    expect(applyRules(tx('Wire transfer', -500, { counterparty: 'Acme Corp' }), [], ['Donato Renato Berini']).category).toBe('uncategorized')
+  })
+})
+
 describe('applyRules — NULL-safe text fields (2026-07-06 crash fix)', () => {
   // The type says string, but DB rows cast into ParsedTransaction can carry
   // NULL (ingestion writes '' — direct inserts/tools don't). Hit live during

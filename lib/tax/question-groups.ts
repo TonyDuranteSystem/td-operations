@@ -26,6 +26,9 @@ export interface UncategorizedRow {
   /** Advisory AI hints (#2) — present once the AI labeling pass has run. */
   ai_lean?: string | null
   ai_bucket?: string | null
+  /** Current subcategory — lets the UI light the precise chip (owner draw vs
+   *  personal spend both live in 'distribution'; 2026-07-07). */
+  subcategory?: string | null
   /** The row's current bookkeeping category (no-vanish: lets the review show
    *  the owner's current choice instead of dropping decided rows). */
   category?: string | null
@@ -55,6 +58,9 @@ export interface QuestionGroup {
   /** The group's current bookkeeping category (mode across its rows) — drives
    *  which answer chip shows as selected so a flagged row never just vanishes. */
   current_category?: string
+  /** Mode subcategory — distinguishes owner draws from personal spend inside
+   *  'distribution' so the selected chip is honest (2026-07-07). */
+  current_subcategory?: string
 }
 
 /** Most-frequent non-empty value in a list (ties → first seen). */
@@ -124,6 +130,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         leanRaw === "business" || leanRaw === "personal" || leanRaw === "unsure" ? leanRaw : undefined
       const bucket = mode(g.rows.map(r => r.ai_bucket))
       const current_category = mode(g.rows.map(r => r.category))
+      const current_subcategory = mode(g.rows.map(r => r.subcategory))
       return {
         group_key,
         label: g.label,
@@ -136,6 +143,7 @@ export function groupUncategorized(rows: UncategorizedRow[]): QuestionGroup[] {
         ...(lean ? { ai_lean: lean } : {}),
         ...(bucket ? { ai_bucket: bucket } : {}),
         ...(current_category ? { current_category } : {}),
+        ...(current_subcategory ? { current_subcategory } : {}),
       }
     })
     .sort((a, b) => b.count - a.count)
@@ -148,6 +156,11 @@ export const ANSWER_CHOICES = [
   // no longer exists): a money-in card can never offer "Business expense".
   { value: "business_expense", category: "expense", subcategory: "client_confirmed", directions: ["out"], label: "Business expense", labelIt: "Spesa aziendale" },
   { value: "personal_spending", category: "distribution", subcategory: "personal_draw", directions: ["out"], label: "Personal (owner) spending — not a business cost", labelIt: "Spesa personale (del socio) — non aziendale" },
+  // Explicit owner-draw answer (2026-07-07, Antonio — Dynamiq: wires to a
+  // member offered no dividend option). Same P&L/M-2 treatment as any
+  // distribution (equity out, attributed to the member by name); the plain
+  // "dividend" label is the point.
+  { value: "owner_draw", category: "distribution", subcategory: "member_distribution", directions: ["out"], label: "Owner draw / dividend (money to a member)", labelIt: "Prelievo del socio / dividendo" },
   { value: "business_income", category: "income", subcategory: "revenue", directions: ["in"], label: "Business income / a sale", labelIt: "Incasso aziendale / vendita" },
   { value: "owner_money_in", category: "contribution", subcategory: "capital_contribution", directions: ["in"], label: "My own money put into the company", labelIt: "Soldi miei messi nella società" },
   // Refund books signed contra-expense (pnl-generator nets it against costs) —

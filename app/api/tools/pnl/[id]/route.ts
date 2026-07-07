@@ -60,6 +60,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ai_lean: (r.ai_lean as string | null) ?? null,
       ai_bucket: (r.ai_bucket as string | null) ?? null,
       category: String(r.category ?? 'uncategorized'),
+      subcategory: (r.subcategory as string | null) ?? null,
     })))
 
     // Per-file source cards.

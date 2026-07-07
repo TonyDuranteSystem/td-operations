@@ -35,7 +35,7 @@ const FIRST_YEAR: PriorReturnCaseRecord = { case: 'first_year', status: 'first_y
 /** Build draft + breakdown from the SAME rows/rates — the production wiring. */
 function build(rows: Array<ValidationRow & DraftTransaction>, fxRates?: Record<string, number>, prior: PriorReturnCaseRecord | null = null) {
   const draft = buildFinancialDraft({ taxYear: 2024, transactions: rows, members: [], priorReturn: prior, defaultUncategorizedBySign: false, fxRates })
-  const breakdown = buildValidationBreakdown({ rows, draft, fxRates, priorReturn: prior, ownership: NO_OWNERS })
+  const breakdown = buildValidationBreakdown({ rows, draft, fxRates, priorReturn: prior, ownership: NO_OWNERS, memberNames: [] })
   return { draft, breakdown }
 }
 
@@ -111,6 +111,22 @@ describe('invariant: breakdown reproduces the draft', () => {
     expect(breakdown.invariant.ok).toBe(true)
   })
 
+  it('OWNERS are excluded from the related-party panel (Dynamiq 2026-07-07 incident)', () => {
+    const rows = [
+      // Member-flagged rows (is_related_party=true, counterparty = the member)
+      row({ category: 'distribution', amount: -4464, is_related_party: true, counterparty: 'Donato Renato Berini', notes: 'Member: Donato Renato Berini' }),
+      row({ category: 'contribution', amount: 900, is_related_party: true, counterparty: 'Sofia Marinoni' }),
+      // A genuine non-owner related entity
+      row({ category: 'expense', amount: -736, is_related_party: true, counterparty: 'Oliva Ayala Abogados S.L.P.' }),
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2024, transactions: rows, members: [], priorReturn: null, defaultUncategorizedBySign: false })
+    const breakdown = buildValidationBreakdown({ rows, draft, priorReturn: null, ownership: NO_OWNERS, memberNames: ['Donato Renato Berini', 'Sofia Marinoni'] })
+    expect(breakdown.related_party.count).toBe(1)
+    expect(breakdown.related_party.top_counterparties[0].label).toBe('Oliva Ayala Abogados S.L.P.')
+    expect(breakdown.related_party.total_abs_usd).toBeCloseTo(736, 2)
+    expect(breakdown.invariant.ok).toBe(true)
+  })
+
   it('related-party rows surface per line and workspace-wide', () => {
     const rows = [
       row({ category: 'expense', amount: -800, is_related_party: true, counterparty: 'Acme FZCO' }),
@@ -143,7 +159,7 @@ describe('invariant: breakdown reproduces the draft', () => {
     const rows = [row({ category: 'income', amount: 1000 })]
     const draft = buildFinancialDraft({ taxYear: 2024, transactions: rows, members: [], priorReturn: null, defaultUncategorizedBySign: false })
     const broken = { ...draft, pnl: { ...draft.pnl, totalIncome: 999999 } }
-    const breakdown = buildValidationBreakdown({ rows, draft: broken, priorReturn: null, ownership: NO_OWNERS })
+    const breakdown = buildValidationBreakdown({ rows, draft: broken, priorReturn: null, ownership: NO_OWNERS, memberNames: [] })
     expect(breakdown.invariant.ok).toBe(false)
     expect(breakdown.invariant.mismatches[0]).toMatchObject({ line: 'Revenue', draft: 999999 })
   })

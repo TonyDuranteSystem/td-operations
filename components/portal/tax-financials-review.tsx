@@ -33,7 +33,7 @@ function ProgressCard({ title, detail, eta }: { title: string; detail: string; e
 
 interface Gate { id: number; title: string; status: 'pass' | 'na' | 'fail'; detail: string; blocking: boolean }
 interface Member { name: string; pct: number; beginning_capital: number; contributions: number; distributions: number; income_share: number; ending_capital: number }
-interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string }
+interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
 
@@ -163,6 +163,8 @@ interface CategoryDrill { bucket: string; label: string; merchants: CategoryMerc
 const ANSWERS = [
   { value: 'business_expense', directions: ['out'], en: 'Business expense', it: 'Spesa aziendale' },
   { value: 'personal_spending', directions: ['out'], en: 'Personal (owner) spending', it: 'Spesa personale (del socio)' },
+  // 2026-07-07 (Dynamiq): wires to a member had no dividend answer.
+  { value: 'owner_draw', directions: ['out'], en: 'Owner draw / dividend', it: 'Prelievo del socio / dividendo' },
   { value: 'business_income', directions: ['in'], en: 'Business income / a sale', it: 'Incasso aziendale / vendita' },
   { value: 'owner_money_in', directions: ['in'], en: 'My own money put in', it: 'Soldi miei messi nella società' },
   { value: 'refund', directions: ['in', 'out'], en: 'Refund / money back', it: 'Rimborso / soldi restituiti' },
@@ -183,7 +185,12 @@ const CATEGORY_TO_ANSWER: Record<string, string> = {
 }
 const activeAnswerOf = (g: QuestionGroup): string | null => {
   const cat = g.current_category ?? 'uncategorized'
-  return cat === 'uncategorized' ? null : (CATEGORY_TO_ANSWER[cat] ?? null)
+  if (cat === 'uncategorized') return null
+  // Owner draws light their own chip — 'distribution' alone can't tell a
+  // member dividend from personal spend (2026-07-07).
+  if (cat === 'distribution' && g.current_subcategory === 'member_distribution') return 'owner_draw'
+  if (cat === 'contribution' && g.current_subcategory === 'member_contribution') return 'owner_money_in'
+  return CATEGORY_TO_ANSWER[cat] ?? null
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -1025,6 +1032,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         )}
       </div>
 
+      {/* Validation Mode (V1, staff-only) — rendered FIRST so toggling it
+          shows the explanation immediately, no scrolling (Antonio 2026-07-07).
+          Same engine pass as the report, invariant-checked. */}
+      {isStaff && validationMode && view.validation && (
+        <ValidationBreakdownPanel validation={view.validation} api={API} />
+      )}
+
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
@@ -1352,11 +1366,6 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </section>
           </div>
 
-          {/* Validation Mode (V1, staff-only): how every number was made,
-              recomputed in the same engine pass and invariant-checked. */}
-          {isStaff && validationMode && view.validation && (
-            <ValidationBreakdownPanel validation={view.validation} api={API} />
-          )}
 
           {/* Members */}
           {view.draft.members.length > 0 && (

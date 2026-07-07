@@ -230,9 +230,12 @@ export default function ValidationBreakdown({ validation, api }: { validation: V
           </ul>
         </section>
 
-        {/* Related party */}
+        {/* Related party — OWNERS EXCLUDED (2026-07-07, Dynamiq incident:
+            members' money is equity, shown in the capital section; only
+            declared related entities / non-owner flagged parties belong here). */}
         <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5">
-          <h2 className="text-sm font-semibold text-zinc-900 mb-2">Related-party transactions (Form 5472 exposure)</h2>
+          <h2 className="text-sm font-semibold text-zinc-900 mb-2">Related-party transactions (non-owner)</h2>
+          <p className="text-[11px] text-zinc-500 mb-2">Members&apos; own movements are NOT listed here — they are owner draws/contributions, shown under Members&apos; capital.</p>
           {validation.related_party.count === 0 ? (
             <p className="text-xs text-zinc-500">None flagged in this workspace.</p>
           ) : (
@@ -246,7 +249,7 @@ export default function ValidationBreakdown({ validation, api }: { validation: V
                   <li key={c.label} className="flex justify-between"><span>{c.label}</span><span>{c.count}× · {fmt(c.total_usd)}</span></li>
                 ))}
               </ul>
-              <p className="text-amber-700">Verify these appear correctly on the 5472/return — misreported related-party amounts carry the $25k-class penalties.</p>
+              <p className="text-amber-700">Cross-check these against the return&apos;s related-party disclosures — misreported related-party amounts carry heavy penalties.</p>
             </div>
           )}
         </section>
