@@ -213,7 +213,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   }
 
   const handlePreview = () => {
-    if (!isOA && formData.amount <= 0) return
+    if (!isOA && (formData.amount <= 0 || members.length === 0)) return
     setStage('preview')
   }
 
@@ -667,11 +667,24 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             </div>
           )}
 
+          {/* An empty members list would make the document templates silently
+              skip their body (the "two-line document" bug) — block instead. */}
+          {!isOA && members.length === 0 && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-800 bg-red-950/40 p-3 text-sm text-red-300">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>
+                {lang === 'it'
+                  ? 'Impossibile generare il documento — nessun membro/titolare risulta collegato alla società. Contatta il supporto per completare i dati societari.'
+                  : 'Cannot generate this document — no member/owner is on file for this company. Please contact support to complete your company records.'}
+              </span>
+            </div>
+          )}
+
           {/* Preview button */}
           <div className="flex justify-end">
             <button
               onClick={handlePreview}
-              disabled={(!isOA && formData.amount <= 0) || (isOA && !oaCanProceed)}
+              disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
               className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
               title={isOA && !oaCanProceed ? 'All members must have portal accounts to proceed' : undefined}
             >

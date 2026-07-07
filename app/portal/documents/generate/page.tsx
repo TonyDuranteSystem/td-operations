@@ -38,19 +38,34 @@ export default async function GenerateDocumentsPage() {
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(20),
+    // No role filter here: CRM role values vary in casing/wording ('owner',
+    // 'Owner', 'Sole Member', ...) — a case-sensitive eq('role','owner')
+    // silently returned nothing for 20+ accounts, which emptied the members
+    // list and made the Distribution Resolution / Tax Statement templates
+    // skip their entire body (the "two-line document" bug, 2026-07-07).
     supabaseAdmin
       .from('account_contacts')
-      .select('contacts(first_name, last_name)')
+      .select('contact_id, role, contacts(first_name, last_name)')
       .eq('account_id', selectedAccountId)
-      .eq('role', 'owner')
-      .limit(1)
-      .single(),
+      .limit(20),
   ])
 
   if (!accountDetail) redirect('/portal')
 
   const rawMembers = members || []
-  const ownerContact = contactResult.data?.contacts as { first_name: string | null; last_name: string | null } | null
+  const contactLinks = (contactResult.data ?? []) as Array<{
+    contact_id: string
+    role: string | null
+    contacts: { first_name: string | null; last_name: string | null } | null
+  }>
+  // Prefer an owner-ish role (any casing), then any member-ish role, then the
+  // first linked contact — never leave the members list silently empty.
+  const ownerLink =
+    contactLinks.find(l => /owner|sole member/i.test(l.role ?? '')) ??
+    contactLinks.find(l => /member/i.test(l.role ?? '')) ??
+    contactLinks[0] ??
+    null
+  const ownerContact = ownerLink?.contacts ?? null
 
   const mappedMembers = rawMembers.length > 0
     ? rawMembers.map(m => ({
@@ -72,7 +87,7 @@ export default async function GenerateDocumentsPage() {
           ownershipPct: null,
           address: null,
           isPrimary: true,
-          contact_id: contactId,
+          contact_id: ownerLink?.contact_id ?? contactId,
           email: null,
           member_id: undefined,
         }]
