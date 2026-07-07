@@ -48,6 +48,18 @@ describe('sanitizeEmailHtml', () => {
     expect(sanitizeEmailHtml('<a href="javascript:alert(1)">x</a>')).toContain('href="#"')
     expect(sanitizeEmailHtml(`<a href='vbscript:evil'>x</a>`)).toContain(`href='#'`)
     expect(sanitizeEmailHtml('<img src="data:text/html,<script>">').toLowerCase()).not.toContain('data:')
+    expect(sanitizeEmailHtml('<img src="javascript:alert(1)">')).toContain('src="#"')
+  })
+
+  it('allows data:image/* in src (inline email images) but never in href', () => {
+    const img = '<img src="data:image/png;base64,iVBORw0KGgo=">'
+    expect(sanitizeEmailHtml(img)).toBe(img)
+    const jpeg = "<img src='data:image/jpeg;base64,AAAA'>"
+    expect(sanitizeEmailHtml(jpeg)).toBe(jpeg)
+    // data: links can smuggle full documents — always neutralized, even images
+    expect(sanitizeEmailHtml('<a href="data:image/png;base64,AAAA">x</a>')).toContain('href="#"')
+    // non-image data src stays blocked
+    expect(sanitizeEmailHtml('<img src="data:application/pdf;base64,AAAA">')).toContain('src="#"')
   })
 
   it('preserves safe formatting and normal links', () => {

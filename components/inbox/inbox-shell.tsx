@@ -620,7 +620,7 @@ export function InboxShell() {
               ) : (
                 <>
                   <MessageThread conversation={selected} mailbox={activeMailbox} />
-                  <ComposeReply conversation={selected} />
+                  <ComposeReply conversation={selected} mailbox={activeMailbox} />
                 </>
               )}
             </>

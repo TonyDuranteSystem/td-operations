@@ -6,10 +6,11 @@ export const dynamic = "force-dynamic"
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { conversationId, message, channel } = body as {
+    const { conversationId, message, channel, mailbox } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
+      mailbox?: string
     }
 
     if (!conversationId || !message) {
@@ -23,11 +24,18 @@ export async function POST(req: NextRequest) {
     if (channel === "gmail" || conversationId.startsWith("gmail:")) {
       const threadId = conversationId.replace("gmail:", "")
 
+      // Thread IDs are mailbox-scoped: fetch AND send through the mailbox the
+      // user is viewing, otherwise replies from antonio@ fail (thread not
+      // found in support@) or go out from the wrong address.
+      const asUser = mailbox === "antonio"
+        ? "antonio.durante@tonydurante.us"
+        : "support@tonydurante.us"
+
       // Get the last message in thread to reply to
       const thread = (await gmailGet(`/threads/${threadId}`, {
         format: "metadata",
         metadataHeaders: ["From", "To", "Subject", "Message-ID", "References"],
-      })) as { messages: GmailAPIMessage[] }
+      }, asUser)) as { messages: GmailAPIMessage[] }
 
       const lastMsg = thread.messages[thread.messages.length - 1]
       const from = getHeader(lastMsg.payload.headers, "From")
@@ -41,7 +49,7 @@ export async function POST(req: NextRequest) {
 
       const encodedReplySubject = `=?utf-8?B?${Buffer.from(replySubject).toString("base64")}?=`
       const headers = [
-        `From: support@tonydurante.us`,
+        `From: ${asUser}`,
         `To: ${replyTo}`,
         `Subject: ${encodedReplySubject}`,
         `In-Reply-To: ${messageId}`,
@@ -55,13 +63,13 @@ export async function POST(req: NextRequest) {
       const result = await gmailPost("/messages/send", {
         raw: encodedRaw,
         threadId,
-      })
+      }, asUser)
 
       // Ensure thread stays in INBOX after reply (Gmail API may remove INBOX label)
       try {
         await gmailPost(`/threads/${threadId}/modify`, {
           addLabelIds: ['INBOX'],
-        })
+        }, asUser)
       } catch {
         // Non-critical — thread was sent, just label may be wrong
       }

@@ -65,12 +65,33 @@ export function sanitizeEmailHtml(html: unknown): string {
   out = out.replace(/\son[a-z0-9_-]+\s*=\s*[^\s>]+/gi, '')
 
   // 4. Neutralize dangerous URL schemes in link/resource attributes.
+  //    href/xlink:href: javascript:/vbscript:/data: are ALL blocked (a link must
+  //    never navigate to script or a data: document).
   out = out.replace(
-    /(href|src|xlink:href)\s*=\s*"(?:\s*(?:javascript|vbscript|data)\s*:)[^"]*"/gi,
+    /(href|xlink:href)\s*=\s*"(?:\s*(?:javascript|vbscript|data)\s*:)[^"]*"/gi,
     '$1="#"',
   )
   out = out.replace(
-    /(href|src|xlink:href)\s*=\s*'(?:\s*(?:javascript|vbscript|data)\s*:)[^']*'/gi,
+    /(href|xlink:href)\s*=\s*'(?:\s*(?:javascript|vbscript|data)\s*:)[^']*'/gi,
+    "$1='#'",
+  )
+  //    src: javascript:/vbscript: blocked; data: blocked EXCEPT data:image/*
+  //    (emails legitimately embed images as data URIs — an image payload cannot
+  //    execute; data:text/html and friends stay blocked).
+  out = out.replace(
+    /(src)\s*=\s*"(?:\s*(?:javascript|vbscript)\s*:)[^"]*"/gi,
+    '$1="#"',
+  )
+  out = out.replace(
+    /(src)\s*=\s*'(?:\s*(?:javascript|vbscript)\s*:)[^']*'/gi,
+    "$1='#'",
+  )
+  out = out.replace(
+    /(src)\s*=\s*"\s*data\s*:(?!\s*image\/)[^"]*"/gi,
+    '$1="#"',
+  )
+  out = out.replace(
+    /(src)\s*=\s*'\s*data\s*:(?!\s*image\/)[^']*'/gi,
     "$1='#'",
   )
 

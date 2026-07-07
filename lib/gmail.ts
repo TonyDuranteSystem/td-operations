@@ -218,6 +218,7 @@ interface GmailHeader {
 interface GmailPart {
   mimeType: string
   filename?: string
+  headers?: GmailHeader[]
   body?: { data?: string; size?: number; attachmentId?: string }
   parts?: GmailPart[]
 }
@@ -253,6 +254,44 @@ export function extractAttachments(payload: GmailAPIMessage['payload']): GmailAt
 
   walk(payload.parts)
   return attachments
+}
+
+export interface GmailInlineImage {
+  /** Content-ID without the surrounding angle brackets */
+  contentId: string
+  attachmentId: string
+  mimeType: string
+}
+
+/**
+ * Extract inline images (parts with a Content-ID header) from a message
+ * payload. Email HTML references these as `<img src="cid:...">`; the caller
+ * rewrites those references to attachment-download URLs.
+ */
+export function extractInlineImages(
+  payload: GmailAPIMessage["payload"]
+): GmailInlineImage[] {
+  const images: GmailInlineImage[] = []
+
+  function walk(parts: GmailPart[] | undefined) {
+    if (!parts) return
+    for (const part of parts) {
+      const cid = part.headers?.find(
+        (h) => h.name.toLowerCase() === "content-id"
+      )?.value
+      if (cid && part.body?.attachmentId && part.mimeType.startsWith("image/")) {
+        images.push({
+          contentId: cid.trim().replace(/^</, "").replace(/>$/, ""),
+          attachmentId: part.body.attachmentId,
+          mimeType: part.mimeType,
+        })
+      }
+      if (part.parts) walk(part.parts)
+    }
+  }
+
+  walk(payload.parts)
+  return images
 }
 
 export interface GmailAPIMessage {

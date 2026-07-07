@@ -5,8 +5,10 @@ import {
   getHeader,
   extractBodyHtml,
   extractAttachments,
+  extractInlineImages,
   type GmailAPIMessage,
 } from "@/lib/gmail"
+import { rewriteCidSources } from "@/lib/inbox/email-html"
 import type { InboxMessage } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -136,8 +138,27 @@ export async function GET(
         const from = getHeader(msg.payload.headers, "From")
         const to = getHeader(msg.payload.headers, "To")
         const date = getHeader(msg.payload.headers, "Date")
-        const body = extractBodyHtml(msg.payload)
-        const attachments = extractAttachments(msg.payload)
+        let body = extractBodyHtml(msg.payload)
+
+        // Resolve inline images: rewrite `src="cid:X"` references to our
+        // attachment-download endpoint so the browser can load them.
+        const inlineImages = extractInlineImages(msg.payload)
+        const usedInline = new Set<string>()
+        if (body && inlineImages.length > 0) {
+          const byCid = new Map(inlineImages.map((i) => [i.contentId, i]))
+          body = rewriteCidSources(body, (cid) => {
+            const img = byCid.get(cid)
+            if (!img) return null
+            usedInline.add(img.attachmentId)
+            const mb = mailbox === "antonio" ? "&mailbox=antonio" : ""
+            return `/api/inbox/attachment?messageId=${msg.id}&attachmentId=${encodeURIComponent(img.attachmentId)}&mimeType=${encodeURIComponent(img.mimeType)}&filename=inline-image${mb}`
+          })
+        }
+
+        // Hide attachments that render inline in the body (Gmail does the same)
+        const attachments = extractAttachments(msg.payload).filter(
+          (a) => !usedInline.has(a.attachmentId)
+        )
 
         const isOutbound =
           from.includes("support@tonydurante.us") ||
@@ -147,7 +168,7 @@ export async function GET(
           id: msg.id,
           direction: isOutbound ? "outbound" : "inbound",
           sender: isOutbound ? to : from,
-          content: body.length > 50000 ? body.slice(0, 50000) + "..." : body,
+          content: body,
           type: "email",
           status: msg.labelIds?.includes("UNREAD") ? "new" : "read",
           createdAt: date

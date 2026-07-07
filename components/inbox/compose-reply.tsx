@@ -7,9 +7,12 @@ import type { InboxConversation } from '@/lib/types'
 
 interface ComposeReplyProps {
   conversation: InboxConversation
+  /** Which Gmail mailbox the user is viewing ('support' | 'antonio') — the
+   *  reply must be fetched from and sent through the SAME mailbox. */
+  mailbox?: string
 }
 
-export function ComposeReply({ conversation }: ComposeReplyProps) {
+export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
   const [message, setMessage] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const queryClient = useQueryClient()
@@ -23,6 +26,7 @@ export function ComposeReply({ conversation }: ComposeReplyProps) {
           conversationId: conversation.id,
           message: text,
           channel: conversation.channel,
+          mailbox,
         }),
       })
       if (!res.ok) {

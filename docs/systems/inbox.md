@@ -1,0 +1,92 @@
+# Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
+_Last verified against code: 2026-07-07 — Claude (inbox audit + Phase 1 rendering fixes)_
+
+## What it is
+
+The `/inbox` tab of the CRM dashboard: a **live window onto Gmail** (support@ and
+antonio@ mailboxes) plus the WhatsApp/Telegram messaging groups stored in
+Supabase. **Nothing Gmail-related is persisted in our DB** — every list/thread
+view is fetched from the Gmail API on demand (SA + DWD impersonation, see
+`lib/gmail.ts`). WhatsApp/Telegram messages live in `messaging_groups` /
+`messages` and are read-only here except replies via the `send-message` Edge
+Function.
+
+## How it works
+
+- **Page**: `app/(dashboard)/inbox/page.tsx` → `components/inbox/inbox-shell.tsx`
+  (channel tabs, mailbox toggle support@/antonio@, search, bulk actions, labels
+  sidebar).
+- **Conversation list**: `app/api/inbox/conversations/route.ts`. Lists Gmail
+  threads (default `labelIds=INBOX`, or `q=in:<label>` / search query), fetches
+  per-thread metadata, finds the external (non-TD) party, and matches their
+  email against `account_contacts → contacts.email/email_2` to label the row
+  with the CRM account. Polled every 30s by `conversation-list.tsx`.
+- **Thread view**: `app/api/inbox/messages/[id]/route.ts` for `gmail:<threadId>`
+  IDs fetches the full thread. Each message body:
+  - HTML extracted by `extractBodyHtml` (`lib/gmail.ts`);
+  - inline images (`src="cid:..."`) rewritten to
+    `/api/inbox/attachment?...` via `extractInlineImages` (`lib/gmail.ts`) +
+    `rewriteCidSources` (`lib/inbox/email-html.ts`); inline-rendered attachments
+    are filtered out of the attachment chip list;
+  - sanitized with `sanitizeEmailHtml` (`lib/html-escape.ts`) — regex-based;
+    blocks script vectors; **allows `data:image/*` in `src` only**;
+  - rendered in `components/inbox/message-thread.tsx`: emails as full-width
+    cards whose body lives in a **sandboxed iframe**
+    (`components/inbox/email-html-frame.tsx`, `sandbox` WITHOUT
+    `allow-scripts` — never add `allow-scripts`, `allow-same-origin` is present
+    for height measurement + authed same-origin image loads). Chat channels
+    keep the bubble layout.
+- **Reply**: `components/inbox/compose-reply.tsx` → `app/api/inbox/reply/route.ts`.
+  Plain-text reply with proper `In-Reply-To`/`References` + `threadId`, sent
+  **through the mailbox being viewed** (`mailbox` param — thread IDs are
+  mailbox-scoped; support@ is the default).
+- **Compose / forward**: `compose-dialog.tsx` → `app/api/inbox/compose/route.ts`
+  → `sendEmail` (`lib/operations/email.ts`) — brand shell, duplicate check,
+  tracking, CRM linkage.
+- **Actions**: `app/api/inbox/email-actions/route.ts` (archive/trash/star/
+  mark-unread/move-to-label, single + bulk, mailbox-aware).
+  `app/api/inbox/mark-read/route.ts` removes UNREAD per message on open.
+- **Unread badges**: `app/api/inbox/stats/route.ts` returns
+  `{ gmail, whatsapp, total }` (support@ INBOX unread + messaging groups).
+  Consumed by `inbox-header.tsx` and the dashboard `unread-messages.tsx` card
+  (reads `total`).
+- **AI surfaces**: `ai-suggest` (draft reply), `ai-compose`,
+  `components/dashboard/cards/email-intelligence.tsx` +
+  `app/api/crm/email-intelligence/route.ts` (AI triage of unread, support@
+  only), `app/api/cron/email-monitor/` (every 5 min: emails from contacts tied
+  to open tasks → `agent_decisions` proposals).
+
+## Rules / gotchas
+
+- **Thread and message IDs are per-mailbox.** Any Gmail API call for a thread
+  listed under mailbox X must impersonate X (`asUser`). The UI passes
+  `mailbox=antonio|support` end-to-end (list → thread → attachment → reply →
+  actions → mark-read).
+- **Gmail label index lags 30–60s** after modify operations — the UI papers over
+  this with optimistic cache updates, `localStorage` deleted-ids (5-min TTL),
+  and delayed invalidations. Don't "fix" those without understanding this.
+- **Email HTML is attacker-controlled** (anyone can email support@). Defense in
+  depth is sanitize + sandboxed iframe. Never render inbound email HTML with
+  `dangerouslySetInnerHTML` outside the sanitizer, and never add
+  `allow-scripts` to the frame.
+- Notification-style senders (Stripe, ShipStation, banks…) can be threaded
+  together **by Gmail itself** (same sender + subject) — that part is
+  Gmail-side behaviour, not our code.
+- Known debt (audit 2026-07-07): subject-based "related thread merging" in
+  `messages/[id]/route.ts` can mix same-sender threads across clients
+  (Phase 2 removes it); email→account lookup is last-write-wins for contacts
+  on multiple accounts; 30s polling refetches up to ~200 threads + the whole
+  `account_contacts` table.
+
+## How to verify current state
+
+1. `npm run test:unit -- email-html html-escape gmail` — parsing/sanitizer/cid
+   rewrite invariants.
+2. Sandbox deploy (`vercel deploy --yes` from the worktree, project
+   `td-operations-sandbox`), log in as QA admin, open `/inbox`:
+   an email with a pasted screenshot must show the image; an email with a
+   data-URI signature image must show it; a large marketing email must render
+   un-truncated inside its frame; switch to antonio@ and send a test reply.
+3. Sends are blocked in sandbox (`SANDBOX_MODE`) — verify reply payloads via
+   the API response / unit level; real-send QA happens on production only after
+   explicit approval.

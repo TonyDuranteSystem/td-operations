@@ -22,7 +22,8 @@ async function fetchInboxStats() {
 export async function UnreadMessagesCard() {
   const stats = await fetchInboxStats()
 
-  const totalUnread = stats?.unread ?? 0
+  // /api/inbox/stats returns { gmail, whatsapp, total } — see InboxStats.
+  const totalUnread = stats?.total ?? 0
 
   if (totalUnread === 0) {
     return (
