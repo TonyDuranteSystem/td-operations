@@ -1,6 +1,12 @@
 'use client'
 
-import { useState, useEffect, useActionState } from 'react'
+import { useState, useEffect } from 'react'
+// React 18 form-action hooks. useActionState is React 19-only — importing it
+// from 'react' on 18.3 is undefined at runtime (build printed an import error
+// and the payout form crashed on render). useFormState has the identical
+// (action, initialState) contract; pending comes from useFormStatus inside
+// the <form>.
+import { useFormState, useFormStatus } from 'react-dom'
 import { Check, Circle, Share2, Banknote, ChevronDown, Copy, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { REFERRAL_STAGES, REFERRAL_STAGE_LABELS, type ReferralStage } from '@/lib/portal/partner-referrals'
@@ -282,8 +288,21 @@ function PayoutRow({ payout }: { payout: PartnerReferralView['payouts'][number] 
 
 const initialState: RequestPayoutState = { ok: false }
 
+function SubmitPayoutButton() {
+  const { pending } = useFormStatus()
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="px-3 py-1.5 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60"
+    >
+      {pending ? 'Submitting…' : 'Submit payout request'}
+    </button>
+  )
+}
+
 function PayoutRequestForm({ payoutId }: { payoutId: string }) {
-  const [state, formAction, pending] = useActionState(requestPartnerPayout, initialState)
+  const [state, formAction] = useFormState(requestPartnerPayout, initialState)
 
   if (state.ok && state.payoutId === payoutId) {
     return (
@@ -312,13 +331,7 @@ function PayoutRequestForm({ payoutId }: { payoutId: string }) {
       {state.error && state.payoutId === payoutId && (
         <p className="text-xs text-red-600">{state.error}</p>
       )}
-      <button
-        type="submit"
-        disabled={pending}
-        className="px-3 py-1.5 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60"
-      >
-        {pending ? 'Submitting…' : 'Submit payout request'}
-      </button>
+      <SubmitPayoutButton />
     </form>
   )
 }
