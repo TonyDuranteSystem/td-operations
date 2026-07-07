@@ -8,6 +8,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { getLocale } from '@/lib/portal/i18n'
 import { TaxFinancialsReview } from '@/components/portal/tax-financials-review'
+import { pickOpenYear } from '@/lib/portal/open-year'
 
 /**
  * /portal/tax-financials — the review/confirm screen (Slice 8, master plan
@@ -18,7 +19,7 @@ import { TaxFinancialsReview } from '@/components/portal/tax-financials-review'
  * OWNER-ONLY — the API routes enforce it; teammates get errors if they
  * navigate here directly.
  */
-export default async function TaxFinancialsPage() {
+export default async function TaxFinancialsPage({ searchParams }: { searchParams?: Promise<{ year?: string }> }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
@@ -32,22 +33,45 @@ export default async function TaxFinancialsPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
   if (!selectedAccountId) redirect('/portal')
 
-  // The open filing year — same derivation the wizard submit uses.
-  const { data: tr } = await supabaseAdmin
+  // ALL open filing years (data_received=false) — an amendment/correction can
+  // leave an older year open next to the current cycle (2026-07-07, Dynamiq
+  // 2024 rebuild: the page used to show only the newest and a correction year
+  // was unreachable). One open year renders exactly as before; several render
+  // a year switcher.
+  const { data: trs } = await supabaseAdmin
     .from('tax_returns')
     .select('tax_year')
     .eq('account_id', selectedAccountId)
     .eq('data_received', false)
     .order('tax_year', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (!tr?.tax_year) redirect('/portal')
+  const openYears = Array.from(new Set(((trs ?? []) as Array<{ tax_year: number }>).map(t => t.tax_year)))
+  const params = searchParams ? await searchParams : undefined
+  const taxYear = pickOpenYear(openYears, params?.year)
+  if (!taxYear) redirect('/portal')
 
   const locale = getLocale(user)
+  const it = locale === 'it'
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
-      <TaxFinancialsReview accountId={selectedAccountId} taxYear={tr.tax_year} locale={locale} />
+      {openYears.length > 1 && (
+        <nav className="mb-4 flex items-center gap-2" aria-label={it ? 'Anno fiscale' : 'Tax year'}>
+          <span className="text-xs text-zinc-500">{it ? 'Anno fiscale:' : 'Tax year:'}</span>
+          {openYears.map(y => (
+            <a
+              key={y}
+              href={`/portal/tax-financials?year=${y}`}
+              aria-current={y === taxYear ? 'page' : undefined}
+              className={`rounded-full px-3 py-1 text-sm font-medium ${y === taxYear
+                ? 'bg-zinc-900 text-white'
+                : 'border border-zinc-300 bg-white text-zinc-600 hover:border-zinc-500'}`}
+            >
+              {y}
+            </a>
+          ))}
+        </nav>
+      )}
+      <TaxFinancialsReview accountId={selectedAccountId} taxYear={taxYear} locale={locale} />
     </div>
   )
 }
