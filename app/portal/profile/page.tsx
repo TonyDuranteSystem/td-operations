@@ -4,7 +4,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getPortalAccounts, getPortalAccountDetail } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
-import { User, Building2, Landmark, CreditCard } from 'lucide-react'
+import { User, Building2, Landmark, CreditCard, ShieldCheck } from 'lucide-react'
 import { t, getLocale } from '@/lib/portal/i18n'
 import Link from 'next/link'
 import { LogoUpload } from '@/components/portal/logo-upload'
@@ -64,6 +64,24 @@ export default async function PortalProfilePage() {
           }}
         />
       </div>
+
+      {/* Identity & Tax — shown once the contact has an ITIN on file (stamped
+          by the ITIN-approval finalize). Client request via Luca (2026-07-07):
+          let clients look up their ITIN without opening the CP565 letter. */}
+      {contact?.itin_number && (
+        <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-blue-600" />
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.identityTax', locale)}</h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            <InfoField label={t('profile.itinNumber', locale)} value={contact.itin_number} />
+            <InfoField label={t('profile.itinIssueDate', locale)} value={contact.itin_issue_date ?? '—'} />
+            <InfoField label={t('profile.itinRenewalDate', locale)} value={contact.itin_renewal_date ?? '—'} />
+          </div>
+          <p className="text-xs text-zinc-400">{t('profile.itinLetterNote', locale)}</p>
+        </div>
+      )}
 
       {/* Company Info */}
       {account && (
