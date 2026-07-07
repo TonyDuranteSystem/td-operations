@@ -102,7 +102,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     // In-flight / failed workspace ingest jobs (by distinct file path).
     const { data: ingestJobs } = await supabaseAdmin
       .from('job_queue')
-      .select('status, result, payload')
+      .select('status, result, payload, created_at')
       .eq('job_type', 'ingest_workspace_statement')
       .eq('related_entity_id', workspaceId)
       .in('status', ['pending', 'processing', 'failed', 'completed'])
@@ -121,6 +121,31 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       if (e.succeeded) continue
       if (e.pending) ingestPending++
       else if (e.failed) ingestFailed++
+    }
+
+    // S1 (2026-07-07): files QUARANTINED for a one-tap format confirmation —
+    // extracted from the failed jobs' marker steps, deduped by mapping id,
+    // dropped once the path eventually ingested (succeeded) or was re-queued.
+    const format_proposals: Array<{ mapping_id: string; file: string; path: string; bank_label: string; ambiguities: string[]; sample: unknown }> = []
+    const seenMapping = new Set<string>()
+    const jobsNewestFirst = ([...(ingestJobs ?? [])] as Array<{ status: string; result: { steps?: Array<{ detail?: string }> } | null; payload: { path?: string } | null; created_at?: string }>)
+      .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
+    for (const j of jobsNewestFirst) {
+      if (j.status !== 'failed') continue
+      const path = j.payload?.path
+      if (!path || byPath.get(path)?.succeeded || byPath.get(path)?.pending) continue
+      for (const s of j.result?.steps ?? []) {
+        const d = s.detail ?? ''
+        const idx = d.indexOf('FORMAT_CONFIRMATION_NEEDED:')
+        if (idx === -1) continue
+        try {
+          const q = JSON.parse(d.slice(idx + 'FORMAT_CONFIRMATION_NEEDED:'.length)) as { mapping_id?: string; file?: string; path?: string; bank_label?: string; ambiguities?: string[]; sample?: unknown }
+          if (q.mapping_id && !seenMapping.has(q.mapping_id)) {
+            seenMapping.add(q.mapping_id)
+            format_proposals.push({ mapping_id: q.mapping_id, file: q.file ?? path.split('/').pop() ?? 'statement', path: q.path ?? path, bank_label: q.bank_label ?? 'Bank', ambiguities: q.ambiguities ?? [], sample: q.sample ?? null })
+          }
+        } catch { /* malformed marker — ignore */ }
+      }
     }
 
     // Smart-categorization job still running? The UI keeps polling and shows
@@ -317,6 +342,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       buckets,
       ingestPending,
       ingestFailed,
+      format_proposals,
       attested: false, // workspaces have no attestation
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
       generated_at: generatedAt,

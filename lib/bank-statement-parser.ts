@@ -43,7 +43,11 @@ export interface ParseResult {
   period: string
   errors: string[]
   /** How the transactions were extracted. Absent for legacy hand-coded parsers. */
-  extraction_method?: "wise_csv" | "relay_csv" | "mercury_csv" | "revolut_csv" | "slash_csv" | "generic_csv" | "wise_pdf" | "ai" | "unknown"
+  extraction_method?: "wise_csv" | "relay_csv" | "mercury_csv" | "revolut_csv" | "slash_csv" | "generic_csv" | "mapped_csv" | "quarantined" | "wise_pdf" | "ai" | "unknown"
+  /** Set when the file is QUARANTINED awaiting a one-tap staff format
+   *  confirmation (S1, 2026-07-07): a mapping was proposed but carries
+   *  ambiguities — the file must NOT ingest until confirmed. */
+  quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[]; sample: unknown }
   /**
    * Balance reconciliation guard (set by AI extraction). When a statement
    * reports opening + closing balances, we verify opening + Σamounts ≈ closing.
@@ -683,6 +687,17 @@ export interface ParseOptions {
   /** Tax year being processed — the year anchor for exports whose dates
    *  carry no year (Slash: "Dec 30"). */
   taxYear?: number
+  /** Learned-format mapping store (S1). Injected by ingest handlers; absent =
+   *  the mapping layer is skipped entirely (legacy behavior, tests stay pure). */
+  mappingStore?: {
+    lookup: (fingerprint: string) => Promise<import("./bank-format-mappings").StoredMapping | null>
+    store: (row: {
+      fingerprint: string; delimiter: string; mapping: import("./bank-format-mappings").FormatMapping
+      status: "proposed" | "verified_auto"; bank_label: string; sample: unknown
+      proposed_by: "ai" | "heuristic"; source_file: string | null; created_by: string
+    }) => Promise<string | null>
+    recordHit: (id: string) => Promise<void>
+  }
 }
 
 const aiDisabled = () => process.env.BANK_STATEMENT_AI_DISABLED === "true"
@@ -831,13 +846,90 @@ export async function parseBankStatement(
       r.extraction_method = "wise_csv"
       if (r.transactions.length > 0) return r
     }
+    // S1 (2026-07-07, tri-role reviewed): LEARNED FORMAT MAPPINGS. When the
+    // ingest path injects a mapping store, unknown layouts go through:
+    // stored-mapping hit (deterministic, zero AI) → heuristic/AI proposal →
+    // deterministic verifier → auto-accept only at ZERO ambiguity, else
+    // QUARANTINE for a one-tap staff confirmation. The generic parser below
+    // remains only for callers without a store (legacy/tests).
+    if (signature === null && opts?.mappingStore) {
+      const {
+        formatFingerprint, applyFormatMapping, verifyMapping,
+        proposeMappingHeuristically, proposeMappingWithAI,
+      } = await import("./bank-format-mappings")
+      const fingerprint = formatFingerprint(headerCells)
+      const stored = await opts.mappingStore.lookup(fingerprint)
+
+      if (stored && (stored.status === "verified_auto" || stored.status === "staff_confirmed")) {
+        const r = applyFormatMapping(content, stored.mapping)
+        const v = verifyMapping(content, stored.mapping)
+        if (v.ok && r.transactions.length > 0) {
+          await opts.mappingStore.recordHit(stored.id)
+          return r
+        }
+        // A stored mapping that no longer verifies on THIS file = the format
+        // drifted — fall through to proposal instead of ingesting bad rows.
+        r.errors.push(`Stored mapping for this format failed verification: ${v.hard_failures.join("; ")}`)
+      }
+      if (stored?.status === "proposed") {
+        return {
+          transactions: [], bank_name: stored.bank_label, currency: "USD", account_holder: "", period: "",
+          errors: ["This file's format is awaiting a one-tap staff confirmation before it can be read."],
+          extraction_method: "quarantined",
+          quarantine: { mapping_id: stored.id, fingerprint, bank_label: stored.bank_label, ambiguities: [], sample: null },
+        }
+      }
+      if (stored?.status !== "rejected") {
+        // Propose: heuristic first (free), AI only when the heuristic can't map.
+        let proposal = proposeMappingHeuristically(content)
+        let proposedBy: "heuristic" | "ai" = "heuristic"
+        if (!proposal && !aiDisabled()) {
+          const bodyRows = parseDelimitedRows(content, dialect.delimiter)
+          const sampleRows = [...bodyRows.slice(1, 5), ...bodyRows.slice(-3)]
+          const ai = await proposeMappingWithAI(headerCells, sampleRows, { fetchImpl: opts?.fetchImpl, model: opts?.aiModel })
+          proposal = ai.mapping
+          proposedBy = "ai"
+        }
+        if (proposal) {
+          const v = verifyMapping(content, proposal)
+          if (v.auto_acceptable) {
+            const id = await opts.mappingStore.store({
+              fingerprint, delimiter: dialect.delimiter, mapping: proposal, status: "verified_auto",
+              bank_label: proposal.bank_label, sample: v.sample, proposed_by: proposedBy,
+              source_file: fileName, created_by: "system:format-mapping",
+            })
+            if (id) {
+              const r = applyFormatMapping(content, proposal)
+              if (r.transactions.length > 0) return r
+            }
+          } else if (v.ok) {
+            // Parses cleanly but carries ambiguities → QUARANTINE, never guess.
+            const id = await opts.mappingStore.store({
+              fingerprint, delimiter: dialect.delimiter, mapping: proposal, status: "proposed",
+              bank_label: proposal.bank_label, sample: v.sample, proposed_by: proposedBy,
+              source_file: fileName, created_by: "system:format-mapping",
+            })
+            return {
+              transactions: [], bank_name: proposal.bank_label, currency: "USD", account_holder: "", period: "",
+              errors: [`This file's format needs a one-tap confirmation: ${v.ambiguities.join(" ")}`],
+              extraction_method: "quarantined",
+              quarantine: { mapping_id: id, fingerprint, bank_label: proposal.bank_label, ambiguities: v.ambiguities, sample: v.sample },
+            }
+          }
+          // hard failures → fall through to AI row-extraction below (last resort)
+        }
+      }
+    }
     // Bank-agnostic generic CSV parser — ANY bank whose CSV has a recognizable
     // date + amount (or debit/credit) column parses here: free, instant, no AI,
     // and a brand-new bank "just works" with no per-bank code. ONLY for unknown
     // layouts (signature === null) — a recognized-but-not-deterministically-
     // parsed format like wise_transfers (source/target double-count semantics)
     // must still go to AI below, never the generic parser. Unmappable → AI too.
-    if (signature === null) {
+    // S1: DEMOTED — skipped whenever a mapping store is present (the verified
+    // mapping path above owns unknown layouts; unverified generic guesses were
+    // the Dynamiq double-conversion origin).
+    if (signature === null && !opts?.mappingStore) {
       const generic = parseGenericCSV(content, { fallbackYear: opts?.taxYear })
       if (generic.transactions.length > 0) { generic.extraction_method = "generic_csv"; return generic }
     }

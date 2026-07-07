@@ -44,6 +44,8 @@ export interface WorkspaceIngestResult {
   bankDetected: string
   uncategorizedRemaining: number
   sourceFileId: string
+  /** S1: the file is QUARANTINED pending a one-tap staff format confirmation. */
+  quarantine?: { mapping_id: string | null; fingerprint: string; bank_label: string; ambiguities: string[]; sample: unknown }
 }
 
 export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<WorkspaceIngestResult> {
@@ -76,7 +78,21 @@ export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<W
     : lower.endsWith(".zip") || lower.endsWith(".x-zip-compressed")
       ? "application/zip"
       : "text/csv"
-  const parsed = await parseBankStatement(buffer, fileName, mimeType, { taxYear })
+  // S1 (2026-07-07): unknown CSV layouts go through the learned-mapping layer
+  // (stored fingerprint → heuristic/AI column-role proposal → deterministic
+  // verifier → auto-accept or quarantine). The store is injected here so the
+  // parser itself stays pure.
+  const { makeSupabaseMappingStore } = await import("@/lib/bank-format-mappings")
+  const parsed = await parseBankStatement(buffer, fileName, mimeType, { taxYear, mappingStore: makeSupabaseMappingStore(db) })
+  if (parsed.extraction_method === "quarantined" && parsed.quarantine) {
+    return {
+      ok: false,
+      error: parsed.errors[0] ?? "This file's format needs a one-tap staff confirmation before it can be read.",
+      inserted: 0, parsed: 0, months: [], bankDetected: parsed.quarantine.bank_label,
+      uncategorizedRemaining: 0, sourceFileId,
+      quarantine: parsed.quarantine,
+    }
+  }
   if (parsed.transactions.length === 0) {
     const detail = parsed.errors.length ? ` (${parsed.errors[0]})` : ""
     return fail(

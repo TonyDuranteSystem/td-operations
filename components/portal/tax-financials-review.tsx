@@ -69,6 +69,8 @@ interface View {
   ingestPending: number
   /** Statement files that couldn't be read (unreadable/merged or failed). */
   ingestFailed: number
+  /** S1: statement files quarantined pending a one-tap format confirmation (staff). */
+  format_proposals?: Array<{ mapping_id: string; file: string; path: string; bank_label: string; ambiguities: string[]; sample: Array<{ date: string; description: string; amount: number; currency: string; account: string }> | null }>
   questions: QuestionGroup[]
   buckets: Bucket[]
   expense_breakdown?: { slug: string; label: string; total: number }[]
@@ -803,6 +805,28 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // Staff workspace only (2026-07-06): set/clear the prior-return answer —
   // first-year companies can never produce a prior return; the server
   // cross-checks first_year against the linked client's formation date.
+  // S1: resolve a quarantined statement format (staff one-tap).
+  const resolveFormat = async (mappingId: string, path: string, action: 'confirm' | 'reject') => {
+    setBusy(`format-${action}-${mappingId}`)
+    setError(null)
+    try {
+      const res = await fetch(`${API}/confirm-format`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapping_id: mappingId, path, action }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not save the format decision — please try again.')
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const setPriorReturn = async (choice: 'first_year' | 'never_filed' | 'clear') => {
     setBusy(`prior-return-${choice}`)
     setError(null)
@@ -851,6 +875,60 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // Bank statements list + "Add a statement" uploader. Extracted so it can
   // render both in the normal populated view AND in the empty state (no
   // transactions yet) without duplicating markup.
+  // S1: quarantined-format confirmation card — the file will NOT be read until
+  // staff confirms how its columns should be interpreted (never guess).
+  const renderFormatProposals = () => {
+    if (!isStaff || !view?.format_proposals?.length) return null
+    return (
+      <section className="rounded-xl border border-amber-300 bg-amber-50 p-4 sm:p-5 space-y-4">
+        <div>
+          <h2 className="text-sm font-bold text-amber-900">⚠ {view.format_proposals.length} file(s) need a format confirmation</h2>
+          <p className="text-xs text-amber-800 mt-0.5">We can read these files, but one detail is ambiguous — confirm the proposed reading below or reject it and request a proper bank export. The file is NOT counted until you decide.</p>
+        </div>
+        {view.format_proposals.map(fp => (
+          <div key={fp.mapping_id} className="rounded-lg border border-amber-200 bg-white p-3 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium text-zinc-800">{fp.file} <span className="text-zinc-400">· read as {fp.bank_label}</span></span>
+              <span className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void resolveFormat(fp.mapping_id, fp.path, 'confirm')}
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {busy === `format-confirm-${fp.mapping_id}` ? 'Confirming…' : 'Confirm — read it this way'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void resolveFormat(fp.mapping_id, fp.path, 'reject')}
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+                >
+                  {busy === `format-reject-${fp.mapping_id}` ? 'Rejecting…' : 'Reject'}
+                </button>
+              </span>
+            </div>
+            {fp.ambiguities.length > 0 && (
+              <ul className="text-xs text-amber-800 list-disc pl-4">
+                {fp.ambiguities.map((a, i) => <li key={i}>{a}</li>)}
+              </ul>
+            )}
+            {Array.isArray(fp.sample) && fp.sample.length > 0 && (
+              <table className="w-full text-xs text-zinc-600">
+                <thead><tr className="text-zinc-400 text-left"><th className="font-normal">Date</th><th className="font-normal">Description</th><th className="font-normal text-right">Amount</th><th className="font-normal">Currency</th><th className="font-normal">Account</th></tr></thead>
+                <tbody>
+                  {fp.sample.map((s, i) => (
+                    <tr key={i}><td>{s.date}</td><td className="pr-2">{s.description}</td><td className="text-right">{s.amount.toFixed(2)}</td><td>{s.currency}</td><td>{s.account}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ))}
+      </section>
+    )
+  }
+
   const renderStatements = () => {
     if (!view) return null
     return (
@@ -948,6 +1026,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
         )}
 
+        {renderFormatProposals()}
         {renderStatements()}
 
         <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
@@ -1151,6 +1230,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     : 'Upload your full-year bank statements below and we\'ll prepare your Profit & Loss and Balance Sheet.')}
             </p>
           </section>
+          {renderFormatProposals()}
           {renderStatements()}
         </div>
       )}
@@ -2054,6 +2134,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
           )}
 
           {/* Files + add-a-statement uploader (shared with the empty state). */}
+          {renderFormatProposals()}
           {renderStatements()}
 
           {/* Completeness summary (dev_task 95127bb2) — translate the checks

@@ -159,7 +159,7 @@ function relayDateToIso(raw: string): string | null {
   return null
 }
 
-function parseAmount(raw: string, commaDecimals: boolean): number {
+export function parseAmount(raw: string, commaDecimals: boolean): number {
   let s = raw.trim().replace(/[+$€£\s]/g, "")
   if (commaDecimals) s = s.replace(/\./g, "").replace(",", ".")
   else s = s.replace(/,/g, "")
@@ -220,7 +220,10 @@ export function parseRelayCSV(csvContent: string, _fileName: string): ParseResul
       description: descParts.join(" | ") || "Relay transaction",
       counterparty: payee,
       amount,
-      currency: (cCurrency !== -1 && row[cCurrency]?.trim()) || "USD",
+      // CPA rule (2026-07-07 Dynamiq incident): Mercury's Amount is USD-SETTLED;
+      // "Original Currency" only notes where a card purchase happened. Taking it
+      // as the row currency made the engine convert an already-USD amount again.
+      currency: "USD",
       balance_after: balance !== null && !isNaN(balance) ? balance : null,
       // content hash incl. running balance (distinguishes equal twin charges)
       transaction_ref: stableRowRef([iso, amount, payee, row[cDesc] ?? "", balanceRaw]),
@@ -252,18 +255,18 @@ export function parseRelayCSV(csvContent: string, _fileName: string): ParseResul
 // It runs AFTER the exact per-bank parsers and BEFORE the AI fallback; an
 // unmappable layout returns 0 rows → caller falls back to AI-CSV extraction.
 
-const G_DATE = ["date completed", "date (utc)", "transaction date", "posted date", "value date", "booking date", "completed date", "date", "timestamp", "data", "date started"]
-const G_AMOUNT = ["total amount", "amount", "importo", "net amount"]
-const G_DEBIT = ["debit", "withdrawal", "withdrawals", "money out", "paid out", "amount out", "addebito", "dare", "out"]
-const G_CREDIT = ["credit", "deposit", "deposits", "money in", "paid in", "amount in", "accredito", "avere", "in"]
-const G_BALANCE = ["running balance", "balance after", "closing balance", "saldo corrente", "saldo", "balance"]
-const G_CURRENCY = ["currency", "ccy", "valuta"]
-const G_DESC = ["description", "details", "narrative", "memo", "reference", "merchant", "payee", "name", "transaction type", "type", "descrizione", "causale", "note", "notes"]
-const G_PARTY = ["payee", "counterparty", "beneficiary", "merchant", "name", "to / from", "to/from"]
+export const G_DATE = ["date completed", "date (utc)", "transaction date", "posted date", "value date", "booking date", "completed date", "date", "timestamp", "data", "date started"]
+export const G_AMOUNT = ["total amount", "amount", "importo", "net amount"]
+export const G_DEBIT = ["debit", "withdrawal", "withdrawals", "money out", "paid out", "amount out", "addebito", "dare", "out"]
+export const G_CREDIT = ["credit", "deposit", "deposits", "money in", "paid in", "amount in", "accredito", "avere", "in"]
+export const G_BALANCE = ["running balance", "balance after", "closing balance", "saldo corrente", "saldo", "balance"]
+export const G_CURRENCY = ["currency", "ccy", "valuta"]
+export const G_DESC = ["description", "details", "narrative", "memo", "reference", "merchant", "payee", "name", "transaction type", "type", "descrizione", "causale", "note", "notes"]
+export const G_PARTY = ["payee", "counterparty", "beneficiary", "merchant", "name", "to / from", "to/from"]
 
 /** Find a column index: exact header match first (most reliable), then a
  *  "contains" match, skipping any header that contains an excluded word. */
-function findCol(header: string[], synonyms: string[], exclude: string[] = []): number {
+export function findCol(header: string[], synonyms: string[], exclude: string[] = []): number {
   for (const s of synonyms) { const i = header.indexOf(s); if (i !== -1) return i }
   for (const s of synonyms) {
     const i = header.findIndex(h => h.includes(s) && !exclude.some(x => h.includes(x)))
@@ -274,7 +277,7 @@ function findCol(header: string[], synonyms: string[], exclude: string[] = []): 
 
 /** Parse an amount allowing a leading +, currency symbols, and (parentheses)
  *  = negative (common accounting export style). */
-function parseSignedAmount(raw: string, commaDecimals: boolean): number {
+export function parseSignedAmount(raw: string, commaDecimals: boolean): number {
   const t = (raw || "").trim()
   if (!t) return NaN
   const paren = /^\(.*\)$/.test(t)
@@ -283,7 +286,7 @@ function parseSignedAmount(raw: string, commaDecimals: boolean): number {
 }
 
 /** Detect M/D/Y vs D/M/Y from the data (ISO dates are unambiguous). */
-function detectDateOrder(samples: string[]): "mdy" | "dmy" {
+export function detectDateOrder(samples: string[]): "mdy" | "dmy" {
   for (const s of samples) {
     const m = s.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-]\d{2,4}$/)
     if (!m) continue
@@ -293,7 +296,7 @@ function detectDateOrder(samples: string[]): "mdy" | "dmy" {
   return "mdy" // default US — most clients' banks are US; flagged when ambiguous
 }
 
-function flexibleDateToIso(raw: string, order: "mdy" | "dmy"): string | null {
+export function flexibleDateToIso(raw: string, order: "mdy" | "dmy"): string | null {
   const t = (raw || "").trim()
   if (!t) return null
   const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
@@ -332,7 +335,7 @@ export function parseGenericCSV(csvContent: string, _opts?: { fallbackYear?: num
     const credit = findCol(h, G_CREDIT)
     if (date !== -1 && (amount !== -1 || debit !== -1 || credit !== -1)) {
       const descCols = G_DESC.map(s => h.indexOf(s)).filter(i => i !== -1)
-      map = { date, amount, debit, credit, balance: findCol(h, G_BALANCE), currency: findCol(h, G_CURRENCY), party: findCol(h, G_PARTY), descCols }
+      map = { date, amount, debit, credit, balance: findCol(h, G_BALANCE), currency: findCol(h, G_CURRENCY, ["original"]), party: findCol(h, G_PARTY), descCols }
       headerIdx = r
       break
     }
@@ -428,7 +431,7 @@ export function parseMercuryCSV(csvContent: string, _fileName: string): ParseRes
   const col = (name: string) => header.indexOf(name)
   const cDate = col("date (utc)"), cDesc = col("description"), cAmount = col("amount"),
     cStatus = col("status"), cSource = col("source account"), cBankDesc = col("bank description"),
-    cMercCat = col("mercury category"), cCurrency = col("original currency")
+    cMercCat = col("mercury category")
 
   if (cDate === -1 || cAmount === -1) {
     return { transactions: [], bank_name: "Mercury", currency: "USD", account_holder: "", period: "", errors: ["Could not find required columns (date, amount)"] }
@@ -454,7 +457,10 @@ export function parseMercuryCSV(csvContent: string, _fileName: string): ParseRes
       description: [desc, bankDesc, mercCat ? `[${mercCat}]` : ""].filter(Boolean).join(" | ") || "Mercury transaction",
       counterparty: bankDesc || desc,
       amount,
-      currency: (cCurrency !== -1 && row[cCurrency]?.trim()) || "USD",
+      // CPA rule (2026-07-07 Dynamiq incident): Mercury's Amount is USD-SETTLED;
+      // "Original Currency" only notes where a card purchase happened. Taking it
+      // as the row currency made the engine convert an already-USD amount again.
+      currency: "USD",
       balance_after: null, // Mercury CSV exports carry no running balance
       transaction_ref: stableRowRef([iso, amount, desc, bankDesc, source]),
       bank_name: "Mercury",

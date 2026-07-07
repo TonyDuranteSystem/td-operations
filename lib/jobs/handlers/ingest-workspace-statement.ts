@@ -134,6 +134,13 @@ export async function handleIngestWorkspaceStatement(job: Job): Promise<JobResul
     result.steps.push(step("ingest", "ok",
       `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})`))
     result.summary = `Ingested ${fileName}: ${r.inserted} transactions`
+  } else if (r.quarantine) {
+    // S1: quarantined = awaiting the one-tap staff format confirmation. The
+    // step detail carries the quarantine JSON (marker-prefixed) so the
+    // workspace GET can render the confirm card without extra queries.
+    result.steps.push(step("ingest", "error", `FORMAT_CONFIRMATION_NEEDED:${JSON.stringify({ file: fileName, path: p.path, ...r.quarantine })}`))
+    result.ok = false
+    result.summary = `Needs format confirmation: ${fileName}`
   } else {
     result.steps.push(step("ingest", "error", `${fileName}: ${r.error ?? "could not read file"}`))
     result.ok = false
