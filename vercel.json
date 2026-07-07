@@ -147,6 +147,10 @@
     {
       "path": "/api/cron/irs-fx-rates",
       "schedule": "0 7 2 * *"
+    },
+    {
+      "path": "/api/cron/error-audit",
+      "schedule": "*/15 * * * *"
     }
   ],
   "rewrites": [

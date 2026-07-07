@@ -59,6 +59,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/memory-decay": "0 9 1 * *",
   "/api/cron/esign-reminders": "0 */6 * * *",
   "/api/cron/action-required-reminders": "0 13 * * *",
+  // AI diagnosis pass over captured runtime errors (lib/system-errors.ts).
+  "/api/cron/error-audit": "*/15 * * * *",
 }
 
 /**

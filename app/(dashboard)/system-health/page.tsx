@@ -36,6 +36,8 @@ import {
   type TrafficLight,
 } from "@/lib/system-health/queries"
 import { AuditFindingsDrilldown } from "@/components/system-health/audit-findings-drilldown"
+import { SystemErrorsPanel } from "@/components/system-health/system-errors-panel"
+import { listSystemErrors } from "@/lib/system-errors"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -80,12 +82,13 @@ function Card({
 export default async function SystemHealthPage() {
   const now = Date.now()
 
-  const [cronRows, audit, stuck, locks, smoke] = await Promise.all([
+  const [cronRows, audit, stuck, locks, smoke, systemErrors] = await Promise.all([
     getCronStatusList(now),
     getLatestAuditFindings(),
     getStuckClientsByServiceType(now),
     getActiveWorkLocks(now),
     getSmokeResults(10),
+    listSystemErrors({ limit: 20 }),
   ])
   const sentry = getSentryStatus()
 
@@ -108,6 +111,24 @@ export default async function SystemHealthPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {/* Widget 0: Error auto-audit — captured runtime errors with AI diagnosis */}
+        <div className="lg:col-span-2 xl:col-span-3">
+          <Card
+            title="System Errors — auto-audit"
+            icon={ShieldAlert}
+            testId="widget-system-errors"
+            right={
+              systemErrors.length > 0 ? (
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                  {systemErrors.length} open
+                </span>
+              ) : undefined
+            }
+          >
+            <SystemErrorsPanel rows={systemErrors} />
+          </Card>
+        </div>
+
         {/* Widget 1: Cron status */}
         <div className="lg:col-span-2 xl:col-span-2">
           <Card

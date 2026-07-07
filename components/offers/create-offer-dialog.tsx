@@ -107,6 +107,50 @@ interface CreateOfferDialogProps {
   referrerType?: string | null
 }
 
+/**
+ * Fire-and-forget capture to the error auto-audit system (system_errors
+ * table via /api/system-errors/report). Never throws, never blocks the UI —
+ * telemetry must not break the flow it is observing.
+ */
+function reportDialogError(payload: {
+  route: string
+  method: string
+  http_status: number | null
+  message: string
+  body_snippet?: string | null
+}) {
+  try {
+    void fetch('/api/system-errors/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, page_path: window.location.pathname }),
+    }).catch(() => {})
+  } catch {
+    // ignore — reporting is best-effort
+  }
+}
+
+/**
+ * Read an API error response without assuming it is JSON. A dead session or
+ * platform error returns HTML/plain text; the old `res.json().catch(...)`
+ * collapsed those into "Unknown error" (2026-07-07 incident). Returns the
+ * parsed body when possible plus the raw snippet for diagnostics.
+ */
+async function readErrorBody(res: Response): Promise<{ parsed: { error?: string; code?: string }; raw: string }> {
+  const raw = await res.text().catch(() => '')
+  try {
+    return { parsed: JSON.parse(raw) as { error?: string; code?: string }, raw }
+  } catch {
+    return { parsed: {}, raw }
+  }
+}
+
+const SESSION_EXPIRED_MSG = 'Your session expired — refresh the page, log in again, then retry. Nothing was lost.'
+
+function isSessionExpired(status: number, parsed: { code?: string }): boolean {
+  return status === 401 || parsed.code === 'SESSION_EXPIRED'
+}
+
 export function CreateOfferDialog({
   open,
   onClose,
@@ -331,8 +375,18 @@ export function CreateOfferDialog({
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(err.error || `Generation failed (${res.status})`)
+        const { parsed, raw } = await readErrorBody(res)
+        if (isSessionExpired(res.status, parsed)) {
+          throw new Error(SESSION_EXPIRED_MSG)
+        }
+        reportDialogError({
+          route: '/api/crm/admin-actions/generate-offer-narrative',
+          method: 'POST',
+          http_status: res.status,
+          message: parsed.error || `Non-JSON error response (HTTP ${res.status})`,
+          body_snippet: parsed.error ? null : raw.slice(0, 500),
+        })
+        throw new Error(parsed.error || `Generation failed (HTTP ${res.status})`)
       }
 
       const data = await res.json()
@@ -634,12 +688,24 @@ export function CreateOfferDialog({
           }),
         })
 
-        const data = await res.json()
-
         if (!res.ok) {
-          toast.error(data.error || 'Failed to create offer')
+          const { parsed, raw } = await readErrorBody(res)
+          if (isSessionExpired(res.status, parsed)) {
+            toast.error(SESSION_EXPIRED_MSG)
+            return
+          }
+          reportDialogError({
+            route: '/api/crm/admin-actions/create-offer',
+            method: 'POST',
+            http_status: res.status,
+            message: parsed.error || `Non-JSON error response (HTTP ${res.status})`,
+            body_snippet: parsed.error ? null : raw.slice(0, 500),
+          })
+          toast.error(parsed.error || `Failed to create offer (HTTP ${res.status})`)
           return
         }
+
+        const data = await res.json()
 
         toast.success(`Draft offer created — opening preview`)
         setCreatedOfferUrl(data.offer_url)

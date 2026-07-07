@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { createOffer, type CreateOfferParams } from "@/lib/operations/offers"
+import { reportSystemError } from "@/lib/system-errors"
 
 export async function POST(req: NextRequest) {
   try {
@@ -84,6 +85,13 @@ export async function POST(req: NextRequest) {
     })
   } catch (err) {
     console.error("Create offer error:", err)
+    await reportSystemError({
+      source: "server",
+      route: "/api/crm/admin-actions/create-offer",
+      method: "POST",
+      http_status: 500,
+      message: err instanceof Error ? err.message : "Internal server error",
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal server error" },
       { status: 500 }

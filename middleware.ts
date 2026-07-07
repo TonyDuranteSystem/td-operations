@@ -206,8 +206,26 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // --- No user: redirect to appropriate login ---
+  // --- No user: 401 JSON for background API calls, redirect for navigations ---
+  // Background fetches (dialogs, panels) must get machine-readable 401 JSON:
+  // the old unconditional redirect sent them to the login PAGE, whose HTML
+  // reply surfaced as garbage toasts ("Unknown error" — 2026-07-07 offer
+  // dialog incident). Direct browser navigations to /api URLs (document
+  // downloads/previews via links) keep the login redirect so a human still
+  // lands on the login screen. Sec-Fetch-Mode identifies navigations in all
+  // modern browsers; the Accept header is the fallback.
   if (!user) {
+    if (pathname.startsWith('/api/')) {
+      const isNavigation =
+        request.headers.get('sec-fetch-mode') === 'navigate' ||
+        (request.headers.get('accept') || '').includes('text/html')
+      if (!isNavigation) {
+        return NextResponse.json(
+          { error: 'Session expired — please log in again.', code: 'SESSION_EXPIRED' },
+          { status: 401 },
+        )
+      }
+    }
     const url = request.nextUrl.clone()
     if (isPortalPath(pathname)) {
       url.pathname = '/portal/login'
@@ -227,6 +245,22 @@ export async function middleware(request: NextRequest) {
   // is reachable. No added cost: the getUser() call already happens for auth.
   const bannedUntil = (user as { banned_until?: string | null }).banned_until ?? null
   if (bannedUntil && new Date(bannedUntil) > new Date()) {
+    // Background API calls get 401 JSON (same contract as SESSION_EXPIRED
+    // above) so UI fetches fail with a readable cause instead of HTML.
+    if (
+      pathname.startsWith('/api/') &&
+      request.headers.get('sec-fetch-mode') !== 'navigate' &&
+      !(request.headers.get('accept') || '').includes('text/html')
+    ) {
+      const res = NextResponse.json(
+        { error: 'This login is suspended.', code: 'ACCOUNT_SUSPENDED' },
+        { status: 401 },
+      )
+      for (const c of request.cookies.getAll()) {
+        if (c.name.startsWith('sb-')) res.cookies.delete(c.name)
+      }
+      return res
+    }
     const url = request.nextUrl.clone()
     url.pathname = '/portal/login'
     url.search = 'reason=suspended'

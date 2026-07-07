@@ -4,6 +4,7 @@ import { canPerform } from '@/lib/permissions'
 import { validateNarrative, renderCallForOffer } from '@/lib/offer-narrative'
 import { callAI } from '@/lib/portal/ai-provider'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { reportSystemError } from '@/lib/system-errors'
 
 // A rich ~4096-token Sonnet narrative runs well past the default function
 // window; give it room (proven value already used elsewhere in this codebase)
@@ -173,6 +174,14 @@ export async function POST(req: NextRequest) {
       // so a future failure is diagnosable from the toast (R099).
       const message = err instanceof Error ? err.message : 'AI generation failed'
       console.error('[generate-offer-narrative] AI generation failed:', message)
+      await reportSystemError({
+        source: 'server',
+        route: '/api/crm/admin-actions/generate-offer-narrative',
+        method: 'POST',
+        http_status: 502,
+        user_email: user?.email ?? null,
+        message,
+      })
       return NextResponse.json({ error: message }, { status: 502 })
     }
 
@@ -203,6 +212,13 @@ export async function POST(req: NextRequest) {
     )
   } catch (err) {
     console.error('[generate-offer-narrative] Error:', err)
+    await reportSystemError({
+      source: 'server',
+      route: '/api/crm/admin-actions/generate-offer-narrative',
+      method: 'POST',
+      http_status: 500,
+      message: err instanceof Error ? err.message : 'Internal server error',
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },
       { status: 500 },
