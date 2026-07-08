@@ -275,6 +275,13 @@ export default function TeamWorkspacePage() {
 
   const handleSend = useCallback(async () => {
     const msg = text.trim()
+    // Slash-command parity with Slack: "/client" opens the native New
+    // conversation modal (client + topic + channel) instead of sending.
+    if (/^\/client\b/i.test(msg)) {
+      setText('')
+      setShowNewConversation(true)
+      return
+    }
     if ((!msg && pendingFiles.length === 0) || !selectedId || sending || uploading) return
     if (isRecording) stopRecording()
 

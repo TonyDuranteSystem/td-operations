@@ -24,6 +24,11 @@ const PUBLIC_PREFIXES = [
   '/api/sync-airtable',
   '/api/webhooks',
   '/api/cron',
+  // Team @claude worker runner — server-to-server only (direct fire from the
+  // send route + Vercel cron rescue). Self-auths via CRON_SECRET Bearer inside
+  // the route; the session gate here would 401 it (root cause of the stuck
+  // "thinking…" placeholders, found 2026-07-08).
+  '/api/team/claude/process',
   // Liveness probe for post-deploy smoke (P2.7 — plan §4 line 576).
   // No auth: anything that gates liveness behind auth is not a liveness probe.
   '/api/health',

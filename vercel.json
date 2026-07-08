@@ -137,6 +137,10 @@
       "schedule": "*/2 * * * *"
     },
     {
+      "path": "/api/team/claude/process",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/cron/memory-digest",
       "schedule": "0 9 * * 0"
     },

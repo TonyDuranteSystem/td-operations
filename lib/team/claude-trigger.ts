@@ -37,7 +37,9 @@ export async function triggerClaudeReply(params: {
   const { threadId, promptBody, promptMessageId, senderIsAntonio } = params
   if (!mentionsClaude(promptBody)) return null
 
-  // 1. Placeholder bubble authored by Claude.
+  // 1. Placeholder bubble authored by Claude. reply_to_id links it to the
+  //    triggering human message — that renders as a quoted reply AND gives the
+  //    cron rescue an exact pointer to the prompt if the direct fire is lost.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: placeholder, error } = await (supabaseAdmin as any)
     .from('internal_messages')
@@ -46,6 +48,7 @@ export async function triggerClaudeReply(params: {
       sender_id: CLAUDE_SENDER_UUID,
       sender_name: CLAUDE_SENDER_NAME,
       message: THINKING_PLACEHOLDER,
+      reply_to_id: promptMessageId,
       read_at: new Date().toISOString(),
     })
     .select('id')
@@ -211,6 +214,93 @@ export async function processClaudeReply(params: {
 
   await bumpThreadActivity(threadId)
   return { ok: true }
+}
+
+/**
+ * Cron rescue — process placeholders whose direct fire was lost.
+ *
+ * The send route fires /api/team/claude/process with a 2.5s-bounded fetch; on
+ * Vercel that fire-and-forget can occasionally be dropped before the target
+ * invocation starts (same failure mode the Slack worker has — its cron is the
+ * safety net there, and this is the equivalent net here). Finds "…" placeholders
+ * older than STUCK_AFTER_MS and runs them. The prompt is recovered from the
+ * placeholder's reply_to_id (set at trigger time); legacy placeholders without
+ * it fall back to the nearest earlier human message in the thread.
+ */
+const STUCK_AFTER_MS = 45_000
+const RESCUE_BATCH = 3
+
+export async function rescueStuckClaudeReplies(): Promise<{ scanned: number; rescued: number }> {
+  const cutoff = new Date(Date.now() - STUCK_AFTER_MS).toISOString()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: stuck } = await (supabaseAdmin as any)
+    .from('internal_messages')
+    .select('id, thread_id, reply_to_id, created_at')
+    .eq('sender_id', CLAUDE_SENDER_UUID)
+    .eq('message', THINKING_PLACEHOLDER)
+    .is('deleted_at', null)
+    .lt('created_at', cutoff)
+    .order('created_at', { ascending: true })
+    .limit(RESCUE_BATCH)
+
+  let rescued = 0
+  for (const ph of stuck ?? []) {
+    let promptId: string | null = ph.reply_to_id
+    if (!promptId) {
+      // Legacy placeholder (pre reply_to_id): nearest earlier human message.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: prev } = await (supabaseAdmin as any)
+        .from('internal_messages')
+        .select('id')
+        .eq('thread_id', ph.thread_id)
+        .neq('sender_id', CLAUDE_SENDER_UUID)
+        .is('deleted_at', null)
+        .lt('created_at', ph.created_at)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      promptId = prev?.id ?? null
+    }
+    if (!promptId) {
+      await failPlaceholder(ph.id, '⚠️ I lost track of the question this was answering — please ask again.')
+      continue
+    }
+
+    // Recover the code-task gate (R111): Antonio-only, keyed on the prompt author.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: prompt } = await (supabaseAdmin as any)
+      .from('internal_messages')
+      .select('sender_id')
+      .eq('id', promptId)
+      .single()
+    const senderIsAntonio = prompt?.sender_id ? await isAntonioUser(prompt.sender_id) : false
+
+    const res = await processClaudeReply({
+      threadId: ph.thread_id,
+      promptMessageId: promptId,
+      placeholderId: ph.id,
+      senderIsAntonio,
+    })
+    if (res.ok) rescued++
+  }
+  return { scanned: (stuck ?? []).length, rescued }
+}
+
+/** Mirror of lib/auth isAdmin, usable from a cron (no session): admin role or
+ *  Antonio's email. Default-safe: unknown/missing user → false. */
+async function isAntonioUser(userId: string): Promise<boolean> {
+  try {
+    const { data } = await supabaseAdmin.auth.admin.getUserById(userId)
+    const u = data?.user
+    if (!u) return false
+    return (
+      u.email === 'antonio.durante@tonydurante.us' ||
+      u.app_metadata?.role === 'admin' ||
+      (u.user_metadata as Record<string, unknown> | undefined)?.role === 'admin'
+    )
+  } catch {
+    return false
+  }
 }
 
 async function failPlaceholder(placeholderId: string, message: string) {

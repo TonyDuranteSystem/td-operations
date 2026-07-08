@@ -38,6 +38,13 @@ The "New conversation" entry on the **Client Discussions** sidebar header opens 
 - `POST /upload-url` — signed direct-to-Storage URL (100MB) → `assets` bucket `team-chat/<threadId>/`, bypassing the serverless body limit (the flaw the old `/api/internal/threads/[id]/upload` had at 10MB).
 - `POST /claude/process` — internal, CRON_SECRET-authed, `maxDuration=300`. Runs the shared worker and rewrites the placeholder.
 
+## @claude reliability — middleware exception + cron rescue (2026-07-08)
+Antonio's first prod @claude got stuck on "thinking…". ROOT CAUSE: `/api/team/claude/process` was not in `middleware.ts` `PUBLIC_PREFIXES`, so the session gate 401'd (SESSION_EXPIRED) the server-to-server direct fire BEFORE the route's own CRON_SECRET auth — deterministic, every time (found via sandbox E2E; handler tests bypass middleware, only a real request catches it — same lesson as the e-sign signer page). FIXES:
+- `middleware.ts`: `/api/team/claude/process` added to `PUBLIC_PREFIXES` (route self-auths via CRON_SECRET Bearer, same as `/api/cron/*`).
+- **Cron rescue net** (same pattern as the Slack worker): the placeholder now stores `reply_to_id = the prompt message` (also renders as a quoted reply); `rescueStuckClaudeReplies()` in `claude-trigger.ts` finds "…" placeholders older than 45s (batch 3), recovers the prompt from `reply_to_id` (legacy fallback: nearest earlier human message), re-derives the Antonio-only code-task gate via an auth lookup, and processes them. The process route gained GET + scan mode; registered in `vercel.json` at `*/2 * * * *` (Vercel sends the CRON_SECRET bearer).
+- `/client` slash command in the composer opens the native New-conversation modal (Slack muscle-memory parity).
+Verified in sandbox: a stuck placeholder (direct fire fails locally by design) was found and rewritten by the scan; `/client` opens the modal.
+
 ## @claude adapter (`lib/team/claude-trigger.ts`)
 A human `@claude` mention → `triggerClaudeReply` inserts a placeholder message (sender = `CLAUDE_SENDER_UUID` sentinel, body `…`) and fires `/api/team/claude/process` (bounded direct-trigger, like the Slack worker). `processClaudeReply` reuses `callWorker` from `lib/ai-agent/worker-tools.ts` (same brain as Slack/Hermes), builds context from recent thread messages + client linkage (`clientKey`/`clientName` when the thread has an account/contact — the per-client brain), then rewrites the placeholder with the answer (TOCTOU-guarded on the placeholder body).
 - **Rails:** research/read on for everyone (`enableDbRead/DocReads/CallReads/Calendly/ClientThreadRead/WebSearch`). **Code-task rail Antonio-only** (`enableCodeTasks = isAdmin`, R111). **Send rails OFF** in team chat for now (research-first, mirrors Hermes Phase 1).
