@@ -12,6 +12,7 @@ interface SACredentials {
   client_email: string
   private_key: string
   token_uri: string
+  project_id?: string
 }
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>()
@@ -21,6 +22,16 @@ function getCredentials(): SACredentials {
   if (!b64) throw new Error("GOOGLE_SA_KEY not configured")
   const json = Buffer.from(b64, "base64").toString("utf-8")
   return JSON.parse(json)
+}
+
+/** Service-account credentials for non-Gmail Google APIs (e.g. Pub/Sub). */
+export function getGoogleSACredentials(): {
+  client_email: string
+  private_key: string
+  token_uri: string
+  project_id?: string
+} {
+  return getCredentials()
 }
 
 const GMAIL_SCOPES = [

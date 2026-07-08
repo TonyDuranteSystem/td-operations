@@ -477,6 +477,25 @@ export default function PortalChatsPage() {
     refetchInterval: 60_000,
   })
 
+  // Real-time green dot: Gmail push → /api/webhooks/gmail-push inserts a
+  // wake-up row → refetch unread buckets within seconds (60s poll = fallback).
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient()
+    const channel = supabase
+      .channel('gmail-push-events')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'gmail_push_events' },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['email-unread'] })
+          queryClient.invalidateQueries({ queryKey: ['client-emails'] })
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Fetch messages for selected thread (by account_id or contact_id)
   const chatQueryParam = selectedAccountId
     ? `account_id=${selectedAccountId}`

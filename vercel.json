@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/gmail-watch-renew",
+      "schedule": "0 5 * * *"
+    },
+    {
       "path": "/api/sync-drive",
       "schedule": "0 */6 * * *"
     },

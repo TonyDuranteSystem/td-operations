@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -14,6 +14,7 @@ import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
+import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
@@ -73,6 +74,27 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
   const isWhatsApp = activeChannel === 'whatsapp'
   const isGmail = selected?.channel === 'gmail'
+
+  // Real-time inbox refresh: Gmail push (users.watch → Pub/Sub → webhook →
+  // gmail_push_events row) — new mail appears within seconds instead of the
+  // 30s poll, which remains the fallback.
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient()
+    const channel = supabase
+      .channel('inbox-gmail-push')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'gmail_push_events' },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+          queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+          queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleEmailDeleted = useCallback((id: string) => {
     setDeletedIds(prev => {

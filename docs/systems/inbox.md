@@ -71,7 +71,20 @@ Function.
   mail to/from their contact addresses); the tab's thread view REUSES the
   inbox `MessageThread`/`ComposeReply` (support@ mailbox), so opening an
   email marks it read in Gmail and the green dot clears naturally.
-- **AI surfaces**: `ai-suggest` (draft reply), `ai-compose`,
+- **Real-time push** (Phase 3b, 2026-07-08): Gmail `users.watch` (INBOX, both
+  mailboxes) publishes to Pub/Sub topic `gmail-push` in GCP project
+  `claude-gmail-connector-488713`; the push subscription `gmail-push-sub`
+  POSTs to `/api/webhooks/gmail-push` with a Google-signed OIDC token
+  (audience = the endpoint URL; verified in `lib/gmail-push.ts::verifyPushOidc`
+  — fails closed, no shared secrets). The webhook inserts a wake-up row in
+  `gmail_push_events` (no email content); `inbox-shell.tsx` and the
+  portal-chats page subscribe via supabase_realtime and refetch. Watches
+  expire ~7 days → `app/api/cron/gmail-watch-renew` (daily 05:00) re-registers
+  both watches, re-syncs the subscription endpoint, and prunes events >2 days.
+  PROD-ONLY: the cron self-skips under `SANDBOX_MODE=1` and sandbox blocks
+  `/api/webhooks/*`; the 5-min `email-monitor` cron and the 30s/60s polls stay
+  as the delivery safety net. Watch state in `gmail_watch_state`
+  (migration `20260708-2100-gmail-push-events.sql`).
   `components/dashboard/cards/email-intelligence.tsx` +
   `app/api/crm/email-intelligence/route.ts` (AI triage of unread, support@
   only), `app/api/cron/email-monitor/` (every 5 min: emails from contacts tied
