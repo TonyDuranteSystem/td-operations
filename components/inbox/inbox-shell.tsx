@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -14,6 +14,7 @@ import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
+import { LinkClientDialog } from './link-client-dialog'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
@@ -57,6 +58,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [moveToOpen, setMoveToOpen] = useState(false)
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const [workerOpen, setWorkerOpen] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
   const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
@@ -711,6 +713,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                           <Forward className="h-4 w-4" />
                         </button>
                         <button
+                          onClick={() => setLinkOpen(true)}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-600 transition-colors"
+                          title="Link to client — show this email in the client's email view"
+                        >
+                          <Link2 className="h-4 w-4" />
+                        </button>
+                        <button
                           onClick={() => emailActionMutation.mutate({ action: 'trash' })}
                           disabled={emailActionMutation.isPending}
                           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
@@ -768,6 +777,14 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           type={createDialog.type}
           conversation={createDialog.conversation}
           onClose={() => setCreateDialog(null)}
+        />
+      )}
+
+      {linkOpen && selected && (
+        <LinkClientDialog
+          conversation={selected}
+          mailbox={activeMailbox}
+          onClose={() => setLinkOpen(false)}
         />
       )}
     </div>

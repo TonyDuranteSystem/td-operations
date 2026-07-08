@@ -8,13 +8,20 @@ import type { InboxConversation } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
+// email_links is not in the generated Database types yet. Same escape hatch
+// as lib/system-errors.ts.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = supabaseAdmin as any
+
 /**
  * GET /api/portal-chats/client-emails?account_id=…|contact_id=…
  *
- * The "Email" tab in Portal Chats: this client's Gmail correspondence in
- * support@ (all mail to/from any of the client's contact addresses, newest
- * first). Returns InboxConversation[] so the shipped inbox thread view
- * (MessageThread + ComposeReply) renders them unchanged.
+ * The client's email view (Portal Chats "Email" tab + account page "Emails"
+ * tab): auto-matched Gmail correspondence in support@ (all mail to/from any
+ * of the client's contact addresses) MERGED with manually linked threads
+ * (`email_links` — e.g. a ShipStation or Mercury notification about this
+ * client). Returns InboxConversation[] (linked threads flagged `linked`) so
+ * the shipped inbox thread view renders them unchanged.
  */
 export async function GET(req: NextRequest) {
   const supabase = createClient()
@@ -61,18 +68,38 @@ export async function GET(req: NextRequest) {
           .map((e) => e.toLowerCase().trim())
       )
     )
-    if (emails.length === 0) {
+
+    // Manually linked threads for this client (support@ only in this view)
+    let linkQuery = db
+      .from("email_links")
+      .select("thread_id, mailbox")
+      .eq("mailbox", "support")
+    linkQuery = accountId
+      ? linkQuery.eq("account_id", accountId)
+      : linkQuery.eq("contact_id", contactId)
+    const { data: linkRows } = await linkQuery.limit(100)
+    const linkedIds = new Set<string>(
+      ((linkRows ?? []) as Array<{ thread_id: string }>).map((l) => l.thread_id)
+    )
+
+    if (emails.length === 0 && linkedIds.size === 0) {
       return NextResponse.json({ conversations: [], emails: [] })
     }
 
     // 2. All mail to/from any of those addresses (support@ mailbox)
-    const clause = emails.map((e) => `from:${e} OR to:${e}`).join(" OR ")
-    const listResult = (await gmailGet("/threads", {
-      q: `{${clause}} -in:trash -in:spam`,
-      maxResults: "50",
-    })) as { threads?: Array<{ id: string }> }
+    let autoIds: string[] = []
+    if (emails.length > 0) {
+      const clause = emails.map((e) => `from:${e} OR to:${e}`).join(" OR ")
+      const listResult = (await gmailGet("/threads", {
+        q: `{${clause}} -in:trash -in:spam`,
+        maxResults: "50",
+      })) as { threads?: Array<{ id: string }> }
+      autoIds = (listResult.threads ?? []).map((t) => t.id)
+    }
 
-    const threadIds = (listResult.threads ?? []).map((t) => t.id)
+    // Union: auto-matched + manually linked (dedup, linked-only appended)
+    const autoSet = new Set(autoIds)
+    const threadIds = [...autoIds, ...Array.from(linkedIds).filter((id) => !autoSet.has(id))]
     if (threadIds.length === 0) {
       return NextResponse.json({ conversations: [], emails })
     }
@@ -111,6 +138,7 @@ export async function GET(req: NextRequest) {
             m.payload?.mimeType === "multipart/mixed" ||
             m.payload?.mimeType === "multipart/related"
         ),
+        linked: linkedIds.has(thread.id),
       })
     }
 

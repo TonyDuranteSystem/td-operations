@@ -119,7 +119,17 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
                 )}>
                   {conv.subject || '(no subject)'}
                 </span>
-                <span className="text-xs text-zinc-400 shrink-0">{formatDate(conv.lastMessageAt)}</span>
+                <span className="flex items-center gap-1.5 shrink-0">
+                  {conv.linked && (
+                    <span
+                      className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-100 text-blue-700"
+                      title="Manually linked to this client"
+                    >
+                      Linked
+                    </span>
+                  )}
+                  <span className="text-xs text-zinc-400">{formatDate(conv.lastMessageAt)}</span>
+                </span>
               </div>
               <div className="flex items-center justify-between gap-2 mt-0.5">
                 <p className="text-xs text-zinc-500 truncate flex-1">{conv.preview}</p>

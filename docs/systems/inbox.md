@@ -74,6 +74,17 @@ Function.
   mail to/from their contact addresses); the tab's thread view REUSES the
   inbox `MessageThread`/`ComposeReply` (support@ mailbox), so opening an
   email marks it read in Gmail and the green dot clears naturally.
+- **Email → client links** (2026-07-08): the thread header's Link2 button
+  (`components/inbox/link-client-dialog.tsx` → `/api/inbox/email-links`)
+  attaches ANY Gmail thread (ShipStation/Mercury-style notifications) to a
+  CRM account. Table `email_links` (pre-existing, EXTENDED by migration
+  `20260708-2300-email-links.sql`: + mailbox/contact_id/subject/sender and
+  the previously-MISSING `uq_email_links_thread` unique index — the
+  create-from-email dialog's upsert had silently failed forever without it).
+  ONE link per thread; re-linking replaces the client. Linked threads merge
+  into the client email views (`client-emails` endpoint, `linked: true`
+  badge) — Portal Chats Email tab AND the account page's new **Emails** tab
+  (`account-detail.tsx` renders `ThreadEmailPanel`).
 - **Worker panel** (2026-07-08, Antonio: "the same worker I have in Slack
   with the same power in inbox"): the thread header's **Worker** button
   (replaces the old AI Assist dispatch) opens

@@ -525,6 +525,8 @@ export interface InboxConversation {
   hasAttachment?: boolean
   /** Color-mark key ('red' | 'orange' | …) from the thread's Marked/* Gmail label */
   colorMark?: string | null
+  /** True when this thread was manually linked to the client (email_links) */
+  linked?: boolean
 }
 
 export interface InboxAttachment {

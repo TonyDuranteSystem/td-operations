@@ -28,6 +28,7 @@ import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { type ServiceDeliveryForStepper } from './service-deliveries-section'
 import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
 import { FlowChips } from '@/components/flows/flow-chips'
+import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 import { DeactivateServiceButton, ReactivateServiceButton } from './service-status-actions'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
@@ -62,6 +63,7 @@ const TABS = [
   { key: 'payments', label: 'Payments', icon: CreditCard, adminOnly: true },
   { key: 'tax', label: 'Tax Returns', icon: FileText, adminOnly: false },
   { key: 'documents', label: 'Documents', icon: FileText, adminOnly: false },
+  { key: 'emails', label: 'Emails', icon: Inbox, adminOnly: false },
   { key: 'correspondence', label: 'Correspondence', icon: Inbox, adminOnly: false },
   { key: 'communications', label: 'Communications', icon: MessageSquare, adminOnly: false },
   { key: 'conversations', label: 'Conversations', icon: MessageSquare, adminOnly: false },
@@ -907,6 +909,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
               FileManager can't render. */}
           <AccountDocumentsList documents={documents} />
           <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
+        </div>
+      )}
+      {activeTab === 'emails' && (
+        // All Gmail with this client: auto-matched (their contact addresses)
+        // + manually linked threads (email_links — "Link to client" in the
+        // inbox). Reuses the Portal Chats Email tab panel unchanged.
+        <div className="flex h-[70vh] min-h-[420px] border rounded-lg overflow-hidden bg-white">
+          <ThreadEmailPanel accountId={account.id} contactId={null} />
         </div>
       )}
       {activeTab === 'correspondence' && (
