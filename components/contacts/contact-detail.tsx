@@ -21,6 +21,7 @@ import { ClientConversationsPanel } from '@/components/conversations/client-conv
 import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
+import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { MessageReactions } from '@/components/chat/message-reactions'
 import type { MessageReaction } from '@/lib/portal/reactions'
@@ -53,6 +54,7 @@ const TABS = [
   { key: 'services', label: 'Services', icon: Briefcase, tooltip: 'Active service deliveries for this client — formations, annual reports, etc.' },
   { key: 'invoices', label: 'Invoices', icon: CreditCard, tooltip: 'All invoices and payment history for this client.' },
   { key: 'documents', label: 'Documents', icon: FolderOpen, tooltip: 'Uploaded files — IDs, contracts, certificates, and more.' },
+  { key: 'emails', label: 'Emails', icon: Mail, tooltip: 'All Gmail with this contact — auto-matched by their addresses plus manually linked emails.' },
   { key: 'chat', label: 'Chat', icon: MessageSquare, tooltip: 'All communication — portal messages and email threads in one timeline.' },
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
   { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'One-screen view of every audit check for this contact — diagnostic + chain audit together.' },
@@ -484,6 +486,13 @@ export function ContactDetail({
       )}
       {activeTab === 'documents' && (
         <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} driveFolderId={contact.drive_folder_id} />
+      )}
+      {activeTab === 'emails' && (
+        // All Gmail with this contact: auto-matched + manually linked
+        // (email_links). Same panel as Portal Chats / account page.
+        <div className="flex h-[70vh] min-h-[420px] border rounded-lg overflow-hidden bg-white">
+          <ThreadEmailPanel accountId={null} contactId={contact.id} />
+        </div>
       )}
       {activeTab === 'chat' && (
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />

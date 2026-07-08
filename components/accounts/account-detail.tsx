@@ -29,6 +29,7 @@ import { type ServiceDeliveryForStepper } from './service-deliveries-section'
 import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
 import { FlowChips } from '@/components/flows/flow-chips'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
+import { AccountEmailsCard } from './account-emails-card'
 import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 import { DeactivateServiceButton, ReactivateServiceButton } from './service-status-actions'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
@@ -891,7 +892,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'overview' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
+        <>
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
+          {/* Recent emails (auto-matched + linked) — visible without hunting
+              for the Emails tab (Antonio 2026-07-08) */}
+          <div className="px-4 pb-4">
+            <AccountEmailsCard accountId={account.id} onOpenAll={() => setActiveTab('emails')} />
+          </div>
+        </>
       )}
       {activeTab === 'services' && (
         <ServiziTab services={services} today={today} accountId={account.id} accountType={account.account_type ?? null} stepperDeliveries={stepperDeliveries} stagesByServiceType={stagesByServiceType} payments={payments} flows={flows} />

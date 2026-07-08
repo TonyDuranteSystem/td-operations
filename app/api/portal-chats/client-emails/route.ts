@@ -72,14 +72,21 @@ export async function GET(req: NextRequest) {
       )
     )
 
-    // Manually linked threads for this client (support@ only in this view)
+    // Manually linked threads for this client (support@ only in this view).
+    // Account view also surfaces links made to the account's CONTACTS, so a
+    // link lands regardless of which role it targeted.
     let linkQuery = db
       .from("email_links")
       .select("thread_id, mailbox")
       .eq("mailbox", "support")
-    linkQuery = accountId
-      ? linkQuery.eq("account_id", accountId)
-      : linkQuery.eq("contact_id", contactId)
+    if (accountId) {
+      const contactList = contactIds.map((id) => `"${id}"`).join(",")
+      linkQuery = contactIds.length > 0
+        ? linkQuery.or(`account_id.eq.${accountId},contact_id.in.(${contactList})`)
+        : linkQuery.eq("account_id", accountId)
+    } else {
+      linkQuery = linkQuery.eq("contact_id", contactId)
+    }
     const { data: linkRows } = await linkQuery.limit(100)
     const linkedIds = new Set<string>(
       ((linkRows ?? []) as Array<{ thread_id: string }>).map((l) => l.thread_id)

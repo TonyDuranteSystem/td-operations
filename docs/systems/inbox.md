@@ -88,8 +88,12 @@ Function.
   (`components/inbox/hover-hint.tsx`).
   ONE link per thread; re-linking replaces the client. Linked threads merge
   into the client email views (`client-emails` endpoint, `linked: true`
-  badge) — Portal Chats Email tab AND the account page's new **Emails** tab
-  (`account-detail.tsx` renders `ThreadEmailPanel`). The client views HIDE
+  badge) — Portal Chats Email tab, the account page **Emails** tab, the
+  account **Overview**'s compact Emails card
+  (`components/accounts/account-emails-card.tsx`, "View all" → the tab) and
+  the CONTACT page's **Emails** tab (`contact-detail.tsx`). The account view
+  also includes links made to the account's CONTACTS (role-agnostic
+  surfacing). The client views HIDE
   our own automated notification emails (portal digest + chat-notify
   subjects, `lib/inbox/system-email-filter.ts`; a deliberately linked one is
   kept) and classify each thread `received`/`sent` by the LAST message's
