@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
+import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
@@ -244,7 +245,7 @@ export default function PortalChatsPage() {
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
-  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo'>('messages')
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo' | 'email'>('messages')
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -462,6 +463,18 @@ export default function PortalChatsPage() {
     queryKey: ['portal-chat-whats-new-counts'],
     queryFn: () => fetch('/api/crm/admin-actions/whats-new?counts=true').then(r => r.json()),
     refetchInterval: 30_000,
+  })
+
+  // Per-thread GREEN dot = unread email threads from this client in support@.
+  // Source of truth is Gmail's UNREAD state — reading the email (Email tab or
+  // Gmail itself) clears the dot on the next refresh.
+  const { data: emailUnreadCounts } = useQuery<{
+    by_account: Record<string, number>
+    by_contact: Record<string, number>
+  }>({
+    queryKey: ['email-unread'],
+    queryFn: () => fetch('/api/portal-chats/email-unread').then(r => r.json()),
+    refetchInterval: 60_000,
   })
 
   // Fetch messages for selected thread (by account_id or contact_id)
@@ -1842,9 +1855,31 @@ export default function PortalChatsPage() {
                         </span>
                       ) : null
                     })()}
+                    {/* Email dot: GREEN pill = unread email threads from this
+                        client in support@ (Gmail UNREAD state). Reading the
+                        email — in the Email tab or in Gmail — clears it. */}
+                    {(() => {
+                      const isAccountThread = !!thread.account_id && (thread.members ?? []).length > 0
+                      const emailCount = isAccountThread
+                        ? emailUnreadCounts?.by_account?.[thread.account_id] ?? 0
+                        : thread.contact_id
+                          ? emailUnreadCounts?.by_contact?.[thread.contact_id] ?? 0
+                          : thread.account_id
+                            ? emailUnreadCounts?.by_account?.[thread.account_id] ?? 0
+                            : 0
+                      return emailCount > 0 ? (
+                        <span
+                          className="px-1.5 py-0.5 rounded-full text-xs font-semibold text-white bg-emerald-600"
+                          title={`${emailCount} unread email${emailCount === 1 ? '' : 's'}`}
+                        >
+                          {emailCount}
+                        </span>
+                      ) : null
+                    })()}
                     {/* (Legacy orange task-count dot retired — purple What's New dot above is the single signal now.) */}
+                    {/* Chat unread: RED pill (red=chat, purple=What's New, green=email) */}
                     {thread.unread_count > 0 && (
-                      <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white">
+                      <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-red-600 text-white">
                         {thread.unread_count}
                       </span>
                     )}
@@ -2454,6 +2489,34 @@ export default function PortalChatsPage() {
                   <ClipboardList className="h-3.5 w-3.5" />
                   To Do
                 </button>
+                {(() => {
+                  // This client's unread-email count (same keying as the green
+                  // dot in the list) — badge on the Email tab.
+                  const emailNew = selectedAccountId
+                    ? (emailUnreadCounts?.by_account?.[selectedAccountId] ?? 0)
+                    : selectedContactId
+                      ? (emailUnreadCounts?.by_contact?.[selectedContactId] ?? 0)
+                      : 0
+                  return (
+                    <button
+                      onClick={() => setChatViewMode('email')}
+                      className={cn(
+                        'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                        chatViewMode === 'email'
+                          ? 'text-emerald-600 border-b-2 border-emerald-600 bg-emerald-50/30'
+                          : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                      )}
+                    >
+                      <Mail className="h-3.5 w-3.5" />
+                      Email
+                      {emailNew > 0 && (
+                        <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold bg-emerald-500 text-white">
+                          {emailNew > 999 ? '999+' : emailNew}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })()}
                 <div className="flex items-center px-2 shrink-0">
                   <HelpDot helpKey="chat.tabs" />
                 </div>
@@ -2659,6 +2722,8 @@ export default function PortalChatsPage() {
               />
             ) : chatViewMode === 'todo' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
               <ThreadTodoPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
+            ) : chatViewMode === 'email' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
+              <ThreadEmailPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
             ) : (
             <>
 

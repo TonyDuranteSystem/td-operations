@@ -62,6 +62,15 @@ Function.
   `labels.get` per shown label (mailbox-aware; badge uses `threadsUnread`).
 - **Bulk bar** (checkbox selection): Delete / Archive / Mark Read /
   Mark Unread / Move to folder — all via `email-actions` bulk branch.
+- **Portal Chats email surface** (Phase 3, 2026-07-08): per-client GREEN dot +
+  "Email" tab in `/portal-chats`. `app/api/portal-chats/email-unread` buckets
+  support@'s unread inbox threads per account/contact
+  (`lib/inbox/email-unread.ts`, same shape as the What's New purple counts;
+  dot colors: red=chat, purple=What's New, green=email).
+  `app/api/portal-chats/client-emails` lists a client's Gmail threads (all
+  mail to/from their contact addresses); the tab's thread view REUSES the
+  inbox `MessageThread`/`ComposeReply` (support@ mailbox), so opening an
+  email marks it read in Gmail and the green dot clears naturally.
 - **AI surfaces**: `ai-suggest` (draft reply), `ai-compose`,
   `components/dashboard/cards/email-intelligence.tsx` +
   `app/api/crm/email-intelligence/route.ts` (AI triage of unread, support@
