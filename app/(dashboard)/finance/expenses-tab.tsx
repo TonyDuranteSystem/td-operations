@@ -107,7 +107,7 @@ export function ExpensesTab({ expenses }: { expenses: TDExpenseRecord[] }) {
   return (
     <div className="h-full overflow-auto p-6 space-y-4">
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-white rounded-lg border p-4">
           <p className="text-xs text-muted-foreground uppercase">Total Expenses</p>
           <p className="text-xl font-semibold mt-1">${stats.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
@@ -319,7 +319,7 @@ function NewExpenseDialog({ onClose }: { onClose: () => void }) {
             <input value={description} onChange={e => setDescription(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="What is this expense for?" />
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">Amount *</label>
               <input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />

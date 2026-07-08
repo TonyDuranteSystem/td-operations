@@ -127,7 +127,7 @@ export function PartnerPayoutsSection({ partnerId, payouts }: Props) {
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-amber-50 rounded-lg p-3 text-center">
           <div className="text-xl font-bold text-amber-700">${totalPending.toLocaleString()}</div>
           <div className="text-[10px] text-amber-600 uppercase tracking-wide">Pending review</div>

@@ -261,7 +261,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             </div>
 
             {/* Summary cards */}
-            <div className="grid grid-cols-4 gap-3 mb-6">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
               <div className="rounded-lg border bg-card p-3">
                 <p className="text-xs text-muted-foreground flex items-center gap-1"><FileText className="w-3 h-3" /> Invoiced</p>
                 <p className="text-lg font-bold mt-1">${selectedClient.total_invoiced.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>

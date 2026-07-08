@@ -124,7 +124,7 @@ function AddressFormFields({
       {f('address_line1', 'Address line 1', { required: true })}
       {f('address_line2', 'Address line 2', { placeholder: 'Suite, unit, etc.' })}
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {f('city', 'City', { required: true })}
         {f('state', 'State', { required: true, placeholder: 'FL' })}
         {f('zip', 'ZIP', { required: true })}

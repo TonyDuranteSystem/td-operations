@@ -310,7 +310,7 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
                   className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-sm font-medium mb-1">Currency</label>
                   <select value={editCurrency} onChange={e => setEditCurrency(e.target.value as 'USD' | 'EUR')}

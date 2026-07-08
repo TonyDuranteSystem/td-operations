@@ -589,7 +589,7 @@ export default function InvoiceSettingsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">Bank Name</label>
                   <input type="text" value={bank.bank_name} onChange={e => updateBankAccount(i, 'bank_name', e.target.value)}

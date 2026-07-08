@@ -146,8 +146,8 @@ export function EditDealDialog({ open, onClose, deal }: EditDealDialogProps) {
             </div>
 
             {/* Amount + Currency */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
                 <label className="block text-sm font-medium mb-1">Amount</label>
                 <input
                   type="number"

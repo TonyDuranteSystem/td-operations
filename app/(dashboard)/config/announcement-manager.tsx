@@ -111,7 +111,7 @@ function AnnouncementDialog({
         </div>
 
         {/* Settings */}
-        <div className="grid grid-cols-3 gap-3 pt-1 border-t border-zinc-100">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-zinc-100">
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1">Type</label>
             <select value={type} onChange={e => setType(e.target.value as 'info' | 'warning' | 'success')}

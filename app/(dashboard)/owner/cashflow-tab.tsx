@@ -33,7 +33,7 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
   return (
     <div className="space-y-6">
       {/* Metric cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Cash Position</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900">{fmt(cash.total)}</p>
