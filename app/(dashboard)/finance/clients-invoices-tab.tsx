@@ -172,11 +172,16 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
         const result = await regenerateInvoice(invoiceId)
         if (!result.success) throw new Error(result.error)
         const applied = (result.data?.applied_credit as number) ?? 0
+        const mirrorSynced = (result.data?.mirror_synced as boolean) ?? false
         if (applied > 0) {
           toast.success('Invoice regenerated — applied credit now shown as a line')
           router.refresh()
+        } else if (mirrorSynced) {
+          // No NEW credit, but the client-portal copy was out of sync and is now corrected.
+          toast.success('Client portal copy synced to this invoice')
+          router.refresh()
         } else {
-          toast.info('No available credit to apply to this invoice')
+          toast.info('No available credit to apply — client copy already in sync')
         }
         return
       }

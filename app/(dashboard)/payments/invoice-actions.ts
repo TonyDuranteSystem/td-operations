@@ -398,7 +398,7 @@ export async function deleteInvoice(
 // Idempotent: a re-click with no remaining available credit re-renders the same
 // document (newApply = 0). amount_paid tracks REAL cash only — credit is shown as
 // a line, never folded into amount_paid.
-export async function regenerateInvoice(paymentId: string): Promise<ActionResult<{ invoice_number: string | null; applied_credit: number; new_total: number }>> {
+export async function regenerateInvoice(paymentId: string): Promise<ActionResult<{ invoice_number: string | null; applied_credit: number; new_total: number; mirror_synced?: boolean }>> {
   return safeAction(async () => {
     const supabase = createClient()
     const result = await applyAvailableCreditToInvoice(paymentId, supabase)

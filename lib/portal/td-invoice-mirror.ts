@@ -10,7 +10,6 @@
  * `td-invoice.ts` and `credit-netting.ts` can import it without a circular
  * import (td-invoice ↔ credit-netting).
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWriteSafe } from '@/lib/db'
 
@@ -61,11 +60,18 @@ export function mirrorDiffers(
  */
 export type MirrorSnapshot = Record<string, string | number | null>
 
+/**
+ * ALWAYS runs as service-role (`supabaseAdmin`). `client_expenses` has RLS
+ * enabled with NO policies, so a staff/user-scoped client (e.g. the one
+ * `regenerateInvoice` passes) is silently denied every write — 0 rows, no error.
+ * That was the ACTUAL cause of the drift: credit-apply updated `payments` with
+ * the staff client (allowed) but its mirror write hit RLS and never landed.
+ * This function must never depend on the caller's client for the mirror.
+ */
 export async function syncTDInvoiceMirror(
   paymentId: string,
-  client?: SupabaseClient,
 ): Promise<{ changed: boolean; before?: MirrorSnapshot; after?: MirrorSnapshot }> {
-  const db = client ?? supabaseAdmin
+  const db = supabaseAdmin
   const { data: p } = await db
     .from('payments')
     .select('total, amount, amount_due, amount_paid, status, invoice_status, paid_date')

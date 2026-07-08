@@ -12,12 +12,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 
 let authUserFixture: { id: string; email: string | null } | null = null
 let isAdminReturn = true
+type Snap = Record<string, string | number | null>
 let reconcileResult = {
   success: true,
   payment_id: "pay-1",
   changed: false,
-  before: { ce_status: "Overdue" as string | null, ce_paid_date: null as string | null },
-  after: { ce_status: "Overdue" as string | null, ce_paid_date: null as string | null },
+  before: { status: "Overdue", amount_due: 700 } as Snap,
+  after: { status: "Overdue", amount_due: 700 } as Snap,
   error: undefined as string | undefined,
 }
 let lastActionLogInsert: Record<string, unknown> | null = null
@@ -75,8 +76,8 @@ beforeEach(() => {
     success: true,
     payment_id: "pay-1",
     changed: false,
-    before: { ce_status: "Overdue", ce_paid_date: null },
-    after: { ce_status: "Overdue", ce_paid_date: null },
+    before: { status: "Overdue", amount_due: 700 },
+    after: { status: "Overdue", amount_due: 700 },
     error: undefined,
   }
   lastActionLogInsert = null
@@ -108,7 +109,8 @@ describe("reconcile-invoice-mirror — delegation + response", () => {
 
   it("returns reconciled message when mirror was updated", async () => {
     reconcileResult.changed = true
-    reconcileResult.after = { ce_status: "Paid", ce_paid_date: "2026-04-01" }
+    reconcileResult.before = { status: "Overdue", amount_due: 700 }
+    reconcileResult.after = { status: "Paid", amount_due: 0 }
     const res = await POST(makeRequest({ payment_id: "pay-1" }) as Parameters<typeof POST>[0])
     expect(res.status).toBe(200)
     const body = await res.json()

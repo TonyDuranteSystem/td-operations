@@ -196,7 +196,7 @@ export async function reconcileAccountCredits(accountId: string, supabase: Supab
     // Project the client mirror from the updated payments row via the single
     // authoritative sync — same path as applyAvailableCreditToInvoice, so this
     // (retained) path can't drift the mirror either.
-    await syncTDInvoiceMirror(invId, supabase)
+    await syncTDInvoiceMirror(invId)
   }
 
   // Decrement each credit's remaining + stamp the last invoice it offset.
@@ -219,6 +219,7 @@ export interface ApplyCreditToInvoiceResult {
   invoice_number: string | null
   applied_credit: number // NEWLY applied this call
   new_total: number
+  mirror_synced?: boolean // client-portal copy was (re)synced to match the invoice
 }
 
 /**
@@ -304,11 +305,11 @@ export async function applyAvailableCreditToInvoice(
   // per-column update here could silently miss (Giuseppe INV-002233 drift:
   // payment → $700, mirror stuck at $1,150). syncTDInvoiceMirror rebuilds the
   // full financial state, so the client always sees the reduced balance.
-  await syncTDInvoiceMirror(paymentId, supabase)
+  const mirror = await syncTDInvoiceMirror(paymentId)
 
   if (application.appliedTotal > 0 && calc.newApply > 0) {
     await consumeCredits(application, paymentId, supabase)
   }
 
-  return { invoice_number: invoiceNumber, applied_credit: calc.newApply, new_total: calc.newTotal }
+  return { invoice_number: invoiceNumber, applied_credit: calc.newApply, new_total: calc.newTotal, mirror_synced: mirror.changed }
 }

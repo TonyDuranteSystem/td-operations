@@ -79,7 +79,7 @@ async function main() {
 
   let healed = 0
   for (const r of drifted) {
-    const res = await syncTDInvoiceMirror(r.td_payment_id, supabaseAdmin)
+    const res = await syncTDInvoiceMirror(r.td_payment_id)
     if (res.changed) healed++
   }
   console.log(`\n✅ Healed ${healed} mirror row(s).`)
