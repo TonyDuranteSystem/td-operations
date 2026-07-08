@@ -182,8 +182,8 @@ export default async function CasesPage({
       </div>
 
       {/* Table */}
-      <div className="rounded-lg border border-zinc-200 bg-white overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="rounded-lg border border-zinc-200 bg-white overflow-x-auto">
+        <table className="w-full min-w-[880px] text-sm">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50">
               <th className="px-4 py-2.5 text-left">

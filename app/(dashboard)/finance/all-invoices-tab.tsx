@@ -361,7 +361,7 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
       )}
 
       {/* Summary bar */}
-      <div className="flex items-center gap-6 text-sm text-muted-foreground bg-muted/50 rounded-lg px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground bg-muted/50 rounded-lg px-4 py-3">
         <span>Total: <strong className="text-foreground">{summaryStats.total}</strong> invoices</span>
         <span>Outstanding: <strong className="text-foreground">{formatCurrency(summaryStats.outstanding)}</strong></span>
         {summaryStats.overdueCount > 0 && (
@@ -434,9 +434,82 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
         </div>
       )}
 
-      {/* Table */}
-      <div className="border rounded-lg overflow-auto max-h-[calc(100vh-320px)]">
-        <table className="w-full text-sm">
+      {/* Mobile card list (< md) — same rows, phone-friendly */}
+      <div className="md:hidden space-y-2">
+        {filtered.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground border rounded-lg">
+            <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
+            No invoices found
+          </div>
+        )}
+        {filtered.map(inv => {
+          const isOverdue = inv.status === 'Overdue'
+          const clientName = getClientName(inv)
+          return (
+            <div key={inv.id} className={`border rounded-lg p-3 space-y-2 ${isOverdue ? 'bg-red-50/50' : 'bg-white'}`}>
+              <div className="flex items-center gap-2">
+                {REMINDABLE_STATUSES.has(inv.status) && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select invoice ${inv.invoice_number}`}
+                    checked={selected.has(inv.id)}
+                    onChange={() => toggleSelected(inv.id)}
+                  />
+                )}
+                <a
+                  href={`/api/invoices/${inv.id}/pdf`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-blue-600 text-xs hover:underline"
+                  title="Open invoice PDF"
+                >
+                  {inv.invoice_number}
+                </a>
+                <span className={`ml-auto inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
+                  {inv.status}
+                </span>
+                <InvoiceNoteDot note={inv.notes} />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium truncate">{clientName}</span>
+                <span className="text-sm font-semibold tabular-nums shrink-0">
+                  {formatCurrency(Number(inv.total ?? 0), inv.currency || 'USD')}
+                </span>
+              </div>
+              {inv.status === 'Partial' && inv.amount_paid > 0 && (
+                <div className="text-xs text-emerald-600 text-right">
+                  {formatCurrency(Number(inv.amount_paid), inv.currency || 'USD')} paid
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>Issued {formatDate(inv.issue_date)}</span>
+                <span>{inv.status === 'Paid' ? `Paid ${formatDate(inv.paid_date)}` : `Due ${formatDate(inv.due_date)}`}</span>
+              </div>
+              {(isPaused(inv) || (inv.reminder_count ?? 0) > 0) && (
+                <div className="flex flex-wrap gap-x-3 text-[11px]">
+                  {isPaused(inv) && (
+                    <span className="text-violet-600">
+                      ⏸ Paused{inv.accounts?.dunning_pause_until ? ` until ${formatDate(inv.accounts.dunning_pause_until)}` : ''}
+                    </span>
+                  )}
+                  {(inv.reminder_count ?? 0) > 0 && (
+                    <span className="text-amber-600">
+                      🔔 {inv.reminder_count} {inv.reminder_count === 1 ? 'reminder' : 'reminders'}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end border-t pt-1.5">
+                <InvoiceActions invoice={inv} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Table (md+) */}
+      <div className="hidden md:block border rounded-lg overflow-auto max-h-[calc(100vh-320px)]">
+        <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-muted/50 sticky top-0">
             <tr>
               <th className="w-8 px-3 py-3">

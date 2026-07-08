@@ -111,6 +111,15 @@ const PUBLIC_PREFIXES = [
   // PWA manifests — must be public for Chrome installability
   '/manifest.webmanifest',
   '/portal/manifest.webmanifest',
+  // Service workers — the browser refetches these on its own schedule (and
+  // use-sw-update polls reg.update() every 60s). Without a live session
+  // cookie the fetch would 307 to /login and the update silently fails,
+  // leaving installed PWAs on a stale worker. Push-only scripts, no secrets.
+  '/dashboard-sw.js',
+  '/portal-sw.js',
+  // Offline fallback page — precached by the service workers at install time
+  // (an authenticated-only page could not be cached by a fresh SW).
+  '/offline',
 ]
 
 function isPublicPath(pathname: string): boolean {

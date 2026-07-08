@@ -173,8 +173,8 @@ function SOPsTab({ rows }: { rows: SOPRow[] }) {
     return <p className="text-sm text-zinc-500">No SOPs.</p>
   }
   return (
-    <div className="border rounded-lg overflow-hidden bg-white">
-      <table className="w-full text-sm">
+    <div className="border rounded-lg overflow-x-auto bg-white">
+      <table className="w-full min-w-[640px] text-sm">
         <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
           <tr>
             <th className="px-4 py-2 font-medium">Service</th>
@@ -218,7 +218,8 @@ function PipelineTab({ rows }: { rows: PipelineStageRow[] }) {
           <header className="px-4 py-2 bg-zinc-50 border-b text-xs font-semibold uppercase text-zinc-600">
             {serviceType}
           </header>
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="text-left text-xs uppercase text-zinc-500 bg-zinc-50/50">
               <tr>
                 <th className="px-4 py-2 font-medium w-12">#</th>
@@ -251,6 +252,7 @@ function PipelineTab({ rows }: { rows: PipelineStageRow[] }) {
               ))}
             </tbody>
           </table>
+          </div>
         </section>
       ))}
     </div>
@@ -287,8 +289,8 @@ function DevTasksTab({ rows, activeStatus }: { rows: DevTaskRow[]; activeStatus:
       {rows.length === 0 ? (
         <p className="text-sm text-zinc-500">No tasks.</p>
       ) : (
-        <div className="border rounded-lg overflow-hidden bg-white">
-          <table className="w-full text-sm">
+        <div className="border rounded-lg overflow-x-auto bg-white">
+          <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
               <tr>
                 <th className="px-4 py-2 font-medium">Priority</th>

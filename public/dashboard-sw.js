@@ -1,6 +1,15 @@
-// Dashboard Service Worker — minimal SW for PWA installability + push handling
-self.addEventListener('install', function () {
+// Dashboard Service Worker — PWA installability, push handling, offline fallback
+// Bump CACHE_NAME whenever the precached assets change.
+var CACHE_NAME = 'td-dashboard-v1'
+var OFFLINE_URL = '/offline'
+
+self.addEventListener('install', function (event) {
   // Don't call skipWaiting — wait for client SKIP_WAITING message
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(function (cache) {
+      return cache.add(OFFLINE_URL)
+    })
+  )
 })
 
 self.addEventListener('message', function (event) {
@@ -9,11 +18,34 @@ self.addEventListener('message', function (event) {
   }
 })
 
-self.addEventListener('activate', function () {
-  self.clients.claim()
+self.addEventListener('activate', function (event) {
+  event.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(
+        keys.filter(function (key) { return key !== CACHE_NAME })
+          .map(function (key) { return caches.delete(key) })
+      )
+    }).then(function () {
+      return self.clients.claim()
+    })
+  )
 })
 
-// Push notifications (same as admin-sw.js — handles notifications if registered here)
+// Offline fallback for page navigations ONLY. Data is never cached — a live
+// CRM must not show stale financials. Network-first; the cached /offline page
+// is served only when the network itself fails.
+self.addEventListener('fetch', function (event) {
+  if (event.request.mode !== 'navigate') return
+  event.respondWith(
+    fetch(event.request).catch(function () {
+      return caches.match(OFFLINE_URL).then(function (cached) {
+        return cached || Response.error()
+      })
+    })
+  )
+})
+
+// Push notifications
 self.addEventListener('push', function (event) {
   if (!event.data) return
 

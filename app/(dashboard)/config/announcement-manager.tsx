@@ -111,7 +111,7 @@ function AnnouncementDialog({
         </div>
 
         {/* Settings */}
-        <div className="grid grid-cols-3 gap-3 pt-1 border-t border-zinc-100">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-zinc-100">
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1">Type</label>
             <select value={type} onChange={e => setType(e.target.value as 'info' | 'warning' | 'success')}
@@ -218,8 +218,8 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
           <p className="text-sm">No announcements yet. Click New to create one.</p>
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden bg-white">
-          <table className="w-full text-sm">
+        <div className="border rounded-lg overflow-x-auto bg-white">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
               <tr>
                 <th className="px-4 py-2 font-medium">Title</th>

@@ -95,8 +95,8 @@ export function CatalogClient({ catalogId, entries, pending }: Props) {
         </button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden bg-white">
-        <table className="w-full text-sm">
+      <div className="border rounded-lg overflow-x-auto bg-white">
+        <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-3 py-2 text-left">Slug</th>
@@ -176,8 +176,8 @@ export function CatalogClient({ catalogId, entries, pending }: Props) {
         {pending.length === 0 ? (
           <div className="text-sm text-gray-400 italic">No pending items.</div>
         ) : (
-          <div className="border rounded-lg overflow-hidden bg-white">
-            <table className="w-full text-sm">
+          <div className="border rounded-lg overflow-x-auto bg-white">
+            <table className="w-full min-w-[560px] text-sm">
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-3 py-2 text-left">Submitted Value</th>

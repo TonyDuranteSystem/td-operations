@@ -228,8 +228,8 @@ export default function EmailTemplatesPage() {
           {Object.entries(grouped).map(([category, list]) => (
             <div key={category}>
               <h2 className="text-sm font-semibold text-zinc-700 mb-2">{category}</h2>
-              <div className="rounded-lg border overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="rounded-lg border overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
                   <thead className="bg-zinc-50 text-xs text-zinc-500 uppercase">
                     <tr>
                       <th className="text-left px-4 py-2 font-medium">Name</th>

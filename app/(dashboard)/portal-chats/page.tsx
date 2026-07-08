@@ -19,6 +19,7 @@ import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { MessageReactions } from '@/components/chat/message-reactions'
@@ -172,18 +173,6 @@ const ACTION_TAG_CONFIG: Record<string, { label: string; color: string; bg: stri
   in_progress: { label: 'In Progress', color: 'text-blue-600', bg: 'bg-blue-100', icon: Clock },
   waiting_on_client: { label: 'Waiting on Client', color: 'text-amber-600', bg: 'bg-amber-100', icon: Hourglass },
   done: { label: 'Done', color: 'text-emerald-600', bg: 'bg-emerald-100', icon: CheckCircle2 },
-}
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4)
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const rawData = atob(base64)
-  const buffer = new ArrayBuffer(rawData.length)
-  const outputArray = new Uint8Array(buffer)
-  for (let i = 0; i < rawData.length; i++) {
-    outputArray[i] = rawData.charCodeAt(i)
-  }
-  return outputArray
 }
 
 function formatFileSize(bytes: number): string {
@@ -388,30 +377,10 @@ export default function PortalChatsPage() {
 
     setNotificationsEnabled(true)
 
-    // Try to register service worker + subscribe to push
+    // Push subscription is best-effort — the basic Notification API above
+    // still works when push is unsupported or the server has no VAPID key.
     try {
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
-
-      const registration = await navigator.serviceWorker.register('/dashboard-sw.js')
-      await navigator.serviceWorker.ready
-
-      // Fetch VAPID public key
-      const vapidRes = await fetch('/api/admin/push')
-      if (!vapidRes.ok) return // VAPID not configured, fall back to basic notifications
-      const { publicKey } = await vapidRes.json()
-      if (!publicKey) return
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey),
-      })
-
-      // Save subscription to server
-      await fetch('/api/admin/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: subscription.toJSON() }),
-      })
+      await subscribeToDashboardPush()
     } catch {
       // Push registration failed — basic Notification API still works
     }
@@ -801,7 +770,7 @@ export default function PortalChatsPage() {
               try {
                 new Notification(`✅ New task${threadCompany ? ' — ' + threadCompany : ''}`, {
                   body: title.slice(0, 120),
-                  icon: '/portal-icon-192.png',
+                  icon: '/portal-icons/icon-192.png',
                   tag: 'portal-chat-task',
                 })
               } catch { /* some browsers block */ }
@@ -1369,7 +1338,7 @@ export default function PortalChatsPage() {
         try {
           new Notification(`💬 ${newMessageThread.company_name}`, {
             body: newMessageThread.last_message.slice(0, 100) || 'New message',
-            icon: '/portal-icon-192.png',
+            icon: '/portal-icons/icon-192.png',
             tag: 'portal-chat', // prevents stacking
           })
         } catch { /* some browsers block */ }

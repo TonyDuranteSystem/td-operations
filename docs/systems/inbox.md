@@ -1,5 +1,6 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
-_Last verified against code: 2026-07-08b — Claude (reply pipeline Gmail-parity: multipart HTML replies, RFC 2047 To-encoding, isHtml flag from real MIME type, quoted-text collapse, 4-row email composer with Enter=newline, post-send delayed refetches; earlier same day: inbox audit + rendering/threading/color-marks overhaul; responsive thread header)_
+_Last verified against code: 2026-07-08c — Claude (cosmetic only, PWA mobile UX pass dev_task `e1f28dce`: the Gmail search-bar row and the bulk-action bar in `inbox-shell.tsx` gained `flex-wrap` so their buttons wrap below the input at phone width instead of overflowing. No behavior change.)_
+_Prior 2026-07-08b — Claude (reply pipeline Gmail-parity: multipart HTML replies, RFC 2047 To-encoding, isHtml flag from real MIME type, quoted-text collapse, 4-row email composer with Enter=newline, post-send delayed refetches; earlier same day: inbox audit + rendering/threading/color-marks overhaul; responsive thread header)_
 
 ## What it is
 

@@ -34,8 +34,8 @@ export function WorkflowsListClient({ entries }: Props) {
           New Workflow
         </Link>
       </div>
-      <div className="bg-white border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white border rounded-lg overflow-x-auto">
+        <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
             <tr>
               <th className="text-left px-4 py-2">Slug</th>

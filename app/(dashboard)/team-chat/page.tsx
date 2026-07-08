@@ -8,7 +8,7 @@ import {
   Send, Loader2, Users, Hash, Paperclip, Smile, Mic, MicOff, FileText, X,
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
   MessageSquare, Bot, CircleDot, Building2, Slack, ExternalLink,
-  LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown,
+  LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import EmojiPicker from 'emoji-picker-react'
@@ -515,8 +515,8 @@ export default function TeamWorkspacePage() {
 
   return (
     <div className="flex h-full">
-      {/* Sidebar */}
-      <div className="w-64 shrink-0 border-r border-zinc-200 bg-zinc-50 flex flex-col">
+      {/* Sidebar — full-screen pane on mobile until a conversation is open */}
+      <div className={`${(selectedId || selectedSlackId) ? 'hidden md:flex' : 'flex'} w-full md:w-64 md:shrink-0 border-r border-zinc-200 bg-zinc-50 flex-col`}>
         <div className="px-4 py-3 border-b border-zinc-200">
           <div className="flex items-center justify-between">
             <h1 className="text-sm font-semibold text-zinc-900 flex items-center gap-2"><Users className="h-4 w-4" /> Team Workspace</h1>
@@ -656,8 +656,17 @@ export default function TeamWorkspacePage() {
         </div>
       </div>
 
-      {/* Main pane */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main pane — hidden on mobile until a conversation is open */}
+      <div className={`${(selectedId || selectedSlackId) ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
+        {(selectedId || selectedSlackId) && (
+          <button
+            onClick={() => { setSelectedId(null); setSelectedSlackId(null) }}
+            className="md:hidden flex items-center gap-1.5 px-4 py-2 text-sm text-zinc-600 border-b border-zinc-200 bg-white shrink-0"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            All conversations
+          </button>
+        )}
         {selectedSlackId ? (
           <SlackFeedView channel={slackChannels.find(c => c.id === selectedSlackId) ?? null} channelId={selectedSlackId} messages={slackMessages} loading={loadingSlack} />
         ) : !selected ? (

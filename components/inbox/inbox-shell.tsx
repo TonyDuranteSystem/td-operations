@@ -427,7 +427,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
       {/* Search bar + Read/Unread filter — Gmail only */}
       {!isWhatsApp && (
-        <div className="flex items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
             type="text"
@@ -463,7 +463,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
       {/* Bulk Action Bar — Gmail only */}
       {bulkMode && !isWhatsApp && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
           <CheckSquare className="h-4 w-4 text-blue-500" />
           <span className="text-sm font-medium text-blue-700">
             {selectedIds.size} selected
