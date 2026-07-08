@@ -218,8 +218,8 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
           <p className="text-sm">No announcements yet. Click New to create one.</p>
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden bg-white">
-          <table className="w-full text-sm">
+        <div className="border rounded-lg overflow-x-auto bg-white">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
               <tr>
                 <th className="px-4 py-2 font-medium">Title</th>

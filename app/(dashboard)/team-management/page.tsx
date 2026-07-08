@@ -279,7 +279,7 @@ export default function TeamManagementPage() {
       )}
 
       {/* Users Table */}
-      <div className="bg-white border border-zinc-200 rounded-lg overflow-hidden">
+      <div className="bg-white border border-zinc-200 rounded-lg overflow-x-auto">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
@@ -287,7 +287,7 @@ export default function TeamManagementPage() {
         ) : users.length === 0 ? (
           <div className="text-center py-12 text-zinc-500">No team members found</div>
         ) : (
-          <table className="w-full">
+          <table className="w-full min-w-[720px]">
             <thead>
               <tr className="border-b border-zinc-200 bg-zinc-50">
                 <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Name</th>
@@ -416,7 +416,7 @@ export default function TeamManagementPage() {
 }
 
 /** Check if this is the currently logged-in user (can't edit self) */
-function isSelf(email: string): boolean {
+function isSelf(_email: string): boolean {
   // We don't have direct access to current user email in client component,
   // but the API prevents self-modification anyway. This is a UI hint —
   // hide edit buttons for antonio.durante@tonydurante.us as a best-effort.

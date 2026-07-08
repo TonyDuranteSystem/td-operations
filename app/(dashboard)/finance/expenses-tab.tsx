@@ -161,8 +161,8 @@ export function ExpensesTab({ expenses }: { expenses: TDExpenseRecord[] }) {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-lg border overflow-x-auto">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="border-b bg-muted/50 text-muted-foreground text-xs uppercase">
               <th className="text-left px-4 py-3">Vendor</th>

@@ -115,8 +115,8 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-white">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-xl border bg-white">
+      <table className="w-full min-w-[720px] text-sm">
         <thead>
           <tr className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
             <th className="px-4 py-3 font-medium">Date</th>

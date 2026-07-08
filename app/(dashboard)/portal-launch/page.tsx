@@ -229,8 +229,8 @@ export default function PortalLaunchPage() {
           <p className="text-xs mt-1">Create portal accounts first from the Accounts page.</p>
         </div>
       ) : (
-        <div className="bg-white border rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white border rounded-xl overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b bg-zinc-50">
                 <th className="w-10 px-4 py-3"></th>
