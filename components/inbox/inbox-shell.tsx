@@ -13,6 +13,7 @@ import { WhatsappThread } from './whatsapp-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
+import { WorkerChatPanel } from './worker-chat-panel'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
@@ -55,6 +56,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
+  const [workerOpen, setWorkerOpen] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
   const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
@@ -250,6 +252,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
   const handleSelect = (conversation: InboxConversation) => {
     setSelected(conversation)
+    setWorkerOpen(false) // worker chat is per email thread
     if (conversation.unread > 0) {
       setUnreadOverrides(prev => new Map(prev).set(conversation.id, 0))
     }
@@ -257,6 +260,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
   const handleBack = () => {
     setSelected(null)
+    setWorkerOpen(false)
   }
 
   const handleForward = async () => {
@@ -308,18 +312,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
   }
 
-  const handleAiAssist = () => {
+  // Antonio 2026-07-08: the inbox assistant is the SLACK WORKER (read-only
+  // DB/CRM/KB tools + central memory), not the generic AI Assist panel.
+  const handleWorker = () => {
     if (!selected) return
-    document.dispatchEvent(new CustomEvent('open-ai-agent', {
-      detail: {
-        emailContext: {
-          name: selected.name,
-          subject: selected.subject || '',
-          preview: selected.preview || '',
-          threadId: selected.id.replace('gmail:', ''),
-        }
-      }
-    }))
+    setWorkerOpen(true)
   }
 
   const handleReply = () => {
@@ -622,12 +619,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                       Reply
                     </button>
                     <button
-                      onClick={handleAiAssist}
+                      onClick={handleWorker}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
-                      title="AI Assist — analyze email and suggest reply"
+                      title="Worker — the Slack worker: reads CRM, DB and memory, discusses and drafts"
                     >
                       <Bot className="h-3.5 w-3.5" />
-                      AI Assist
+                      Worker
                     </button>
 
                     {isGmail && (
@@ -732,10 +729,19 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               {selected.channel === 'whatsapp' && whatsappGroupId ? (
                 <WhatsappThread groupId={whatsappGroupId} />
               ) : (
-                <>
-                  <MessageThread conversation={selected} mailbox={activeMailbox} />
-                  <ComposeReply conversation={selected} mailbox={activeMailbox} />
-                </>
+                <div className="flex flex-1 min-h-0">
+                  <div className="flex-1 flex flex-col min-w-0">
+                    <MessageThread conversation={selected} mailbox={activeMailbox} />
+                    <ComposeReply conversation={selected} mailbox={activeMailbox} />
+                  </div>
+                  {workerOpen && (
+                    <WorkerChatPanel
+                      conversation={selected}
+                      mailbox={activeMailbox}
+                      onClose={() => setWorkerOpen(false)}
+                    />
+                  )}
+                </div>
               )}
             </>
           ) : (

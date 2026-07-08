@@ -74,6 +74,17 @@ Function.
   mail to/from their contact addresses); the tab's thread view REUSES the
   inbox `MessageThread`/`ComposeReply` (support@ mailbox), so opening an
   email marks it read in Gmail and the green dot clears naturally.
+- **Worker panel** (2026-07-08, Antonio: "the same worker I have in Slack
+  with the same power in inbox"): the thread header's **Worker** button
+  (replaces the old AI Assist dispatch) opens
+  `components/inbox/worker-chat-panel.tsx` → `POST /api/inbox/worker-chat`
+  → `callWorker` with the SLACK persona + inbox surface override
+  (`lib/ai-agent/inbox-worker-prompt.ts`) over shared read-only
+  `WORKER_TOOLS` (+ memory recall + propose_action; Slack-only extras like
+  send_portal_message / code-task rail are NOT included — R111 preserved).
+  Conversation memory persists PER EMAIL THREAD via
+  threadId `inbox-<mailbox>-<gmailThreadId>`. Mailbox-gated
+  (`checkMailboxAccess`); route `maxDuration = 300`.
 - **Real-time push** (Phase 3b, 2026-07-08): Gmail `users.watch` (INBOX, both
   mailboxes) publishes to Pub/Sub topic `gmail-push` in GCP project
   `claude-gmail-connector-488713`; the push subscription `gmail-push-sub`
