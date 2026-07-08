@@ -95,6 +95,9 @@ export async function POST(
       attachments,
       card: card ?? null,
       mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
+      // Resolved USER IDS (sender already excluded) — the queryable source for
+      // the Mentions inbox/badge; handles above stay for display only.
+      mentioned_user_ids: mentions.userIds,
       read_at: now,
     })
     .select()

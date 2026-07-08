@@ -69,6 +69,7 @@ export interface TeamThread {
   work_status: 'todo' | 'in_progress' | 'waiting' | 'handled'
   later: boolean
   unread_count: number
+  mention_count: number
   last_message: string | null
   last_message_at: string | null
   last_sender_name: string | null

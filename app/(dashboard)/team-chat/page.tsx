@@ -480,6 +480,8 @@ export default function TeamWorkspacePage() {
   const dms = threads.filter(t => t.thread_type === 'dm')
   const discussions = threads.filter(t => t.thread_type === 'discussion')
   const laterThreads = threads.filter(t => t.later && !t.archived_at)
+  const mentionThreads = threads.filter(t => t.mention_count > 0 && !t.archived_at)
+  const totalMentions = mentionThreads.reduce((n, t) => n + t.mention_count, 0)
   const unfiledDiscussions = discussions.filter(t => !t.parent_channel_id)
   const threadsInChannel = (cid: string) => threads.filter(t => t.thread_type !== 'channel' && t.parent_channel_id === cid)
   const toggleExpand = (cid: string) => setExpandedChannels(prev => { const n = new Set(prev); if (n.has(cid)) n.delete(cid); else n.add(cid); return n })
@@ -535,7 +537,25 @@ export default function TeamWorkspacePage() {
             <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-zinc-400" /></div>
           ) : searchResults !== null ? (
             <div className="mt-2">
-              <p className="px-2 text-[11px] font-semibold text-zinc-400 uppercase mb-1">Search</p>
+              {/* Chats whose NAME matches (Luca's "search client" — instant, client-side) */}
+              {(() => {
+                const q = searchQ.trim().toLowerCase()
+                const nameHits = q.length < 2 ? [] : threads.filter(t => !t.archived_at && labelFor(t).toLowerCase().includes(q)).slice(0, 8)
+                return nameHits.length > 0 ? (
+                  <>
+                    <p className="px-2 text-[11px] font-semibold text-zinc-400 uppercase mb-1">Chats</p>
+                    {nameHits.map(t => (
+                      <button key={'hit-' + t.id} onClick={() => { setSelectedId(t.id); setSearchQ(''); setSearchResults(null) }}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-zinc-100 text-left">
+                        {t.thread_type === 'channel' ? <Hash className="h-3.5 w-3.5 text-zinc-400 shrink-0" /> : <Building2 className="h-3.5 w-3.5 text-zinc-400 shrink-0" />}
+                        <span className="flex-1 truncate text-sm text-zinc-700">{labelFor(t)}</span>
+                        <StatusDot status={t.work_status} />
+                      </button>
+                    ))}
+                  </>
+                ) : null
+              })()}
+              <p className="px-2 text-[11px] font-semibold text-zinc-400 uppercase mb-1 mt-2">Messages</p>
               {searchResults.length === 0 ? <p className="px-2 text-xs text-zinc-400">No matches.</p> :
                 searchResults.map(r => (
                   <button key={r.id} onClick={() => { setSelectedId(r.thread_id); setSearchQ(''); setSearchResults(null) }}
@@ -547,6 +567,21 @@ export default function TeamWorkspacePage() {
             </div>
           ) : (
             <>
+              {mentionThreads.length > 0 && (
+                <>
+                  <div className="flex items-center justify-between px-2 mt-1 mb-1">
+                    <p className="text-[11px] font-semibold text-violet-500 uppercase tracking-wide">Mentions</p>
+                    <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-violet-600 text-white text-[10px] font-bold flex items-center justify-center">{totalMentions}</span>
+                  </div>
+                  {mentionThreads.map(t => (
+                    <SidebarThread key={'mention-' + t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
+                      icon={<span className="text-violet-500 text-xs font-bold">@</span>} label={labelFor(t)}
+                      channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
+                      menuOpen={menuThreadId === 'mention-' + t.id} onMenuToggle={o => setMenuThreadId(o ? 'mention-' + t.id : null)} />
+                  ))}
+                </>
+              )}
+
               {laterThreads.length > 0 && (
                 <>
                   <SectionHeader label="Later" />
@@ -792,6 +827,18 @@ function SectionHeader({ label, onAdd }: { label: string; onAdd?: () => void }) 
   )
 }
 
+/** Follow-up dot: surfaces the kanban status in the list (Luca's request).
+ *  todo = no dot (default state, avoids noise); handled shows via strikethrough. */
+function StatusDot({ status }: { status: TeamThread['work_status'] }) {
+  if (status !== 'in_progress' && status !== 'waiting') return null
+  return (
+    <span
+      title={status === 'in_progress' ? 'In Progress' : 'Waiting'}
+      className={cn('w-2 h-2 rounded-full shrink-0', status === 'in_progress' ? 'bg-blue-500' : 'bg-amber-500')}
+    />
+  )
+}
+
 function ViewToggle({ view, setView }: { view: 'list' | 'board'; setView: (v: 'list' | 'board') => void }) {
   return (
     <div className="flex items-center bg-zinc-100 rounded-lg p-0.5">
@@ -814,6 +861,7 @@ function SidebarThread({ t, selected, onClick, icon, label, resolved, channels, 
       <button onClick={onClick} className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left">
         <span className="shrink-0 text-zinc-500">{icon}</span>
         <span className={cn('flex-1 truncate text-sm', t.unread_count > 0 ? 'font-semibold text-zinc-900' : 'text-zinc-600', resolved && 'line-through opacity-60')}>{label}</span>
+        <StatusDot status={t.work_status} />
         {t.later && <Clock className="h-3 w-3 text-amber-400 shrink-0" />}
         {t.unread_count > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{t.unread_count}</span>}
       </button>
@@ -850,6 +898,7 @@ function ThreadRow({ t, selected, onClick, icon, label, resolved }: { t: TeamThr
     <button onClick={onClick} className={cn('w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left', selected ? 'bg-zinc-200' : 'hover:bg-zinc-100')}>
       <span className="shrink-0 text-zinc-500">{icon}</span>
       <span className={cn('flex-1 truncate text-sm', t.unread_count > 0 ? 'font-semibold text-zinc-900' : 'text-zinc-600', resolved && 'line-through opacity-60')}>{label}</span>
+      <StatusDot status={t.work_status} />
       {t.unread_count > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{t.unread_count}</span>}
     </button>
   )

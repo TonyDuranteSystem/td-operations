@@ -71,6 +71,14 @@ Turns the workspace into a lightweight work tracker (Antonio's request).
 - Pure helpers `TEAM_WORK_STATUSES`/`TEAM_WORK_STATUS_LABELS`/`isValidWorkStatus` in `lib/team/workspace.ts` (unit-tested). Migrations `20260708-1400` (schema) + `20260708-1500` (RPC — DROP+CREATE, signature changed).
 - Verified in sandbox browser: move a discussion into a channel (nests under the folder), mark-unread (badge returns), Later (LATER section), board renders + status change re-groups the card. Physical drag can't be automated (library limitation) but the operation it triggers is verified.
 
+## Mentions inbox, status dots, chat search, sidebar scale fix (2026-07-08, from Luca's Slack proposal)
+Luca proposed (Slack #td-dev 1783524778.142989): column layout per channel, client search, follow-up dots, and a Mentions section. Panel review mapped half to already-shipped features (folders, @mention push, kanban) and approved three additions + one scale fix:
+- **Mentions inbox**: `internal_messages.mentioned_user_ids uuid[]` (resolved USER IDS stored at send time — handles in `mentions` stay display-only; GIN index). "Pending mention" = mentioned in a message newer than my `last_read_at` in that thread → clears naturally on open (reuses the per-user read model, no new table). `get_team_threads` returns per-caller `mention_count`; the UI shows a violet **MENTIONS** section (badge = total) above LATER.
+- **Status dots** (`StatusDot`): the kanban `work_status` surfaces in every list row — blue = in_progress, amber = waiting; todo intentionally undotted (noise), handled shows via strikethrough.
+- **Chat name search**: the sidebar search panel now has a **Chats** group (client-side label match, top 8, with status dots) above the **Messages** content results.
+- **Sidebar scale fix**: `get_team_threads` computes `label` server-side (LEFT JOIN accounts/contacts/leads) — replaced the threads route's per-discussion N+1 lookups (2 queries × N discussions per load/poll) that would degrade first as clients grow. Migration `20260708-1800`.
+- **Deferred with a trigger**: Luca's Finder-style column layout — revisit when a channel folder no longer fits one screen (~15–20 clients) or total threads pass ~100.
+
 ## Business rules / invariants
 - **Staff-only, never client-visible.** All routes gate on `isDashboardUser`; RLS is staff-only.
 - **Unread is per-user** via `internal_thread_reads`. Do NOT reintroduce logic based on the single `read_at` column for unread (it made counts always 0 — the pre-Phase-1 bug, because sends stamped `read_at=now()`).

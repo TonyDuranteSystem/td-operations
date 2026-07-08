@@ -26,25 +26,11 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Enrich client-discussion threads with the account/contact display name so
-  // the sidebar can label them without a second round-trip.
+  // Labels come from the RPC itself (accounts/contacts/leads joined server-side,
+  // one query) — the old per-thread lookups here were an N+1 that would degrade
+  // first as client count grows (panel review of Luca's proposal, 2026-07-08).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const enriched = await Promise.all((threads ?? []).map(async (t: any) => {
-    let label: string | null = t.channel_name ?? t.title ?? null
-    if (t.thread_type === 'general') {
-      label = 'general'
-    }
-    if (t.thread_type === 'discussion') {
-      if (t.account_id) {
-        const { data: a } = await supabaseAdmin.from('accounts').select('company_name').eq('id', t.account_id).single()
-        label = a?.company_name ?? label
-      } else if (t.contact_id) {
-        const { data: c } = await supabaseAdmin.from('contacts').select('full_name').eq('id', t.contact_id).single()
-        label = c?.full_name ?? label
-      }
-    }
-    return { ...t, label: label ?? 'Discussion' }
-  }))
+  const enriched = (threads ?? []).map((t: any) => ({ ...t, label: t.label ?? 'Thread' }))
 
   const members = await listTeamMembers()
 
