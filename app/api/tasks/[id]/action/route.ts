@@ -32,6 +32,7 @@ import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createWorkflowTask, updateTask } from "@/lib/operations/task"
+import { emitUiEvent } from "@/lib/ui-events"
 import { advanceStage } from "@/lib/operations/service-delivery"
 import { getCrmRole, isDashboardUser } from "@/lib/auth"
 import { parseWorkflowSnapshot } from "@/lib/tasks/workflow-snapshot-schema"
@@ -600,6 +601,7 @@ async function finalizeSuccess(args: {
     })
     .eq("id", logId)
 
+  void emitUiEvent("tasks") // live-refresh task views in all open tabs
   return json({
     ok: true,
     log_id: logId,

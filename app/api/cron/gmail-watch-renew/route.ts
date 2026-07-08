@@ -48,9 +48,12 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Prune wake-up rows older than 2 days (they are signals, not history)
+  // Prune wake-up rows older than 2 days (they are signals, not history).
+  // Covers BOTH realtime buses: gmail push events and the dashboard
+  // cross-tab ui_events (lib/ui-events.ts).
   const cutoff = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
   await db.from("gmail_push_events").delete().lt("created_at", cutoff)
+  await db.from("ui_events").delete().lt("created_at", cutoff)
 
   const failed = Object.values(results).some((v) => v.startsWith("error"))
   return NextResponse.json({ ok: !failed, results }, { status: failed ? 500 : 200 })

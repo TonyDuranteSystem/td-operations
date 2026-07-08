@@ -385,6 +385,17 @@ export function ActionBoard() {
     return () => clearInterval(t)
   }, [load])
 
+  // Live cross-tab refresh: the dashboard UiEventListener dispatches
+  // 'td-ui-event' when any tab/machine changes board cards — reload
+  // immediately instead of waiting for the 30s poll.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      if ((e as CustomEvent).detail?.kind === 'todo') load()
+    }
+    document.addEventListener('td-ui-event', handler)
+    return () => document.removeEventListener('td-ui-event', handler)
+  }, [load])
+
   const move = useCallback(
     async (id: string, action_type: string) => {
       setMovingId(id)

@@ -21,6 +21,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { emitUiEvent } from "@/lib/ui-events"
 import type { Database } from "@/lib/database.types"
 
 // ─── Types ──────────────────────────────────────────────────
@@ -199,6 +200,7 @@ export async function createWorkflowTask(
       details: params.details || { workflow_slug: params.workflow_slug },
     })
 
+    void emitUiEvent("tasks") // live-refresh task views in all open tabs
     return { success: true, outcome: "created", task_id: data.id }
   } catch (err) {
     return {
@@ -273,6 +275,7 @@ export async function updateTask(
       details: params.details || { fields: changedFields, patch: params.patch },
     })
 
+    void emitUiEvent("tasks") // live-refresh task views in all open tabs
     return {
       success: true,
       outcome: "updated",

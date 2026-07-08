@@ -104,7 +104,11 @@ Function.
   send_portal_message / code-task rail are NOT included — R111 preserved).
   Conversation memory persists PER EMAIL THREAD via
   threadId `inbox-<mailbox>-<gmailThreadId>`. Mailbox-gated
-  (`checkMailboxAccess`); route `maxDuration = 300`.
+  (`checkMailboxAccess`); route `maxDuration = 300`. The SAME route also
+  serves a CLIENT MODE (`clientKey: acct-<id>|contact-<id>`, threadId
+  `chat-<clientKey>`, portal-chats surface prompt) — used by the Portal
+  Chats **Worker** tab (`components/portal-chats/thread-worker-panel.tsx`),
+  per-client persistent memory.
 - **Real-time push** (Phase 3b, 2026-07-08): Gmail `users.watch` (INBOX, both
   mailboxes) publishes to Pub/Sub topic `gmail-push` in GCP project
   `claude-gmail-connector-488713`; the push subscription `gmail-push-sub`

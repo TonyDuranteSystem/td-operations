@@ -23,6 +23,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { explainFailure } from "@/lib/errors/explain-failure"
+import { emitUiEvent } from "@/lib/ui-events"
 
 export const dynamic = "force-dynamic"
 
@@ -281,6 +282,7 @@ export async function POST(req: NextRequest) {
         .select()
         .single()
       if (error) throw error
+      void emitUiEvent("todo") // live-refresh boards in all open tabs
       return NextResponse.json({ action: data, updated: true })
     }
 
@@ -298,6 +300,7 @@ export async function POST(req: NextRequest) {
       .select()
       .single()
     if (error) throw error
+    void emitUiEvent("todo") // live-refresh boards in all open tabs
     return NextResponse.json({ action: data, created: true })
   } catch (err) {
     // Supabase returns failures as a PLAIN object in the {data,error} tuple (not an
@@ -367,6 +370,7 @@ export async function PATCH(req: NextRequest) {
       .select()
       .single()
     if (error) throw error
+    void emitUiEvent("todo") // live-refresh boards in all open tabs
     return NextResponse.json({ action: data, moved: action_type !== undefined })
   } catch (err) {
     // Supabase returns failures as a PLAIN object in the {data,error} tuple (not an
