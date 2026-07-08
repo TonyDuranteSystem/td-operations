@@ -77,4 +77,26 @@ describe('issueReferralCreditNote', () => {
     expect(input.line_items[0].unit_price).toBe(-300) // -abs(-300)
     expect(updates.payments.payload.credit_remaining).toBe(300) // positive remaining
   })
+
+  it('supports a contact-only target (personal credit for a referrer with no company)', async () => {
+    const { supabase } = makeSupabaseStub()
+    await issueReferralCreditNote({ referralId: 'ref-4', referrerContactId: 'con-1', amount: 100 }, supabase as never)
+    const input = (createTDInvoice as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(input.account_id).toBeUndefined()
+    expect(input.contact_id).toBe('con-1')
+  })
+
+  it('passes BOTH ids when account and contact are known (account-scoped credit, person attribution)', async () => {
+    const { supabase } = makeSupabaseStub()
+    await issueReferralCreditNote({ referralId: 'ref-5', referrerAccountId: 'acc-5', referrerContactId: 'con-5', amount: 200 }, supabase as never)
+    const input = (createTDInvoice as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(input.account_id).toBe('acc-5')
+    expect(input.contact_id).toBe('con-5')
+  })
+
+  it('throws when neither an account nor a contact target is given', async () => {
+    const { supabase } = makeSupabaseStub()
+    await expect(issueReferralCreditNote({ referralId: 'ref-6', amount: 100 }, supabase as never)).rejects.toThrow(/required/)
+    expect(createTDInvoice).not.toHaveBeenCalled()
+  })
 })

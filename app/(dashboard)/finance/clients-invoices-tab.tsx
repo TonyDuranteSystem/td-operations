@@ -42,6 +42,9 @@ function statusBadge(status: string) {
     Draft: 'bg-gray-100 text-gray-600',
     Split: 'bg-purple-100 text-purple-800',
     Voided: 'bg-gray-100 text-gray-500 line-through',
+    Credit: 'bg-emerald-100 text-emerald-800',
+    Available: 'bg-emerald-100 text-emerald-800',
+    Applied: 'bg-zinc-100 text-zinc-600',
   }
   return (
     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${colors[status] ?? 'bg-gray-100 text-gray-600'}`}>
@@ -451,7 +454,9 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
               </div>
             )}
 
-            {/* Credit Notes */}
+            {/* Credit Notes — payments rows with invoice_status='Credit' (CN- numbers).
+                "Available" = credit_remaining still unspent; apply it to an open
+                invoice with that invoice's Regenerate button. */}
             {showSection === 'credits' && (
               <div className="rounded-lg border overflow-x-auto">
                 <table className="w-full text-sm">
@@ -459,6 +464,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                     <tr className="border-b bg-muted/50">
                       <th className="text-left px-4 py-2.5 font-medium">Credit Note</th>
                       <th className="text-right px-4 py-2.5 font-medium">Amount</th>
+                      <th className="text-right px-4 py-2.5 font-medium">Remaining</th>
                       <th className="text-left px-4 py-2.5 font-medium">Reason</th>
                       <th className="text-left px-4 py-2.5 font-medium">Status</th>
                       <th className="text-left px-4 py-2.5 font-medium">Applied To</th>
@@ -467,18 +473,27 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                   </thead>
                   <tbody>
                     {creditNotes.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No credit notes</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No credit notes</td></tr>
                     )}
-                    {creditNotes.map(cn => (
-                      <tr key={cn.id as string} className="border-b hover:bg-muted/30">
-                        <td className="px-4 py-2.5 font-medium">{cn.credit_note_number as string}</td>
-                        <td className="px-4 py-2.5 text-right text-green-600">${Number(cn.amount ?? 0).toFixed(2)}</td>
-                        <td className="px-4 py-2.5 text-muted-foreground">{(cn.reason as string) ?? '—'}</td>
-                        <td className="px-4 py-2.5">{statusBadge(cn.status as string)}</td>
-                        <td className="px-4 py-2.5 text-muted-foreground">{(cn.applied_to_invoice_id as string) ? 'Applied' : '—'}</td>
-                        <td className="px-4 py-2.5 text-muted-foreground">{((cn.created_at as string) ?? '').split('T')[0]}</td>
-                      </tr>
-                    ))}
+                    {creditNotes.map(cn => {
+                      const sym = csym(cn.currency as string | undefined)
+                      const remaining = Number(cn.remaining ?? 0)
+                      const appliedToId = cn.applied_to_invoice_id as string | null
+                      const appliedInv = appliedToId ? invoices.find(i => (i.id as string) === appliedToId) : null
+                      return (
+                        <tr key={cn.id as string} className="border-b hover:bg-muted/30">
+                          <td className="px-4 py-2.5 font-medium font-mono">{(cn.credit_note_number as string) ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-right text-green-600">{sym}{Number(cn.amount ?? 0).toFixed(2)}</td>
+                          <td className="px-4 py-2.5 text-right font-medium">{remaining > 0 ? `${sym}${remaining.toFixed(2)}` : '—'}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{(cn.reason as string) ?? '—'}</td>
+                          <td className="px-4 py-2.5">{statusBadge(cn.status as string)}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">
+                            {appliedInv ? (appliedInv.invoice_number as string) : appliedToId ? 'Applied' : '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{((cn.created_at as string) ?? '').split('T')[0]}</td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

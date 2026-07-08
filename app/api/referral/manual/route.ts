@@ -93,6 +93,12 @@ export async function GET(request: NextRequest) {
       email: c.email,
       account_id: accountId,
       account_name: link?.accounts?.company_name ?? null,
+      // ALL linked companies — the referrer picker defaults a person to their
+      // company (credits are account-scoped) and needs the full list to let
+      // staff choose when the person owns several.
+      accounts: (c.account_contacts ?? [])
+        .filter(l => l.account_id)
+        .map(l => ({ id: l.account_id, name: l.accounts?.company_name ?? null })),
       setup_fee_total: sf,
       default_credit_usd: defaultReferralCreditUsd(sf),
     }

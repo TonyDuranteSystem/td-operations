@@ -1,11 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { Share2, Users, TrendingUp, Wallet, Copy, Check, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react'
+import { Share2, Users, TrendingUp, Wallet, Copy, Check, ExternalLink, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { ReferralRow } from './page'
 import { AddReferralModal } from './add-referral-modal'
+import { ReconcileBacklogButton } from './reconcile-backlog-button'
 
 interface Props {
   referrals: ReferralRow[]
@@ -48,12 +49,22 @@ function fmtByCur(m: Record<string, number>): string {
 export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [search, setSearch] = useState('')
+  // One referrer's full referral list in one place: set by clicking a Top
+  // Referrer row (keyed by referrer contact/account id, not by name).
+  const [referrerFilter, setReferrerFilter] = useState<{ id: string; name: string } | null>(null)
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
+  const q = search.trim().toLowerCase()
   const filtered = referrals.filter(r => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
     if (typeFilter !== 'all' && r.referrer_type !== typeFilter) return false
+    if (referrerFilter && (r.referrer_contact_id || r.referrer_account_id) !== referrerFilter.id) return false
+    if (q) {
+      const hay = `${r.referrer_name ?? ''} ${r.referred_name ?? ''} ${r.referred_company ?? ''}`.toLowerCase()
+      if (!hay.includes(q)) return false
+    }
     return true
   })
 
@@ -79,7 +90,10 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
             <p className="text-sm text-zinc-500">Track referrals, commissions, and payouts</p>
           </div>
         </div>
-        <AddReferralModal />
+        <div className="flex items-center gap-2">
+          <ReconcileBacklogButton />
+          <AddReferralModal />
+        </div>
       </div>
 
       {/* Stats */}
@@ -93,10 +107,20 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
       {/* Top Referrers */}
       {referrers.length > 0 && (
         <div className="bg-white rounded-xl border shadow-sm p-5">
-          <h2 className="text-sm font-semibold text-zinc-700 mb-3">Top Referrers</h2>
+          <h2 className="text-sm font-semibold text-zinc-700 mb-3">Top Referrers <span className="font-normal text-zinc-400">— click one to see all their referrals</span></h2>
           <div className="divide-y">
             {referrers.slice(0, 10).map((r) => (
-              <div key={r.id} className="flex items-center justify-between py-2.5">
+              <div
+                key={r.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setReferrerFilter(prev => prev?.id === r.id ? null : { id: r.id, name: r.name })}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setReferrerFilter(prev => prev?.id === r.id ? null : { id: r.id, name: r.name }) }}
+                className={cn(
+                  'flex items-center justify-between py-2.5 px-2 -mx-2 rounded-md cursor-pointer transition-colors',
+                  referrerFilter?.id === r.id ? 'bg-violet-50' : 'hover:bg-zinc-50',
+                )}
+              >
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center text-violet-700 text-xs font-semibold">
                     {r.name.charAt(0).toUpperCase()}
@@ -113,7 +137,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                   <span className="text-sm font-medium">{fmtByCur(r.commissionByCur)}</span>
                   {r.code && (
                     <button
-                      onClick={() => copyLink(r.code!)}
+                      onClick={(e) => { e.stopPropagation(); copyLink(r.code!) }}
                       className="p-1.5 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600"
                       title="Copy referral link"
                     >
@@ -129,7 +153,25 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
 
       {/* Filters + Table */}
       <div className="bg-white rounded-xl border shadow-sm">
-        <div className="flex items-center gap-3 px-5 py-3 border-b">
+        <div className="flex flex-wrap items-center gap-3 px-5 py-3 border-b">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search referrer or referred…"
+              className="w-56 rounded-md border pl-8 pr-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          {referrerFilter && (
+            <button
+              onClick={() => setReferrerFilter(null)}
+              className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
+              title="Clear referrer filter"
+            >
+              Referrer: {referrerFilter.name} <X className="h-3 w-3" />
+            </button>
+          )}
           <select
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}

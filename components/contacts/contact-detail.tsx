@@ -26,6 +26,7 @@ import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { MessageReactions } from '@/components/chat/message-reactions'
 import type { MessageReaction } from '@/lib/portal/reactions'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
+import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
@@ -422,6 +423,9 @@ export function ContactDetail({
 
       {/* Notification Center roll-up: What's New + To-Do + Workflow for this contact */}
       <EntityActivitySummary contactId={contact.id} />
+
+      {/* Referrals GIVEN by this person (or their companies) — renders only when there are any */}
+      <ReferralsGivenCard contactId={contact.id} />
 
       {/* Tabs */}
       <div className="border-b">

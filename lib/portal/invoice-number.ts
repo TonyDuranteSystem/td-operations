@@ -63,19 +63,37 @@ export async function generateInvoiceNumber(): Promise<string> {
 export async function generateCreditNoteNumber(): Promise<string> {
   const prefix = 'CN-'
   const strictPattern = `${prefix}______` // 6 underscores → exactly 6 chars after prefix
+  // LIKE's underscore matches ANY character, so a malformed row like 'CN-QA0001'
+  // also matches — and lex-sorts ABOVE every numeric CN- (letters > digits), so
+  // trusting only the lexicographic max would parse NaN → always yield CN-000001
+  // → a permanent unique-violation retry loop. Scan a page (desc) and take the
+  // highest ALL-DIGITS suffix instead. Caught in sandbox QA 2026-07-08;
+  // generateInvoiceNumber has the same latent fragility (separate task).
   const { data } = await supabaseAdmin
     .from('payments')
     .select('invoice_number')
     .like('invoice_number', strictPattern)
     .order('invoice_number', { ascending: false })
-    .limit(1)
+    .limit(50)
 
-  let maxSeq = 0
-  if (data && data.length > 0 && data[0].invoice_number) {
-    const num = parseInt(data[0].invoice_number.replace(prefix, ''), 10)
-    if (!isNaN(num) && num > maxSeq) maxSeq = num
-  }
+  const maxSeq = maxNumericSuffix((data ?? []).map(r => r.invoice_number), prefix)
   return `${prefix}${String(maxSeq + 1).padStart(6, '0')}`
+}
+
+/**
+ * Highest 6-digit numeric suffix among `PREFIX-NNNNNN` numbers, ignoring
+ * malformed entries (non-digit suffixes). Pure — unit tested.
+ */
+export function maxNumericSuffix(numbers: Array<string | null>, prefix: string): number {
+  let max = 0
+  for (const n of numbers) {
+    if (!n || !n.startsWith(prefix)) continue
+    const suffix = n.slice(prefix.length)
+    if (!/^\d{6}$/.test(suffix)) continue
+    const num = parseInt(suffix, 10)
+    if (num > max) max = num
+  }
+  return max
 }
 
 /**

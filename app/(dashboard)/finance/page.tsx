@@ -143,23 +143,30 @@ export default async function FinancePage({
       .not('invoice_status', 'is', null)
       .order('paid_date', { ascending: false, nullsFirst: false })
 
+    // Credit notes live in `payments` as invoice_status='Credit' rows (negative
+    // total, CN- numbers) — created by the referral reward paths and the manual
+    // New-Credit-Note flow. NOT in `client_credit_notes` (that table belongs to
+    // the separate two-step lib/portal/credit-notes.ts path and has never been
+    // written to) — reading it here left this tab permanently empty.
+    const creditNoteQuery = supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, total, credit_remaining, description, amount_currency, credit_for_payment_id, issue_date, paid_date, created_at')
+      .eq('invoice_status', 'Credit')
+      .order('created_at', { ascending: false })
+
     if (isUnlinked) {
       invoiceQuery.is('account_id', null).not('contact_id', 'is', null)
       payHistQuery.is('account_id', null).not('contact_id', 'is', null)
+      creditNoteQuery.is('account_id', null).not('contact_id', 'is', null)
     } else {
       invoiceQuery.eq('account_id', selectedClientId)
       payHistQuery.eq('account_id', selectedClientId)
+      creditNoteQuery.eq('account_id', selectedClientId)
     }
 
     const [invRes, cnRes, auditRes, payRes] = await Promise.all([
       invoiceQuery,
-      isUnlinked
-        ? Promise.resolve({ data: [] })
-        : supabaseAdmin
-            .from('client_credit_notes')
-            .select('*')
-            .eq('account_id', selectedClientId)
-            .order('created_at', { ascending: false }),
+      creditNoteQuery,
       supabaseAdmin
         .from('invoice_audit_log')
         .select('*')
@@ -176,7 +183,20 @@ export default async function FinancePage({
       client_invoice_items: p.payment_items ?? [],
       client_customers: null,
     }))
-    clientCreditNotes = cnRes.data ?? []
+    // Map to the shape the Credit Notes tab renders. `amount` is the credit's
+    // face value (positive); `remaining` is what's still unspent; a credit with
+    // remaining > 0 is Available, otherwise Applied (consumed by an invoice).
+    clientCreditNotes = (cnRes.data ?? []).map(cn => ({
+      id: cn.id,
+      credit_note_number: cn.invoice_number,
+      amount: Math.abs(Number(cn.total ?? 0)),
+      remaining: Number(cn.credit_remaining ?? 0),
+      currency: cn.amount_currency ?? 'USD',
+      reason: cn.description,
+      status: Number(cn.credit_remaining ?? 0) > 0 ? 'Available' : 'Applied',
+      applied_to_invoice_id: cn.credit_for_payment_id,
+      created_at: cn.issue_date ?? cn.paid_date ?? cn.created_at,
+    }))
     // Filter audit log for this client's invoices
     const clientInvIds = new Set((invRes.data ?? []).map(i => i.id))
     clientAuditLog = (auditRes.data ?? []).filter(a => clientInvIds.has((a as Record<string, unknown>).invoice_id as string))
