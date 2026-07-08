@@ -11,7 +11,7 @@ import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
-import { contactThreadOrFilter } from '@/lib/portal/thread-scope'
+import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -158,7 +158,17 @@ export async function GET(request: NextRequest) {
 
     // Superset rule shared with the What's New feed via lib/portal/thread-scope
     // so the two thread definitions can never drift.
-    query = query.or(contactThreadOrFilter(contactIdParam, threadAccountIds))
+    //
+    // STAFF ONLY (2026-07-08, "one message, one staff thread"): multi-member
+    // accounts have their own inbox thread, so the person thread excludes
+    // their messages — otherwise every MMLLC client message rendered in both
+    // the company AND the member's thread (Adam Mihaly / LUMA duplicate).
+    // Client callers on this legacy path keep the full superset: their portal
+    // views are scoped by buildChatQueryPlan, not by this exclusion.
+    const excludeAccountIds = !isClientUser
+      ? await multiMemberAccountIds(threadAccountIds)
+      : []
+    query = query.or(contactThreadOrFilter(contactIdParam, threadAccountIds, excludeAccountIds))
   } else if (accountId) {
     query = query.eq('account_id', accountId)
   }
@@ -268,15 +278,15 @@ export async function POST(request: NextRequest) {
   } else {
     resolvedContactId = bodyContactId || authContactId
     if (!resolvedContactId && account_id && !isClientUser) {
-      // Admin send with only account_id → target any linked contact so the
-      // message lands in the client's contact-scoped thread.
-      const { data: primary } = await supabaseAdmin
-        .from('account_contacts')
-        .select('contact_id')
-        .eq('account_id', account_id)
-        .limit(1)
-        .maybeSingle()
-      resolvedContactId = primary?.contact_id || null
+      // Admin send with only account_id → tag the member actually being
+      // answered, deterministically (2026-07-08 — the old `limit(1)` pick was
+      // arbitrary and tagged replies to the wrong MMLLC member):
+      //   1. the author of the message being replied to (if a member),
+      //   2. else the last client sender in this account thread,
+      //   3. else the primary linked contact, else the first by contact_id.
+      // Client visibility is unchanged either way — company threads are gated
+      // by account_id; the contact tag is display/routing metadata.
+      resolvedContactId = await resolveAdminReplyContact(account_id, reply_to_id || null)
     }
     // Verify access for client contacts
     if (isClientUser) {
@@ -411,6 +421,56 @@ export async function POST(request: NextRequest) {
   })
 
   return NextResponse.json({ message: responseMsg })
+}
+
+/**
+ * Deterministic member tag for an admin reply into an account thread.
+ * Order: reply-to author (if a linked member) → last client sender on the
+ * account → primary linked contact → first linked contact by contact_id.
+ * Returns null only when the account has no linked contacts at all.
+ */
+async function resolveAdminReplyContact(
+  accountId: string,
+  replyToId: string | null,
+): Promise<string | null> {
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('contact_id, is_primary')
+    .eq('account_id', accountId)
+  const linked = (links ?? []) as { contact_id: string; is_primary: boolean | null }[]
+  if (linked.length === 0) return null
+  const linkedIds = new Set(linked.map(l => l.contact_id))
+
+  // 1. Author of the message being replied to.
+  if (replyToId) {
+    const { data: parent } = await supabaseAdmin
+      .from('portal_messages')
+      .select('contact_id, sender_type')
+      .eq('id', replyToId)
+      .maybeSingle()
+    if (parent?.sender_type === 'client' && parent.contact_id && linkedIds.has(parent.contact_id)) {
+      return parent.contact_id
+    }
+  }
+
+  // 2. Last client sender in this account thread.
+  const { data: lastClient } = await supabaseAdmin
+    .from('portal_messages')
+    .select('contact_id')
+    .eq('account_id', accountId)
+    .eq('sender_type', 'client')
+    .not('contact_id', 'is', null)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (lastClient?.contact_id && linkedIds.has(lastClient.contact_id)) {
+    return lastClient.contact_id
+  }
+
+  // 3. Primary linked contact, else first by contact_id (stable order).
+  const sorted = [...linked].sort((a, b) => a.contact_id.localeCompare(b.contact_id))
+  return sorted.find(l => l.is_primary)?.contact_id ?? sorted[0].contact_id
 }
 
 /**

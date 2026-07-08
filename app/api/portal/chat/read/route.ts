@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -124,15 +125,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ marked: count ?? 0 })
   }
 
-  // Contact-scoped: mark ALL messages for this contact across all accounts.
+  // Contact-scoped: mark the messages that BELONG to the contact thread.
   // This covers:
   //   (a) messages with contact_id = X (any account_id, including null)
   //   (b) legacy messages with contact_id = NULL but account_id in linked accounts
+  //
+  // Staff reads (2026-07-08, "one message, one staff thread"): messages on
+  // multi-member accounts belong to that account's own thread, are NOT shown
+  // in the person thread, and must NOT be marked read from here — otherwise
+  // opening a member's personal thread silently cleared the company thread's
+  // unread badge for messages staff never saw. Client reads keep the full
+  // superset (their scoped reads go through the scope=company/personal branch
+  // above; this legacy path stays unchanged for them).
   const { data: acRows } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
     .eq('contact_id', contact_id)
   const linkedAccountIds = (acRows ?? []).map(r => r.account_id)
+  const excludedAccountIds = dashUser ? await multiMemberAccountIds(linkedAccountIds) : []
+  const excludedSet = new Set(excludedAccountIds)
 
   // (a) messages tagged with contact_id
   let q1 = supabaseAdmin
@@ -141,6 +152,9 @@ export async function POST(request: NextRequest) {
     .eq('contact_id', contact_id)
     .eq('sender_type', senderTypeToMark)
     .is('read_at', null)
+  if (excludedAccountIds.length > 0) {
+    q1 = q1.or(`account_id.is.null,account_id.not.in.(${excludedAccountIds.join(',')})`)
+  }
   // Skip messages the client explicitly kept unread.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
   q1 = (q1 as any).eq('client_kept_unread', false)
@@ -150,14 +164,16 @@ export async function POST(request: NextRequest) {
   const { error: e1, count: c1 } = await q1
   if (e1) return NextResponse.json({ error: e1.message }, { status: 500 })
 
-  // (b) legacy messages with no contact_id but linked account
+  // (b) legacy messages with no contact_id but linked account (staff: only
+  // accounts without their own thread — see the exclusion note above)
+  const companyOnlyAccountIds = linkedAccountIds.filter(id => !excludedSet.has(id))
   let c2 = 0
-  if (linkedAccountIds.length > 0) {
+  if (companyOnlyAccountIds.length > 0) {
     let q2 = supabaseAdmin
       .from('portal_messages')
       .update({ read_at: now })
       .is('contact_id', null)
-      .in('account_id', linkedAccountIds)
+      .in('account_id', companyOnlyAccountIds)
       .eq('sender_type', senderTypeToMark)
       .is('read_at', null)
     // Skip messages the client explicitly kept unread.

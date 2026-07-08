@@ -136,6 +136,7 @@ interface ChatMessage {
   sender_type: 'client' | 'admin' | 'system'
   sender_name?: string | null
   account_id?: string | null
+  contact_id?: string | null
   // PR 2 Step 6 (2026-05-05): tag chosen by sender. NULL = legacy
   // untagged message (pre-PR 2). Renders without a badge.
   sender_context?: 'person' | 'company' | null
@@ -656,6 +657,16 @@ export default function PortalChatsPage() {
     return acc
   }, {})
 
+  // Account ids that have their OWN account-level thread (multi-member LLCs).
+  // Kept in a ref so the realtime handlers below can consult it without
+  // re-subscribing every time the thread list refetches.
+  const accountThreadIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    accountThreadIdsRef.current = new Set(
+      (threads ?? []).filter(t => t.account_id).map(t => t.account_id as string)
+    )
+  }, [threads])
+
   // Realtime subscription — selected thread messages. Subscribes to portal_messages
   // INSERT/UPDATE events on BOTH account_id AND contact_id so no message is missed
   // regardless of which column was set at write time (MCP tool, dashboard, client portal).
@@ -667,8 +678,25 @@ export default function PortalChatsPage() {
     const primaryColumn = selectedAccountId ? 'account_id' : 'contact_id'
     const supabase = createSupabaseBrowserClient()
 
+    // "One message, one staff thread" (2026-07-08): the broad subscriptions
+    // deliver every message touching this thread's ids, so drop the ones that
+    // belong to a DIFFERENT thread — mirrors the server-side scoping in
+    // GET /api/portal/chat (multi-member accounts own their messages; a person
+    // thread carries only personal + solo-company messages). Without this gate
+    // a MMLLC client message was live-patched into the member's person thread
+    // too, resurrecting the duplicate until the next refetch.
+    const belongsToThisThread = (msg: ChatMessage): boolean => {
+      if (selectedAccountId) return msg.account_id === selectedAccountId
+      if (msg.contact_id === selectedContactId) {
+        return !msg.account_id || !accountThreadIdsRef.current.has(msg.account_id)
+      }
+      // Company-only rows (contact_id NULL) from the solo-company subscription.
+      return !msg.contact_id && !!msg.account_id && !accountThreadIdsRef.current.has(msg.account_id)
+    }
+
     const handleInsert = (payload: { new: unknown }) => {
       const newMessage = payload.new as ChatMessage
+      if (!belongsToThisThread(newMessage)) return
       queryClient.setQueryData<ChatMessage[]>(
         ['portal-chat-messages', threadId],
         (prev) => {

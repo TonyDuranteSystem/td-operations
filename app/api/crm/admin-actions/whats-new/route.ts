@@ -30,6 +30,7 @@ import {
   bucketWhatsNewCounts,
   contactThreadOrFilter,
   linkedContactIdsByAccount,
+  multiMemberAccountIds,
 } from "@/lib/portal/thread-scope"
 
 export const dynamic = "force-dynamic"
@@ -157,11 +158,19 @@ export async function GET(req: NextRequest) {
       // linked contact's person thread — the person thread is a superset view,
       // mirroring the Messages feed (see lib/portal/thread-scope.ts). Resolve
       // the account → contacts map only for the notes that need it.
+      // Multi-member accounts own their thread ("one message, one staff
+      // thread", 2026-07-08): their notes light ONLY the account thread's dot.
       const accountOnlyIds = Array.from(
         new Set(visible.filter((n) => n.account_id && !n.contact_id).map((n) => n.account_id as string)),
       )
-      const contactsByAccount = await linkedContactIdsByAccount(accountOnlyIds)
-      return NextResponse.json(bucketWhatsNewCounts(visible, contactsByAccount))
+      const allNoteAccountIds = Array.from(
+        new Set(visible.map((n) => n.account_id).filter((id): id is string => !!id)),
+      )
+      const [contactsByAccount, multiMember] = await Promise.all([
+        linkedContactIdsByAccount(accountOnlyIds),
+        multiMemberAccountIds(allNoteAccountIds),
+      ])
+      return NextResponse.json(bucketWhatsNewCounts(visible, contactsByAccount, new Set(multiMember)))
     }
 
     if (wantNotes) {
@@ -188,9 +197,13 @@ export async function GET(req: NextRequest) {
         // Person thread = contact-tagged notes PLUS company-only notes on the
         // contact's linked accounts — the same superset rule the Messages feed
         // applies, via the shared helper so the two can't drift (2026-07-06:
-        // member-info notes were company-only and invisible here).
+        // member-info notes were company-only and invisible here). Multi-member
+        // accounts' notes are excluded — they belong to the account thread
+        // ("one message, one staff thread", 2026-07-08); this is a staff-only
+        // endpoint so the exclusion always applies.
         const linked = await getClientAccountIds(contactId as string)
-        q = q.or(contactThreadOrFilter(contactId as string, linked))
+        const excluded = await multiMemberAccountIds(linked)
+        q = q.or(contactThreadOrFilter(contactId as string, linked, excluded))
       }
       const { data, error } = await q
       if (error) throw error

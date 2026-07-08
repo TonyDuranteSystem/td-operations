@@ -14,6 +14,7 @@ import { safeSend } from "@/lib/mcp/safe-send"
 import type { MailingAddressRow } from "@/lib/addresses"
 import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
+import { contactThreadOrFilter, multiMemberAccountIds } from "@/lib/portal/thread-scope"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -1674,160 +1675,68 @@ Supports filtering:
     },
     async ({ unread_only, account_id, contact_id, limit }) => {
       try {
-        const threads: Array<{
-          account_id: string | null
-          contact_id: string | null
-          company_name: string
-          contact_name: string | null
-          last_message: string
-          last_message_at: string
-          last_sender: string
-          unread_count: number
-        }> = []
+        // Same source of truth as the CRM Portal Chats inbox (2026-07-08):
+        // get_portal_chat_threads_v2 applies the "one message, one staff
+        // thread" rule (multi-member accounts get ONE account-level thread;
+        // person threads carry only personal + solo-company messages). The
+        // tool previously hand-rolled its own thread list, which double-showed
+        // MMLLC messages as both a company and a person thread.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: rows, error } = await (supabaseAdmin as any).rpc("get_portal_chat_threads_v2")
+        if (error) {
+          return { content: [{ type: "text" as const, text: `Failed to load threads: ${error.message}` }] }
+        }
 
-        // ─── Build list of account IDs to query ─────────────
-        let accountIds: string[] = []
-        let contactOnlyIds: string[] = []
+        type ThreadRow = {
+          contact_id: string | null
+          contact_name: string
+          account_id: string | null
+          companies: { id: string; name: string }[]
+          members: { id: string; name: string }[]
+          last_message: string | null
+          last_message_at: string | null
+          unread_count: number
+        }
+        let threads = (rows ?? []) as ThreadRow[]
 
         if (account_id) {
-          accountIds = [account_id]
+          // Multi-member account → its own account-level thread. Solo account →
+          // its messages live in the owner's person thread (companies pill).
+          threads = threads.filter(t =>
+            t.account_id === account_id || (t.companies ?? []).some(c => c.id === account_id)
+          )
         } else if (contact_id) {
-          // Find all accounts linked to this contact
-          const { data: links } = await supabaseAdmin
-            .from("account_contacts")
-            .select("account_id")
-            .eq("contact_id", contact_id)
-          accountIds = (links || []).map(l => l.account_id)
-          // Also check for contact-only threads
-          contactOnlyIds = [contact_id]
-        } else {
-          // Get all unique account_ids from portal_messages
-          const { data: acctRows } = await supabaseAdmin
-            .from("portal_messages")
-            .select("account_id")
-            .not("account_id", "is", null)
-            .order("created_at", { ascending: false })
-          accountIds = Array.from(new Set((acctRows || []).map(r => r.account_id)))
-
-          // Get all unique contact-only threads
-          const { data: ctRows } = await supabaseAdmin
-            .from("portal_messages")
-            .select("contact_id")
-            .is("account_id", null)
-            .not("contact_id", "is", null)
-            .order("created_at", { ascending: false })
-          contactOnlyIds = Array.from(new Set((ctRows || []).map(r => r.contact_id)))
+          // The person's own thread + every account-level thread they're a member of.
+          threads = threads.filter(t =>
+            t.contact_id === contact_id || (t.members ?? []).some(m => m.id === contact_id)
+          )
         }
-
-        // ─── Process account-based threads ─────────────
-        for (const acctId of accountIds.slice(0, limit)) {
-          const { data: acct } = await supabaseAdmin
-            .from("accounts")
-            .select("company_name")
-            .eq("id", acctId)
-            .single()
-
-          const { data: contactLink } = await supabaseAdmin
-            .from("account_contacts")
-            .select("contacts(full_name)")
-            .eq("account_id", acctId)
-            .limit(1)
-            .single()
-
-          const { data: lastMsg } = await supabaseAdmin
-            .from("portal_messages")
-            .select("message, created_at, sender_type")
-            .eq("account_id", acctId)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single()
-
-          const { count } = await supabaseAdmin
-            .from("portal_messages")
-            .select("id", { count: "exact", head: true })
-            .eq("account_id", acctId)
-            .eq("sender_type", "client")
-            .is("read_at", null)
-
-          const unread = count ?? 0
-          if (unread_only && unread === 0) continue
-
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contactName = (contactLink?.contacts as any)?.full_name ?? null
-
-          threads.push({
-            account_id: acctId,
-            contact_id: null,
-            company_name: acct?.company_name ?? "Unknown",
-            contact_name: contactName,
-            last_message: lastMsg?.message?.substring(0, 150) ?? "",
-            last_message_at: lastMsg?.created_at ?? "",
-            last_sender: lastMsg?.sender_type === "client" ? "client" : "admin",
-            unread_count: unread,
-          })
-        }
-
-        // ─── Process contact-only threads ─────────────
-        for (const ctId of contactOnlyIds.slice(0, limit)) {
-          const { data: ct } = await supabaseAdmin
-            .from("contacts")
-            .select("full_name, email")
-            .eq("id", ctId)
-            .single()
-
-          const { data: lastMsg } = await supabaseAdmin
-            .from("portal_messages")
-            .select("message, created_at, sender_type")
-            .eq("contact_id", ctId)
-            .is("account_id", null)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single()
-
-          const { count } = await supabaseAdmin
-            .from("portal_messages")
-            .select("id", { count: "exact", head: true })
-            .eq("contact_id", ctId)
-            .is("account_id", null)
-            .eq("sender_type", "client")
-            .is("read_at", null)
-
-          const unread = count ?? 0
-          if (unread_only && unread === 0) continue
-
-          threads.push({
-            account_id: null,
-            contact_id: ctId,
-            company_name: ct?.full_name ?? ct?.email ?? "Unknown Contact",
-            contact_name: ct?.full_name ?? null,
-            last_message: lastMsg?.message?.substring(0, 150) ?? "",
-            last_message_at: lastMsg?.created_at ?? "",
-            last_sender: lastMsg?.sender_type === "client" ? "client" : "admin",
-            unread_count: unread,
-          })
-        }
-
-        // Sort by last message time (newest first)
-        threads.sort((a, b) => b.last_message_at.localeCompare(a.last_message_at))
+        if (unread_only) threads = threads.filter(t => Number(t.unread_count) > 0)
+        threads = threads.slice(0, limit)
 
         if (threads.length === 0) {
           return { content: [{ type: "text" as const, text: unread_only ? "No unread portal messages." : "No portal chat threads found." }] }
         }
 
-        const totalUnread = threads.reduce((sum, t) => sum + t.unread_count, 0)
+        const totalUnread = threads.reduce((sum, t) => sum + Number(t.unread_count), 0)
         const lines = threads.map(t => {
-          const unreadBadge = t.unread_count > 0 ? ` [${t.unread_count} unread]` : ""
-          const name = t.contact_name ? `${t.company_name} (${t.contact_name})` : t.company_name
-          const lastBy = t.last_sender === "client" ? "Client" : "TD Team"
+          const unread = Number(t.unread_count)
+          const unreadBadge = unread > 0 ? ` [${unread} unread]` : ""
+          // Account thread → company (member names); person thread → person (company names)
+          const detail = t.account_id
+            ? (t.members ?? []).map(m => m.name).join(", ")
+            : (t.companies ?? []).map(c => c.name).join(", ")
+          const name = detail ? `${t.contact_name} (${detail})` : t.contact_name
           const time = t.last_message_at ? new Date(t.last_message_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""
           const id = t.account_id ? `account_id: ${t.account_id}` : `contact_id: ${t.contact_id}`
-          return `${t.unread_count > 0 ? "🔴" : "⚪"} **${name}**${unreadBadge}\n   Last (${lastBy}, ${time}): "${t.last_message.substring(0, 100)}${t.last_message.length > 100 ? "..." : ""}"\n   ${id}`
+          const preview = (t.last_message ?? "").substring(0, 100)
+          return `${unread > 0 ? "🔴" : "⚪"} **${name}**${unreadBadge}\n   Last (${time}): "${preview}${(t.last_message ?? "").length > 100 ? "..." : ""}"\n   ${id}`
         })
 
         return {
           content: [{
             type: "text" as const,
-            text: `Portal Chat Inbox — ${totalUnread} unread message${totalUnread !== 1 ? "s" : ""} across ${threads.filter(t => t.unread_count > 0).length} thread${threads.filter(t => t.unread_count > 0).length !== 1 ? "s" : ""}\n\n${lines.join("\n\n")}\n\nUse portal_chat_read(account_id or contact_id) to read full conversation.`,
+            text: `Portal Chat Inbox — ${totalUnread} unread message${totalUnread !== 1 ? "s" : ""} across ${threads.filter(t => Number(t.unread_count) > 0).length} thread${threads.filter(t => Number(t.unread_count) > 0).length !== 1 ? "s" : ""}\n\n${lines.join("\n\n")}\n\nUse portal_chat_read(account_id or contact_id) to read full conversation.`,
           }],
         }
       } catch (error) {
@@ -1842,7 +1751,7 @@ Supports filtering:
     "portal_chat_read",
     `Read the full message history for a portal chat thread. Returns messages in chronological order with sender info, timestamps, and attachments.
 
-Use after portal_chat_inbox to read a specific conversation. Pass either account_id (for LLC threads) or contact_id (for person threads without an LLC).
+Use after portal_chat_inbox to read a specific conversation. Pass either account_id (for LLC threads) or contact_id (for person threads: the contact's personal messages plus their solo-owned companies' messages; multi-member LLC messages live in their own account thread).
 
 After reading, you should:
 1. Summarize what the client said
@@ -1882,7 +1791,17 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
         if (account_id) {
           query = query.eq("account_id", account_id)
         } else {
-          query = query.eq("contact_id", contact_id!).is("account_id", null)
+          // Person thread = personal messages + solo-company messages, same
+          // scope as the CRM inbox (multi-member accounts' messages live in
+          // their own account thread — "one message, one staff thread",
+          // 2026-07-08, shared rule in lib/portal/thread-scope.ts).
+          const { data: links } = await supabaseAdmin
+            .from("account_contacts")
+            .select("account_id")
+            .eq("contact_id", contact_id!)
+          const linked = (links ?? []).map(l => l.account_id as string)
+          const excluded = await multiMemberAccountIds(linked)
+          query = query.or(contactThreadOrFilter(contact_id!, linked, excluded))
         }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

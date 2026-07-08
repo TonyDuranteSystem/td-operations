@@ -17,6 +17,8 @@ import {
   contactThreadOrFilter,
   linkedContactIdsByAccount,
   bucketWhatsNewCounts,
+  pickMultiMemberAccounts,
+  multiMemberAccountIds,
 } from '@/lib/portal/thread-scope'
 
 describe('contactThreadOrFilter', () => {
@@ -28,6 +30,81 @@ describe('contactThreadOrFilter', () => {
     expect(contactThreadOrFilter('c1', ['a1', 'a2'])).toBe(
       'contact_id.eq.c1,and(contact_id.is.null,account_id.in.(a1,a2))',
     )
+  })
+
+  it('empty exclusion list keeps the historical filter byte-identical', () => {
+    expect(contactThreadOrFilter('c1', ['a1'], [])).toBe(
+      contactThreadOrFilter('c1', ['a1']),
+    )
+  })
+
+  it('excluded (multi-member) accounts are dropped from both arms', () => {
+    // a1 = solo company (stays in company-only arm), a2 = multi-member (excluded)
+    expect(contactThreadOrFilter('c1', ['a1', 'a2'], ['a2'])).toBe(
+      'and(contact_id.eq.c1,or(account_id.is.null,account_id.not.in.(a2))),and(contact_id.is.null,account_id.in.(a1))',
+    )
+  })
+
+  it('all linked accounts excluded → only the personal/non-excluded contact arm remains', () => {
+    expect(contactThreadOrFilter('c1', ['a1'], ['a1'])).toBe(
+      'and(contact_id.eq.c1,or(account_id.is.null,account_id.not.in.(a1)))',
+    )
+  })
+
+  it('exclusion can name accounts outside the linked list (defensive)', () => {
+    expect(contactThreadOrFilter('c1', [], ['a9'])).toBe(
+      'and(contact_id.eq.c1,or(account_id.is.null,account_id.not.in.(a9)))',
+    )
+  })
+})
+
+describe('pickMultiMemberAccounts', () => {
+  it('returns only accounts with 2+ distinct contacts', () => {
+    expect(
+      pickMultiMemberAccounts([
+        { account_id: 'a1', contact_id: 'c1' },
+        { account_id: 'a1', contact_id: 'c2' },
+        { account_id: 'a2', contact_id: 'c1' },
+      ]).sort(),
+    ).toEqual(['a1'])
+  })
+
+  it('duplicate links to the same contact do not make an account multi-member', () => {
+    expect(
+      pickMultiMemberAccounts([
+        { account_id: 'a1', contact_id: 'c1' },
+        { account_id: 'a1', contact_id: 'c1' },
+      ]),
+    ).toEqual([])
+  })
+
+  it('ignores rows with missing ids and handles empty input', () => {
+    expect(pickMultiMemberAccounts([])).toEqual([])
+    expect(
+      pickMultiMemberAccounts([
+        { account_id: '', contact_id: 'c1' },
+        { account_id: 'a1', contact_id: '' },
+      ]),
+    ).toEqual([])
+  })
+})
+
+describe('multiMemberAccountIds', () => {
+  beforeEach(() => {
+    rows = []
+  })
+
+  it('short-circuits on empty input without querying', async () => {
+    expect(await multiMemberAccountIds([])).toEqual([])
+  })
+
+  it('classifies via current account_contacts links', async () => {
+    rows = [
+      { account_id: 'a1', contact_id: 'c1' },
+      { account_id: 'a1', contact_id: 'c2' },
+      { account_id: 'a2', contact_id: 'c3' },
+    ]
+    expect(await multiMemberAccountIds(['a1', 'a2'])).toEqual(['a1'])
   })
 })
 
@@ -100,5 +177,46 @@ describe('bucketWhatsNewCounts', () => {
     expect(r.by_account).toEqual({ a1: 2 })
     expect(r.by_contact).toEqual({ c1: 2, c2: 2 })
     expect(r.total).toBe(3)
+  })
+
+  // "One message, one staff thread" (2026-07-08): notes on a multi-member
+  // account light ONLY the account thread's dot — never a contact bucket.
+  it('both-tagged note on a MULTI-MEMBER account counts for the account only', () => {
+    const links = new Map([['a1', ['c1', 'c2']]])
+    const r = bucketWhatsNewCounts(
+      [{ account_id: 'a1', contact_id: 'c1' }],
+      links,
+      new Set(['a1']),
+    )
+    expect(r.by_account).toEqual({ a1: 1 })
+    expect(r.by_contact).toEqual({})
+    expect(r.total).toBe(1)
+  })
+
+  it('company-only note on a MULTI-MEMBER account does not fan out to members', () => {
+    const links = new Map([['a1', ['c1', 'c2']]])
+    const r = bucketWhatsNewCounts(
+      [{ account_id: 'a1', contact_id: null }],
+      links,
+      new Set(['a1']),
+    )
+    expect(r.by_account).toEqual({ a1: 1 })
+    expect(r.by_contact).toEqual({})
+    expect(r.total).toBe(1)
+  })
+
+  it('solo accounts keep the superset fan-out when a multi-member set is provided', () => {
+    const links = new Map([['a1', ['c1']]])
+    const r = bucketWhatsNewCounts(
+      [
+        { account_id: 'a1', contact_id: null },
+        { account_id: null, contact_id: 'c1' },
+      ],
+      links,
+      new Set(['other']),
+    )
+    expect(r.by_account).toEqual({ a1: 1 })
+    expect(r.by_contact).toEqual({ c1: 2 })
+    expect(r.total).toBe(2)
   })
 })
