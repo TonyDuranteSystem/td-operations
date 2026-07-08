@@ -24,8 +24,9 @@ Three distinct things that share the word "team" / "partner" — keep them separ
 - Partner data: `client_partners` (`td_base_costs`, commission model, price list); payouts/referrals shared with `referrals-circleback.md` (`referrals`, `referral_payouts`).
 - **Partner portal**: `app/portal/partner/{clients,invoices,new-request}` — a partner sees their managed clients + invoices and can submit new requests. CRM view: `app/(dashboard)/partners`.
 
-## 2. Internal team messaging (built)
-- `portal_team_send` (`lib/mcp/tools/portal.ts`) — an **internal staff-only** message linked to an account/contact, shown in CRM **Portal Chats → Team tab**; staff get real-time toast + push. **Never visible to clients.** Use it to flag things for Luca etc. (This is staff coordination — distinct from the client-facing portal chat in `portal.md`.)
+## 2. Internal team messaging (built) — now the **Team Workspace**, see `team-workspace.md`
+- Backed by `internal_threads` / `internal_messages` (NOT `portal_messages` — that is the client chat). Rebuilt Phase 1 (2026-07-07, sandbox) into a full Slack-replacement workspace: channels, DMs, client discussions, reactions/edit/pin/search, @mentions + @claude AI worker, per-user unread. **Full detail: `docs/systems/team-workspace.md`.**
+- `portal_team_send` (`lib/mcp/tools/portal.ts`) — an **internal staff-only** message linked to an account/contact, writes to `internal_threads`/`internal_messages`, shown in CRM **Portal Chats → Team tab** (and the new `/team-chat`). **Never visible to clients.** Distinct from the client-facing portal chat in `portal.md`.
 
 ## 3. Portal Team Access (PLANNED — NOT built)
 - Design goal: a client **owner** (SMLLC owner contact / MMLLC SS-4 signer) invites **employees** into ONE company's portal with per-section permission toggles (data-driven, server-enforced, default-deny). Non-delegable: signing legal docs (view-only for teammates) + team management.

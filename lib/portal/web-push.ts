@@ -184,6 +184,39 @@ export async function sendPushToAdminExcluding(
 }
 
 /**
+ * Send push notification to specific dashboard users only (by auth user id).
+ * Used for @mention targeting so only the mentioned teammate is pinged, not the
+ * whole team. Sender should be excluded by the caller (don't include your own
+ * id in userIds). No-op with {sent:0,failed:0} when userIds is empty.
+ */
+export async function sendPushToAdminUsers(
+  userIds: string[],
+  payload: PushPayload,
+) {
+  const ids = Array.from(new Set((userIds || []).filter(Boolean)))
+  if (ids.length === 0) return { sent: 0, failed: 0 }
+  try {
+    initWebPush()
+  } catch {
+    return { sent: 0, failed: 0 }
+  }
+
+  const { data: subscriptions } = await supabaseAdmin
+    .from('admin_push_subscriptions')
+    .select('id, endpoint, p256dh, auth_key')
+    .in('user_id', ids)
+
+  if (!subscriptions?.length) return { sent: 0, failed: 0 }
+
+  return deliverPushBatch(
+    'admin_push_subscriptions',
+    subscriptions,
+    payload,
+    `admin-users:${ids.length}`,
+  )
+}
+
+/**
  * Get the VAPID public key for client-side subscription
  */
 export function getVapidPublicKey(): string | null {
