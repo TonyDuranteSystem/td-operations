@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
+import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import type { InboxConversation } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -98,8 +99,8 @@ export async function GET(req: NextRequest) {
       conversations.push({
         id: `gmail:${thread.id}`,
         channel: "gmail",
-        name: getHeader(firstMsg.payload?.headers, "From").replace(/<.*>/, "").trim(),
-        preview: lastMsg.snippet || firstMsg.snippet || "",
+        name: displayNameFromHeader(getHeader(firstMsg.payload?.headers, "From")),
+        preview: decodeHtmlEntities(lastMsg.snippet || firstMsg.snippet || ""),
         unread: thread.messages.filter((m) => m.labelIds?.includes("UNREAD")).length,
         lastMessageAt: lastDate
           ? new Date(lastDate).toISOString()

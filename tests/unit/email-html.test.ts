@@ -1,6 +1,36 @@
 import { describe, it, expect } from 'vitest'
-import { rewriteCidSources } from '@/lib/inbox/email-html'
+import { rewriteCidSources, decodeHtmlEntities, displayNameFromHeader } from '@/lib/inbox/email-html'
 import { extractInlineImages, type GmailAPIMessage } from '@/lib/gmail'
+
+describe('decodeHtmlEntities', () => {
+  it('decodes the entities Gmail snippets actually contain', () => {
+    expect(decodeHtmlEntities('Hi Tony, I hope you&#39;re doing well')).toBe(
+      "Hi Tony, I hope you're doing well"
+    )
+    expect(decodeHtmlEntities('Q&amp;A &quot;quoted&quot; &lt;tag&gt;&nbsp;x')).toBe(
+      'Q&A "quoted" <tag> x'
+    )
+    expect(decodeHtmlEntities('hex: &#x27;ok&#x27;')).toBe("hex: 'ok'")
+  })
+
+  it('does not double-decode (&amp; handled last) and survives bad codes', () => {
+    expect(decodeHtmlEntities('&amp;#39;')).toBe('&#39;')
+    expect(decodeHtmlEntities('&#99999999; stays')).toBe('&#99999999; stays')
+    expect(decodeHtmlEntities('')).toBe('')
+  })
+})
+
+describe('displayNameFromHeader', () => {
+  it('strips the address part and RFC 2822 quotes', () => {
+    expect(displayNameFromHeader('"Tamás Fazekas" <tamas@x.com>')).toBe('Tamás Fazekas')
+    expect(displayNameFromHeader('Mario Rossi <mario@x.com>')).toBe('Mario Rossi')
+  })
+
+  it('returns empty for bare addresses and handles empty input', () => {
+    expect(displayNameFromHeader('<bare@x.com>')).toBe('')
+    expect(displayNameFromHeader('')).toBe('')
+  })
+})
 
 describe('rewriteCidSources', () => {
   const resolve = (cid: string) =>

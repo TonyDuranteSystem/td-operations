@@ -8,6 +8,44 @@
  * the sanitizer/browser handles them like any other broken image.
  */
 
+/**
+ * Decode HTML entities in Gmail snippets for PLAIN-TEXT display. Gmail's
+ * `snippet` field is entity-encoded (&#39; &amp; …); rendering it as text
+ * shows the entities literally. Numeric entities first; &amp; LAST so
+ * double-encoded input can't double-decode. Output is rendered as text
+ * (never dangerouslySetInnerHTML), so decoding is safe.
+ */
+export function decodeHtmlEntities(text: string): string {
+  if (!text) return text
+  return text
+    .replace(/&#(\d+);/g, (full, n: string) => {
+      const code = parseInt(n, 10)
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : full
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (full, h: string) => {
+      const code = parseInt(h, 16)
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : full
+    })
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+}
+
+/**
+ * Human display name from a From/To header: strips the <email> part and the
+ * RFC 2822 surrounding quotes ("Tamás Fazekas" <t@x.com> → Tamás Fazekas).
+ */
+export function displayNameFromHeader(headerValue: string): string {
+  return (headerValue || "")
+    .replace(/<[^>]*>/g, "")
+    .trim()
+    .replace(/^"+|"+$/g, "")
+    .trim()
+}
+
 export function rewriteCidSources(
   html: string,
   resolve: (contentId: string) => string | null

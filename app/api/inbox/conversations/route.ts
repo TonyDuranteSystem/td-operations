@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
+import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import type { InboxConversation } from "@/lib/types"
 
@@ -252,15 +253,19 @@ export async function GET(req: NextRequest) {
             // Match external email to CRM account
             const accountMatch = emailLookup.get(externalEmail)
 
-            // Determine display name: CRM account name > From display name > email
-            let displayName = externalFrom.replace(/<.*>/, "").trim()
+            // Determine display name: CRM account name > From display name > email.
+            // Strip RFC 2822 quotes ("Tamás Fazekas" <t@x> → Tamás Fazekas).
+            let displayName = displayNameFromHeader(externalFrom)
             // If display name is just the email (no name part), try CRM lookup
             if (!displayName || displayName === externalEmail) {
               displayName = accountMatch?.accountName || externalEmail
             }
 
-            // Use latest message snippet as preview (not first message)
-            const latestSnippet = lastMsg?.snippet || firstMsg?.snippet || ""
+            // Latest message snippet as preview — Gmail snippets are
+            // HTML-entity-encoded; decode for plain-text display.
+            const latestSnippet = decodeHtmlEntities(
+              lastMsg?.snippet || firstMsg?.snippet || ""
+            )
 
             conversations.push({
               id: `gmail:${thread.id}`,

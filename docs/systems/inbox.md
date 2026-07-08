@@ -21,6 +21,9 @@ Function.
   per-thread metadata, finds the external (non-TD) party, and matches their
   email against `account_contacts → contacts.email/email_2` to label the row
   with the CRM account. Polled every 30s by `conversation-list.tsx`.
+  Gmail `snippet`s are HTML-entity-encoded — previews go through
+  `decodeHtmlEntities` and sender names through `displayNameFromHeader`
+  (both `lib/inbox/email-html.ts`) before plain-text display.
 - **Thread view**: `app/api/inbox/messages/[id]/route.ts` for `gmail:<threadId>`
   IDs fetches the full thread. Each message body:
   - HTML extracted by `extractBodyHtml` (`lib/gmail.ts`);
