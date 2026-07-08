@@ -65,6 +65,9 @@ export interface TeamThread {
   created_by: string
   created_at: string
   last_activity_at: string | null
+  parent_channel_id: string | null
+  work_status: 'todo' | 'in_progress' | 'waiting' | 'handled'
+  later: boolean
   unread_count: number
   last_message: string | null
   last_message_at: string | null

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
+import { isValidWorkStatus } from '@/lib/team/workspace'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -63,7 +64,7 @@ export async function GET(
   await (supabaseAdmin as any)
     .from('internal_thread_reads')
     .upsert(
-      { thread_id: threadId, user_id: user.id, last_read_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      { thread_id: threadId, user_id: user.id, last_read_at: new Date().toISOString(), manual_unread: false, updated_at: new Date().toISOString() },
       { onConflict: 'thread_id,user_id' },
     )
 
@@ -100,6 +101,14 @@ export async function PATCH(
   if (typeof body.color === 'string') patch.color = body.color.trim() || null
   if (typeof body.resolved === 'boolean') patch.resolved_at = body.resolved ? new Date().toISOString() : null
   if (typeof body.archived === 'boolean') patch.archived_at = body.archived ? new Date().toISOString() : null
+  // Move to (or out of) a channel folder.
+  if ('channel_id' in body) patch.parent_channel_id = body.channel_id || null
+  // Kanban status. 'handled' IS the done state → keep resolved_at in sync so
+  // anything reading resolved_at (and the resolve toggle) stays consistent.
+  if (isValidWorkStatus(body.work_status)) {
+    patch.work_status = body.work_status
+    patch.resolved_at = body.work_status === 'handled' ? new Date().toISOString() : null
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: 'No changes provided' }, { status: 400 })

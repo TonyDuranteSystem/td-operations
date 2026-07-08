@@ -4,10 +4,10 @@ import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
- * POST /api/team/threads/[id]/read
- * Advance the caller's read pointer for a thread (per-user unread model).
- * Lightweight companion to GET /threads/[id] for when the client just wants to
- * clear the badge without refetching messages. Staff-only.
+ * POST /api/team/threads/[id]/mark-unread
+ * Personal (per-user) "mark as unread" — forces the unread badge back on for
+ * the caller even though they've read the thread. Cleared when they next open
+ * the thread. Staff-only.
  */
 export async function POST(
   _request: NextRequest,
@@ -24,7 +24,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabaseAdmin as any)
     .from('internal_thread_reads')
-    .upsert({ thread_id: threadId, user_id: user.id, last_read_at: now, manual_unread: false, updated_at: now }, { onConflict: 'thread_id,user_id' })
+    .upsert({ thread_id: threadId, user_id: user.id, manual_unread: true, updated_at: now }, { onConflict: 'thread_id,user_id' })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

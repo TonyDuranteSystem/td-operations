@@ -7,7 +7,28 @@ import {
   validateHexColor,
   validateTeamCard,
   CLAUDE_MENTION_ID,
+  isValidWorkStatus,
+  TEAM_WORK_STATUSES,
+  TEAM_WORK_STATUS_LABELS,
 } from '@/lib/team/workspace'
+
+describe('work status', () => {
+  it('accepts the four valid statuses', () => {
+    for (const s of TEAM_WORK_STATUSES) expect(isValidWorkStatus(s)).toBe(true)
+  })
+  it('rejects anything else', () => {
+    expect(isValidWorkStatus('done')).toBe(false)
+    expect(isValidWorkStatus('')).toBe(false)
+    expect(isValidWorkStatus(null)).toBe(false)
+    expect(isValidWorkStatus(5)).toBe(false)
+  })
+  it('has a label for every status', () => {
+    for (const s of TEAM_WORK_STATUSES) expect(TEAM_WORK_STATUS_LABELS[s]).toBeTruthy()
+  })
+  it('order is todo → in_progress → waiting → handled', () => {
+    expect(TEAM_WORK_STATUSES).toEqual(['todo', 'in_progress', 'waiting', 'handled'])
+  })
+})
 
 describe('parseMentionHandles', () => {
   it('extracts a single mention', () => {

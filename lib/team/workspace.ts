@@ -85,6 +85,23 @@ export function channelSlug(name: string): string {
     .slice(0, 60)
 }
 
+/** Kanban work statuses for a thread (Antonio 2026-07-08). Order = board columns. */
+export const TEAM_WORK_STATUSES = ['todo', 'in_progress', 'waiting', 'handled'] as const
+export type TeamWorkStatus = (typeof TEAM_WORK_STATUSES)[number]
+
+/** Human labels for the board columns. */
+export const TEAM_WORK_STATUS_LABELS: Record<TeamWorkStatus, string> = {
+  todo: 'To do',
+  in_progress: 'In Progress',
+  waiting: 'Waiting',
+  handled: 'Handled',
+}
+
+/** True if the value is a valid work status. */
+export function isValidWorkStatus(v: unknown): v is TeamWorkStatus {
+  return typeof v === 'string' && (TEAM_WORK_STATUSES as readonly string[]).includes(v)
+}
+
 /** Default palette for channels / rich cards (hex). UI may offer more. */
 export const TEAM_COLORS = [
   '#6366f1', // indigo

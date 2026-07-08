@@ -8,13 +8,15 @@ import {
   Send, Loader2, Users, Hash, Paperclip, Smile, Mic, MicOff, FileText, X,
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
   MessageSquare, Bot, CircleDot, Building2, Slack, ExternalLink,
+  LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown,
 } from 'lucide-react'
+import { TeamBoard } from './board'
 import EmojiPicker from 'emoji-picker-react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
-import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug } from '@/lib/team/workspace'
+import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
 import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg } from './types'
 
@@ -67,6 +69,9 @@ export default function TeamWorkspacePage() {
   const [selectedSlackId, setSelectedSlackId] = useState<string | null>(null)
   const [slackMessages, setSlackMessages] = useState<SlackMsg[]>([])
   const [loadingSlack, setLoadingSlack] = useState(false)
+  const [view, setView] = useState<'list' | 'board'>('list')
+  const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
+  const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; thread_id: string; thread_label: string; message: string; sender_name: string; created_at: string }[] | null>(null)
   const [reactFor, setReactFor] = useState<string | null>(null)
@@ -399,6 +404,39 @@ export default function TeamWorkspacePage() {
     if (d.reused) toast.info('Opened the existing conversation for this client + topic.')
   }
 
+  const setWorkStatus = useCallback(async (threadId: string, status: TeamWorkStatus) => {
+    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, work_status: status } : t))
+    const r = await fetch(`/api/team/threads/${threadId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ work_status: status }),
+    })
+    if (!r.ok) { toast.error('Failed to update status'); loadThreads() }
+  }, [loadThreads])
+
+  const moveToChannel = useCallback(async (threadId: string, channelId: string | null) => {
+    setMenuThreadId(null)
+    const r = await fetch(`/api/team/threads/${threadId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: channelId }),
+    })
+    if (!r.ok) { toast.error('Failed to move'); return }
+    loadThreads()
+  }, [loadThreads])
+
+  const markUnread = useCallback(async (threadId: string) => {
+    setMenuThreadId(null)
+    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, unread_count: Math.max(1, t.unread_count) } : t))
+    await fetch(`/api/team/threads/${threadId}/mark-unread`, { method: 'POST' }).catch(() => {})
+    loadThreads()
+  }, [loadThreads])
+
+  const toggleLater = useCallback(async (threadId: string, later: boolean) => {
+    setMenuThreadId(null)
+    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, later } : t))
+    await fetch(`/api/team/threads/${threadId}/later`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ later }),
+    }).catch(() => {})
+    loadThreads()
+  }, [loadThreads])
+
   const toggleResolve = async () => {
     if (!selected) return
     const r = await fetch(`/api/team/threads/${selected.id}`, {
@@ -412,21 +450,47 @@ export default function TeamWorkspacePage() {
   const channels = threads.filter(t => t.thread_type === 'channel')
   const dms = threads.filter(t => t.thread_type === 'dm')
   const discussions = threads.filter(t => t.thread_type === 'discussion')
+  const laterThreads = threads.filter(t => t.later && !t.archived_at)
+  const unfiledDiscussions = discussions.filter(t => !t.parent_channel_id)
+  const threadsInChannel = (cid: string) => threads.filter(t => t.thread_type !== 'channel' && t.parent_channel_id === cid)
+  const toggleExpand = (cid: string) => setExpandedChannels(prev => { const n = new Set(prev); if (n.has(cid)) n.delete(cid); else n.add(cid); return n })
 
   const dmLabel = (t: TeamThread): string => {
     if (!t.dm_key || !currentUserId) return t.label
     const otherId = t.dm_key.split(':').find(id => id !== currentUserId) ?? ''
     return members.find(m => m.id === otherId)?.name ?? 'Direct message'
   }
+  const labelFor = (t: TeamThread): string =>
+    t.thread_type === 'channel' ? `#${t.channel_slug ?? t.label}`
+    : t.thread_type === 'dm' ? dmLabel(t)
+    : t.thread_type === 'general' ? 'general'
+    : t.label
 
   const pinned = messages.filter(m => m.pinned_at && !m.deleted_at)
+
+  if (view === 'board') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-3 px-5 py-2 border-b border-zinc-200 bg-white shrink-0">
+          <ViewToggle view={view} setView={setView} />
+          <span className="text-sm font-semibold text-zinc-800">Team Workspace</span>
+          <span className="text-[11px] text-zinc-400">drag a card to change its status</span>
+        </div>
+        <TeamBoard threads={threads} channels={channels} onStatusChange={setWorkStatus}
+          onOpenThread={(id) => { setView('list'); setSelectedId(id) }} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full">
       {/* Sidebar */}
       <div className="w-64 shrink-0 border-r border-zinc-200 bg-zinc-50 flex flex-col">
         <div className="px-4 py-3 border-b border-zinc-200">
-          <h1 className="text-sm font-semibold text-zinc-900 flex items-center gap-2"><Users className="h-4 w-4" /> Team Workspace</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-sm font-semibold text-zinc-900 flex items-center gap-2"><Users className="h-4 w-4" /> Team Workspace</h1>
+            <ViewToggle view={view} setView={setView} />
+          </div>
           <p className="text-[11px] text-zinc-500">Internal — never visible to clients</p>
         </div>
         <div className="px-3 py-2">
@@ -454,19 +518,59 @@ export default function TeamWorkspacePage() {
             </div>
           ) : (
             <>
+              {laterThreads.length > 0 && (
+                <>
+                  <SectionHeader label="Later" />
+                  {laterThreads.map(t => (
+                    <SidebarThread key={'later-' + t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
+                      icon={<Clock className="h-3.5 w-3.5 text-amber-500" />} label={labelFor(t)}
+                      channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
+                      menuOpen={menuThreadId === 'later-' + t.id} onMenuToggle={o => setMenuThreadId(o ? 'later-' + t.id : null)} />
+                  ))}
+                </>
+              )}
+
               {generalThread && <ThreadRow t={generalThread} selected={selectedId === generalThread.id} onClick={() => setSelectedId(generalThread.id)} icon={<Hash className="h-3.5 w-3.5" />} label="general" />}
 
               <SectionHeader label="Channels" onAdd={() => setShowNewChannel(true)} />
               {channels.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No channels yet.</p>}
-              {channels.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<Hash className="h-3.5 w-3.5" style={t.color ? { color: t.color } : undefined} />} label={t.channel_slug ?? t.label} />)}
+              {channels.map(ch => {
+                const filed = threadsInChannel(ch.id)
+                const expanded = expandedChannels.has(ch.id)
+                return (
+                  <div key={ch.id}>
+                    <div className="flex items-center">
+                      <button onClick={() => toggleExpand(ch.id)} className="p-1 text-zinc-400 hover:text-zinc-700 shrink-0">
+                        {filed.length > 0 ? (expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />) : <span className="w-3.5 inline-block" />}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <ThreadRow t={ch} selected={selectedId === ch.id} onClick={() => setSelectedId(ch.id)} icon={<Hash className="h-3.5 w-3.5" style={ch.color ? { color: ch.color } : undefined} />} label={ch.channel_slug ?? ch.label} />
+                      </div>
+                    </div>
+                    {expanded && filed.map(t => (
+                      <div key={t.id} className="pl-5">
+                        <SidebarThread t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
+                          icon={<Building2 className="h-3 w-3 text-zinc-400" />} label={labelFor(t)}
+                          channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
+                          menuOpen={menuThreadId === t.id} onMenuToggle={o => setMenuThreadId(o ? t.id : null)} />
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
 
               <SectionHeader label="Direct Messages" onAdd={() => setShowNewDm(true)} />
               {dms.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No DMs yet.</p>}
               {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
-              <SectionHeader label="Client Discussions" onAdd={() => setShowNewConversation(true)} />
-              {discussions.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
-              {discussions.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<Building2 className="h-3.5 w-3.5" />} label={t.label} resolved={!!t.resolved_at} />)}
+              <SectionHeader label="Discussions" onAdd={() => setShowNewConversation(true)} />
+              {unfiledDiscussions.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
+              {unfiledDiscussions.map(t => (
+                <SidebarThread key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
+                  icon={<Building2 className="h-3.5 w-3.5" />} label={t.label} resolved={!!t.resolved_at}
+                  channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
+                  menuOpen={menuThreadId === t.id} onMenuToggle={o => setMenuThreadId(o ? t.id : null)} />
+              ))}
 
               {slackEnabled && (
                 <>
@@ -637,6 +741,59 @@ function SectionHeader({ label, onAdd }: { label: string; onAdd?: () => void }) 
     <div className="flex items-center justify-between px-2 mt-4 mb-1">
       <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">{label}</p>
       {onAdd && <button onClick={onAdd} className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200"><Plus className="h-3.5 w-3.5" /></button>}
+    </div>
+  )
+}
+
+function ViewToggle({ view, setView }: { view: 'list' | 'board'; setView: (v: 'list' | 'board') => void }) {
+  return (
+    <div className="flex items-center bg-zinc-100 rounded-lg p-0.5">
+      <button onClick={() => setView('list')} title="Chat list" className={cn('p-1 rounded-md', view === 'list' ? 'bg-white shadow-sm text-zinc-800' : 'text-zinc-400 hover:text-zinc-600')}><ListIcon className="h-3.5 w-3.5" /></button>
+      <button onClick={() => setView('board')} title="Kanban board" className={cn('p-1 rounded-md', view === 'board' ? 'bg-white shadow-sm text-zinc-800' : 'text-zinc-400 hover:text-zinc-600')}><LayoutGrid className="h-3.5 w-3.5" /></button>
+    </div>
+  )
+}
+
+function SidebarThread({ t, selected, onClick, icon, label, resolved, channels, onMove, onMarkUnread, onToggleLater, menuOpen, onMenuToggle }: {
+  t: TeamThread; selected: boolean; onClick: () => void; icon: React.ReactNode; label: string; resolved?: boolean
+  channels: TeamThread[]
+  onMove: (id: string, channelId: string | null) => void
+  onMarkUnread: (id: string) => void
+  onToggleLater: (id: string, later: boolean) => void
+  menuOpen: boolean; onMenuToggle: (open: boolean) => void
+}) {
+  return (
+    <div className={cn('group relative flex items-center rounded-lg', selected ? 'bg-zinc-200' : 'hover:bg-zinc-100')}>
+      <button onClick={onClick} className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left">
+        <span className="shrink-0 text-zinc-500">{icon}</span>
+        <span className={cn('flex-1 truncate text-sm', t.unread_count > 0 ? 'font-semibold text-zinc-900' : 'text-zinc-600', resolved && 'line-through opacity-60')}>{label}</span>
+        {t.later && <Clock className="h-3 w-3 text-amber-400 shrink-0" />}
+        {t.unread_count > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{t.unread_count}</span>}
+      </button>
+      <button onClick={e => { e.stopPropagation(); onMenuToggle(!menuOpen) }} className={cn('shrink-0 p-1 mr-1 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200', menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}>
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+      {menuOpen && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => onMenuToggle(false)} />
+          <div className="absolute right-1 top-8 z-30 w-52 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 text-sm">
+            <button onClick={() => onMarkUnread(t.id)} className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 text-zinc-700">Mark as unread</button>
+            <button onClick={() => onToggleLater(t.id, !t.later)} className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 text-zinc-700">{t.later ? 'Remove from Later' : 'Save for Later'}</button>
+            <div className="border-t border-zinc-100 my-1" />
+            <p className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase">Move to channel</p>
+            <div className="max-h-40 overflow-y-auto">
+              {t.parent_channel_id && <button onClick={() => onMove(t.id, null)} className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 text-zinc-500">— No channel —</button>}
+              {channels.length === 0 && <p className="px-3 py-1.5 text-[11px] text-zinc-400">No channels yet.</p>}
+              {channels.map(c => (
+                <button key={c.id} onClick={() => onMove(t.id, c.id)} disabled={t.parent_channel_id === c.id}
+                  className={cn('w-full text-left px-3 py-1.5 hover:bg-zinc-100 flex items-center gap-1.5', t.parent_channel_id === c.id ? 'text-zinc-400' : 'text-zinc-700')}>
+                  <Hash className="h-3 w-3" style={c.color ? { color: c.color } : undefined} /> {c.channel_slug ?? c.label}{t.parent_channel_id === c.id && ' ✓'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
