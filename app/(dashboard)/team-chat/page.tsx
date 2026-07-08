@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import {
@@ -60,6 +61,7 @@ export default function TeamWorkspacePage() {
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [showNewChannel, setShowNewChannel] = useState(false)
   const [showNewDm, setShowNewDm] = useState(false)
+  const [showNewConversation, setShowNewConversation] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; thread_id: string; thread_label: string; message: string; sender_name: string; created_at: string }[] | null>(null)
   const [reactFor, setReactFor] = useState<string | null>(null)
@@ -122,6 +124,16 @@ export default function TeamWorkspacePage() {
 
   // Initial load
   useEffect(() => { loadThreads(true) }, [loadThreads])
+
+  // Deep link: /team-chat?thread=<id> selects that thread once loaded (used by
+  // push notifications and the "New conversation" channel card).
+  const searchParams = useSearchParams()
+  const deepLinkThread = searchParams.get('thread')
+  useEffect(() => {
+    if (deepLinkThread && threads.some(t => t.id === deepLinkThread)) {
+      setSelectedId(deepLinkThread)
+    }
+  }, [deepLinkThread, threads])
 
   // Load messages when a thread is selected
   useEffect(() => { if (selectedId) loadMessages(selectedId) }, [selectedId, loadMessages])
@@ -344,6 +356,19 @@ export default function TeamWorkspacePage() {
     setSelectedId(d.thread.id)
   }
 
+  const createConversation = async (client: string, topic: string, channelId: string | null) => {
+    const r = await fetch('/api/team/conversations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client, topic: topic || undefined, channel_id: channelId || undefined }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { toast.error(d.error || 'Failed to start conversation'); return }
+    setShowNewConversation(false)
+    await loadThreads()
+    setSelectedId(d.thread.id)
+    if (d.reused) toast.info('Opened the existing conversation for this client + topic.')
+  }
+
   const toggleResolve = async () => {
     if (!selected) return
     const r = await fetch(`/api/team/threads/${selected.id}`, {
@@ -409,7 +434,7 @@ export default function TeamWorkspacePage() {
               {dms.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No DMs yet.</p>}
               {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
-              <SectionHeader label="Client Discussions" />
+              <SectionHeader label="Client Discussions" onAdd={() => setShowNewConversation(true)} />
               {discussions.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
               {discussions.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<Building2 className="h-3.5 w-3.5" />} label={t.label} resolved={!!t.resolved_at} />)}
             </>
@@ -554,6 +579,7 @@ export default function TeamWorkspacePage() {
 
       {showNewChannel && <NewChannelModal onClose={() => setShowNewChannel(false)} onCreate={createChannel} />}
       {showNewDm && <NewDmModal members={members.filter(m => m.id !== currentUserId)} onClose={() => setShowNewDm(false)} onPick={startDm} />}
+      {showNewConversation && <NewConversationModal channels={channels} generalThread={generalThread ?? null} onClose={() => setShowNewConversation(false)} onCreate={createConversation} />}
     </div>
   )
 }
@@ -697,6 +723,102 @@ function NewChannelModal({ onClose, onCreate }: { onClose: () => void; onCreate:
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 rounded-lg">Cancel</button>
           <button onClick={() => slug && onCreate(name, color)} disabled={!slug} className="px-3 py-1.5 text-sm bg-zinc-800 text-white rounded-lg disabled:opacity-40">Create</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NewConversationModal({ channels, generalThread, onClose, onCreate }: {
+  channels: TeamThread[]; generalThread: TeamThread | null
+  onClose: () => void; onCreate: (client: string, topic: string, channelId: string | null) => void
+}) {
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<{ value: string; label: string; sublabel: string }[]>([])
+  const [picked, setPicked] = useState<{ value: string; label: string } | null>(null)
+  const [topics, setTopics] = useState<{ slug: string; display_name: string }[]>([])
+  const [topicSel, setTopicSel] = useState('')
+  const [newTopic, setNewTopic] = useState('')
+  const [channelId, setChannelId] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/portal/chat/topic-templates').then(r => r.json()).then(d => setTopics(d.templates ?? [])).catch(() => {})
+  }, [])
+
+  // Debounced client search
+  useEffect(() => {
+    if (picked) return
+    if (q.trim().length < 2) { setResults([]); return }
+    const t = setTimeout(() => {
+      fetch(`/api/team/client-search?q=${encodeURIComponent(q)}`).then(r => r.json()).then(d => setResults(d.results ?? [])).catch(() => setResults([]))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [q, picked])
+
+  const effectiveTopic = newTopic.trim() || topicSel
+  const channelOptions = [...(generalThread ? [generalThread] : []), ...channels]
+
+  const submit = async () => {
+    if (!picked || busy) return
+    setBusy(true)
+    await onCreate(picked.value, effectiveTopic, channelId || null)
+    setBusy(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl p-5 w-96 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold text-zinc-900 mb-4">New conversation</h3>
+
+        {/* Client (required) */}
+        <label className="text-[11px] font-semibold text-zinc-500 uppercase">Client</label>
+        {picked ? (
+          <div className="flex items-center justify-between mt-1 mb-3 px-3 py-2 border border-zinc-200 rounded-lg bg-zinc-50">
+            <span className="text-sm text-zinc-800 truncate">{picked.label}</span>
+            <button onClick={() => { setPicked(null); setQ('') }} className="text-zinc-400 hover:text-zinc-700"><X className="h-3.5 w-3.5" /></button>
+          </div>
+        ) : (
+          <div className="relative mt-1 mb-3">
+            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search account, contact, or lead…"
+              className="w-full px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-300" />
+            {results.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-zinc-200 rounded-lg shadow-lg max-h-52 overflow-y-auto z-10">
+                {results.map(r => (
+                  <button key={r.value} onClick={() => { setPicked({ value: r.value, label: r.label }); setResults([]) }}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-zinc-100 text-left">
+                    <span className="text-sm text-zinc-800 truncate">{r.label}</span>
+                    <span className="text-[10px] text-zinc-400 shrink-0 ml-2">{r.sublabel}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Topic (optional) */}
+        <label className="text-[11px] font-semibold text-zinc-500 uppercase">Topic <span className="text-zinc-300">(optional)</span></label>
+        <select value={topicSel} onChange={e => setTopicSel(e.target.value)} disabled={!!newTopic.trim()}
+          className="w-full mt-1 mb-2 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-300 disabled:opacity-50">
+          <option value="">Pick a topic</option>
+          {topics.map(t => <option key={t.slug} value={t.display_name}>{t.display_name}</option>)}
+        </select>
+        <input value={newTopic} onChange={e => setNewTopic(e.target.value)} placeholder="Or type a new topic"
+          className="w-full mb-3 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-300" />
+
+        {/* Channel (optional) */}
+        <label className="text-[11px] font-semibold text-zinc-500 uppercase">Also post in channel <span className="text-zinc-300">(optional)</span></label>
+        <select value={channelId} onChange={e => setChannelId(e.target.value)}
+          className="w-full mt-1 mb-4 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-300">
+          <option value="">None</option>
+          {channelOptions.map(c => <option key={c.id} value={c.id}>#{c.thread_type === 'general' ? 'general' : (c.channel_slug ?? c.label)}</option>)}
+        </select>
+
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 rounded-lg">Cancel</button>
+          <button onClick={submit} disabled={!picked || busy} className="px-3 py-1.5 text-sm bg-zinc-800 text-white rounded-lg disabled:opacity-40 flex items-center gap-1">
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Start
+          </button>
         </div>
       </div>
     </div>

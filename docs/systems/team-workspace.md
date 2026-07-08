@@ -22,6 +22,12 @@ Realtime publication members: `internal_messages` (pre-existing) + `internal_thr
 - `search_team_messages(p_user_id, p_query)` → ILIKE search across visible messages (same DM rule), cap 50.
 - `toggle_internal_message_reaction(msg, emoji, reactor_id, reactor_name)` → atomic add/remove keyed on (emoji, reactor). Mirror of `toggle_message_reaction` (that one is bound to `portal_messages` — do NOT reuse it here).
 
+## New conversation (native, Slack-independent — the Client-Threads modal, reimagined)
+The "New conversation" entry on the **Client Discussions** sidebar header opens a modal (mirrors the Slack Client-Threads modal) — pick a **client** (account/contact/lead search), an optional **topic** (from the `topic_templates` catalog or free-typed), and optionally a **channel** to also drop a card into. It creates (or reuses) a `thread_type='discussion'` thread anchored to that client + topic. Purely native — no Slack.
+- `GET /api/team/client-search?q=` — accounts (`company_name`) + contacts (`full_name`) + leads (`full_name`), staff-only, returns `{value:"<kind>:<uuid>", label, sublabel, kind}` (mirrors the Slack modal's 3-table search). Topics come from the existing `GET /api/portal/chat/topic-templates`.
+- `POST /api/team/conversations` — body `{ client:"account|contact|lead:<uuid>", topic?, channel_id? }`. Parses the client ref (`lib/team/conversations.ts::parseClientRef`), resolves the display name, **finds-or-reuses** an OPEN discussion for the same client+topic (dedup on `(clientCol, topic_slug)`), else creates one titled `"<client> · <topic>"` + seeds a "🗂️ Conversation started" message. Optional `channel_id` drops a rich card (`kind:client_message`, link `/team-chat?thread=<id>`) into that channel.
+- Schema: `internal_threads` gained `topic`, `topic_slug`, `lead_id` (migration `20260708-0100`). The page honors `?thread=<id>` to deep-select (used by the channel card + push links).
+
 ## API routes (`app/api/team/*`, all staff-only via `isDashboardUser`)
 - `GET /threads` — sidebar payload: `get_team_threads` + staff directory (`listTeamMembers`) + current user.
 - `POST /channels` — create channel (slug from name, unique). `POST /dms` — find-or-create DM by `dm_key`.
