@@ -140,11 +140,33 @@ Function.
   across turns and GET on the route restores the conversation on panel
   reopen; Slack read rails enabled (SQL dig-in, sysdocs/SOPs/Drive, calls,
   Calendly, client threads, thread recall, web-search dark) with
-  maxIterations 20; send/code rails stay OFF (propose_action only). The SAME route also
+  maxIterations 20. The SAME route also
   serves a CLIENT MODE (`clientKey: acct-<id>|contact-<id>`, thread scope
   `chat-<clientKey>`, portal-chats surface prompt) — used by the Portal
   Chats **Worker** tab (`components/portal-chats/thread-worker-panel.tsx`),
   per-client persistent memory.
+  **SEND RAIL (2026-07-08d, Antonio: "the same powerful worker I have in
+  Slack — when I say 'send it' it must send")**: the CRM worker now SENDS,
+  scoped per surface so a screen can only send through its natural channel:
+  Inbox → `enableEmailSend` (email reply, threaded in the open Gmail thread);
+  Portal Chats → `enableSlackSend` (portal-chat message). The code-task rail
+  stays OFF (Antonio-only, R111); everything non-send still routes through
+  `propose_action`. Two safety additions over the raw Slack behavior, both in
+  `worker-tools.ts` via the new `WorkerSendContext` threaded
+  callWorker→runWorkerLoop→executeWorkerTool: (1) **hard-pinned recipient** —
+  the Portal Chats send is FORCED to the open client (`pinnedPortalRecipient`
+  from `clientKey`); the executor overrides whatever ids the model supplies,
+  so it can NEVER message another client; (2) **per-staff attribution** —
+  every send is logged to `action_log` with `sendActor`
+  (`crm-inbox:<email>` / `crm-portal:<email>`) instead of the generic worker
+  actor. The send tools remain OUT of `WORKER_TOOLS` (injected only via the
+  enable flags), so the dormant Hermes worker is unaffected (R108). Sending
+  still requires the staff member's explicit "send it" (prompt discipline in
+  the surface addenda, generalized from "Antonio" to "the staff member here"
+  since all staff can send). Sandbox blocks real email (`SANDBOX_MODE`) — email
+  send is verified there by payload only; portal-message send is fully testable.
+  Tests: `tests/unit/slack-portal-send.test.ts` (pin override, actor attribution),
+  `tests/unit/inbox-worker-prompt.test.ts` (per-surface send authorization).
 - **Degradation contract** (2026-07-09): a Gmail fetch failure in
   `/api/inbox/conversations` returns **503** for the gmail-only view (merged
   view returns the chat channels + `gmailDegraded: true`) and the list's

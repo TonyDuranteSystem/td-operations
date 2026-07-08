@@ -143,3 +143,37 @@ describe("send_portal_message — safety wiring", () => {
     expect(r).toContain("✅ Portal message sent")
   })
 })
+
+describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
+  it("records the acting staff member (CRM worker) in the audit log", async () => {
+    await sendPortalMessageFromWorker({ contact_id: "cnt-5", message: "hi" }, "crm-portal:luca@tonydurante.us")
+    expect(logAction).toHaveBeenCalledOnce()
+    const arg = logAction.mock.calls[0][0] as { actor: string; summary: string }
+    expect(arg.actor).toBe("crm-portal:luca@tonydurante.us")
+    expect(arg.summary).toContain("CRM worker")
+  })
+
+  it("defaults to the Slack-worker actor when none is passed (Slack path unchanged)", async () => {
+    await sendPortalMessageFromWorker({ contact_id: "cnt-5", message: "hi" })
+    const arg = logAction.mock.calls[0][0] as { actor: string; summary: string }
+    expect(arg.actor).toBe("claude.slack")
+    expect(arg.summary).toContain("Slack worker")
+  })
+
+  it("HARD-PINS the recipient: a model-supplied contact_id is overridden by the panel's client", async () => {
+    responses.accountContacts = { contact_id: "cnt-PINNED" }
+    // Model tries to message a DIFFERENT client; the pin forces the open account.
+    const r = await executeWorkerTool(
+      "send_portal_message",
+      { contact_id: "cnt-ATTACKER", message: "pinned" },
+      undefined,
+      undefined,
+      undefined,
+      { actor: "crm-portal:luca@tonydurante.us", pinnedPortalRecipient: { account_id: "acc-PIN" } },
+    )
+    expect(r).toContain("✅ Portal message sent")
+    expect(lastInsertedRow).toMatchObject({ account_id: "acc-PIN", contact_id: "cnt-PINNED" })
+    // the attacker-supplied contact id never reached the insert
+    expect(lastInsertedRow).not.toMatchObject({ contact_id: "cnt-ATTACKER" })
+  })
+})

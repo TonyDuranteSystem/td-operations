@@ -1030,7 +1030,7 @@ export async function sendPortalMessageFromWorker(input: {
   account_id?: unknown
   contact_id?: unknown
   message?: unknown
-}): Promise<string> {
+}, actor?: string): Promise<string> {
   const accountId =
     typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
   const contactId =
@@ -1101,13 +1101,13 @@ export async function sendPortalMessageFromWorker(input: {
 
   // Audit trail (fire-and-forget, never throws).
   logAction({
-    actor: "claude.slack",
+    actor: actor ?? "claude.slack",
     action_type: "send",
     table_name: "portal_messages",
     record_id: msg.id,
     account_id: accountId ?? undefined,
     contact_id: resolvedContactId ?? undefined,
-    summary: `Portal chat message sent via Slack worker: "${message.slice(0, 80)}${message.length > 80 ? "…" : ""}"`,
+    summary: `Portal chat message sent via ${actor ? "CRM worker" : "Slack worker"}: "${message.slice(0, 80)}${message.length > 80 ? "…" : ""}"`,
   })
 
   // In-app notification + client email (fire-and-forget; a wiring failure never
@@ -1609,6 +1609,7 @@ export async function executeWorkerTool(
   availableNames?: Set<string>,
   sourceMessageId?: string | null,
   currentThreadId?: string | null,
+  sendContext?: WorkerSendContext,
 ): Promise<string> {
   if (name === "start_code_task") {
     const { _currentSlackCtx } = await import("./slack-claude")
@@ -1670,13 +1671,35 @@ export async function executeWorkerTool(
     const cleaned: Record<string, unknown> = { ...params }
     if (typeof cleaned.body === "string") cleaned.body = stripDraftMarkdown(cleaned.body)
     if (typeof cleaned.subject === "string") cleaned.subject = stripDraftMarkdown(cleaned.subject)
-    return executeTool("send_email", cleaned)
+    const emailResult = await executeTool("send_email", cleaned)
+    // Attribution audit (fire-and-forget): record WHICH staff member triggered a
+    // CRM-panel email send. Only on a real success (the shared tool returns
+    // {"success":true,...}); a sandbox-blocked / failed send is not logged as sent.
+    if (sendContext?.actor && emailResult.includes('"success":true')) {
+      logAction({
+        actor: sendContext.actor,
+        action_type: "send",
+        table_name: "gmail",
+        summary: `Email sent via CRM worker to ${typeof cleaned.to === "string" ? cleaned.to : "?"}: "${String(cleaned.subject ?? "").slice(0, 80)}"`,
+      })
+    }
+    return emailResult
   }
   if (name === "send_portal_message") {
     // Slack-only direct send (gated at the tool-list level via enableSlackSend).
     // Reaches here only when the model was actually handed the tool, same as
     // start_code_task above.
-    return sendPortalMessageFromWorker(params)
+    //
+    // CRM Portal Chats panel: the send is HARD-PINNED to the client whose chat is
+    // open (sendContext.pinnedPortalRecipient) — override whatever ids the model
+    // supplied so it can NEVER message another client. The Slack path sets no pin,
+    // so the model-supplied ids stand there (unchanged behaviour).
+    const pin = sendContext?.pinnedPortalRecipient
+    const portalParams =
+      pin && (pin.account_id || pin.contact_id)
+        ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
+        : params
+    return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined)
   }
   // Client Threads — Slack-only. Executor-gate too (defense-in-depth, R108): the
   // tag WRITE and the lookup READ must never fire for the Hermes research worker
@@ -2067,6 +2090,28 @@ export interface CallWorkerOptions {
    * Hermes/Telegram path passes nothing and stays on the shared key.
    */
   apiKeyOverride?: string
+  /**
+   * CRM-panel send safety + attribution (Inbox / Portal Chats worker). The Slack
+   * path never sets these, so its behaviour is unchanged.
+   * - sendActor: WHO triggered the send (e.g. "crm-inbox:luca@tonydurante.us").
+   *   Recorded in the action_log audit trail instead of the generic worker actor,
+   *   so every panel send is attributable to a staff member.
+   * - pinnedPortalRecipient: when set, send_portal_message is FORCED to this exact
+   *   client (the Portal Chats panel is scoped to ONE client). The model cannot
+   *   message anyone else — the executor overrides whatever ids the model supplies.
+   */
+  sendActor?: string | null
+  pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
+}
+
+/**
+ * Per-call send context threaded from callWorker → runWorkerLoop →
+ * executeWorkerTool. Carries the acting staff member (for audit attribution) and
+ * an optional hard-pinned portal recipient (Portal Chats panel safety).
+ */
+export interface WorkerSendContext {
+  actor?: string | null
+  pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -2135,6 +2180,7 @@ export async function runWorkerLoop(
   currentThreadId?: string | null,
   serverTools?: Array<Record<string, unknown>>,
   apiKeyOverride?: string,
+  sendContext?: WorkerSendContext,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   // Dedicated-key override (Slack worker) with fallback to the shared key. Covers
   // both fetch sites below — they read this same apiKey.
@@ -2237,7 +2283,7 @@ export async function runWorkerLoop(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
-      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId, currentThreadId)
+      const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId, currentThreadId, sendContext)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -2577,7 +2623,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       ? buildWebServerTools()
       : undefined
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride)
+  const sendContext: WorkerSendContext | undefined =
+    opts.sendActor || opts.pinnedPortalRecipient
+      ? { actor: opts.sendActor ?? null, pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null }
+      : undefined
+
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext)
 
   if (threadId) {
     try {

@@ -219,6 +219,27 @@ export async function POST(req: NextRequest) {
     rowId = inserted?.id ?? null
   }
 
+  // Per-surface SEND rail (Antonio 2026-07-08: "the same powerful worker I have
+  // in Slack — when I say 'send it' it must send"). Scoped by surface so a screen
+  // can only send through its natural channel:
+  //   - Inbox  → email reply (enableEmailSend); replies in the open Gmail thread.
+  //   - Portal Chats → portal-chat message (enableSlackSend), HARD-PINNED to the
+  //     open client so the worker can never message anyone else.
+  // Every send is attributed to the acting staff member (sendActor) in action_log.
+  // These flags never touch WORKER_TOOLS, so the dormant Hermes worker is unaffected
+  // (R108). Sending still requires the staff member's explicit "send it" (prompt).
+  const actorEmail = user.email ?? "unknown"
+  const sendRails =
+    surface === "inbox"
+      ? { enableEmailSend: true, sendActor: `crm-inbox:${actorEmail}` }
+      : {
+          enableSlackSend: true,
+          sendActor: `crm-portal:${actorEmail}`,
+          pinnedPortalRecipient: clientKey!.startsWith("acct-")
+            ? { account_id: clientKey!.slice("acct-".length) }
+            : { contact_id: clientKey!.slice("contact-".length) },
+        }
+
   try {
     const { reply } = await callWorker(userBody, {
       threadId,
@@ -226,8 +247,8 @@ export async function POST(req: NextRequest) {
       systemPromptOverride: buildWorkerSurfacePrompt(surface),
       // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
       // to work how it works in Slack"). Same switches the Team Workspace
-      // grants staff. Send/code rails stay OFF — actions go through
-      // propose_action → the approval rail.
+      // grants staff. The code-task rail stays OFF (Antonio-only, R111);
+      // send is enabled per-surface via sendRails below.
       enableDbRead: true,
       enableDocReads: true,
       enableCallReads: true,
@@ -236,6 +257,7 @@ export async function POST(req: NextRequest) {
       enableThreadRecall: true,
       enableWebSearch: true, // live only if WORKER_WEB_SEARCH_ENABLED
       maxIterations: 20,
+      ...sendRails,
       ...(clientKey && body.clientName
         ? { clientKey, clientName: body.clientName }
         : {}),

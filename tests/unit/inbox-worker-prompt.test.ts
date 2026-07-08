@@ -24,6 +24,28 @@ describe('buildWorkerSurfacePrompt', () => {
     expect(prompt.startsWith(SLACK_WORKER_SYSTEM_PROMPT)).toBe(true)
     expect(prompt).toContain('SURFACE OVERRIDE — PORTAL CHATS')
   })
+
+  it('portal-chats surface authorizes a pinned portal-message send (not "cannot send")', () => {
+    const prompt = buildWorkerSurfacePrompt('portal-chats')
+    expect(prompt).toContain('SENDING A PORTAL MESSAGE')
+    expect(prompt).toContain('send_portal_message')
+    expect(prompt).toContain('recipient is fixed to the client')
+    expect(prompt).not.toContain('You cannot send messages from here')
+  })
+
+  it('inbox surface authorizes a threaded email send (not "cannot send")', () => {
+    const prompt = buildWorkerSurfacePrompt('inbox')
+    expect(prompt).toContain('SENDING EMAIL')
+    expect(prompt).toContain('send_email')
+    expect(prompt).toContain('reply_to_message_id')
+    expect(prompt).not.toContain('You cannot send emails or messages from here')
+  })
+
+  it('both surfaces read an explicit "send it" from ANY staff member as approval', () => {
+    for (const s of ['inbox', 'portal-chats'] as const) {
+      expect(buildWorkerSurfacePrompt(s)).toContain('WHO IS TALKING')
+    }
+  })
 })
 
 describe('displayUserMessage', () => {
