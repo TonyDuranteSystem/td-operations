@@ -1159,8 +1159,8 @@ function NewConversationModal({ channels, generalThread, onClose, onCreate }: {
         <input value={newTopic} onChange={e => setNewTopic(e.target.value)} placeholder="Or type a new topic"
           className="w-full mb-3 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-300" />
 
-        {/* Channel (optional) */}
-        <label className="text-[11px] font-semibold text-zinc-500 uppercase">Also post in channel <span className="text-zinc-300">(optional)</span></label>
+        {/* Channel (optional) — the conversation is FILED under this channel (Slack parity) */}
+        <label className="text-[11px] font-semibold text-zinc-500 uppercase">Channel <span className="text-zinc-300">(optional — conversation is filed there)</span></label>
         <select value={channelId} onChange={e => setChannelId(e.target.value)}
           className="w-full mt-1 mb-4 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-300">
           <option value="">None</option>

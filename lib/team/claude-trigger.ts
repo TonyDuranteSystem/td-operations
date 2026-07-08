@@ -172,22 +172,50 @@ export async function processClaudeReply(params: {
     ? `RECENT TEAM CHAT (for reference — you are "Claude", a teammate in this internal staff thread):\n${history}\n\n`
     : ''
 
-  const userBody = `${contextBlock}The latest message mentions you (@claude):\n${prompt.sender_name}: ${prompt.message}\n\nReply as a concise, helpful teammate. This is an INTERNAL staff thread (never client-visible).`
+  const userBody = `${contextBlock}The latest message mentions you (@claude):\n${prompt.sender_name}: ${prompt.message}`
 
   let reply: string
   try {
     const { callWorker } = await import('@/lib/ai-agent/worker-tools')
+    // FULL SLACK PARITY (parity matrix 2026-07-08, after the "send it in the
+    // thread" incident): the Team Chat worker runs with the SAME configuration
+    // as the Slack worker — same persona/discipline prompt (SOURCES FIRST, TWO
+    // GEARS, DRAFTS, send-after-explicit-"send it"), same send rails, same
+    // iteration budget, same billing key. Differences are transport-only:
+    //  - threadId = the TEAM thread uuid → worker thread memory AND
+    //    approval_queue.thread_id linkage for the in-chat 6-digit code rail.
+    //  - messageId is NOT passed: approval_queue.source_message_id FKs
+    //    agent_messages(id) (Slack rows) — a team message id would violate it.
+    //  - enableClientThreadTag stays off (that rail is #td-support-specific).
+    const { SLACK_WORKER_SYSTEM_PROMPT } = await import('@/lib/ai-agent/slack-claude')
+    const { loadRelevantTemplates, formatTemplatesForPrompt } = await import('@/lib/ai-agent/templates')
+
+    let systemPrompt = `${SLACK_WORKER_SYSTEM_PROMPT}\n\nCONTEXT CORRECTION: you are in the CRM TEAM CHAT (crm.tonydurante.us → Team Chat), not Slack. Same team, same rules, same tools — replies render as chat messages in this internal thread (never client-visible).`
+    try {
+      const templates = await loadRelevantTemplates(prompt.message)
+      const block = formatTemplatesForPrompt(templates)
+      if (block) systemPrompt += `\n${block}`
+    } catch { /* best-effort, same as Slack */ }
+
     const res = await callWorker(userBody, {
-      // Read/research rails on for everyone.
+      threadId,
+      systemPromptOverride: systemPrompt,
+      apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
+      maxIterations: 20,
+      // Read/research rails.
       enableDbRead: true,
       enableDocReads: true,
       enableCallReads: true,
       enableCalendly: true,
       enableClientThreadRead: true,
       enableWebSearch: true,
-      // Code-task rail Antonio-only (R111). Send rails stay OFF in team chat for
-      // now (research-first, mirrors Hermes Phase 1) — a later phase can add them
-      // behind the show-draft-first approval discipline.
+      enableThreadRecall: true,
+      enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === 'true',
+      // Send rails — Slack parity: draft in thread, send on explicit "send it"
+      // (discipline enforced by SLACK_WORKER_SYSTEM_PROMPT, same as Slack).
+      enableEmailSend: true,
+      enableSlackSend: true,
+      // Code-task rail Antonio-only (R111), keyed on the prompt author.
       enableCodeTasks: senderIsAntonio,
       clientKey,
       clientName,
@@ -213,6 +241,20 @@ export async function processClaudeReply(params: {
     .eq('message', THINKING_PLACEHOLDER) // TOCTOU guard: only if still pending
 
   await bumpThreadActivity(threadId)
+
+  // Slack parity: Slack posts the answer as a NEW message so the phone gets a
+  // push. In Team Chat the answer replaces the placeholder (no insert → no push
+  // path), so push the asker explicitly. Best-effort.
+  try {
+    const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
+    await sendPushToAdminUsers([prompt.sender_id], {
+      title: 'Claude replied',
+      body: reply.slice(0, 120),
+      url: `/team-chat?thread=${threadId}`,
+      tag: `team-claude-${threadId}`,
+    })
+  } catch { /* non-critical */ }
+
   return { ok: true }
 }
 

@@ -47,6 +47,23 @@ export async function POST(request: NextRequest) {
 
   const now = new Date().toISOString()
 
+  // Validate the channel up-front (it's now the thread's HOME, not just a card
+  // target) — a bad id should 400, not silently create an unfiled thread.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let channelRow: any = null
+  if (channelId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: ch } = await (supabaseAdmin as any)
+      .from('internal_threads')
+      .select('id, thread_type, color')
+      .eq('id', channelId)
+      .single()
+    if (!ch || (ch.thread_type !== 'channel' && ch.thread_type !== 'general')) {
+      return NextResponse.json({ error: 'That channel was not found.' }, { status: 400 })
+    }
+    channelRow = ch
+  }
+
   // Reuse an OPEN discussion for the same client + topic if present.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let reuseQuery: any = (supabaseAdmin as any)
@@ -63,7 +80,22 @@ export async function POST(request: NextRequest) {
   let reused = false
   if (thread) {
     reused = true
+    // Reused with a channel selected → file it there (moves an unfiled or
+    // differently-filed conversation to the chosen channel, per user intent).
+    if (channelId && thread.parent_channel_id !== channelId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabaseAdmin as any)
+        .from('internal_threads')
+        .update({ parent_channel_id: channelId })
+        .eq('id', thread.id)
+      thread = { ...thread, parent_channel_id: channelId }
+    }
   } else {
+    // Slack parity: the channel picked in the modal is WHERE THE CONVERSATION
+    // LIVES — file it under that channel folder (parent_channel_id), exactly
+    // like Slack's /client modal puts the thread IN the channel. (The card
+    // dropped below is the visible "conversation started" marker, mirroring
+    // Slack's 🗂️ root message.) Fix for the Tamás Fazekas incident 2026-07-08.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: created, error } = await (supabaseAdmin as any)
       .from('internal_threads')
@@ -74,6 +106,7 @@ export async function POST(request: NextRequest) {
         topic_slug: topicSlug,
         title: conversationTitle(clientName, topic),
         created_by: user.id,
+        parent_channel_id: channelId || null,
         last_activity_at: now,
       })
       .select()
@@ -91,32 +124,26 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  // Optional: drop a card into the chosen channel so the team sees it there too.
-  if (channelId) {
+  // Drop a "conversation started" card into the channel (the visible marker in
+  // the channel timeline — the analog of Slack's 🗂️ root message). Only for
+  // NEW conversations; a reuse just re-files silently.
+  if (channelRow && !reused) {
+    await supabaseAdmin.from('internal_messages').insert({
+      thread_id: channelId,
+      sender_id: user.id,
+      sender_name: getUserDisplayName(user),
+      message: '',
+      read_at: now,
+      card: {
+        kind: 'client_message',
+        title: `New conversation: ${clientName}`,
+        subtitle: topic ? `Topic: ${topic}` : 'Client discussion',
+        url: `/team-chat?thread=${thread.id}`,
+        color: channelRow.color ?? undefined,
+      },
+    })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: channel } = await (supabaseAdmin as any)
-      .from('internal_threads')
-      .select('id, thread_type, color')
-      .eq('id', channelId)
-      .single()
-    if (channel && (channel.thread_type === 'channel' || channel.thread_type === 'general')) {
-      await supabaseAdmin.from('internal_messages').insert({
-        thread_id: channelId,
-        sender_id: user.id,
-        sender_name: getUserDisplayName(user),
-        message: '',
-        read_at: now,
-        card: {
-          kind: 'client_message',
-          title: `New conversation: ${clientName}`,
-          subtitle: topic ? `Topic: ${topic}` : 'Client discussion',
-          url: `/team-chat?thread=${thread.id}`,
-          color: channel.color ?? undefined,
-        },
-      })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any).from('internal_threads').update({ last_activity_at: now }).eq('id', channelId)
-    }
+    await (supabaseAdmin as any).from('internal_threads').update({ last_activity_at: now }).eq('id', channelId)
   }
 
   return NextResponse.json({ thread, reused })

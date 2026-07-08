@@ -141,6 +141,30 @@ export async function POST(
     // non-critical
   }
 
+  // ── In-thread approval completion (Slack-parity rail) ──────────────────
+  // An ADMIN message that is EXACTLY a 6-digit code completes the pending
+  // proposal linked to this thread — deterministically, without the LLM.
+  // The code message itself was inserted above (visible in the chat); the
+  // outcome posts as a Claude reply. See lib/team/team-approval.ts.
+  if (isAdmin(user)) {
+    const { isSixDigitCode, handleTeamApprovalCode } = await import('@/lib/team/team-approval')
+    if (isSixDigitCode(message)) {
+      const outcome = await handleTeamApprovalCode({ code: message, threadId, isAdminSender: true })
+      if (outcome.handled) {
+        const { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME } = await import('@/lib/team/workspace')
+        await supabaseAdmin.from('internal_messages').insert({
+          thread_id: threadId,
+          sender_id: CLAUDE_SENDER_UUID,
+          sender_name: CLAUDE_SENDER_NAME,
+          message: outcome.message,
+          reply_to_id: msg.id,
+          read_at: now,
+        })
+        return NextResponse.json({ message: msg, approval_handled: true })
+      }
+    }
+  }
+
   // @claude trigger — fire the AI worker adapter (loop-safe: only human sends
   // reach this route; the processor also refuses Claude-authored prompts).
   let claudePlaceholderId: string | null = null
