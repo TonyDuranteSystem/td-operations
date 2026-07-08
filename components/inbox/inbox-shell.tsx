@@ -15,6 +15,7 @@ import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
 import { LinkClientDialog } from './link-client-dialog'
+import { HoverHint } from './hover-hint'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
@@ -588,71 +589,78 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                 {/* Action buttons — not shown for WhatsApp (read-only) */}
                 {!isWhatsApp && (
                   <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
-                    <button
-                      onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
-                      title="Create Task"
-                    >
-                      <ClipboardList className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
-                      title="Create Service"
-                    >
-                      <Cog className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
-                      title="Create Invoice"
-                    >
-                      <Receipt className="h-4 w-4" />
-                    </button>
+                    <HoverHint label="Create Task">
+                      <button
+                        onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
+                      >
+                        <ClipboardList className="h-4 w-4" />
+                      </button>
+                    </HoverHint>
+                    <HoverHint label="Create Service">
+                      <button
+                        onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
+                      >
+                        <Cog className="h-4 w-4" />
+                      </button>
+                    </HoverHint>
+                    <HoverHint label="Create Invoice">
+                      <button
+                        onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                      >
+                        <Receipt className="h-4 w-4" />
+                      </button>
+                    </HoverHint>
 
                     <div className="w-px h-4 bg-zinc-200 mx-0.5" />
 
-                    <button
-                      onClick={handleReply}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
-                      title="Reply"
-                    >
-                      <Reply className="h-3.5 w-3.5" />
-                      Reply
-                    </button>
-                    <button
-                      onClick={handleWorker}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
-                      title="Worker — the Slack worker: reads CRM, DB and memory, discusses and drafts"
-                    >
-                      <Bot className="h-3.5 w-3.5" />
-                      Worker
-                    </button>
+                    <HoverHint label="Write a reply">
+                      <button
+                        onClick={handleReply}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
+                      >
+                        <Reply className="h-3.5 w-3.5" />
+                        Reply
+                      </button>
+                    </HoverHint>
+                    <HoverHint label="AI worker — reads CRM, DB & memory">
+                      <button
+                        onClick={handleWorker}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
+                      >
+                        <Bot className="h-3.5 w-3.5" />
+                        Worker
+                      </button>
+                    </HoverHint>
 
                     {isGmail && (
                       <>
-                        <button
-                          onClick={() => emailActionMutation.mutate({ action: 'archive' })}
-                          disabled={emailActionMutation.isPending}
-                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                          title="Archive"
-                        >
-                          <Archive className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => emailActionMutation.mutate({ action: 'star' })}
-                          disabled={emailActionMutation.isPending}
-                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
-                          title="Star"
-                        >
-                          <Star className="h-4 w-4" />
-                        </button>
+                        <HoverHint label="Archive">
+                          <button
+                            onClick={() => emailActionMutation.mutate({ action: 'archive' })}
+                            disabled={emailActionMutation.isPending}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                          >
+                            <Archive className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
+                        <HoverHint label="Star">
+                          <button
+                            onClick={() => emailActionMutation.mutate({ action: 'star' })}
+                            disabled={emailActionMutation.isPending}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
+                          >
+                            <Star className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
                         <div className="relative">
+                          <HoverHint label="Mark with a color">
                           <button
                             onClick={() => setColorMenuOpen(!colorMenuOpen)}
                             disabled={emailActionMutation.isPending}
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                            title="Mark with color"
                           >
                             {selected.colorMark ? (
                               <span
@@ -663,6 +671,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                               <Palette className="h-4 w-4" />
                             )}
                           </button>
+                          </HoverHint>
                           {colorMenuOpen && (
                             <>
                               <div className="fixed inset-0 z-40" onClick={() => setColorMenuOpen(false)} />
@@ -696,38 +705,42 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                             </>
                           )}
                         </div>
-                        <button
-                          onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
-                          disabled={emailActionMutation.isPending}
-                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
-                          title="Mark Unread"
-                        >
-                          <MailOpen className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={handleForward}
-                          disabled={emailActionMutation.isPending}
-                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                          title="Forward"
-                        >
-                          <Forward className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => setLinkOpen(true)}
-                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-600 transition-colors"
-                          title="Link to client — show this email in the client's email view"
-                        >
-                          <Link2 className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => emailActionMutation.mutate({ action: 'trash' })}
-                          disabled={emailActionMutation.isPending}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </button>
+                        <HoverHint label="Mark as unread">
+                          <button
+                            onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
+                            disabled={emailActionMutation.isPending}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                          >
+                            <MailOpen className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
+                        <HoverHint label="Forward">
+                          <button
+                            onClick={handleForward}
+                            disabled={emailActionMutation.isPending}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                          >
+                            <Forward className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
+                        <HoverHint label="Link to client / lead / partner">
+                          <button
+                            onClick={() => setLinkOpen(true)}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-600 transition-colors"
+                          >
+                            <Link2 className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
+                        <HoverHint label="Delete (moves to Trash)">
+                          <button
+                            onClick={() => emailActionMutation.mutate({ action: 'trash' })}
+                            disabled={emailActionMutation.isPending}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
+                        </HoverHint>
                       </>
                     )}
                   </div>

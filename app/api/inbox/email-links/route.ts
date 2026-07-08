@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
 
   let query = db
     .from("email_links")
-    .select("id, thread_id, mailbox, account_id, contact_id, subject, sender, linked_by, created_at, account:accounts(company_name)")
+    .select("id, thread_id, mailbox, account_id, contact_id, lead_id, partner_id, subject, sender, linked_by, created_at, account:accounts(company_name), contact:contacts(full_name), lead:leads(full_name), partner:client_partners(partner_name)")
     .order("created_at", { ascending: false })
 
   if (threadId) {
@@ -67,6 +67,8 @@ export async function POST(req: NextRequest) {
     mailbox?: string
     accountId?: string
     contactId?: string
+    leadId?: string
+    partnerId?: string
     subject?: string
     sender?: string
   }
@@ -77,9 +79,10 @@ export async function POST(req: NextRequest) {
   }
 
   const gmailThreadId = body.gmailThreadId?.trim()
-  if (!gmailThreadId || (!body.accountId && !body.contactId)) {
+  const hasTarget = !!(body.accountId || body.contactId || body.leadId || body.partnerId)
+  if (!gmailThreadId || !hasTarget) {
     return NextResponse.json(
-      { error: "gmailThreadId and accountId or contactId are required" },
+      { error: "gmailThreadId and one of accountId/contactId/leadId/partnerId are required" },
       { status: 400 }
     )
   }
@@ -92,7 +95,8 @@ export async function POST(req: NextRequest) {
   const mailbox = body.mailbox === "antonio" ? "antonio" : "support"
 
   // ONE link per thread (uq_email_links_thread): linking again REPLACES the
-  // client — same upsert target the create-from-email dialog uses.
+  // target — same upsert target the create-from-email dialog uses. Exactly
+  // one role column is set per link.
   const { data, error } = await db
     .from("email_links")
     .upsert(
@@ -101,6 +105,8 @@ export async function POST(req: NextRequest) {
         mailbox,
         account_id: body.accountId ?? null,
         contact_id: body.contactId ?? null,
+        lead_id: body.leadId ?? null,
+        partner_id: body.partnerId ?? null,
         subject: body.subject?.slice(0, 500) ?? null,
         sender: body.sender?.slice(0, 300) ?? null,
         linked_by: user.email ?? null,

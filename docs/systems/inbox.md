@@ -81,6 +81,11 @@ Function.
   `20260708-2300-email-links.sql`: + mailbox/contact_id/subject/sender and
   the previously-MISSING `uq_email_links_thread` unique index — the
   create-from-email dialog's upsert had silently failed forever without it).
+  Targets EVERY role — accounts, contacts, LEADS, PARTNERS (`lead_id`/
+  `partner_id` columns, migration `20260708-2340`; the
+  `/api/inbox/link-targets` search sweeps all four tables and the dialog
+  shows role badges). Thread-header buttons show hover legends
+  (`components/inbox/hover-hint.tsx`).
   ONE link per thread; re-linking replaces the client. Linked threads merge
   into the client email views (`client-emails` endpoint, `linked: true`
   badge) — Portal Chats Email tab AND the account page's new **Emails** tab
