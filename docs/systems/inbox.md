@@ -136,6 +136,18 @@ Function.
   only), `app/api/cron/email-monitor/` (every 5 min: emails from contacts tied
   to open tasks → `agent_decisions` proposals).
 
+- **Email index** (leg 1, 2026-07-08, dev_task 224726be): `email_index` —
+  metadata-only, REBUILDABLE cache of both mailboxes (one row per message:
+  headers, snippet, label state, resolved CRM linkage; NO bodies/attachments;
+  tsvector `search` column; migration `20260709-0100`). Gmail stays the
+  source of truth — wipe & rebuild on drift. Fed by (a) resumable backfill +
+  reconcile cron `/api/cron/email-index-sync` (*/10 min; cursors in
+  `gmail_watch_state.backfill_page_token/index_history_id`) and (b) the
+  gmail-push webhook (incremental `syncIncremental` per notification,
+  best-effort). Engine: `lib/email-index/sync.ts`. RLS: staff read;
+  antonio@ rows ADMIN-ONLY (mirrors `checkMailboxAccess`). Leg 2 (pending):
+  instant inbox search, client-emails + green dots reading the index.
+
 ## Access control
 
 - `/inbox` and `/api/inbox/*` require a dashboard user (middleware); clients

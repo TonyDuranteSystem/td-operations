@@ -67,5 +67,14 @@ export async function POST(req: NextRequest) {
     .update({ history_id: notification.historyId, updated_at: new Date().toISOString() })
     .eq("mailbox", mailbox)
 
+  // Email index: incremental sync of whatever changed (best-effort — the
+  // email-index-sync cron reconciles anything a push misses)
+  try {
+    const { syncIncremental } = await import("@/lib/email-index/sync")
+    await syncIncremental(mailbox as "support" | "antonio", notification.historyId)
+  } catch (err) {
+    console.warn("[gmail-push] incremental index sync failed (cron will heal):", err)
+  }
+
   return NextResponse.json({ ok: true })
 }

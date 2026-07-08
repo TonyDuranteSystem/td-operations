@@ -5,6 +5,10 @@
       "schedule": "0 5 * * *"
     },
     {
+      "path": "/api/cron/email-index-sync",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/sync-drive",
       "schedule": "0 */6 * * *"
     },
