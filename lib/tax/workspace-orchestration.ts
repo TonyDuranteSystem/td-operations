@@ -132,5 +132,7 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
     memberNames: wizardMembers.map(m => m.name),
   })
 
-  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, validation }
+  // providedBalances: [] — balance anchors are a BOOKS concept (account+year);
+  // the standalone workspace scratch tool has no account to anchor to.
+  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, providedBalances: [], validation }
 }

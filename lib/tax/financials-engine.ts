@@ -25,6 +25,7 @@ import { computePnlTotals } from "@/lib/pnl-generator"
 import { sameName, type ResolvedMember } from "./ownership-resolution"
 import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 import { toUsd, type FxRates } from "./fx"
+import { mergeBankBalances, type ProvidedBankBalance, type BankBalancesSummary } from "./bank-balances"
 
 export interface DraftTransaction {
   id: string
@@ -52,6 +53,9 @@ export interface MemberCapital {
 
 export interface BankCashPosition {
   bank_key: string
+  /** Dominant row currency for this bank account — the currency provided
+   *  balances should be entered in (S2 slice 2 UI hint). */
+  currency: string
   /** Derived from the first balance-bearing row (balance_after − amount); null when the CSV has no balance column. */
   derived_beginning: number | null
   /** Last balance_after seen; null when the CSV has no balance column. */
@@ -64,13 +68,17 @@ export interface FinancialDraft {
   pnl: ReturnType<typeof computePnlTotals>
   members: MemberCapital[]
   banks: BankCashPosition[]
+  /** Per-bank merged balances + tie-out results (S2 slice 2) — provided
+   *  anchors merged with statement-derived figures, USD, with provenance. */
+  bank_balances: BankBalancesSummary | null
   /** The current year's beginning cash. Prefers the prior return's Schedule L
    *  ending cash; when there is no validated prior, falls back to the bank
    *  statements' opening balances (only when EVERY account carries a running
-   *  balance and there are members to hold the opening equity). Null otherwise. */
+   *  balance and there are members to hold the opening equity), then to the
+   *  client/staff-provided per-bank openings (only when EVERY bank has one). */
   beginning_cash: number | null
   /** Where beginning_cash came from — drives the UI note + gate wording. */
-  beginning_cash_source: "prior_return" | "statements" | null
+  beginning_cash_source: "prior_return" | "statements" | "provided" | null
   beginning_capital_total: number
   ending_cash: number
   /** v1: assets = cash. */
@@ -96,6 +104,11 @@ export interface BuildDraftInput {
   /** IRS yearly-average rates (foreign units per USD) for converting
    *  foreign-currency amounts to USD (Phase 2). Omit for all-USD datasets. */
   fxRates?: FxRates
+  /** Per-bank balance anchors (S2 slice 2): client/staff-recorded opening +
+   *  closing balances in the account's own currency. Third beginning-cash
+   *  source (after prior return and statement balance columns) and the
+   *  per-bank tie-out anchor. */
+  providedBalances?: ProvidedBankBalance[]
 }
 
 /** Match a counterparty/description to a member by name. Exported for tests. */
@@ -162,8 +175,15 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
       .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date))
     const firstWithBalance = rows.find(r => r.balance_after !== null)
     const lastWithBalance = [...rows].reverse().find(r => r.balance_after !== null)
+    const curCounts = new Map<string, number>()
+    for (const r of rows) {
+      const c = (r.currency ?? "USD").trim().toUpperCase() || "USD"
+      curCounts.set(c, (curCounts.get(c) ?? 0) + 1)
+    }
+    const currency = Array.from(curCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "USD"
     return {
       bank_key: key,
+      currency,
       derived_beginning: firstWithBalance ? Number(firstWithBalance.balance_after) - Number(firstWithBalance.amount) : null,
       reported_ending: lastWithBalance ? Number(lastWithBalance.balance_after) : null,
       net_movement: rows.reduce((s, r) => s + Number(r.amount), 0),
@@ -173,16 +193,40 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   // ── Capital roll-forward per member ──
   const allocatable = members.filter(m => m.pct !== null) as Array<ResolvedMember & { pct: number }>
 
-  // ── Beginning cash source (prior return → statements → none) ──
+  // ── Beginning cash source (prior return → statements → provided → none) ──
   // Prior return wins (year-over-year tie-out). With no validated prior, fall
   // back to the statements' opening balances — but ONLY when every account
   // carries a running balance (a partial figure would mislead) AND there are
   // members to hold the matching opening equity (so the balance sheet still
-  // ties: assets = equity). Otherwise leave it blank for staff to resolve.
+  // ties: assets = equity). S2 slice 2: with neither, the client/staff-provided
+  // per-bank openings fill the gap (again only when EVERY bank has one) —
+  // always labeled as provided, never implied bank-verified.
   const priorCash = priorEndingCash(priorReturn)
   const allBanksHaveOpening = banks.length > 0 && banks.every(b => b.derived_beginning !== null)
   const statementOpening = allBanksHaveOpening ? banks.reduce((s, b) => s + (b.derived_beginning as number), 0) : null
   const usingStatementOpening = priorCash === null && statementOpening !== null && allocatable.length > 0
+
+  // Per-bank balance anchors + tie-outs (computed even with no provided rows —
+  // statement-derived figures alone still verify banks that carry balances).
+  const balanceSummary = mergeBankBalances({
+    banks,
+    provided: input.providedBalances ?? [],
+    fxRates: fxRates ?? null,
+  })
+  const usingProvidedOpening = priorCash === null && !usingStatementOpening
+    && balanceSummary.total_opening_usd !== null && allocatable.length > 0
+  const providedOpening = usingProvidedOpening ? balanceSummary.total_opening_usd : null
+  if (balanceSummary.mismatched_banks.length > 0) {
+    for (const m of balanceSummary.banks.filter(x => x.tie === "mismatch")) {
+      notes.push(`${m.bank_key}: opening + transactions differ from the closing balance by ${(m.delta_usd as number).toFixed(2)} USD — a transaction is likely missing or duplicated in that account's statements.`)
+    }
+  }
+  for (const m of balanceSummary.banks.filter(x => x.provided_conflicts_derived)) {
+    notes.push(`${m.bank_key}: the balance you provided disagrees with the statement's own balance column — please re-check which is right.`)
+  }
+  for (const m of balanceSummary.banks.filter(x => x.missing_fx_rate)) {
+    notes.push(`${m.bank_key}: provided balance is in a currency with no IRS exchange rate on file — excluded from totals until the rate is added.`)
+  }
 
   const contribTxs = transactions.filter(t => t.category === "contribution")
   const distTxs = transactions.filter(t => t.category === "distribution")
@@ -216,7 +260,11 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     const distributions = own.distributions + unattributedDist * share
     // No validated prior → seed opening capital from the statements' opening cash
     // (by ownership %) so the balance sheet ties; else use the prior K-1 figure.
-    const beginning = usingStatementOpening ? statementOpening! * share : priorBeginningCapital(priorReturn, m.name)
+    const beginning = usingStatementOpening
+      ? statementOpening! * share
+      : usingProvidedOpening
+        ? (providedOpening as number) * share
+        : priorBeginningCapital(priorReturn, m.name)
     const incomeShare = pnl.netIncome * share
     return {
       name: m.name,
@@ -230,12 +278,14 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   })
 
   // ── Balance sheet (cash basis v1) ──
-  const beginningCash = priorCash ?? (usingStatementOpening ? statementOpening : null)
+  const beginningCash = priorCash ?? (usingStatementOpening ? statementOpening : providedOpening)
   const beginningCashSource: FinancialDraft["beginning_cash_source"] =
-    priorCash !== null ? "prior_return" : (usingStatementOpening ? "statements" : null)
+    priorCash !== null ? "prior_return" : (usingStatementOpening ? "statements" : (usingProvidedOpening ? "provided" : null))
   const startCash = beginningCash ?? 0
   if (usingStatementOpening) {
     notes.push(`Beginning cash taken from your bank statements' opening balances (${statementOpening!.toFixed(2)}) — no prior-year return on file. Opening equity seeded from the same figure so the balance sheet ties; staff confirm during review.`)
+  } else if (usingProvidedOpening) {
+    notes.push(`Beginning cash per the provided per-bank opening balances (${(providedOpening as number).toFixed(2)} USD) — not bank-verified. Opening equity seeded from the same figure so the balance sheet ties.`)
   } else if (beginningCash === null && priorReturn && priorReturn.case === "filed_elsewhere") {
     notes.push("Prior return is not validated — beginning cash assumed 0 until staff resolve it (gate 2 will not pass).")
   }
@@ -249,6 +299,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     pnl,
     members: memberCapital,
     banks,
+    bank_balances: banks.length > 0 ? balanceSummary : null,
     beginning_cash: beginningCash,
     beginning_cash_source: beginningCashSource,
     beginning_capital_total: beginningCapitalTotal,

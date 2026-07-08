@@ -33,6 +33,9 @@ export interface FinancialsView {
   ownership: OwnershipResolution
   priorReturn: PriorReturnCaseRecord | null
   transactionCount: number
+  /** Raw provided per-bank balance rows (S2 slice 2) — what the balances
+   *  editor displays; the merged/tie view lives in draft.bank_balances. */
+  providedBalances: Array<{ bank_key: string; currency: string; opening_balance: number | null; closing_balance: number | null; source: "client" | "staff" }>
 }
 
 /** Pull member rows out of the wizard's flattened repeater keys
@@ -162,7 +165,22 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   // merchants). Instead every still-uncategorized row is defaulted by sign
   // (outflow → business expense, inflow → income) and the owner only flags the
   // exceptions (personal spend). This makes the P&L complete and unblocks gate 6.
-  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates })
+  // S2 slice 2 — per-bank balance anchors recorded by the client/staff.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: balanceRows } = await (supabaseAdmin as any) // table not yet in database.types.ts
+    .from("account_bank_balances")
+    .select("bank_key, currency, opening_balance, closing_balance, source")
+    .eq("account_id", accountId)
+    .eq("tax_year", taxYear)
+  const providedBalances = ((balanceRows ?? []) as Array<Record<string, unknown>>).map(r => ({
+    bank_key: String(r.bank_key),
+    currency: String(r.currency ?? "USD"),
+    opening_balance: r.opening_balance === null ? null : Number(r.opening_balance),
+    closing_balance: r.closing_balance === null ? null : Number(r.closing_balance),
+    source: (r.source === "staff" ? "staff" : "client") as "client" | "staff",
+  }))
+
+  const draft = buildFinancialDraft({ taxYear, transactions, members: ownership.members, priorReturn, defaultUncategorizedBySign: true, fxRates, providedBalances })
   const gates = evaluateGates({ draft, ownership, priorReturn })
 
   // Completeness summary (dev_task 95127bb2): translate the failing/na gates +
@@ -172,7 +190,7 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const missingFxCurrencies = foreignCurrencies.filter(c => !fxRates || !(fxRates[c] > 0))
   const completeness = buildCompletenessSummary({ gates, draft, missingFxCurrencies })
 
-  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length }
+  return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, providedBalances }
 }
 
 /** Write resolved percentages back to account_contacts where they differ. */

@@ -48,8 +48,16 @@ interface View {
   draft: {
     pnl: { totalIncome: number; totalCogs: number; grossProfit: number; totalExpenses: number; netIncome: number; totalDistributions: number; totalContributions: number; uncategorizedCount: number; uncategorizedTotal: number }
     members: Member[]
+    banks?: Array<{ bank_key: string; currency: string; derived_beginning: number | null; reported_ending: number | null; net_movement: number }>
+    bank_balances?: {
+      banks: Array<{ bank_key: string; opening_usd: number | null; opening_source: string | null; closing_usd: number | null; closing_source: string | null; expected_closing_usd: number | null; delta_usd: number | null; tie: 'ok' | 'mismatch' | 'unverifiable'; provided_conflicts_derived: boolean; missing_fx_rate: boolean }>
+      total_opening_usd: number | null
+      total_opening_source: 'statements' | 'provided' | null
+      missing_openings: string[]
+      mismatched_banks: string[]
+    } | null
     beginning_cash: number | null
-    beginning_cash_source: 'prior_return' | 'statements' | null
+    beginning_cash_source: 'prior_return' | 'statements' | 'provided' | null
     ending_cash: number
     total_assets: number
     total_liabilities: number
@@ -57,6 +65,7 @@ interface View {
     notes: string[]
   }
   gates: Gate[]
+  providedBalances?: Array<{ bank_key: string; currency: string; opening_balance: number | null; closing_balance: number | null; source: 'client' | 'staff' }>
   /** Staff workspace only: the stored prior-return answer (case+status). */
   prior_return?: { case: string | null; status: string | null } | null
   /** Staff workspace only: Validation Mode breakdown (same engine pass). */
@@ -245,6 +254,11 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // Antonio's rejected taps surfaced only in the far-away top banner — the
   // buttons looked dead; a rejection must be loud where the click happened).
   const [periodError, setPeriodError] = useState<string | null>(null)
+  // S2 slice 2 — per-bank balance anchors editor (books mode only).
+  const [balDraft, setBalDraft] = useState<Record<string, { opening: string; closing: string }>>({})
+  const [balDirty, setBalDirty] = useState(false)
+  const [balError, setBalError] = useState<string | null>(null)
+  const [balSaved, setBalSaved] = useState(false)
   const [catData, setCatData] = useState<Record<string, CategoryDrill>>({})
   const [catLoading, setCatLoading] = useState<string | null>(null)
   const [catError, setCatError] = useState<string | null>(null)
@@ -261,6 +275,17 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       const v: View = await res.json()
       setView(v)
       setAttested(v.attested) // server truth — a data change resets it
+      // Balance editor mirrors the server rows; user edits survive reloads only
+      // until saved (save → reload → server truth).
+      const provided = new Map((v.providedBalances ?? []).map(b => [b.bank_key, b]))
+      setBalDraft(Object.fromEntries((v.draft.banks ?? []).map(b => {
+        const row = provided.get(b.bank_key)
+        return [b.bank_key, {
+          opening: row?.opening_balance === null || row?.opening_balance === undefined ? '' : String(row.opening_balance),
+          closing: row?.closing_balance === null || row?.closing_balance === undefined ? '' : String(row.closing_balance),
+        }]
+      })))
+      setBalDirty(false)
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : 'Could not load your financials — please try again.')
     } finally {
@@ -368,6 +393,54 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // S2 slice 2 — save per-bank balance anchors (books mode; POSTs to the fixed
+  // portal route regardless of apiBase — the staff workspace tool never renders
+  // this panel because it has no account).
+  const saveBalances = async () => {
+    if (!view?.draft.banks) return
+    setBusy('balances')
+    setBalError(null)
+    setBalSaved(false)
+    try {
+      const parseNum = (v: string): number | null => {
+        const t = v.trim().replace(/\s/g, '')
+        if (!t) return null
+        // Accept both 1,234.56 and 1.234,56 (Italian) input styles.
+        const normalized = /,\d{1,2}$/.test(t) && !t.includes('.')
+          ? t.replace(',', '.')
+          : t.replace(/,/g, '')
+        const n = Number(normalized)
+        if (!Number.isFinite(n)) throw new Error(it ? `Valore non valido: "${v}"` : `Invalid number: "${v}"`)
+        return n
+      }
+      const balances = (view.draft.banks ?? []).map(b => ({
+        bank_key: b.bank_key,
+        currency: b.currency,
+        opening_balance: parseNum(balDraft[b.bank_key]?.opening ?? ''),
+        closing_balance: parseNum(balDraft[b.bank_key]?.closing ?? ''),
+      })).filter(b => b.opening_balance !== null || b.closing_balance !== null)
+      if (balances.length === 0) {
+        setBalError(it ? 'Inserisci almeno un saldo.' : 'Enter at least one balance.')
+        return
+      }
+      const res = await fetch('/api/portal/tax-financials/balances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, balances }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || (it ? 'Impossibile salvare i saldi — riprova.' : 'Could not save the balances — please try again.'))
+      }
+      setBalSaved(true)
+      await load()
+    } catch (e) {
+      setBalError(e instanceof Error && e.message ? e.message : (it ? 'Impossibile salvare i saldi — riprova.' : 'Could not save the balances — please try again.'))
     } finally {
       setBusy(null)
     }
@@ -1432,6 +1505,9 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     {view.draft.beginning_cash_source === 'statements' && (
                       <span className="ml-1 text-[11px] text-zinc-400">{it ? '(dai tuoi estratti conto)' : '(from your statements)'}</span>
                     )}
+                    {view.draft.beginning_cash_source === 'provided' && (
+                      <span className="ml-1 text-[11px] text-zinc-400">{it ? '(dai saldi che hai fornito)' : '(per the balances you provided)'}</span>
+                    )}
                   </dt>
                   <dd className="font-medium">{view.draft.beginning_cash === null ? '—' : fmt(view.draft.beginning_cash)}</dd>
                 </div>
@@ -1448,6 +1524,78 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
             </section>
           </div>
 
+
+
+          {/* S2 slice 2 — per-bank balance anchors (books mode only: the staff
+              workspace tool has no account). The two statement-header numbers
+              that verify each account: opening + transactions = closing. */}
+          {accountId && (view.draft.banks?.length ?? 0) > 0 && (
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
+              <h2 className="text-sm font-semibold text-zinc-900 mb-1">{it ? 'Saldi bancari — inizio e fine anno' : 'Bank balances — start and end of year'}</h2>
+              <p className="text-xs text-zinc-600 mb-3">
+                {it
+                  ? `Copia dall'estratto conto di ogni banca il saldo al 1° gennaio e al 31 dicembre ${taxYear} (nella valuta del conto). Con questi due numeri verifichiamo ogni conto: saldo iniziale + movimenti = saldo finale — e se qualcosa non torna ti diciamo esattamente quale banca e di quanto.`
+                  : `Copy each bank's balance on January 1 and December 31, ${taxYear} from its statement (in the account's own currency). These two numbers let us verify every account: opening + transactions = closing — and if something is off we name the exact bank and amount.`}
+              </p>
+              {balError && (
+                <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">⚠ {balError}</div>
+              )}
+              <div className="space-y-2">
+                {(view.draft.banks ?? []).map(b => {
+                  const tie = view.draft.bank_balances?.banks.find(x => x.bank_key === b.bank_key)
+                  return (
+                    <div key={b.bank_key} className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-100 bg-zinc-50 px-3 py-2">
+                      <span className="min-w-[160px] flex-1 text-sm font-medium text-zinc-800">{b.bank_key} <span className="text-[11px] font-normal text-zinc-400">({b.currency})</span></span>
+                      <label className="flex items-center gap-1 text-xs text-zinc-500">
+                        {it ? '1 gen' : 'Jan 1'}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={balDraft[b.bank_key]?.opening ?? ''}
+                          placeholder="0.00"
+                          onChange={e => { setBalDirty(true); setBalSaved(false); setBalDraft(d => ({ ...d, [b.bank_key]: { opening: e.target.value, closing: d[b.bank_key]?.closing ?? '' } })) }}
+                          className="w-28 rounded-md border border-zinc-300 px-2 py-1 text-sm text-right"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-zinc-500">
+                        {it ? '31 dic' : 'Dec 31'}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={balDraft[b.bank_key]?.closing ?? ''}
+                          placeholder="0.00"
+                          onChange={e => { setBalDirty(true); setBalSaved(false); setBalDraft(d => ({ ...d, [b.bank_key]: { opening: d[b.bank_key]?.opening ?? '', closing: e.target.value } })) }}
+                          className="w-28 rounded-md border border-zinc-300 px-2 py-1 text-sm text-right"
+                        />
+                      </label>
+                      {tie?.tie === 'ok' && <span className="text-xs font-medium text-emerald-700">✓ {it ? 'torna' : 'ties'}</span>}
+                      {tie?.tie === 'mismatch' && (
+                        <span className="text-xs font-medium text-amber-700">
+                          ⚠ {it ? 'differenza' : 'off by'} {fmt(Math.abs(tie.delta_usd ?? 0))} USD
+                        </span>
+                      )}
+                      {tie?.provided_conflicts_derived && (
+                        <span className="text-xs font-medium text-red-700">⚠ {it ? 'diverso dall\u2019estratto' : 'differs from statement'}</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={() => void saveBalances()}
+                  disabled={busy !== null || !balDirty}
+                  className="rounded-md bg-zinc-900 px-4 py-1.5 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50"
+                >
+                  {busy === 'balances' ? (it ? 'Salvataggio…' : 'Saving…') : (it ? 'Salva saldi' : 'Save balances')}
+                </button>
+                {balSaved && !balDirty && <span className="text-xs text-emerald-700">✓ {it ? 'Salvati' : 'Saved'}</span>}
+                <span className="text-[11px] text-zinc-400">
+                  {it ? 'I saldi forniti sono indicati come tali nel bilancio — non sostituiscono gli estratti conto.' : 'Provided balances are labeled as such on the balance sheet — they never replace your statements.'}
+                </span>
+              </div>
+            </section>
+          )}
 
           {/* Members */}
           {view.draft.members.length > 0 && (
