@@ -193,6 +193,73 @@ export async function GET(request: NextRequest) {
       else if (e.failed) ingestFailed++
     }
 
+    // Location-period + country cards (Phase B2, 2026-07-08): same pure
+    // builder as the staff tool (lib/tax/location-cards.ts), fed from the
+    // client's BOOKS — located rows (stamped by recategorizeAccountYear or
+    // carried by Save-to-client), the account-scoped period answers, and the
+    // standing account policies. Residence anchor = the account's declared
+    // fiscal-residence country (same resolver the S4 sweep uses).
+    let periods: unknown[] = []
+    let country_cards: unknown[] = []
+    let period_answers: unknown[] = []
+    let residence_country: string | null = null
+    try {
+      const locatedRows = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
+        const { data, error } = await db
+          .from('bank_transactions')
+          .select('id, transaction_date, description, counterparty, amount, category, notes, loc_code, loc_source')
+          .eq('account_id', accountId)
+          .eq('tax_year', taxYear)
+          .not('loc_code', 'is', null)
+          .order('id', { ascending: true })
+          .range(from, to)
+        if (error) throw new Error(error.message)
+        return (data ?? []) as Record<string, unknown>[]
+      })
+      const { data: batchRows } = await db
+        .from('pnl_period_answers')
+        .select('id, loc_codes, period_start, period_end, choice, actor_role, row_count, dollar_total, created_at, undone_at, policy_revoked_at')
+        .eq('account_id', accountId)
+        .eq('tax_year', taxYear)
+        .order('created_at', { ascending: false })
+      const activeAnswers = ((batchRows ?? []) as Array<Record<string, unknown>>).filter(b => !b.undone_at)
+      const { data: acctPolicies } = await db
+        .from('account_location_policies')
+        .select('loc_code')
+        .eq('account_id', accountId)
+        .eq('active', true)
+      const { resolveAccountResidenceIso } = await import('@/lib/tax/country-policy-sweep')
+      residence_country = await resolveAccountResidenceIso(accountId)
+      const { buildLocationCards } = await import('@/lib/tax/location-cards')
+      const built = buildLocationCards({
+        locatedRows: locatedRows.map(r => ({
+          id: String(r.id),
+          transaction_date: String(r.transaction_date ?? ''),
+          description: (r.description as string | null) ?? null,
+          counterparty: (r.counterparty as string | null) ?? null,
+          amount: Number(r.amount),
+          category: (r.category as string | null) ?? null,
+          notes: (r.notes as string | null) ?? null,
+          loc_code: (r.loc_code as string | null) ?? null,
+          loc_source: (r.loc_source as string | null) ?? null,
+        })),
+        periodAnswers: activeAnswers.map(b => ({
+          loc_codes: b.loc_codes as string[],
+          period_start: String(b.period_start),
+          period_end: String(b.period_end),
+          policy_revoked_at: (b.policy_revoked_at as string | null) ?? null,
+        })),
+        accountPolicyCodes: ((acctPolicies ?? []) as Array<{ loc_code: string }>).map(p => p.loc_code),
+        residenceCountry: residence_country,
+        taxYear,
+      })
+      periods = built.periods
+      country_cards = built.country_cards
+      period_answers = activeAnswers
+    } catch (e) {
+      console.error('[tax-financials] location cards failed (view unaffected):', e)
+    }
+
     // Self-healing AI chain state (Phase 3R): the client sees a neutral
     // text-only "still finishing automatically" note during backoff waits —
     // never a control (review cond.: a stopped client run must be VISIBLE).
@@ -219,6 +286,10 @@ export async function GET(request: NextRequest) {
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
       aiState,
       aiRemaining,
+      periods,
+      country_cards,
+      period_answers,
+      residence_country,
     })
   } catch (err) {
     console.error('[tax-financials] view failed:', err)

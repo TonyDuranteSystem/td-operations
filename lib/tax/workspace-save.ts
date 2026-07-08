@@ -104,7 +104,7 @@ export interface SaveToClientResult {
 }
 
 const WS_SAVE_COLUMNS =
-  "tax_year, transaction_date, description, category, subcategory, counterparty, amount, currency, balance_after, bank_name, account_type, transaction_ref, source_file_id, is_related_party, notes"
+  "tax_year, transaction_date, description, category, subcategory, counterparty, amount, currency, balance_after, bank_name, account_type, transaction_ref, source_file_id, is_related_party, notes, loc_code, loc_source, loc_confidence"
 
 interface WsSaveRow {
   tax_year: number
@@ -122,6 +122,9 @@ interface WsSaveRow {
   source_file_id: string | null
   is_related_party: boolean | null
   notes: string | null
+  loc_code: string | null
+  loc_source: string | null
+  loc_confidence: string | null
 }
 
 /** Every workspace transaction (paged), the columns needed to write to bank_transactions. */
@@ -222,6 +225,11 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
         source_file_id: tx.source_file_id,
         is_related_party: tx.is_related_party,
         notes: tx.notes,
+        // Phase B2: location stamps travel to the books so the client's
+        // country/period cards see what the workspace saw.
+        loc_code: tx.loc_code,
+        loc_source: tx.loc_source,
+        loc_confidence: tx.loc_confidence,
       } as never, { onConflict: "account_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
     if (!error) inserted++
   }

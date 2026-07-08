@@ -197,10 +197,10 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       stale = !!newest?.created_at && String(newest.created_at) > generatedAt
     }
 
-    // Location-period triage (Phase 2b, staff-only tool — the portal API never
-    // sends these). Residence anchor = the linked client's declared fiscal-
-    // residence country from the CRM; periods there are home life, never cards.
-    const { detectPresencePeriods } = await import('@/lib/tax/presence-periods')
+    // Location-period triage (Phase 2b; since Phase B2 the portal serves the
+    // same cards from the client's books). Residence anchor = the linked
+    // client's declared fiscal-residence country from the CRM; periods there
+    // are home life, never cards.
     const { residenceCountryToIso } = await import('@/lib/tax/merchant-locations')
     let residenceCountry: string | null = null
     let residenceOnFile = false
@@ -238,95 +238,44 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       .eq('workspace_id', workspaceId)
       .order('created_at', { ascending: false })
     const periodAnswers = ((batchRows ?? []) as Array<Record<string, unknown>>).filter(b => !b.undone_at)
-    // S2/F3: period DETECTION stays deterministic-only (AI-read places never
-    // create presence density); the FULL located set (incl. loc_source='ai')
-    // feeds the S3 country cards below.
-    const allPeriods = detectPresencePeriods(
-      locatedRows
-        .filter(r => (r.loc_source as string | null) === 'text' || (r.loc_source as string | null) === 'map')
-        .map(r => ({
-          id: String(r.id),
-          transaction_date: String(r.transaction_date ?? ''),
-          description: (r.description as string | null) ?? null,
-          counterparty: (r.counterparty as string | null) ?? null,
-          amount: Number(r.amount),
-          category: (r.category as string | null) ?? null,
-          notes: (r.notes as string | null) ?? null,
-          loc_code: (r.loc_code as string | null) ?? null,
-        })),
-      residenceCountry,
-    )
-    // A period already covered by an active (not-undone) batch is answered —
-    // no card; the attestation line renders from period_answers instead. A
-    // period with nothing sweepable left renders no card either.
-    const overlapDays = (aStart: string, aEnd: string, bStart: string, bEnd: string) => {
-      const s = Math.max(Date.parse(aStart), Date.parse(bStart))
-      const e = Math.min(Date.parse(aEnd), Date.parse(bEnd))
-      return e < s ? 0 : (e - s) / 86400000 + 1
-    }
-    const periods = allPeriods.filter(p => {
-      if (p.sweepable_count === 0) return false
-      const pDays = overlapDays(p.start, p.end, p.start, p.end)
-      return !periodAnswers.some(b =>
-        (b.loc_codes as string[]).includes(p.primary) &&
-        overlapDays(p.start, p.end, String(b.period_start), String(b.period_end)) / pDays >= 0.8)
-    })
-
-    // S3 — country-policy cards: one card per non-residence country with
-    // still-sweepable located spend (ANY source incl. 'ai'). Counts mirror the
-    // country-scope sweep predicate EXACTLY (amount<0, sweepable category,
-    // not hand-answered) — they feed the confirm modal's expected_* guard.
-    // A country covered by an ACTIVE full-year answer (the stored policy)
-    // shows no card.
-    const { PERIOD_SWEEPABLE_CATEGORIES } = await import('@/lib/tax/presence-periods')
-    const { rowRootKey } = await import('@/lib/tax/row-root')
+    // Builder extracted to lib/tax/location-cards.ts (Phase B2, 2026-07-08) so
+    // the portal GET serves the same cards from the client's books — semantics
+    // unchanged (S2/F3 deterministic-only detection, S3 sweep-predicate counts,
+    // S4 policy/revoke coverage). This caller still loads workspace rows +
+    // workspace answers + the linked account's standing policies.
     const wsYear = Number((await db.from('pnl_workspaces').select('tax_year').eq('id', workspaceId).maybeSingle()).data?.tax_year)
-    const yearStart = `${wsYear}-01-01`, yearEnd = `${wsYear}-12-31`
-    const sweepableSet = new Set<string>(PERIOD_SWEEPABLE_CATEGORIES as readonly string[])
-    const coveredCountries = new Set<string>()
-    for (const b of periodAnswers) {
-      // S4: a REVOKED full-year answer is still booked (its attestation line
-      // stays) but no longer a standing policy — its country card returns.
-      if (b.policy_revoked_at) continue
-      if (String(b.period_start) <= yearStart && String(b.period_end) >= yearEnd) {
-        for (const c of (b.loc_codes as string[])) coveredCountries.add(c)
-      }
-    }
-    // S4: the linked account's standing policies also cover their countries —
-    // no card flashes between Generate and the chain-end auto-sweep for a
-    // country the sweep is about to book anyway.
+    const accountPolicyCodes: string[] = []
     if (wsRow?.linked_account_id) {
       const { data: acctPolicies } = await db
         .from('account_location_policies')
         .select('loc_code')
         .eq('account_id', wsRow.linked_account_id)
         .eq('active', true)
-      for (const p of (acctPolicies ?? []) as Array<{ loc_code: string }>) coveredCountries.add(p.loc_code)
+      for (const p of (acctPolicies ?? []) as Array<{ loc_code: string }>) accountPolicyCodes.push(p.loc_code)
     }
-    const byCountry = new Map<string, { count: number; total: number; merchants: Map<string, number>; keys: Set<string> }>()
-    for (const r of locatedRows) {
-      const code = (r.loc_code as string | null) ?? ''
-      if (!code || code === residenceCountry || coveredCountries.has(code)) continue
-      const amt = Number(r.amount)
-      const notes = (r.notes as string | null) ?? null
-      if (amt >= 0 || !sweepableSet.has(String(r.category)) || (notes !== null && notes.startsWith('manual:'))) continue
-      const e = byCountry.get(code) ?? { count: 0, total: 0, merchants: new Map(), keys: new Set() }
-      e.count++
-      e.total += Math.abs(amt)
-      const root = rowRootKey((r.description as string | null) ?? '', (r.counterparty as string | null) ?? null)
-      e.merchants.set(root.label, (e.merchants.get(root.label) ?? 0) + 1)
-      e.keys.add(root.key)
-      byCountry.set(code, e)
-    }
-    const country_cards = Array.from(byCountry.entries())
-      .map(([loc_code, e]) => ({
-        loc_code,
-        count: e.count,
-        total: Math.round(e.total * 100) / 100,
-        merchants: Array.from(e.merchants.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([m]) => m),
-        keys: Array.from(e.keys),
-      }))
-      .sort((a, b) => b.count - a.count)
+    const { buildLocationCards } = await import('@/lib/tax/location-cards')
+    const { periods, country_cards } = buildLocationCards({
+      locatedRows: locatedRows.map(r => ({
+        id: String(r.id),
+        transaction_date: String(r.transaction_date ?? ''),
+        description: (r.description as string | null) ?? null,
+        counterparty: (r.counterparty as string | null) ?? null,
+        amount: Number(r.amount),
+        category: (r.category as string | null) ?? null,
+        notes: (r.notes as string | null) ?? null,
+        loc_code: (r.loc_code as string | null) ?? null,
+        loc_source: (r.loc_source as string | null) ?? null,
+      })),
+      periodAnswers: periodAnswers.map(b => ({
+        loc_codes: b.loc_codes as string[],
+        period_start: String(b.period_start),
+        period_end: String(b.period_end),
+        policy_revoked_at: (b.policy_revoked_at as string | null) ?? null,
+      })),
+      accountPolicyCodes,
+      residenceCountry,
+      taxYear: wsYear,
+    })
 
     return NextResponse.json({
       ...view,

@@ -385,6 +385,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear,
           loc_codes: p.loc_codes, period_start: p.start, period_end: p.end, choice,
           expected_row_count: p.sweepable_count, expected_dollar_total: p.sweepable_total,
         }),
@@ -519,6 +520,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          account_id: accountId, tax_year: taxYear,
           scope: 'country', loc_codes: [card.loc_code], choice,
           expected_row_count: card.count, expected_dollar_total: card.total,
         }),
@@ -546,7 +548,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       const res = await fetch(`${API}/period-answer/undo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_id: batchId }),
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, batch_id: batchId }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -1485,19 +1487,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               Interrogative copy + top merchants so a wrong detection is
               falsifiable at a glance; answers apply ONLY from the confirm
               dialog and are fully undoable (exact prior-state restore). */}
-          {isStaff && ((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
+          {/* Phase B2 (2026-07-08): visible to the CLIENT too — the portal GET
+              now serves the same cards from the books. Staff-only wording
+              (CRM references, third-person "the client") is mode-switched. */}
+          {((view.periods?.length ?? 0) > 0 || (view.period_answers?.length ?? 0) > 0 || (view.country_cards?.length ?? 0) > 0) && (
             <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
               <h3 className="text-sm font-bold text-indigo-900 mb-1">
                 🌍 {it ? 'Periodi fuori sede rilevati' : 'Time away from home base detected'}
               </h3>
               <p className="text-xs text-zinc-600 mb-3">
-                {view.residence_on_file
+                {view.residence_on_file || (!isStaff && view.residence_country)
                   ? (it
                     ? `Residenza fiscale registrata: ${locLabel(view.residence_country ?? '', it)}. Le spese fatte lì restano nella revisione normale; per i periodi all'estero basta UNA risposta.`
                     : `Fiscal residence on file: ${locLabel(view.residence_country ?? '', it)}. Spending there stays in the normal review; each period away needs just ONE answer.`)
-                  : (it
-                    ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
-                    : 'No fiscal residence on file in the CRM for this client — showing every detected period.')}
+                  : isStaff
+                    ? (it
+                      ? 'Nessuna residenza fiscale registrata nel CRM per questo cliente — mostriamo tutti i periodi rilevati.'
+                      : 'No fiscal residence on file in the CRM for this client — showing every detected period.')
+                    : (it
+                      ? 'Abbiamo rilevato spese localizzate in questi paesi — una risposta registra tutto il periodo.'
+                      : 'We detected spending located in these countries — one answer books the whole period.')}
               </p>
               {periodError && (
                 <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
@@ -1597,8 +1606,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       ✓ {b.actor_role === 'system'
                         ? (it ? 'Registrato automaticamente secondo la regola fissa del paese' : 'Booked automatically under the standing country policy')
                         : b.actor_role === 'client'
-                          ? (it ? 'Il cliente ha attestato' : 'Client attested')
-                          : (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')}
+                          ? (isStaff
+                            ? (it ? 'Il cliente ha attestato' : 'Client attested')
+                            : (it ? 'Hai risposto tu' : 'You answered'))
+                          : isStaff
+                            ? (it ? 'Registrato dallo staff su indicazione del cliente' : 'Staff booked on client\'s instruction')
+                            : (it ? 'Registrato dal nostro team' : 'Booked by our team')}
                       {': '}
                       <strong className="text-zinc-800">{b.loc_codes.map(c => locLabel(c, it)).join(' / ')} {fmtDay(b.period_start, it)} – {fmtDay(b.period_end, it)} = {b.choice === 'business' ? (it ? 'aziendale' : 'business') : (it ? 'personale' : 'personal')}</strong>
                       {` (${b.row_count} ${it ? 'righe' : 'rows'}, $${fmt(b.dollar_total)})`}
@@ -1609,13 +1622,22 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                           {it ? 'Annullare ferma anche la regola fissa' : 'Undo also stops the standing policy'}
                         </span>
                       )}
-                      <button
-                        disabled={busy !== null}
-                        onClick={() => void undoPeriodAnswer(b.id)}
-                        className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
-                      >
-                        {it ? 'Annulla' : 'Undo'}
-                      </button>
+                      {/* Clients can revert only their OWN answers (the server
+                          enforces the same rule) — staff/system batches show a
+                          "message us" hint instead of a dead button. */}
+                      {(isStaff || b.actor_role === 'client') ? (
+                        <button
+                          disabled={busy !== null}
+                          onClick={() => void undoPeriodAnswer(b.id)}
+                          className="rounded-full border border-zinc-300 bg-white px-2.5 py-1 font-medium text-zinc-600 hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+                        >
+                          {it ? 'Annulla' : 'Undo'}
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-zinc-400">
+                          {it ? 'Scrivici in chat per modificarla' : 'Message us to change it'}
+                        </span>
+                      )}
                     </span>
                   </div>
                 ))}

@@ -295,7 +295,7 @@ export async function recategorizeAccountYear(
   const rows = await fetchAllBankTransactionsByYear<CategorizableRow>(
     accountId,
     taxYear,
-    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket",
+    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
   )
   if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 
@@ -455,6 +455,33 @@ export async function recategorizeAccountYear(
   }
 
   const uncategorizedRemaining = Array.from(effCat.values()).filter(c => c === "uncategorized").length
+
+  // Location labeling (Phase B2, 2026-07-08 — books twin of the workspace
+  // block in workspace-recategorize.ts): deterministic-only stamping so the
+  // client's country/period cards see locations on rows that never passed
+  // through a workspace (wizard-ingested books). Same rules as the workspace:
+  // idempotent pure extractors; a fresh deterministic hit outranks and
+  // overwrites an 'ai' stamp (carried over by Save-to-client); a no-hit must
+  // never CLEAR an 'ai' stamp (the extractors are blind to language/city
+  // tokens the AI read). AI-place itself stays workspace-only.
+  const { inferLocation } = await import("./merchant-locations")
+  for (const r of rows) {
+    const hit = inferLocation({
+      description: (r.description as string | null) ?? null,
+      counterparty: (r.counterparty as string | null) ?? null,
+      amount: Number(r.amount),
+      category: (effCat.get(r.id as string) as string | null) ?? (r.category as string | null),
+    })
+    const cur = r as unknown as { loc_code: string | null; loc_source: string | null; loc_confidence: string | null }
+    if (!hit && cur.loc_source === "ai") continue
+    const next = hit ?? { loc_code: null, loc_source: null, loc_confidence: null }
+    if (cur.loc_code === next.loc_code && cur.loc_source === next.loc_source && cur.loc_confidence === next.loc_confidence) continue
+    const { error: locErr } = await supabaseAdmin
+      .from("bank_transactions")
+      .update(next as never)
+      .eq("id", r.id as string)
+    if (locErr) throw new Error(`Failed to stamp location on transaction ${r.id}: ${locErr.message}`)
+  }
 
   return { scanned: rows.length, recategorized, transferPairs, aiCategorized, aiErrors, uncategorizedRemaining, aiStats, ...(aiNoCandidates ? { aiNoCandidates } : {}) }
 }
