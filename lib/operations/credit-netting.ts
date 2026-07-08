@@ -5,6 +5,7 @@ import {
   isCreditLine,
   sumLineAmounts,
 } from "@/lib/portal/invoice-regenerate"
+import { syncTDInvoiceMirror } from "@/lib/portal/td-invoice-mirror"
 
 export interface CreditApplication {
   appliedTotal: number
@@ -192,13 +193,10 @@ export async function reconcileAccountCredits(accountId: string, supabase: Supab
       amount_paid: newPaid,
       ...(settled ? { status: "Paid", invoice_status: "Paid", paid_date: new Date().toISOString().split("T")[0] } : {}),
     }).eq("id", invId)
-    // Mirror onto client_expenses (portal-visible balance).
-    // eslint-disable-next-line no-restricted-syntax -- portal expense mirror balance update; consistency with the invoice row above.
-    await supabase.from("client_expenses").update({
-      amount_due: newDue,
-      amount_paid: newPaid,
-      ...(settled ? { status: "Paid", paid_date: new Date().toISOString().split("T")[0] } : {}),
-    }).eq("td_payment_id", invId)
+    // Project the client mirror from the updated payments row via the single
+    // authoritative sync — same path as applyAvailableCreditToInvoice, so this
+    // (retained) path can't drift the mirror either.
+    await syncTDInvoiceMirror(invId, supabase)
   }
 
   // Decrement each credit's remaining + stamp the last invoice it offset.
@@ -301,12 +299,12 @@ export async function applyAvailableCreditToInvoice(
     ...(calc.settled ? { status: "Paid", invoice_status: "Paid" } : {}),
   }).eq("id", paymentId)
 
-  // eslint-disable-next-line no-restricted-syntax -- client_expenses mirror balance update, consistent with the invoice row above.
-  await supabase.from("client_expenses").update({
-    total: calc.newTotal,
-    amount_due: calc.newDue,
-    ...(calc.settled ? { status: "Paid" } : {}),
-  }).eq("td_payment_id", paymentId)
+  // Project the client-facing mirror from the (now-updated) payments row via the
+  // single authoritative sync — NOT a hand-rolled partial update. The old
+  // per-column update here could silently miss (Giuseppe INV-002233 drift:
+  // payment → $700, mirror stuck at $1,150). syncTDInvoiceMirror rebuilds the
+  // full financial state, so the client always sees the reduced balance.
+  await syncTDInvoiceMirror(paymentId, supabase)
 
   if (application.appliedTotal > 0 && calc.newApply > 0) {
     await consumeCredits(application, paymentId, supabase)

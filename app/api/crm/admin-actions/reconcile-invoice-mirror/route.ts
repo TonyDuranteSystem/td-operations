@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
     before: result.before,
     after: result.after,
     message: result.changed
-      ? `Mirror reconciled. Status: ${result.before?.ce_status} → ${result.after?.ce_status}.`
+      ? `Mirror reconciled. Balance: ${result.before?.amount_due ?? '—'} → ${result.after?.amount_due ?? '—'}, status ${result.before?.status ?? '—'} → ${result.after?.status ?? '—'}.`
       : "No drift — mirror already matches internal record.",
   })
 }

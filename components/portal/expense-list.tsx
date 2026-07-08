@@ -176,21 +176,37 @@ export function ExpenseList({
                 </div>
                 <span className="text-zinc-600 text-xs truncate">{exp.invoice_number || exp.internal_ref || '—'}</span>
                 <span className="text-right font-medium">
-                  {exp.currency === 'EUR' ? '\u20AC' : '$'}
-                  {Number(exp.amount_due ?? exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  {exp.amount_due != null && exp.amount_due < exp.total && (
-                    <span className="ml-1 text-[10px] font-normal text-zinc-400 line-through">
-                      {exp.currency === 'EUR' ? '\u20AC' : '$'}{Number(exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {Number(exp.total) < 0 ? (
+                    // Credit note (negative total): a credit TO the client, not a $0 bill.
+                    <span className="text-emerald-600">
+                      {'\u2212'}{exp.currency === 'EUR' ? '\u20AC' : '$'}
+                      {Math.abs(Number(exp.total)).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </span>
+                  ) : (
+                    <>
+                      {exp.currency === 'EUR' ? '\u20AC' : '$'}
+                      {Number(exp.amount_due ?? exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      {exp.amount_due != null && exp.amount_due < exp.total && (
+                        <span className="ml-1 text-[10px] font-normal text-zinc-400 line-through">
+                          {exp.currency === 'EUR' ? '\u20AC' : '$'}{Number(exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </span>
+                      )}
+                    </>
                   )}
                 </span>
                 <span className="text-xs text-zinc-500">
                   {fmtDate(exp.issue_date)}
                 </span>
                 <span>
-                  <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[exp.status] ?? 'bg-zinc-100')}>
-                    {exp.status}
-                  </span>
+                  {Number(exp.total) < 0 ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                      {isIt ? 'Credito' : 'Credit'}
+                    </span>
+                  ) : (
+                    <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[exp.status] ?? 'bg-zinc-100')}>
+                      {exp.status}
+                    </span>
+                  )}
                 </span>
                 <span>
                   <span className={cn('inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border', src.className)}>

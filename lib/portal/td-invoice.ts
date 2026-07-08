@@ -12,6 +12,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
+import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
@@ -478,17 +479,18 @@ export interface ReconcileTDMirrorResult {
   success: boolean
   payment_id: string
   changed: boolean
-  before?: { ce_status: string | null; ce_paid_date: string | null }
-  after?: { ce_status: string | null; ce_paid_date: string | null }
+  before?: Record<string, string | number | null>
+  after?: Record<string, string | number | null>
   error?: string
 }
 
 /**
  * Force the `client_expenses` mirror row to match the current `payments`
- * row for a given payment. Source of truth is `payments`. Used by:
+ * row for a given payment. Source of truth is `payments`. Now syncs the FULL
+ * financial state (amounts + status) via `syncTDInvoiceMirror`, not just status.
+ * Used by:
  *   - the CRM "Sync Mirror" admin button (manual repair for one invoice)
- *   - the one-time backfill for the 6 Pattern A stuck invoices
- *   - future reconciliation cron (not yet built)
+ *   - the reconciliation sweep (scripts/reconcile-td-mirror-drift.ts)
  *
  * Idempotent — re-running is safe if state already matches.
  */
@@ -497,53 +499,14 @@ export async function reconcileTDInvoiceMirror(
 ): Promise<ReconcileTDMirrorResult> {
   const { data: payment, error: payErr } = await supabaseAdmin
     .from('payments')
-    .select('id, status, paid_date, amount_paid')
+    .select('id')
     .eq('id', paymentId)
     .single()
 
   if (payErr || !payment) {
-    return {
-      success: false,
-      payment_id: paymentId,
-      changed: false,
-      error: `Payment not found: ${payErr?.message || 'unknown'}`,
-    }
+    return { success: false, payment_id: paymentId, changed: false, error: `Payment not found: ${payErr?.message || 'unknown'}` }
   }
 
-  const { data: beforeExpense } = await supabaseAdmin
-    .from('client_expenses')
-    .select('status, paid_date')
-    .eq('td_payment_id', paymentId)
-    .maybeSingle()
-
-  await syncTDInvoiceStatus(
-    paymentId,
-    (payment.status as string | null) ?? 'Pending',
-    payment.paid_date as string | undefined,
-    payment.amount_paid as number | undefined,
-  )
-
-  const { data: afterExpense } = await supabaseAdmin
-    .from('client_expenses')
-    .select('status, paid_date')
-    .eq('td_payment_id', paymentId)
-    .maybeSingle()
-
-  const changed =
-    (beforeExpense?.status ?? null) !== (afterExpense?.status ?? null) ||
-    (beforeExpense?.paid_date ?? null) !== (afterExpense?.paid_date ?? null)
-
-  return {
-    success: true,
-    payment_id: paymentId,
-    changed,
-    before: {
-      ce_status: beforeExpense?.status ?? null,
-      ce_paid_date: beforeExpense?.paid_date ?? null,
-    },
-    after: {
-      ce_status: afterExpense?.status ?? null,
-      ce_paid_date: afterExpense?.paid_date ?? null,
-    },
-  }
+  const { changed, before, after } = await syncTDInvoiceMirror(paymentId)
+  return { success: true, payment_id: paymentId, changed, before, after }
 }
