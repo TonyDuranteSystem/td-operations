@@ -61,6 +61,7 @@ export default function TeamWorkspacePage() {
   const [uploading, setUploading] = useState(false)
   const [showEmoji, setShowEmoji] = useState(false)
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
+  const [commandQuery, setCommandQuery] = useState<string | null>(null)
   const [showNewChannel, setShowNewChannel] = useState(false)
   const [showNewDm, setShowNewDm] = useState(false)
   const [showNewConversation, setShowNewConversation] = useState(false)
@@ -241,7 +242,7 @@ export default function TeamWorkspacePage() {
     return () => document.removeEventListener('mousedown', h)
   }, [])
 
-  // Detect @mention typing for autocomplete
+  // Detect @mention and /command typing for autocomplete
   const onTextChange = (val: string) => {
     setText(val)
     const el = inputRef.current
@@ -249,6 +250,27 @@ export default function TeamWorkspacePage() {
     const upto = val.slice(0, caret)
     const m = upto.match(/(?:^|\s)@([a-zA-Z0-9._-]*)$/)
     setMentionQuery(m ? m[1].toLowerCase() : null)
+    // Slash-command menu: only when the whole message starts with "/"
+    const c = val.match(/^\/([a-zA-Z]*)$/)
+    setCommandQuery(c ? c[1].toLowerCase() : null)
+  }
+
+  const SLASH_COMMANDS = useMemo(() => [
+    { key: 'client', label: 'New conversation', hint: 'client + topic discussion', run: () => setShowNewConversation(true) },
+    { key: 'channel', label: 'New channel', hint: 'create a channel folder', run: () => setShowNewChannel(true) },
+    { key: 'dm', label: 'New direct message', hint: 'message a teammate', run: () => setShowNewDm(true) },
+    { key: 'board', label: 'Open board', hint: 'kanban view of all threads', run: () => setView('board') },
+  ], [])
+
+  const commandCandidates = useMemo(() => {
+    if (commandQuery === null) return []
+    return SLASH_COMMANDS.filter(c => c.key.startsWith(commandQuery) || c.label.toLowerCase().includes(commandQuery))
+  }, [commandQuery, SLASH_COMMANDS])
+
+  const runCommand = (cmd: { run: () => void }) => {
+    setText('')
+    setCommandQuery(null)
+    cmd.run()
   }
 
   const mentionCandidates = useMemo(() => {
@@ -690,6 +712,18 @@ export default function TeamWorkspacePage() {
 
             {/* Composer */}
             <div className="shrink-0 px-4 py-3 border-t border-zinc-200 bg-white relative">
+              {/* Slash-command menu — type "/" to see it */}
+              {commandCandidates.length > 0 && (
+                <div className="absolute bottom-full left-4 mb-1 w-72 bg-white border border-zinc-200 rounded-lg shadow-lg overflow-hidden z-30">
+                  {commandCandidates.map((c, i) => (
+                    <button key={c.key} onClick={() => runCommand(c)} className={cn('w-full flex items-center justify-between px-3 py-2 text-left hover:bg-zinc-100', i === 0 && 'bg-zinc-50')}>
+                      <span className="text-sm text-zinc-800">{c.label}</span>
+                      <span className="text-[10px] text-zinc-400">/{c.key} — {c.hint}</span>
+                    </button>
+                  ))}
+                  <p className="px-3 py-1 text-[10px] text-zinc-400 border-t border-zinc-100">Enter runs the first · Esc dismisses</p>
+                </div>
+              )}
               {/* Mention autocomplete */}
               {mentionQuery !== null && mentionCandidates.length > 0 && (
                 <div className="absolute bottom-full left-4 mb-1 w-64 bg-white border border-zinc-200 rounded-lg shadow-lg overflow-hidden z-30">
@@ -717,8 +751,14 @@ export default function TeamWorkspacePage() {
                   </button>
                   <input ref={fileRef} type="file" multiple onChange={e => { setPendingFiles(p => [...p, ...Array.from(e.target.files ?? [])].slice(0, 5)); e.target.value = '' }} className="hidden" />
                   <textarea ref={inputRef} value={text} onChange={e => onTextChange(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && mentionQuery === null) { e.preventDefault(); handleSend() } }}
-                    placeholder={editing ? 'Edit message…' : isRecording ? 'Recording…' : `Message ${selected.thread_type === 'channel' ? '#' + (selected.channel_slug ?? '') : selected.thread_type === 'dm' ? dmLabel(selected) : selected.label}… (@ to mention, @claude for AI)`}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        if (commandCandidates.length > 0) { e.preventDefault(); runCommand(commandCandidates[0]); return }
+                        if (mentionQuery === null) { e.preventDefault(); handleSend() }
+                      }
+                      if (e.key === 'Escape' && commandQuery !== null) setCommandQuery(null)
+                    }}
+                    placeholder={editing ? 'Edit message…' : isRecording ? 'Recording…' : `Message ${selected.thread_type === 'channel' ? '#' + (selected.channel_slug ?? '') : selected.thread_type === 'dm' ? dmLabel(selected) : selected.label}… (@ to mention · @claude for AI · / for commands)`}
                     rows={1} className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none resize-none max-h-[240px] placeholder:text-zinc-400" />
                 </div>
                 {sending || uploading ? (
