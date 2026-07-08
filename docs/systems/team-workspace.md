@@ -46,6 +46,16 @@ A human `@claude` mention → `triggerClaudeReply` inserts a placeholder message
 ## Pure helpers (`lib/team/workspace.ts`, unit-tested)
 `parseMentionHandles` (ignores emails), `mentionsClaude`, `dmKey`, `channelSlug`, `validateHexColor`, `validateTeamCard`, `TEAM_COLORS`, `CLAUDE_SENDER_UUID`/`CLAUDE_SENDER_NAME`/`CLAUDE_MENTION_ID`. `lib/team/directory.ts` = staff directory + `resolveMentions` (handle→user id). `lib/team/attachment.ts` = client-side signed-URL upload (reuses `validateChatAttachment` so team + client chat share size/type policy).
 
+## Slack channel mirror (read-only feed — ships DORMANT)
+A read-only view of the Slack channels the bot is in, inside the workspace, so the team can watch Slack from the CRM during the parallel-run before Slack is decommissioned. Gated on the `slack_mirror_enabled` app_setting (default **false** — dormant; prod has no row → off).
+- **Tables:** `slack_channels` (id/name/is_member/last_message_at…) + `slack_messages` (`(channel_id, ts)` PK, thread_ts, author, text, subtype, deleted, posted_at, raw). Staff-only RLS. Migration `20260708-0300`.
+- **Two feeds into the mirror:** (1) LIVE — the production Slack webhook (`app/api/webhooks/slack-claude/route.ts`) calls `ingestSlackMessageEvent(event)` for every channel `message` event, ADDITIVELY before the worker routing (worker behaviour unchanged; best-effort; no-op when the flag is off). (2) BACKFILL — `POST /api/team/slack/sync` runs `syncSlackChannels()` (conversations.list) + `backfillChannelHistory()` (conversations.history) — internal app is exempt from the 2025 Slack rate limits.
+- **Module:** `lib/team/slack-mirror.ts` (server) + pure `lib/team/slack-mirror-classify.ts` (`classifySlackEvent` handles new/edit(message_changed)/delete(message_deleted); `resolveSlackMentions`; `KNOWN_SLACK_USERS`). Idempotent upsert on `(channel_id, ts)` for Slack retries.
+- **Read APIs:** `GET /api/team/slack/channels`, `GET /api/team/slack/channels/[id]/messages` (Open-in-Slack via `buildSlackThreadDeepLink`), `POST /api/team/slack/sync`. All staff-only + kill-switch-gated.
+- **UI:** a "Slack" sidebar section (only when enabled) → click a channel → read-only feed with per-message + channel "Open in Slack"; footer "reply in Slack" (no CRM→Slack posting in this slice).
+- **Scope note:** the app has `channels:read` + `channels:history`. Human display names use a 3-person `KNOWN_SLACK_USERS` stopgap; full name resolution for everyone needs the `users:read` scope + a users.info cache in the sync. Private channels need `groups:read`/`groups:history` + `message.groups`. CRM→Slack posting needs `chat:write.customize`.
+- **Verified in sandbox** (2026-07-08): synced 11 real channels + 183 messages via local bot token; feed renders real #td-dev history with names + mentions resolved + working deep links. Live event flow is **prod-only** (webhook is the prod URL) — verify after switch-on there.
+
 ## Business rules / invariants
 - **Staff-only, never client-visible.** All routes gate on `isDashboardUser`; RLS is staff-only.
 - **Unread is per-user** via `internal_thread_reads`. Do NOT reintroduce logic based on the single `read_at` column for unread (it made counts always 0 — the pre-Phase-1 bug, because sends stamped `read_at=now()`).

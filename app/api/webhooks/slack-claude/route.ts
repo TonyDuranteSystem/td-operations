@@ -327,6 +327,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, saved: true })
   }
 
+  // ── Slack channel mirror (Team Workspace) — ADDITIVE, gated on the
+  //    'slack_mirror_enabled' kill-switch. Captures every channel `message`
+  //    event into slack_messages so the workspace can show a read-only Slack
+  //    feed. Best-effort and a no-op when the mirror is off; it NEVER changes
+  //    the worker routing below (falls through untouched).
+  try {
+    const { ingestSlackMessageEvent } = await import("@/lib/team/slack-mirror")
+    await ingestSlackMessageEvent(event)
+  } catch {
+    // non-fatal — the mirror must never break the worker ack
+  }
+
   // Accept two kinds of events:
   //  1. app_mention — Antonio @mentions Claude (any channel, any context)
   //  2. message in a thread — a follow-up reply in a thread Claude already

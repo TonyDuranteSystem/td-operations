@@ -25,6 +25,7 @@ export type AppSettingKey =
   | "portal_digest_type_labels" // object — per-notification-type display overrides for the digest email, merged over code defaults in lib/portal/digest-render.ts. Shape: { "<type>": { icon?: string, label_en?: string, label_it?: string, show_body?: boolean } }. Lets ops rename sections / toggle item detail lines without a deploy.
   | "td_communication_settings" // object — TD Communication admin panel system settings. Shape: { enabled: boolean (portal tab visibility), disclaimer_en/it: string, default_sla_days: number }. Read/written via lib/td-communication/comm-settings.ts; edited in the CRM TD Communication → Settings tab.
   | "td_communication_landing" // object — TD Communication landing page content (Phase 9). Shape: TdCommLandingState { draft, published: LandingContent, published_at/by, updated_at/by }. Two snapshots (draft/published); Publish promotes draft→published. Read/written via lib/td-communication/landing.ts; edited in the CRM TD Communication → Landing Page tab AND /collab.
+  | "slack_mirror_enabled" // boolean — when true, the Team Workspace mirrors Slack channels the bot is in (webhook ingest + conversations.history backfill) into slack_channels/slack_messages and shows a read-only "Slack" section with Open-in-Slack links. Default FALSE (dormant). Consumed in lib/team/slack-mirror.ts + the workspace UI. Toggle when ready to run Slack alongside the CRM.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,
@@ -63,6 +64,14 @@ export async function isTaxSeasonPaused(): Promise<boolean> {
 export async function isPortalAdminEmailEnabled(): Promise<boolean> {
   const v = await getAppSetting<boolean>("portal_admin_email_on_client_message", true)
   return v !== false
+}
+
+/** Whether the Team Workspace Slack mirror is on. Default false (dormant) so it
+ *  ships without touching Slack until ops flips it on. Gates both the webhook
+ *  ingest and the workspace "Slack" section. */
+export async function isSlackMirrorEnabled(): Promise<boolean> {
+  const v = await getAppSetting<boolean>("slack_mirror_enabled", false)
+  return v === true
 }
 
 /** Minimum agreement_year for the portal renewal-MSA banner to render.

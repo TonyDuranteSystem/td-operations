@@ -10,6 +10,8 @@
 
 Always-on Claude presence in Slack. When Antonio writes `@Claude` in any Slack channel or thread, Claude responds conversationally — discuss, investigate, propose — without requiring an open Claude Code session.
 
+> **Note — Team Workspace Slack mirror (2026-07-08):** the webhook (`app/api/webhooks/slack-claude/route.ts`) now also calls `ingestSlackMessageEvent(event)` (from `lib/team/slack-mirror.ts`) for every channel `message` event, ADDITIVELY before the worker routing — it upserts the message into the `slack_messages` mirror so the CRM Team Workspace can show a read-only Slack feed. Best-effort, wrapped in try/catch, and a **no-op** unless the `slack_mirror_enabled` app_setting is on (default off). It never changes the `@Claude` worker behaviour below. Full detail: `docs/systems/team-workspace.md` → "Slack channel mirror".
+
 **Key behaviors:**
 - Immediate "On it 👍" ACK within 1–2 s (Slack's 3-second requirement met every time)
 - AI reply 8–15 s later via the worker cron — the worker **posts the answer as a NEW message** (`chat.postMessage`) in the thread, then collapses the "On it 👍" ack to a minimal "✅" (`chat.update`, `blocks: []` to drop the Stop button). A fresh post is what triggers a Slack **push notification** so Antonio knows on his phone that Claude finished — `chat.update` is an edit and Slack does not notify on edits (which is why the old in-place "morph" left him with no signal). Order is post-first: if the fresh post fails (channel error), the worker falls back to morphing the ack into the answer so the reply is never lost.
