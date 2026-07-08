@@ -80,14 +80,16 @@ export async function GET(req: NextRequest) {
       .select("thread_id, mailbox")
       .eq("mailbox", "support")
     if (accountId) {
-      const contactList = contactIds.map((id) => `"${id}"`).join(",")
+      // UUIDs unquoted — quoting inside or/in.() breaks PostgREST parsing
+      // (QA 2026-07-08: the error was silently swallowed and links vanished)
       linkQuery = contactIds.length > 0
-        ? linkQuery.or(`account_id.eq.${accountId},contact_id.in.(${contactList})`)
+        ? linkQuery.or(`account_id.eq.${accountId},contact_id.in.(${contactIds.join(",")})`)
         : linkQuery.eq("account_id", accountId)
     } else {
       linkQuery = linkQuery.eq("contact_id", contactId)
     }
-    const { data: linkRows } = await linkQuery.limit(100)
+    const { data: linkRows, error: linkErr } = await linkQuery.limit(100)
+    if (linkErr) console.error("client-emails link query failed:", linkErr.message)
     const linkedIds = new Set<string>(
       ((linkRows ?? []) as Array<{ thread_id: string }>).map((l) => l.thread_id)
     )
