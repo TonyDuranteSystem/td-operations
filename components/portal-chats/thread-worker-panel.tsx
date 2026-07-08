@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Loader2, Send } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 
 interface ChatMsg {
   role: 'user' | 'worker'
@@ -45,11 +46,27 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
     return () => clearInterval(t)
   }, [pending])
 
-  // New client selected → fresh panel state (the worker's own per-client
-  // memory persists server-side regardless)
+  // New client selected → restore that client's recorded conversation
+  // (per-client persistent memory, like opening a Slack thread)
   useEffect(() => {
     setMessages([])
     sentContextRef.current = false
+    if (!clientKey) return
+    let alive = true
+    fetch(`/api/inbox/worker-chat?clientKey=${encodeURIComponent(clientKey)}`)
+      .then(r => r.json())
+      .then((data: { turns?: Array<{ user: string; worker: string | null }> }) => {
+        if (!alive || !data.turns?.length) return
+        const restored: ChatMsg[] = []
+        for (const t of data.turns) {
+          restored.push({ role: 'user', text: t.user })
+          if (t.worker) restored.push({ role: 'worker', text: t.worker })
+        }
+        setMessages(restored)
+        sentContextRef.current = true
+      })
+      .catch(() => {})
+    return () => { alive = false }
   }, [clientKey])
 
   const send = async () => {
@@ -119,13 +136,13 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
           <div key={i} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
             <div
               className={cn(
-                'max-w-[90%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap break-words',
+                'max-w-[90%] rounded-2xl px-3.5 py-2 text-sm break-words',
                 m.role === 'user'
-                  ? 'bg-violet-600 text-white rounded-br-md'
+                  ? 'bg-violet-600 text-white rounded-br-md whitespace-pre-wrap'
                   : 'bg-zinc-100 text-zinc-900 rounded-bl-md'
               )}
             >
-              {m.text}
+              {m.role === 'worker' ? <WorkerMarkdown text={m.text} /> : m.text}
             </div>
           </div>
         ))}
@@ -146,8 +163,8 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
             }}
             placeholder={`Ask the worker about ${clientName}…`}
-            rows={1}
-            className="flex-1 resize-none rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 max-h-28"
+            rows={4}
+            className="flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 min-h-[96px] max-h-64"
           />
           <button
             onClick={send}

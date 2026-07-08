@@ -12,7 +12,23 @@
  * structurally.
  */
 
+import { createHash } from "crypto"
 import { SLACK_WORKER_SYSTEM_PROMPT } from "@/lib/ai-agent/slack-claude"
+
+/**
+ * agent_messages.thread_id is a UUID column (Slack derives random UUIDs and
+ * maps scopes via context_json). The CRM worker wants PERMANENT per-scope
+ * threads (same email/client → same thread forever), so we derive a
+ * DETERMINISTIC UUID from the scope string: sha256 → 16 bytes → RFC-4122
+ * v4-shaped (version/variant bits set). Pure and unit-testable.
+ */
+export function deterministicThreadUuid(scope: string): string {
+  const bytes = createHash("sha256").update(scope).digest().subarray(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40 // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // RFC 4122 variant
+  const hex = bytes.toString("hex")
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
 
 export interface InboxEmailContext {
   subject?: string
@@ -56,6 +72,14 @@ export function buildWorkerSurfacePrompt(surface: WorkerSurface): string {
 /** Back-compat alias (inbox surface). */
 export function buildInboxWorkerSystemPrompt(): string {
   return buildWorkerSurfacePrompt("inbox")
+}
+
+/** Display form of a stored turn: the raw user message, not the context blob. */
+export function displayUserMessage(body: string, contextJson: unknown): string {
+  const fromCtx = (contextJson as { user_message?: string } | null)?.user_message
+  if (fromCtx) return fromCtx
+  const marker = body.lastIndexOf("Staff member: ")
+  return marker >= 0 ? body.slice(marker + "Staff member: ".length) : body
 }
 
 /** First-turn user body for the portal-chats Worker tab. */

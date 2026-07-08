@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Loader2, Send, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import type { InboxConversation } from '@/lib/types'
 
 interface ChatMsg {
@@ -37,6 +38,28 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const sentContextRef = useRef(false)
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
+
+  // Restore the recorded conversation on open — like opening a Slack thread.
+  useEffect(() => {
+    let alive = true
+    const params = new URLSearchParams({ gmailThreadId })
+    if (mailbox) params.set('mailbox', mailbox)
+    fetch(`/api/inbox/worker-chat?${params}`)
+      .then(r => r.json())
+      .then((data: { turns?: Array<{ user: string; worker: string | null }> }) => {
+        if (!alive || !data.turns?.length) return
+        const restored: ChatMsg[] = []
+        for (const t of data.turns) {
+          restored.push({ role: 'user', text: t.user })
+          if (t.worker) restored.push({ role: 'worker', text: t.worker })
+        }
+        setMessages(restored)
+        sentContextRef.current = true // context already recorded on turn 1
+      })
+      .catch(() => {})
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gmailThreadId])
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -123,13 +146,13 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           <div key={i} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
             <div
               className={cn(
-                'max-w-[90%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap break-words',
+                'max-w-[90%] rounded-2xl px-3.5 py-2 text-sm break-words',
                 m.role === 'user'
-                  ? 'bg-violet-600 text-white rounded-br-md'
+                  ? 'bg-violet-600 text-white rounded-br-md whitespace-pre-wrap'
                   : 'bg-zinc-100 text-zinc-900 rounded-bl-md'
               )}
             >
-              {m.text}
+              {m.role === 'worker' ? <WorkerMarkdown text={m.text} /> : m.text}
             </div>
           </div>
         ))}
@@ -150,8 +173,8 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
             }}
             placeholder="Ask the worker about this email…"
-            rows={1}
-            className="flex-1 resize-none rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 max-h-28"
+            rows={4}
+            className="flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 min-h-[96px] max-h-64"
           />
           <button
             onClick={send}

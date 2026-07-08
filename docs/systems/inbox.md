@@ -106,14 +106,25 @@ Function.
   (`lib/ai-agent/inbox-worker-prompt.ts`) over shared read-only
   `WORKER_TOOLS` (+ memory recall + propose_action; Slack-only extras like
   send_portal_message / code-task rail are NOT included — R111 preserved).
-  Conversation memory persists PER EMAIL THREAD via
-  threadId `inbox-<mailbox>-<gmailThreadId>`. Mailbox-gated
+  Conversation memory persists PER EMAIL THREAD via thread scope
+  `inbox-<mailbox>-<gmailThreadId>` (hashed to a deterministic UUID for
+  `agent_messages.thread_id` by `deterministicThreadUuid`; the readable
+  scope is kept in `context_json.crm_scope_key`). Mailbox-gated
   (`checkMailboxAccess`); route `maxDuration = 300`. On the FIRST turn the
   route reads the thread itself (last 5 messages, plain text, capped) and
   hands the worker the transcript + the gmail thread id/mailbox for
   `gmail_read_thread` self-serve — the worker never claims it can't see the
-  open email (best-effort: a Gmail hiccup degrades to snippet context). The SAME route also
-  serves a CLIENT MODE (`clientKey: acct-<id>|contact-<id>`, threadId
+  open email (best-effort: a Gmail hiccup degrades to snippet context).
+  FULL SLACK PARITY (2026-07-08c): every exchange recorded in
+  `agent_messages` (sender `crm` — enum value added by migration
+  20260709-0200 — recipient `worker`: no cron claims recipient='worker',
+  isolating these rows from the Slack + dormant Hermes-bridge queues; see
+  ai-agent.md), so pronouns work
+  across turns and GET on the route restores the conversation on panel
+  reopen; Slack read rails enabled (SQL dig-in, sysdocs/SOPs/Drive, calls,
+  Calendly, client threads, thread recall, web-search dark) with
+  maxIterations 20; send/code rails stay OFF (propose_action only). The SAME route also
+  serves a CLIENT MODE (`clientKey: acct-<id>|contact-<id>`, thread scope
   `chat-<clientKey>`, portal-chats surface prompt) — used by the Portal
   Chats **Worker** tab (`components/portal-chats/thread-worker-panel.tsx`),
   per-client persistent memory.

@@ -8,12 +8,67 @@ import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
   buildClientWorkerUserBody,
+  displayUserMessage,
+  deterministicThreadUuid,
   type InboxEmailContext,
 } from "@/lib/ai-agent/inbox-worker-prompt"
 
 export const dynamic = "force-dynamic"
 // Worker runs a multi-step tool loop over the DB/CRM — can take minutes.
 export const maxDuration = 300
+
+/**
+ * GET — conversation history for a worker thread (panel reopen restores the
+ * chat, like opening a Slack thread). Same auth + mailbox gate as POST.
+ */
+export async function GET(req: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+  }
+
+  const gmailThreadId = req.nextUrl.searchParams.get("gmailThreadId")?.trim()
+  const clientKey = req.nextUrl.searchParams.get("clientKey")?.trim()
+  const mailbox = req.nextUrl.searchParams.get("mailbox")
+  if (!gmailThreadId && !clientKey) {
+    return NextResponse.json({ error: "gmailThreadId or clientKey required" }, { status: 400 })
+  }
+  if (gmailThreadId && !(await checkMailboxAccess(mailbox))) {
+    return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+  }
+
+  // agent_messages.thread_id is a UUID column — derive it from the scope
+  // string (same email/client → same thread forever).
+  const scope = gmailThreadId
+    ? `inbox-${mailbox === "antonio" ? "antonio" : "support"}-${gmailThreadId}`
+    : `chat-${clientKey}`
+  const threadId = deterministicThreadUuid(scope)
+
+  const { supabaseAdmin } = await import("@/lib/supabase-admin")
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { data } = await db
+    .from("agent_messages")
+    .select("id, body, reply, status, context_json, created_at")
+    .eq("thread_id", threadId)
+    .order("created_at", { ascending: true })
+    .limit(60)
+
+  const turns = ((data ?? []) as Array<{
+    body: string
+    reply: string | null
+    status: string
+    context_json: unknown
+    created_at: string
+  }>).map((r) => ({
+    user: displayUserMessage(r.body, r.context_json),
+    worker: r.status === "failed" ? null : r.reply,
+    created_at: r.created_at,
+  }))
+
+  return NextResponse.json({ threadId, turns })
+}
 
 /**
  * POST /api/inbox/worker-chat — the Slack worker, embedded in the Inbox.
@@ -59,7 +114,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  let threadId: string
+  let scope: string
   let userBody: string
   let surface: "inbox" | "portal-chats"
 
@@ -73,7 +128,7 @@ export async function POST(req: NextRequest) {
     const mailboxAddress = mailboxKey === "antonio"
       ? "antonio.durante@tonydurante.us"
       : "support@tonydurante.us"
-    threadId = `inbox-${mailboxKey}-${gmailThreadId}`
+    scope = `inbox-${mailboxKey}-${gmailThreadId}`
 
     // First turn (context present): READ THE EMAIL server-side — the worker
     // must have the thread in front of it, not a 100-char snippet (Antonio
@@ -110,18 +165,93 @@ export async function POST(req: NextRequest) {
     if (!/^(acct|contact)-[0-9a-f-]{10,}$/i.test(clientKey!)) {
       return NextResponse.json({ error: "Invalid clientKey" }, { status: 400 })
     }
-    threadId = `chat-${clientKey}`
+    scope = `chat-${clientKey}`
     userBody = buildClientWorkerUserBody(message, { name: body.clientName })
     surface = "portal-chats"
+  }
+
+  // thread_id is a UUID column; same scope → same thread forever.
+  const threadId = deterministicThreadUuid(scope)
+
+  // RECORD the exchange as an agent_messages row — exactly like the Slack
+  // pipeline. This is what feeds buildThreadContext ("CONVERSATION SO FAR")
+  // and recall_conversation on later turns; without it the worker was
+  // amnesiac between panel messages (Antonio 2026-07-08: "it must work how
+  // it works in Slack").
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { supabaseAdmin } = await import("@/lib/supabase-admin")
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  let rowId: string | null = null
+  {
+    // sender/recipient use the agent_message_party enum ('crm' added by
+    // migration 20260709-0200). Recipient 'worker' is claimed by NO cron
+    // (Slack + dormant Hermes both claim recipient='claude' only), so these
+    // rows stay isolated from the queues without touching the bridge
+    // ("leave the bridge alone"). Thread context is keyed by thread_id only,
+    // so memory is unaffected.
+    const { data: inserted, error: insertError } = await db
+      .from("agent_messages")
+      .insert({
+        sender: "crm",
+        recipient: "worker",
+        subject: body.context?.subject || body.clientName || `Worker chat (${surface})`,
+        body: userBody,
+        status: "processing",
+        thread_id: threadId,
+        context_json: {
+          source: "crm-worker",
+          surface,
+          crm_scope_key: scope, // human-readable thread scope (thread_id is its UUID hash)
+          user_message: message, // raw message for history display
+          ...(gmailThreadId ? { gmail_thread_id: gmailThreadId, mailbox: body.mailbox ?? "support" } : {}),
+          ...(clientKey ? { client_key: clientKey } : {}),
+          user_email: user.email ?? null,
+        },
+      })
+      .select("id")
+      .single()
+    if (insertError) {
+      // supabase-js reports errors in the result, it does not throw — log
+      // loudly, degrade to a memoryless turn rather than blocking the reply.
+      console.error("[worker-chat] agent_messages insert failed (memory degraded):", insertError)
+    }
+    rowId = inserted?.id ?? null
   }
 
   try {
     const { reply } = await callWorker(userBody, {
       threadId,
+      ...(rowId ? { messageId: rowId } : {}),
       systemPromptOverride: buildWorkerSurfacePrompt(surface),
+      // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
+      // to work how it works in Slack"). Same switches the Team Workspace
+      // grants staff. Send/code rails stay OFF — actions go through
+      // propose_action → the approval rail.
+      enableDbRead: true,
+      enableDocReads: true,
+      enableCallReads: true,
+      enableCalendly: true,
+      enableClientThreadRead: true,
+      enableThreadRecall: true,
+      enableWebSearch: true, // live only if WORKER_WEB_SEARCH_ENABLED
+      maxIterations: 20,
+      ...(clientKey && body.clientName
+        ? { clientKey, clientName: body.clientName }
+        : {}),
     })
+    if (rowId) {
+      await db.from("agent_messages").update({ reply, status: "done" }).eq("id", rowId)
+    }
     return NextResponse.json({ reply, threadId })
   } catch (error) {
+    if (rowId) {
+      await db
+        .from("agent_messages")
+        .update({ status: "failed", reply: error instanceof Error ? error.message : "failed" })
+        .eq("id", rowId)
+        .then(() => {}, () => {})
+    }
     console.error("[worker-chat] failed:", error)
     const detail = error instanceof Error ? error.message : "Worker failed"
     return NextResponse.json({ error: detail }, { status: 500 })

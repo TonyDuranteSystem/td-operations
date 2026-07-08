@@ -4,14 +4,38 @@ import {
   buildInboxWorkerUserBody,
   buildWorkerSurfacePrompt,
   buildClientWorkerUserBody,
+  deterministicThreadUuid,
 } from '@/lib/ai-agent/inbox-worker-prompt'
 import { SLACK_WORKER_SYSTEM_PROMPT } from '@/lib/ai-agent/slack-claude'
+
+describe('deterministicThreadUuid', () => {
+  it('is a valid UUID, stable for the same scope, distinct across scopes', () => {
+    const a = deterministicThreadUuid('inbox-support-19f428d9b3eb63a1')
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(deterministicThreadUuid('inbox-support-19f428d9b3eb63a1')).toBe(a)
+    expect(deterministicThreadUuid('chat-acct-123')).not.toBe(a)
+    expect(deterministicThreadUuid('')).toMatch(/^[0-9a-f-]{36}$/)
+  })
+})
 
 describe('buildWorkerSurfacePrompt', () => {
   it('portal-chats surface is the Slack persona + portal override', () => {
     const prompt = buildWorkerSurfacePrompt('portal-chats')
     expect(prompt.startsWith(SLACK_WORKER_SYSTEM_PROMPT)).toBe(true)
     expect(prompt).toContain('SURFACE OVERRIDE — PORTAL CHATS')
+  })
+})
+
+describe('displayUserMessage', () => {
+  it('prefers the recorded raw message', async () => {
+    const { displayUserMessage } = await import('@/lib/ai-agent/inbox-worker-prompt')
+    expect(displayUserMessage('big context blob\n\nStaff member: draft a reply', { user_message: 'draft a reply' }))
+      .toBe('draft a reply')
+  })
+  it('falls back to extracting after the Staff member marker, then the body', async () => {
+    const { displayUserMessage } = await import('@/lib/ai-agent/inbox-worker-prompt')
+    expect(displayUserMessage('ctx\nStaff member: who is he?', null)).toBe('who is he?')
+    expect(displayUserMessage('plain message', null)).toBe('plain message')
   })
 })
 
