@@ -544,6 +544,8 @@ export interface InboxMessage {
   direction: 'inbound' | 'outbound'
   sender: string
   content: string
+  /** True when content is the real text/html MIME part (emails only) */
+  isHtml?: boolean
   type: string
   status: string
   createdAt: string

@@ -1,5 +1,5 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
-_Last verified against code: 2026-07-08 — Claude (inbox audit + rendering/threading/color-marks overhaul; responsive thread header)_
+_Last verified against code: 2026-07-08b — Claude (reply pipeline Gmail-parity: multipart HTML replies, RFC 2047 To-encoding, isHtml flag from real MIME type, quoted-text collapse, 4-row email composer with Enter=newline, post-send delayed refetches; earlier same day: inbox audit + rendering/threading/color-marks overhaul; responsive thread header)_
 
 ## What it is
 
@@ -26,7 +26,14 @@ Function.
   (both `lib/inbox/email-html.ts`) before plain-text display.
 - **Thread view**: `app/api/inbox/messages/[id]/route.ts` for `gmail:<threadId>`
   IDs fetches the full thread. Each message body:
-  - HTML extracted by `extractBodyHtml` (`lib/gmail.ts`);
+  - extracted by `extractBodyWithType` (`lib/gmail.ts`) which also returns
+    the REAL MIME type as `isHtml` on the message payload — the renderer
+    branches on that flag, NOT on a content sniff ("contains < and >"
+    misdetected plain replies quoting `<a@b.com>` as HTML and ate every
+    line break, 2026-07-08). Plain-text emails render `whitespace-pre-wrap`
+    with quoted history ("On ... wrote:" / "> " lines, EN+IT) collapsed
+    behind a Gmail-style "Show quoted text" toggle (`splitQuotedText` in
+    `lib/inbox/email-quote.ts`, unit-tested);
   - inline images (`src="cid:..."`) rewritten to
     `/api/inbox/attachment?...` via `extractInlineImages` (`lib/gmail.ts`) +
     `rewriteCidSources` (`lib/inbox/email-html.ts`); inline-rendered attachments
@@ -40,11 +47,20 @@ Function.
     for height measurement + authed same-origin image loads). Chat channels
     keep the bubble layout. EMAIL threads render NEWEST-FIRST (Luca 2026-07-08) — chat channels stay chronological with bottom auto-scroll.
 - **Reply**: `components/inbox/compose-reply.tsx` → `app/api/inbox/reply/route.ts`.
-  Plain-text reply with proper `In-Reply-To`/`References` + `threadId`,
-  Gmail-style quoted history of the last message (capped 10k chars,
-  best-effort), base64 CTE (UTF-8 safe), sent **through the mailbox being
+  Gmail-parity MIME built by the pure `buildReplyMime` in
+  `lib/inbox/reply-mime.ts` (unit-tested): **multipart/alternative**
+  (text/plain with "> "-quoted history + text/html with a `gmail_quote`
+  blockquote), proper `In-Reply-To`/`References` + `threadId`, quoted
+  history capped 10k chars (best-effort), base64 CTE, **RFC 2047-encoded
+  Subject AND To display-name** (`encodeAddressHeader` in `lib/gmail.ts` —
+  the Gmail API returns headers decoded; copying From→To raw shipped
+  "TamÃƒÂ¡s" mojibake, 2026-07-08), sent **through the mailbox being
   viewed** (`mailbox` param — thread IDs are mailbox-scoped; support@ is the
-  default).
+  default). Composer (email mode): 4-row resize-y textarea, **Enter = new
+  line, Cmd/Ctrl+Enter = send** (chat channels keep Enter-to-send); after a
+  send the thread re-fetches at 0/4/12s because Gmail indexes the sent copy
+  with a lag and the push watch covers INBOX only — without the delayed
+  refetches the sent reply never appears until manual refresh.
 - **Compose / forward**: `compose-dialog.tsx` → `app/api/inbox/compose/route.ts`
   → `sendEmail` (`lib/operations/email.ts`) — brand shell, duplicate check,
   tracking, CRM linkage.

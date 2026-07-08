@@ -336,38 +336,83 @@ export function decodeBase64Url(data: string): string {
 }
 
 /**
- * Extract email body preserving HTML for rich rendering.
- * Falls back to text/plain if no HTML part found.
+ * Extract email body preserving HTML for rich rendering, and report which
+ * MIME part it came from. The renderer must branch on the REAL part type —
+ * guessing HTML-ness from the content (e.g. "contains < and >") misfires on
+ * plain-text replies that quote an address like `"Name" <a@b.com>`, which
+ * then render as HTML and lose every line break (Antonio 2026-07-08).
  */
-export function extractBodyHtml(payload: GmailAPIMessage["payload"]): string {
-  // Direct body
+export function extractBodyWithType(
+  payload: GmailAPIMessage["payload"]
+): { body: string; isHtml: boolean } {
+  // Direct body — the message's own mimeType tells us what it is
   if (payload.body?.data) {
-    return decodeBase64Url(payload.body.data)
+    return {
+      body: decodeBase64Url(payload.body.data),
+      isHtml: (payload.mimeType || "").toLowerCase().includes("html"),
+    }
   }
 
   if (payload.parts) {
     // Prefer HTML
     for (const part of payload.parts) {
       if (part.mimeType === "text/html" && part.body?.data) {
-        return decodeBase64Url(part.body.data)
+        return { body: decodeBase64Url(part.body.data), isHtml: true }
       }
     }
     // Fallback to plain text
     for (const part of payload.parts) {
       if (part.mimeType === "text/plain" && part.body?.data) {
-        return decodeBase64Url(part.body.data)
+        return { body: decodeBase64Url(part.body.data), isHtml: false }
       }
     }
     // Nested parts
     for (const part of payload.parts) {
       if (part.parts) {
-        const body = extractBodyHtml({ headers: [], mimeType: part.mimeType, parts: part.parts })
-        if (body) return body
+        const nested = extractBodyWithType({
+          headers: [],
+          mimeType: part.mimeType,
+          parts: part.parts,
+        })
+        if (nested.body) return nested
       }
     }
   }
 
-  return ""
+  return { body: "", isHtml: false }
+}
+
+/**
+ * Extract email body preserving HTML for rich rendering.
+ * Falls back to text/plain if no HTML part found.
+ */
+export function extractBodyHtml(payload: GmailAPIMessage["payload"]): string {
+  return extractBodyWithType(payload).body
+}
+
+/**
+ * RFC 2047-encode the display-name of an address header value when it
+ * contains non-ASCII characters. The Gmail API returns headers DECODED
+ * (e.g. `"Tamás Fazekas" <a@b.com>`), so copying a From into a reply's To
+ * without re-encoding sends raw UTF-8 header bytes → mojibake
+ * ("TamÃƒÂ¡s") for the recipient AND in our own thread view. Subject
+ * encoding is R041; this is the same rule for address headers.
+ */
+export function encodeAddressHeader(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return trimmed
+  // eslint-disable-next-line no-control-regex
+  const isAscii = /^[\x00-\x7F]*$/.test(trimmed)
+  if (isAscii) return trimmed
+
+  const match = trimmed.match(/^(.*)<([^<>]+)>$/)
+  if (!match) return trimmed // bare non-ASCII address — nothing safe to do
+  const rawName = match[1].trim().replace(/^"|"$/g, "").trim()
+  const email = match[2].trim()
+  if (!rawName) return `<${email}>`
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7F]*$/.test(rawName)) return `"${rawName}" <${email}>`
+  return `=?utf-8?B?${Buffer.from(rawName, "utf-8").toString("base64")}?= <${email}>`
 }
 
 /**

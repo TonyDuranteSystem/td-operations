@@ -162,6 +162,7 @@ ${kbContext ? `\n${kbContext}` : ''}
 
 RULES:
 - Write the reply directly — no "Here's a draft" preamble. Just the email body.
+- PLAIN TEXT ONLY — this goes into an email as-is. NEVER use markdown (**bold**, bullets with * or -, # headings). The client would see the raw asterisks.
 - Match the language of the incoming email (Italian if they wrote in Italian, English if English).
 - Be professional, warm, and concise.
 - Reference specific services, deadlines, or payments when relevant.

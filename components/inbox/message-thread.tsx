@@ -5,7 +5,31 @@ import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import type { InboxMessage, InboxConversation } from '@/lib/types'
 import { sanitizeEmailHtml } from '@/lib/html-escape'
+import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { EmailHtmlFrame } from './email-html-frame'
+
+/**
+ * Plain-text email body: line breaks preserved, quoted history ("On ...
+ * wrote:" + "> " lines) collapsed behind a Gmail-style toggle.
+ */
+function PlainEmailBody({ content }: { content: string }) {
+  const { main, quoted } = splitQuotedText(content)
+  return (
+    <div className="px-2 py-1.5">
+      <p className="text-sm whitespace-pre-wrap break-words">{main}</p>
+      {quoted && (
+        <details className="mt-2">
+          <summary className="cursor-pointer select-none text-xs text-zinc-400 hover:text-zinc-600 list-none inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-0.5">
+            ··· Show quoted text
+          </summary>
+          <p className="mt-1 text-sm whitespace-pre-wrap break-words text-zinc-500 border-l-2 border-zinc-200 pl-3">
+            {quoted}
+          </p>
+        </details>
+      )}
+    </div>
+  )
+}
 
 interface MessageThreadProps {
   conversation: InboxConversation
@@ -160,16 +184,18 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
               </div>
 
               <div className="px-2 py-1">
-                {msg.content?.includes('<') && msg.content?.includes('>') ? (
+                {/* Branch on the REAL MIME type from the server — guessing
+                    from the content misdetects plain replies quoting an
+                    address like `<a@b.com>` as HTML and eats line breaks.
+                    Heuristic kept only as fallback for cached payloads. */}
+                {(msg.isHtml ?? (msg.content?.includes('<') && msg.content?.includes('>'))) ? (
                   // Inbound email HTML is attacker-controlled (anyone can email
                   // support@). Defense in depth: sanitized AND rendered in a
                   // sandboxed iframe with scripts disabled (security audit
                   // 2026-06-13, H8/H9).
                   <EmailHtmlFrame html={sanitizeEmailHtml(msg.content)} />
                 ) : (
-                  <p className="text-sm whitespace-pre-wrap break-words px-2 py-1.5">
-                    {msg.content}
-                  </p>
+                  <PlainEmailBody content={msg.content || ''} />
                 )}
               </div>
 

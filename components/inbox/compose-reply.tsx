@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Send, Sparkles, Loader2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { InboxConversation } from '@/lib/types'
 
 interface ComposeReplyProps {
@@ -37,10 +38,18 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
     },
     onSuccess: () => {
       setMessage('')
-      queryClient.invalidateQueries({
-        queryKey: ['inbox-messages', conversation.id],
-      })
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      const refetch = () => {
+        queryClient.invalidateQueries({
+          queryKey: ['inbox-messages', conversation.id],
+        })
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }
+      // Gmail indexes the sent message with a small lag, and the push watch
+      // only covers INCOMING mail — without these delayed refetches the sent
+      // reply never appears in the thread until a manual refresh.
+      refetch()
+      setTimeout(refetch, 4000)
+      setTimeout(refetch, 12000)
     },
   })
 
@@ -50,8 +59,22 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
     sendMutation.mutate(text)
   }
 
+  const isEmail = conversation.channel === 'gmail'
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key !== 'Enter') return
+    if (isEmail) {
+      // Email composer works like Gmail: Enter = new line, Cmd/Ctrl+Enter
+      // sends. Enter-to-send made multi-paragraph replies impossible and
+      // caused accidental sends.
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault()
+        handleSend()
+      }
+      return
+    }
+    // Chat channels (WhatsApp/Telegram) keep Enter-to-send, Shift+Enter = newline
+    if (!e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
@@ -96,12 +119,18 @@ export function ComposeReply({ conversation, mailbox }: ComposeReplyProps) {
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={`Reply via ${conversation.channel}...`}
-          rows={1}
-          className="compose-reply-textarea flex-1 resize-none rounded-xl border border-zinc-300 px-4 py-2.5 text-sm
-            focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-            placeholder:text-zinc-400 max-h-32"
-          style={{ minHeight: '42px' }}
+          placeholder={
+            isEmail
+              ? 'Reply via gmail... (Enter = new line, ⌘+Enter = send)'
+              : `Reply via ${conversation.channel}...`
+          }
+          rows={isEmail ? 4 : 1}
+          className={cn(
+            'compose-reply-textarea flex-1 rounded-xl border border-zinc-300 px-4 py-2.5 text-sm',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder:text-zinc-400',
+            isEmail ? 'resize-y min-h-[96px] max-h-80' : 'resize-none max-h-32'
+          )}
+          style={isEmail ? undefined : { minHeight: '42px' }}
         />
 
         {/* AI Suggest button — only for Gmail */}

@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   gmailGet,
   getHeader,
-  extractBodyHtml,
+  extractBodyWithType,
   extractAttachments,
   extractInlineImages,
   type GmailAPIMessage,
@@ -69,7 +69,11 @@ export async function GET(
         const from = getHeader(msg.payload.headers, "From")
         const to = getHeader(msg.payload.headers, "To")
         const date = getHeader(msg.payload.headers, "Date")
-        let body = extractBodyHtml(msg.payload)
+        // Real MIME type from the chosen part — the client must NOT guess
+        // HTML-ness from the content (plain replies quoting `<a@b.com>`
+        // misrender as HTML and lose all line breaks).
+        const extracted = extractBodyWithType(msg.payload)
+        let body = extracted.body
 
         // Resolve inline images: rewrite `src="cid:X"` references to our
         // attachment-download endpoint so the browser can load them.
@@ -100,6 +104,7 @@ export async function GET(
           direction: isOutbound ? "outbound" : "inbound",
           sender: isOutbound ? to : from,
           content: body,
+          isHtml: extracted.isHtml,
           type: "email",
           status: msg.labelIds?.includes("UNREAD") ? "new" : "read",
           createdAt: date
