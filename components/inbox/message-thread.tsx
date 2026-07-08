@@ -88,11 +88,15 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id])
 
-  // Auto-scroll to bottom when messages load
+  // Chat channels: auto-scroll to bottom (newest last, WhatsApp-style).
+  // EMAIL threads render NEWEST FIRST (Luca 2026-07-08: no scrolling to the
+  // bottom of long threads — and the growing email iframes made bottom-scroll
+  // land mid-thread anyway), so they stay at the top.
+  const isEmailThread = data?.channel === 'gmail'
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
+    if (!scrollRef.current) return
+    scrollRef.current.scrollTop = isEmailThread ? 0 : scrollRef.current.scrollHeight
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.messages])
 
   if (isLoading) {
@@ -103,7 +107,9 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
     )
   }
 
-  const messages = data?.messages || []
+  const messages = isEmailThread
+    ? [...(data?.messages || [])].reverse() // newest email on top
+    : data?.messages || []
 
   if (messages.length === 0) {
     return (

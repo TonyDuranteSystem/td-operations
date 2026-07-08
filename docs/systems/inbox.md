@@ -38,7 +38,7 @@ Function.
     (`components/inbox/email-html-frame.tsx`, `sandbox` WITHOUT
     `allow-scripts` — never add `allow-scripts`, `allow-same-origin` is present
     for height measurement + authed same-origin image loads). Chat channels
-    keep the bubble layout.
+    keep the bubble layout. EMAIL threads render NEWEST-FIRST (Luca 2026-07-08) — chat channels stay chronological with bottom auto-scroll.
 - **Reply**: `components/inbox/compose-reply.tsx` → `app/api/inbox/reply/route.ts`.
   Plain-text reply with proper `In-Reply-To`/`References` + `threadId`,
   Gmail-style quoted history of the last message (capped 10k chars,
