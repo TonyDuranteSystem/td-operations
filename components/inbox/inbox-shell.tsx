@@ -208,6 +208,14 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
           queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
         }, 2000)
+      } else if (variables.action === 'mark_unread' || variables.action === 'mark_read') {
+        // The optimistic unread override already updated the badge — do NOT
+        // force a ~300-Gmail-call conversations refetch just to flip a read
+        // dot (that heavy refetch under load is exactly what blanked the
+        // list, Antonio 2026-07-08). Stats/labels are cheap; the 30s poll
+        // reconciles the list. Gmail's label index lags anyway.
+        queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+        queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
       } else {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
@@ -255,7 +263,14 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         })
       }
       clearSelection()
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      // Read/unread already reflected by the optimistic badges above +
+      // the archive/trash rows already filtered optimistically — a heavy
+      // conversations refetch here is what blanked the list under Gmail load
+      // (Antonio 2026-07-08). Only refetch the list for label MOVES (which
+      // change membership and aren't optimistically handled).
+      if (variables.action === 'move_to_label') {
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
       queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
 

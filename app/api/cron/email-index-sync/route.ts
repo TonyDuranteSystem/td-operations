@@ -30,13 +30,28 @@ export async function GET(request: NextRequest) {
   const results: Record<string, unknown> = {}
   const startedAt = Date.now()
 
+  // The one-time backfill makes ~180 live Gmail calls per page on the SAME
+  // mailbox the interactive inbox reads. Running it hard during the workday
+  // starved Gmail's per-user quota and made the inbox slow/flaky (Antonio
+  // 2026-07-08). So: PAUSE backfill during US business hours (13:00–23:00
+  // UTC ≈ 9am–7pm ET) and cap it to ONE page/run otherwise — the rebuild
+  // just takes longer (overnight), and every index-backed surface falls back
+  // to live Gmail until it completes, so there is zero correctness cost.
+  // The light incremental reconcile still runs whenever backfill is done.
+  const utcHour = new Date().getUTCHours()
+  const inBusinessHours = utcHour >= 13 && utcHour < 23
+  const maxBackfillPages = inBusinessHours ? 0 : 1
+
   for (const mailbox of ["support", "antonio"] as const) {
     try {
-      // Up to 3 backfill pages per mailbox per run, within the time budget
-      // (~180 threads/run/mailbox → full history in hours, not days)
-      let bf = await backfillStep(mailbox)
-      let pages = 1
-      while (!bf.done && pages < 3 && Date.now() - startedAt < 180_000) {
+      // One backfill page per run off business hours; none during them.
+      let bf: { indexedThreads: number; indexedMessages: number; done: boolean } = {
+        indexedThreads: 0,
+        indexedMessages: 0,
+        done: false,
+      }
+      let pages = 0
+      while (pages < maxBackfillPages && !bf.done && Date.now() - startedAt < 60_000) {
         const next = await backfillStep(mailbox)
         bf = {
           indexedThreads: bf.indexedThreads + next.indexedThreads,
@@ -44,6 +59,16 @@ export async function GET(request: NextRequest) {
           done: next.done,
         }
         pages += 1
+      }
+      // If backfill was skipped this run, reflect the persisted done-state so
+      // the reconcile branch still fires once the rebuild has completed.
+      if (pages === 0) {
+        const { data: st } = await db
+          .from("gmail_watch_state")
+          .select("backfill_done")
+          .eq("mailbox", mailbox)
+          .maybeSingle()
+        bf.done = st?.backfill_done === true
       }
       let sync: { threads: number } | null = null
       if (bf.done) {

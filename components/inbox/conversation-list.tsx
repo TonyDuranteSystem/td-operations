@@ -1,6 +1,6 @@
 'use client'
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { Mail, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -129,6 +129,10 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       return json
     },
     refetchInterval: searchQuery ? false : 30_000,
+    // Never flash an empty pane while a refetch (or a mailbox/filter switch)
+    // is in flight — keep showing the list we already have (Antonio
+    // 2026-07-08: the list "disappeared" on actions/scroll under Gmail load).
+    placeholderData: keepPreviousData,
   })
 
   const conversations = (data?.conversations || [])

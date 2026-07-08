@@ -153,6 +153,24 @@ Function.
   invalidations are debounced 2.5s trailing: bulk archive/delete of N
   emails fires N push events; without the debounce that meant N
   back-to-back full refetches (each up to ~300 Gmail calls) → 429 → blank.
+- **Anti-blank hardening** (2026-07-09, after Antonio reported the list
+  vanishing on mark-unread / scroll while the prod re-backfill was running):
+  (1) the conversations query uses `placeholderData: keepPreviousData` — the
+  list never flashes empty during a refetch or a mailbox/filter switch;
+  (2) mark_read / mark_unread (single AND bulk) NO LONGER force a
+  conversations refetch — the optimistic unread override already flips the
+  badge, so a ~300-Gmail-call refetch per read-toggle (the thing that
+  blanked the list under load) is gone; only membership-changing actions
+  (trash/archive/move) refetch; (3) the email-index backfill cron
+  (`/api/cron/email-index-sync`) PAUSES during US business hours (13:00–23:00
+  UTC) and does at most ONE page/run otherwise — the one-time rebuild makes
+  ~180 live Gmail calls/page on the SAME mailbox the inbox reads, and running
+  it hard mid-day starved Gmail's per-user quota (3s list loads + hiccups).
+  The rebuild just finishes overnight; index-backed surfaces fall back to
+  live Gmail until `backfill_done`, so pausing has zero correctness cost.
+  KNOWN heaviness (future work): the default INBOX list still does ~300 live
+  Gmail metadata GETs per load — it should read from `email_index` like
+  search/client-emails/green-dots already do.
 - **Real-time push** (Phase 3b, 2026-07-08): Gmail `users.watch` (INBOX, both
   mailboxes) publishes to Pub/Sub topic `gmail-push` in GCP project
   `claude-gmail-connector-488713`; the push subscription `gmail-push-sub`
