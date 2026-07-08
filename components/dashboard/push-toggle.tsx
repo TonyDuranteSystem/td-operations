@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Bell, BellOff, Loader2, Send } from 'lucide-react'
 import { toast } from 'sonner'
+import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 
 // Throttle silent re-subscription to once per 24h per browser. Re-subscribing
 // keeps the row warm in admin_push_subscriptions (POST upserts), so endpoints
@@ -66,33 +67,15 @@ export function DashboardPushToggle({ compact = false, refreshOnMount = false }:
   const handleEnable = async () => {
     setLoading(true)
     try {
-      const registration = await navigator.serviceWorker.register('/dashboard-sw.js')
-      await navigator.serviceWorker.ready
-
-      const keyRes = await fetch('/api/admin/push')
-      if (!keyRes.ok) throw new Error('Push not configured on server')
-      const { publicKey } = await keyRes.json()
-
-      const perm = await Notification.requestPermission()
-      setPermission(perm)
-      if (perm !== 'granted') {
+      const result = await subscribeToDashboardPush()
+      setPermission(Notification.permission)
+      if (result === 'denied') {
         toast.error('Notification permission denied')
         setLoading(false)
         return
       }
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
-      })
-
-      const res = await fetch('/api/admin/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: subscription.toJSON() }),
-      })
-
-      if (!res.ok) throw new Error('Failed to save subscription')
+      if (result === 'unconfigured') throw new Error('Push not configured on server')
+      if (result === 'unsupported') throw new Error('Push not supported in this browser')
 
       // Mark the refresh timestamp so refreshOnMount doesn't re-POST today.
       try {
@@ -252,15 +235,4 @@ async function maybeRefreshSubscription(sub: PushSubscription) {
   } catch {
     // Network failure — silent. Next mount will retry.
   }
-}
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const rawData = atob(base64)
-  const outputArray = new Uint8Array(rawData.length)
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i)
-  }
-  return outputArray
 }

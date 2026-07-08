@@ -13,7 +13,7 @@ self.addEventListener('activate', function () {
   self.clients.claim()
 })
 
-// Push notifications (same as admin-sw.js — handles notifications if registered here)
+// Push notifications
 self.addEventListener('push', function (event) {
   if (!event.data) return
 
