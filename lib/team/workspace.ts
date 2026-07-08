@@ -58,6 +58,23 @@ export function mentionsClaude(body: string): boolean {
 }
 
 /**
+ * Slack invitation-gate parity (Antonio 2026-07-08 — "every time I have to
+ * @claude… is it normal?"): in a CLIENT DISCUSSION, once Claude has
+ * participated, plain follow-up messages continue the conversation without
+ * re-mentioning — exactly like Slack thread replies after a mentioned parent
+ * (and /client conversation threads). Channels/general/DMs still require an
+ * explicit @claude for each new ask (like Slack top-level channel messages).
+ */
+export function shouldAutoContinueWithClaude(args: {
+  threadType: string
+  claudeHasParticipated: boolean
+  bodyMentionsClaude: boolean
+}): boolean {
+  if (args.bodyMentionsClaude) return true
+  return args.threadType === 'discussion' && args.claudeHasParticipated
+}
+
+/**
  * Canonical DM key for an unordered pair of user ids. Sorting makes
  * dm(a,b) === dm(b,a) so the partial-unique index dedupes one thread per pair.
  * Self-DM (a===b) is allowed (a private notes-to-self thread) and yields "a".

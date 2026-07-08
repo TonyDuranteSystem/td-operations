@@ -1,5 +1,5 @@
 # Team Workspace (internal Slack-replacement chat)
-_Last verified against code: 2026-07-07 — Claude (Phase 1 built in SANDBOX on branch `claude/ecstatic-pasteur-10660b`, NOT yet on production. Goal per Antonio: replace Slack entirely so the team has ONE place to work — no extra app/fee. This is the staff-only internal chat, distinct from the client portal chat in `portal.md`.)_
+_Last verified against code: 2026-07-08 — Claude (LIVE ON PRODUCTION through the Slack-parity pass, commit `97363891`; invitation gate added same day. Goal per Antonio: replace Slack entirely so the team has ONE place to work — no extra app/fee. This is the staff-only internal chat, distinct from the client portal chat in `portal.md`.)_
 
 ## What it is
 The internal team chat, rebuilt from a single "Team General" room into a full workspace: **named channels**, **direct messages**, **client discussions**, and a **general** room — all staff-only, never client-visible. Reactions, edit-with-history, pins, message search, @mentions with targeted push, colored rich cards, and an **@claude** AI-worker trigger. Backed by the same `internal_threads` / `internal_messages` tables that already powered the old team chat + `portal_team_send` (so nothing pre-existing broke — the change is additive).
@@ -47,6 +47,13 @@ Antonio's prod test exposed half-parity: a conversation created with a channel s
 - **Verified**: filing E2E (conversation created under the channel), interception E2E (planted proposal → typed code → "Approved" outcome), send E2E on deployed sandbox (draft → "send it" → "Sent. ✅", direct tool, no code). Slack worker untouched (its call sites unchanged; slack-approval tests green).
 - **Slice 2 (tracked, not built)**: attachments/images from team messages into the worker, referenced-thread capture, Stop button, animated thinking ticks, reaction rails, ask-antonio code-task answer routing.
 
+## @claude invitation gate — no re-mention in discussions (2026-07-08)
+Antonio (Giuseppe Cirino · Billing): *"everytime I have to @claude for the worker to answer. is it normal?"* It wasn't Slack parity: in Slack, thread replies flow to the worker once the parent mentioned Claude, and `/client` conversation threads process ALL replies mention-free. Team Chat required `@claude` on every message.
+- **Rule (shipped)**: in a `discussion` thread where Claude has ALREADY participated (any `internal_messages` row with the Claude sentinel sender — i.e. it was @mentioned once), every subsequent plain TEXT message auto-triggers the worker. Channels / general / DMs still require an explicit `@claude` per ask (Slack top-level parity).
+- **Where**: pure predicate `shouldAutoContinueWithClaude` in `lib/team/workspace.ts` (unit-tested); the messages POST checks prior Claude participation (one indexed lookup, only for plain messages in discussions) and calls `triggerClaudeReply({ force: true })`; `triggerClaudeReply` gained a `force` param that bypasses its own `mentionsClaude` guard. The processor/cron-rescue never re-check the mention, so rescued forced prompts survive.
+- **Ordering preserved**: the 6-digit approval interception still runs (and returns) BEFORE the trigger block; attachment/card-only sends (empty text) never auto-trigger; loop-safety unchanged (Claude-sentinel messages never reach the send route's trigger).
+- **Deliberate scope**: a human-only discussion (nobody ever mentions Claude) is never auto-invoked. A channel 30-min continuation window was offered and deferred by Antonio ("ship rule 1 now").
+
 ## @claude reliability — middleware exception + cron rescue (2026-07-08)
 Antonio's first prod @claude got stuck on "thinking…". ROOT CAUSE: `/api/team/claude/process` was not in `middleware.ts` `PUBLIC_PREFIXES`, so the session gate 401'd (SESSION_EXPIRED) the server-to-server direct fire BEFORE the route's own CRON_SECRET auth — deterministic, every time (found via sandbox E2E; handler tests bypass middleware, only a real request catches it — same lesson as the e-sign signer page). FIXES:
 - `middleware.ts`: `/api/team/claude/process` added to `PUBLIC_PREFIXES` (route self-auths via CRON_SECRET Bearer, same as `/api/cron/*`).
@@ -56,7 +63,7 @@ Verified in sandbox: a stuck placeholder (direct fire fails locally by design) w
 
 ## @claude adapter (`lib/team/claude-trigger.ts`)
 A human `@claude` mention → `triggerClaudeReply` inserts a placeholder message (sender = `CLAUDE_SENDER_UUID` sentinel, body `…`) and fires `/api/team/claude/process` (bounded direct-trigger, like the Slack worker). `processClaudeReply` reuses `callWorker` from `lib/ai-agent/worker-tools.ts` (same brain as Slack/Hermes), builds context from recent thread messages + client linkage (`clientKey`/`clientName` when the thread has an account/contact — the per-client brain), then rewrites the placeholder with the answer (TOCTOU-guarded on the placeholder body).
-- **Rails:** research/read on for everyone (`enableDbRead/DocReads/CallReads/Calendly/ClientThreadRead/WebSearch`). **Code-task rail Antonio-only** (`enableCodeTasks = isAdmin`, R111). **Send rails OFF** in team chat for now (research-first, mirrors Hermes Phase 1).
+- **Rails:** research/read on for everyone (`enableDbRead/DocReads/CallReads/Calendly/ClientThreadRead/WebSearch`). **Code-task rail Antonio-only** (`enableCodeTasks = isAdmin`, R111). **Send rails ON since the 2026-07-08 parity pass** (`enableEmailSend`/`enableSlackSend` + full discipline prompt — see "@claude FULL SLACK PARITY" above; the earlier research-only stance was the Tamás incident's root cause).
 - **Loop-safety:** only human sends reach the send route; `processClaudeReply` refuses a prompt authored by the Claude sentinel. Claude's own posts never re-trigger.
 
 ## Pure helpers (`lib/team/workspace.ts`, unit-tested)
@@ -91,7 +98,7 @@ Luca proposed (Slack #td-dev 1783524778.142989): column layout per channel, clie
 ## Business rules / invariants
 - **Staff-only, never client-visible.** All routes gate on `isDashboardUser`; RLS is staff-only.
 - **Unread is per-user** via `internal_thread_reads`. Do NOT reintroduce logic based on the single `read_at` column for unread (it made counts always 0 — the pre-Phase-1 bug, because sends stamped `read_at=now()`).
-- **@claude requires an explicit mention**; the worker never listens ambiently. Code tasks Antonio-only; send tools are not wired into team chat.
+- **@claude trigger scope**: an explicit mention anywhere, PLUS plain text messages in a `discussion` where Claude has already participated (invitation gate, 2026-07-08). It never listens ambiently in channels/general/DMs, and never in a discussion it hasn't been invited into. Code tasks Antonio-only; send tools run on the Slack discipline rail (draft → explicit "send it").
 - **Attachments** must live on our Storage host (send route rejects off-host URLs); 100MB via signed URL, active-content block-list (shared with portal chat).
 
 ## How to verify current state

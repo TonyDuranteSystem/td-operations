@@ -56,8 +56,10 @@ export async function POST(
     }
   }
 
-  // Thread must exist.
-  const { data: thread } = await supabaseAdmin
+  // Thread must exist. (as-any: generated types predate thread_type — same
+  // escape as every other internal_threads site in this route family.)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: thread } = await (supabaseAdmin as any)
     .from('internal_threads')
     .select('id, thread_type, account_id')
     .eq('id', threadId)
@@ -167,14 +169,35 @@ export async function POST(
 
   // @claude trigger — fire the AI worker adapter (loop-safe: only human sends
   // reach this route; the processor also refuses Claude-authored prompts).
+  // Invitation gate (Slack parity, Antonio 2026-07-08): in a client DISCUSSION
+  // where Claude has already participated, plain text messages continue the
+  // conversation without re-mentioning — like Slack thread replies after a
+  // mentioned parent. Channels/general/DMs still require an explicit @claude.
+  let invokeClaude = mentions.claude
+  if (!invokeClaude && message && thread.thread_type === 'discussion') {
+    const { shouldAutoContinueWithClaude, CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')
+    const { data: claudeMsg } = await supabaseAdmin
+      .from('internal_messages')
+      .select('id')
+      .eq('thread_id', threadId)
+      .eq('sender_id', CLAUDE_SENDER_UUID)
+      .limit(1)
+      .maybeSingle()
+    invokeClaude = shouldAutoContinueWithClaude({
+      threadType: thread.thread_type,
+      claudeHasParticipated: !!claudeMsg,
+      bodyMentionsClaude: mentions.claude,
+    })
+  }
   let claudePlaceholderId: string | null = null
-  if (mentions.claude) {
+  if (invokeClaude) {
     try {
       claudePlaceholderId = await triggerClaudeReply({
         threadId,
         promptBody: message,
         promptMessageId: msg.id,
         senderIsAntonio: isAdmin(user),
+        force: true,
       })
     } catch (err) {
       console.error('[team] claude trigger failed:', err instanceof Error ? err.message : err)

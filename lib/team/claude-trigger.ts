@@ -33,9 +33,13 @@ export async function triggerClaudeReply(params: {
   promptBody: string
   promptMessageId: string
   senderIsAntonio: boolean
+  /** Invitation-gate continuation: the route determined this thread is an
+   *  active Claude conversation (discussion + prior Claude participation), so
+   *  run without requiring an in-body @claude. */
+  force?: boolean
 }): Promise<string | null> {
-  const { threadId, promptBody, promptMessageId, senderIsAntonio } = params
-  if (!mentionsClaude(promptBody)) return null
+  const { threadId, promptBody, promptMessageId, senderIsAntonio, force } = params
+  if (!force && !mentionsClaude(promptBody)) return null
 
   // 1. Placeholder bubble authored by Claude. reply_to_id links it to the
   //    triggering human message — that renders as a quoted reply AND gives the

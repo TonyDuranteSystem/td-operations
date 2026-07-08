@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseMentionHandles,
   mentionsClaude,
+  shouldAutoContinueWithClaude,
   dmKey,
   channelSlug,
   validateHexColor,
@@ -77,6 +78,24 @@ describe('mentionsClaude', () => {
   })
   it('CLAUDE_MENTION_ID constant is claude', () => {
     expect(CLAUDE_MENTION_ID).toBe('claude')
+  })
+})
+
+describe('shouldAutoContinueWithClaude (Slack invitation-gate parity)', () => {
+  it('explicit mention always triggers, in any thread type', () => {
+    expect(shouldAutoContinueWithClaude({ threadType: 'channel', claudeHasParticipated: false, bodyMentionsClaude: true })).toBe(true)
+    expect(shouldAutoContinueWithClaude({ threadType: 'discussion', claudeHasParticipated: false, bodyMentionsClaude: true })).toBe(true)
+  })
+  it('plain message in a discussion continues once Claude has participated', () => {
+    expect(shouldAutoContinueWithClaude({ threadType: 'discussion', claudeHasParticipated: true, bodyMentionsClaude: false })).toBe(true)
+  })
+  it('plain message in a discussion with NO prior Claude participation does not trigger', () => {
+    expect(shouldAutoContinueWithClaude({ threadType: 'discussion', claudeHasParticipated: false, bodyMentionsClaude: false })).toBe(false)
+  })
+  it('plain messages in channels/general/DMs never auto-trigger, even after participation', () => {
+    for (const threadType of ['channel', 'general', 'dm']) {
+      expect(shouldAutoContinueWithClaude({ threadType, claudeHasParticipated: true, bodyMentionsClaude: false })).toBe(false)
+    }
   })
 })
 
