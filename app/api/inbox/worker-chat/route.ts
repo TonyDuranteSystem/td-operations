@@ -4,8 +4,9 @@ import { isDashboardUser } from "@/lib/auth"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { callWorker } from "@/lib/ai-agent/worker-tools"
 import {
-  buildInboxWorkerSystemPrompt,
+  buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
+  buildClientWorkerUserBody,
   type InboxEmailContext,
 } from "@/lib/ai-agent/inbox-worker-prompt"
 
@@ -33,9 +34,13 @@ export async function POST(req: NextRequest) {
 
   let body: {
     message?: string
+    // Inbox mode — per email thread
     gmailThreadId?: string
     mailbox?: string
     context?: InboxEmailContext | null
+    // Client mode (portal-chats Worker tab) — per client
+    clientKey?: string
+    clientName?: string
   }
   try {
     body = await req.json()
@@ -45,31 +50,48 @@ export async function POST(req: NextRequest) {
 
   const message = body.message?.trim()
   const gmailThreadId = body.gmailThreadId?.trim()
-  if (!message || !gmailThreadId) {
+  const clientKey = body.clientKey?.trim()
+  if (!message || (!gmailThreadId && !clientKey)) {
     return NextResponse.json(
-      { error: "message and gmailThreadId are required" },
+      { error: "message and gmailThreadId or clientKey are required" },
       { status: 400 }
     )
   }
 
-  // Discussing an antonio@ thread exposes its content — same admin-only gate
-  // as every other inbox surface.
-  if (!(await checkMailboxAccess(body.mailbox))) {
-    return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+  let threadId: string
+  let userBody: string
+  let surface: "inbox" | "portal-chats"
+
+  if (gmailThreadId) {
+    // Discussing an antonio@ thread exposes its content — same admin-only
+    // gate as every other inbox surface.
+    if (!(await checkMailboxAccess(body.mailbox))) {
+      return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
+    }
+    const mailboxKey = body.mailbox === "antonio" ? "antonio" : "support"
+    threadId = `inbox-${mailboxKey}-${gmailThreadId}`
+    userBody = buildInboxWorkerUserBody(message, body.context ?? null)
+    surface = "inbox"
+  } else {
+    // clientKey: 'acct-<uuid>' | 'contact-<uuid>' — a per-client memory
+    // namespace for the portal-chats Worker tab (the worker itself is
+    // read-only; staff auth above is the ACL).
+    if (!/^(acct|contact)-[0-9a-f-]{10,}$/i.test(clientKey!)) {
+      return NextResponse.json({ error: "Invalid clientKey" }, { status: 400 })
+    }
+    threadId = `chat-${clientKey}`
+    userBody = buildClientWorkerUserBody(message, { name: body.clientName })
+    surface = "portal-chats"
   }
 
-  const mailboxKey = body.mailbox === "antonio" ? "antonio" : "support"
-  const threadId = `inbox-${mailboxKey}-${gmailThreadId}`
-
   try {
-    const userBody = buildInboxWorkerUserBody(message, body.context ?? null)
     const { reply } = await callWorker(userBody, {
       threadId,
-      systemPromptOverride: buildInboxWorkerSystemPrompt(),
+      systemPromptOverride: buildWorkerSurfacePrompt(surface),
     })
     return NextResponse.json({ reply, threadId })
   } catch (error) {
-    console.error("[inbox-worker-chat] failed:", error)
+    console.error("[worker-chat] failed:", error)
     const detail = error instanceof Error ? error.message : "Worker failed"
     return NextResponse.json({ error: detail }, { status: 500 })
   }

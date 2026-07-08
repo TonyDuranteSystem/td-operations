@@ -22,18 +22,48 @@ export interface InboxEmailContext {
   latestMessage?: string
 }
 
-const INBOX_ADDENDUM = `
+const SURFACE_ADDENDA = {
+  inbox: `
 
 ━━━ SURFACE OVERRIDE — CRM INBOX (read this LAST, it wins over Slack-specific instructions above) ━━━
 You are NOT in Slack right now. You are embedded in the CRM dashboard's Inbox, in a side panel next to an open email thread. The person talking to you is a staff member reading that email.
 - FORMATTING: plain text with simple Markdown (short paragraphs, dashes for lists). No Slack mrkdwn, no <@mentions>, no channel references, no emoji reactions.
 - Everything else about who you are, how you work, your tools, and your discuss-first discipline is UNCHANGED.
 - Typical asks here: explain this email, check the client's real state in the CRM/DB before answering, recall past decisions from memory, draft a reply (give ONLY the email body text when asked for a draft — the staff member sends it themselves).
-- You cannot send emails or messages from here. For actions, use propose_action as usual.`
+- You cannot send emails or messages from here. For actions, use propose_action as usual.`,
+  'portal-chats': `
 
-/** System prompt for the inbox worker: Slack persona + inbox surface override. */
+━━━ SURFACE OVERRIDE — PORTAL CHATS (read this LAST, it wins over Slack-specific instructions above) ━━━
+You are NOT in Slack right now. You are embedded in the CRM dashboard's Portal Chats page, in a Worker tab for ONE specific client. The person talking to you is a staff member working that client.
+- FORMATTING: plain text with simple Markdown (short paragraphs, dashes for lists). No Slack mrkdwn, no <@mentions>, no channel references, no emoji reactions.
+- Everything else about who you are, how you work, your tools, and your discuss-first discipline is UNCHANGED.
+- Typical asks here: summarize this client's state (services, payments, deadlines, chats, emails), recall past decisions from memory, draft a portal-chat message (give ONLY the message text when asked for a draft — the staff member sends it themselves).
+- You cannot send messages from here. For actions, use propose_action as usual.`,
+} as const
+
+export type WorkerSurface = keyof typeof SURFACE_ADDENDA
+
+/** System prompt for an embedded worker: Slack persona + surface override. */
+export function buildWorkerSurfacePrompt(surface: WorkerSurface): string {
+  return `${SLACK_WORKER_SYSTEM_PROMPT}${SURFACE_ADDENDA[surface]}`
+}
+
+/** Back-compat alias (inbox surface). */
 export function buildInboxWorkerSystemPrompt(): string {
-  return `${SLACK_WORKER_SYSTEM_PROMPT}${INBOX_ADDENDUM}`
+  return buildWorkerSurfacePrompt("inbox")
+}
+
+/** First-turn user body for the portal-chats Worker tab. */
+export function buildClientWorkerUserBody(
+  message: string,
+  client?: { name?: string | null } | null
+): string {
+  if (!client?.name) return message
+  return [
+    `[PORTAL CHATS CONTEXT — the staff member is working the client: ${client.name}]`,
+    "",
+    `Staff member: ${message}`,
+  ].join("\n")
 }
 
 /**

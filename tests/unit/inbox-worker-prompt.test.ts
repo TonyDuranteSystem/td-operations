@@ -2,8 +2,30 @@ import { describe, it, expect } from 'vitest'
 import {
   buildInboxWorkerSystemPrompt,
   buildInboxWorkerUserBody,
+  buildWorkerSurfacePrompt,
+  buildClientWorkerUserBody,
 } from '@/lib/ai-agent/inbox-worker-prompt'
 import { SLACK_WORKER_SYSTEM_PROMPT } from '@/lib/ai-agent/slack-claude'
+
+describe('buildWorkerSurfacePrompt', () => {
+  it('portal-chats surface is the Slack persona + portal override', () => {
+    const prompt = buildWorkerSurfacePrompt('portal-chats')
+    expect(prompt.startsWith(SLACK_WORKER_SYSTEM_PROMPT)).toBe(true)
+    expect(prompt).toContain('SURFACE OVERRIDE — PORTAL CHATS')
+  })
+})
+
+describe('buildClientWorkerUserBody', () => {
+  it('prefixes the client context when a name is given', () => {
+    const body = buildClientWorkerUserBody('summarize their state', { name: 'Unique Commerce LLC' })
+    expect(body).toContain('PORTAL CHATS CONTEXT')
+    expect(body).toContain('Unique Commerce LLC')
+    expect(body).toContain('Staff member: summarize their state')
+  })
+  it('passes through without a client', () => {
+    expect(buildClientWorkerUserBody('hi', null)).toBe('hi')
+  })
+})
 
 describe('buildInboxWorkerSystemPrompt', () => {
   it('is the Slack persona verbatim plus the inbox surface override', () => {

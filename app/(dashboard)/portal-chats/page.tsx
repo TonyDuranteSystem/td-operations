@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
+import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
@@ -245,7 +246,7 @@ export default function PortalChatsPage() {
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
-  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo' | 'email'>('messages')
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo' | 'email' | 'worker'>('messages')
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -2536,6 +2537,19 @@ export default function PortalChatsPage() {
                     </button>
                   )
                 })()}
+                <button
+                  onClick={() => setChatViewMode('worker')}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                    chatViewMode === 'worker'
+                      ? 'text-violet-600 border-b-2 border-violet-600 bg-violet-50/30'
+                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                  )}
+                  title="The Slack worker for this client — reads CRM, DB & memory"
+                >
+                  <Wand2 className="h-3.5 w-3.5" />
+                  Worker
+                </button>
                 <div className="flex items-center px-2 shrink-0">
                   <HelpDot helpKey="chat.tabs" />
                 </div>
@@ -2743,6 +2757,12 @@ export default function PortalChatsPage() {
               <ThreadTodoPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
             ) : chatViewMode === 'email' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
               <ThreadEmailPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
+            ) : chatViewMode === 'worker' && (selectedAccountId || selectedContactId || selectedCompanyId) ? (
+              <ThreadWorkerPanel
+                accountId={selectedAccountId || selectedCompanyId}
+                contactId={selectedContactId}
+                clientName={selectedName?.company || selectedName?.contact || 'this client'}
+              />
             ) : (
             <>
 
