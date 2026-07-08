@@ -125,7 +125,7 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
 
   if (r.ok) {
     result.steps.push(step("ingest", "ok",
-      `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})${r.alert ? ` — ${r.alert}` : ""}`))
+      `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})${r.failed ? ` — ⚠ ${r.failed} row(s) FAILED to insert (error-audited)` : ""}${r.alert ? ` — ${r.alert}` : ""}`))
     result.summary = `Ingested ${fileName}: ${r.inserted} transactions`
 
     // If this was the LAST statement for the account+year, tell the client their

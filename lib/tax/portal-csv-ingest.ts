@@ -32,6 +32,9 @@ export interface IngestResult {
   bankDetected: string
   uncategorizedRemaining: number
   sourceFileId: string
+  /** Rows that error'd on insert (never dedup skips) — non-zero is already
+   * error-audited; surfaced here so job steps/receipts can show it. */
+  failed?: number
 }
 
 export interface IngestPortalCsvInput {
@@ -137,7 +140,13 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // Per-row errors are COLLECTED and the whole file fails loudly when nothing
   // landed — a silent 0-insert hid the sandbox index drift for a full
   // submission (13 files parsed, 0 rows, no error anywhere).
+  // S2 slice 1 (2026-07-08): PARTIAL drops are loud too — a constraint that
+  // rejects a category (prod's CHECK lacked 'contribution', Dynamiq lost
+  // $3,059.99 across 2 rows) used to fail only those rows with no trace beyond
+  // the step text. Every error'd row now counts + reports to the error-audit
+  // feed. Dedup skips are NOT errors (ignoreDuplicates returns no error).
   let inserted = 0
+  let failedCount = 0
   let firstInsertError: string | null = null
   for (const tx of categorized) {
     const { error } = await supabaseAdmin
@@ -161,10 +170,27 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
         notes: tx.notes,
       }, { onConflict: "account_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
     if (!error) inserted++
-    else if (!firstInsertError) firstInsertError = error.message
+    else {
+      failedCount++
+      if (!firstInsertError) firstInsertError = error.message
+    }
   }
   if (inserted === 0 && categorized.length > 0 && firstInsertError) {
     return fail(`The file was read correctly (${categorized.length} transactions) but could not be saved: ${firstInsertError}. Please contact us — this is on our side, not yours.`)
+  }
+  if (failedCount > 0) {
+    console.error(`[portal-csv-ingest] ${failedCount} row(s) FAILED to insert for account ${accountId} ${taxYear}: ${firstInsertError}`)
+    try {
+      const { reportSystemError } = await import("@/lib/system-errors")
+      await reportSystemError({
+        source: "server",
+        route: "lib/tax/portal-csv-ingest",
+        message: `Statement ingest dropped ${failedCount}/${categorized.length} row(s) for account ${accountId} ${taxYear}: ${firstInsertError}`,
+        context: { account_id: accountId, tax_year: taxYear, source_file_id: sourceFileId, failed: failedCount, parsed: categorized.length },
+      })
+    } catch (e) {
+      console.error("[portal-csv-ingest] error-audit report failed:", e)
+    }
   }
 
   // 5. Deterministic categorization passes now (rules + transfer pairs)…
@@ -217,5 +243,5 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     await resetFinancialsAttestation(accountId, taxYear, `new file ingested (${inserted} transactions)`)
   }
 
-  return { ok: true, alert: analysis.alert, inserted, parsed: categorized.length, months, bankDetected, uncategorizedRemaining, sourceFileId }
+  return { ok: true, alert: analysis.alert, inserted, parsed: categorized.length, months, bankDetected, uncategorizedRemaining, sourceFileId, failed: failedCount }
 }

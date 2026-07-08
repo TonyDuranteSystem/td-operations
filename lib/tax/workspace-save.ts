@@ -99,6 +99,9 @@ export interface SaveToClientResult {
   reason?: string
   inserted: number
   deleted: number
+  /** Rows that FAILED to insert (constraint/DB errors — never dedup skips).
+   * Non-zero is loud: logged, error-audited, and surfaced to the caller. */
+  failed: number
   /** Storage path of the pre-replace snapshot (Replace only). */
   backupPath?: string
 }
@@ -171,7 +174,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
 
   const wsRows = (await fetchWorkspaceRowsForSave(workspaceId)).filter(r => Number(r.tax_year) === taxYear)
   if (wsRows.length === 0) {
-    return { ok: false, action: "refuse", reason: "This workspace has no transactions to save.", inserted: 0, deleted: 0 }
+    return { ok: false, action: "refuse", reason: "This workspace has no transactions to save.", inserted: 0, deleted: 0, failed: 0 }
   }
 
   // Existing rows in the client's real books for this account+year.
@@ -184,7 +187,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
   const inFlightJobs = await countInFlightIngestJobs(targetAccountId, taxYear)
   const decision = decideSaveToClient({ existingCount: existingCount ?? 0, inFlightJobs, mode })
   if (decision.action === "refuse") {
-    return { ok: false, action: "refuse", reason: decision.reason, inserted: 0, deleted: 0 }
+    return { ok: false, action: "refuse", reason: decision.reason, inserted: 0, deleted: 0, failed: 0 }
   }
 
   // Replace → snapshot then delete the client's rows for this year.
@@ -204,7 +207,14 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
 
   // Insert workspace rows into the client's books — same dedup contract as the
   // portal path (identical row shape; ignoreDuplicates keeps merge idempotent).
+  // SILENT-DROP GUARD (S2 slice 1, 2026-07-08): per-row errors used to be
+  // swallowed — prod's category CHECK rejected the only 2 'contribution' rows
+  // of the Dynamiq save and nobody knew ($3,059.99 short until the client
+  // hand-reconciled). Every failed row is now recorded and the save reports
+  // itself to the error-audit feed. A dedup skip (merge idempotency) is NOT a
+  // failure — upsert with ignoreDuplicates returns no error for those.
   let inserted = 0
+  const failedRows: Array<{ ref: string; date: string; amount: string; error: string }> = []
   for (const tx of wsRows) {
     const { error } = await supabaseAdmin
       .from("bank_transactions")
@@ -232,6 +242,21 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
         loc_confidence: tx.loc_confidence,
       } as never, { onConflict: "account_id,transaction_ref,transaction_date,amount", ignoreDuplicates: true })
     if (!error) inserted++
+    else failedRows.push({ ref: tx.transaction_ref, date: tx.transaction_date, amount: String(tx.amount), error: error.message })
+  }
+  if (failedRows.length > 0) {
+    console.error(`[workspace-save] ${failedRows.length} row(s) FAILED to insert:`, failedRows.slice(0, 5))
+    try {
+      const { reportSystemError } = await import("@/lib/system-errors")
+      await reportSystemError({
+        source: "server",
+        route: "lib/tax/workspace-save",
+        message: `Save-to-client dropped ${failedRows.length} row(s) for account ${targetAccountId} ${taxYear}: ${failedRows[0].error}`,
+        context: { workspace_id: workspaceId, account_id: targetAccountId, tax_year: taxYear, failed: failedRows.slice(0, 20) },
+      })
+    } catch (e) {
+      console.error("[workspace-save] error-audit report failed:", e)
+    }
   }
 
   // Auto-learn promotion (Phase 4, 2026-07-02): a blank workspace's learned
@@ -348,7 +373,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
       record_id: workspaceId,
       account_id: targetAccountId,
       summary: `Saved P&L workspace to client (${decision.action}): +${inserted} row(s)${deleted ? `, -${deleted} replaced` : ""}${promotedRules ? `, ${promotedRules} learned rule(s) promoted` : ""}${promotedPolicies ? `, ${promotedPolicies} country polic${promotedPolicies === 1 ? "y" : "ies"} promoted` : ""} for tax year ${taxYear}`,
-      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, backup_path: backupPath ?? null, promoted_rules: promotedRules, promoted_policies: promotedPolicies },
+      details: { workspace_id: workspaceId, tax_year: taxYear, mode: decision.action, inserted, deleted, failed: failedRows.length, backup_path: backupPath ?? null, promoted_rules: promotedRules, promoted_policies: promotedPolicies },
     } as never)
   } catch (e) {
     console.error("[workspace-save] audit log insert failed (save already applied):", e)
@@ -371,5 +396,5 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     }
   }
 
-  return { ok: true, action: decision.action, inserted, deleted, backupPath }
+  return { ok: true, action: decision.action, inserted, deleted, failed: failedRows.length, backupPath }
 }
