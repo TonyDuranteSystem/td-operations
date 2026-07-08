@@ -31,6 +31,9 @@ export async function GET() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const enriched = await Promise.all((threads ?? []).map(async (t: any) => {
     let label: string | null = t.channel_name ?? t.title ?? null
+    if (t.thread_type === 'general') {
+      label = 'general'
+    }
     if (t.thread_type === 'discussion') {
       if (t.account_id) {
         const { data: a } = await supabaseAdmin.from('accounts').select('company_name').eq('id', t.account_id).single()

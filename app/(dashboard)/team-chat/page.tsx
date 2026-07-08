@@ -96,19 +96,27 @@ export default function TeamWorkspacePage() {
     }
   }, [])
 
-  const loadMessages = useCallback(async (threadId: string) => {
-    setLoadingMsgs(true)
+  const loadMessages = useCallback(async (threadId: string, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoadingMsgs(true)
     try {
       const r = await fetch(`/api/team/threads/${threadId}`)
       if (!r.ok) throw new Error('Failed')
       const d = await r.json()
-      setMessages(d.messages)
+      // On a silent poll, only replace if something actually changed (avoids
+      // clobbering local optimistic state / re-render churn).
+      setMessages(prev => {
+        if (opts?.silent) {
+          const a = prev[prev.length - 1]?.id, b = d.messages[d.messages.length - 1]?.id
+          if (prev.length === d.messages.length && a === b) return prev
+        }
+        return d.messages
+      })
       // Optimistically clear this thread's unread badge locally.
       setThreads(prev => prev.map(t => t.id === threadId ? { ...t, unread_count: 0 } : t))
     } catch {
-      toast.error('Failed to load messages')
+      if (!opts?.silent) toast.error('Failed to load messages')
     } finally {
-      setLoadingMsgs(false)
+      if (!opts?.silent) setLoadingMsgs(false)
     }
   }, [])
 
@@ -144,8 +152,32 @@ export default function TeamWorkspacePage() {
     return () => { if (debounce) clearTimeout(debounce); supabase.removeChannel(channel) }
   }, [loadThreads])
 
-  // Scroll to bottom on new messages
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  // Scroll to bottom only when a genuinely-new message arrives (not on every
+  // poll refresh, which would fight the user's scroll position).
+  const lastMsgIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    const lastId = messages[messages.length - 1]?.id ?? null
+    if (lastId && lastId !== lastMsgIdRef.current) {
+      lastMsgIdRef.current = lastId
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages])
+
+  // Polling fallback — realtime is best-effort (WebSocket can drop, or the
+  // changefeed can lag). Poll the open thread + the sidebar so the workspace
+  // stays correct even when realtime delivers nothing. Pauses when the tab is
+  // hidden to avoid waste. Mirrors the portal-chats staff inbox pattern.
+  useEffect(() => {
+    const msgTimer = setInterval(() => {
+      if (document.visibilityState === 'visible' && selectedIdRef.current) {
+        loadMessages(selectedIdRef.current, { silent: true })
+      }
+    }, 8000)
+    const listTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') loadThreads()
+    }, 20000)
+    return () => { clearInterval(msgTimer); clearInterval(listTimer) }
+  }, [loadMessages, loadThreads])
 
   // Auto-grow textarea
   useEffect(() => {
@@ -207,6 +239,8 @@ export default function TeamWorkspacePage() {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: msg }),
         })
         if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Edit failed') }
+        const d = await r.json().catch(() => null)
+        if (d?.message) setMessages(prev => prev.map(x => x.id === d.message.id ? { ...x, ...d.message } : x))
         setEditing(null); setText('')
       } catch (e) {
         toast.error(e instanceof Error ? e.message : 'Edit failed')
@@ -232,6 +266,19 @@ export default function TeamWorkspacePage() {
         body: JSON.stringify({ message: sentText, reply_to_id: sentReply?.id ?? null, attachments }),
       })
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Failed to send') }
+      // Optimistically render the sender's own message immediately, instead of
+      // waiting for the realtime round-trip (which can lag or drop). The realtime
+      // INSERT handler dedups by id, so no double render. If @claude was pinged,
+      // its placeholder arrives via realtime/poll.
+      const d = await r.json().catch(() => null)
+      if (d?.message) {
+        setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, {
+          ...d.message,
+          reply_to_preview: sentReply
+            ? { id: sentReply.id, message: sentReply.message, sender_name: sentReply.sender_name, deleted_at: sentReply.deleted_at }
+            : null,
+        }])
+      }
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Failed to send')
       setText(sentText); setReplyTo(sentReply)
