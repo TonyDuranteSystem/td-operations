@@ -134,7 +134,7 @@ describe('createManualReferralCredit', () => {
   })
 
   it('self-heals a converted-but-uncredited existing row instead of failing (retry after a crash)', async () => {
-    const { supabase, state } = makeDb({ existing: [{ id: 'ref-old', status: 'converted', credited_amount: 0, commission_amount: 250 }] })
+    const { supabase, state } = makeDb({ existing: [{ id: 'ref-old', status: 'converted', credited_amount: 0, commission_amount: 250, commission_currency: 'USD' }] })
     const res = await createManualReferralCredit(
       { referrerContactId: 'c-1', referrerAccountId: 'a-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 250 },
       supabase,
@@ -143,6 +143,22 @@ describe('createManualReferralCredit', () => {
     // No new referral row — the credit is issued on the EXISTING one, idempotently.
     expect(state.inserts).toHaveLength(0)
     expect(invoiceMock.mock.calls[0][0].idempotency_key).toBe('referral-credit:ref-old')
+  })
+
+  it('re-stamps a recovered legacy EUR row to USD (the credit is issued in USD, figure as-is)', async () => {
+    const { supabase, state } = makeDb({ existing: [{ id: 'ref-eur', status: 'converted', credited_amount: 0, commission_amount: 250, commission_currency: 'EUR' }] })
+    const res = await createManualReferralCredit(
+      { referrerContactId: 'c-1', referrerAccountId: 'a-1', referredContactId: 'rc-1', referredName: 'X', creditAmountUsd: 250 },
+      supabase,
+    )
+    expect(res.created).toBe(true)
+    // Without this, the row would render "€250 paid" for a $250 credit note.
+    expect(state.updates).toContainEqual({
+      table: 'referrals',
+      payload: { commission_type: 'credit_note', commission_pct: 10, commission_amount: 250, commission_currency: 'USD' },
+      col: 'id',
+      val: 'ref-eur',
+    })
   })
 
   it('leaves a recoverable referral row when the credit note fails (no orphan money, retry works)', async () => {

@@ -26,28 +26,30 @@ export async function generateInvoiceNumber(): Promise<string> {
   // a wrong max.
   // TODO: when sequential count exceeds 999999, the LIKE pattern needs to allow 7+ chars.
   const strictPattern = `${prefix}______` // 6 underscores → exactly 6 chars after prefix
+  // LIKE's underscore matches ANY character, so a malformed row like 'INV-MMQA-3'
+  // also matches and lex-sorts ABOVE every numeric INV- — taking only the first
+  // row would parse NaN, hide the true numeric max, and produce a permanently
+  // colliding candidate (verified against real INV-MMQA-* rows in sandbox,
+  // 2026-07-08). Scan a page per table and take the highest ALL-DIGITS suffix.
   const [ciResult, pResult] = await Promise.all([
     supabaseAdmin
       .from('client_invoices')
       .select('invoice_number')
       .like('invoice_number', strictPattern)
       .order('invoice_number', { ascending: false })
-      .limit(1),
+      .limit(50),
     supabaseAdmin
       .from('payments')
       .select('invoice_number')
       .like('invoice_number', strictPattern)
       .order('invoice_number', { ascending: false })
-      .limit(1),
+      .limit(50),
   ])
 
-  let maxSeq = 0
-  for (const result of [ciResult, pResult]) {
-    if (result.data && result.data.length > 0 && result.data[0].invoice_number) {
-      const num = parseInt(result.data[0].invoice_number.replace(prefix, ''), 10)
-      if (!isNaN(num) && num > maxSeq) maxSeq = num
-    }
-  }
+  const maxSeq = Math.max(
+    maxNumericSuffix((ciResult.data ?? []).map(r => r.invoice_number), prefix),
+    maxNumericSuffix((pResult.data ?? []).map(r => r.invoice_number), prefix),
+  )
 
   return `${prefix}${String(maxSeq + 1).padStart(6, '0')}`
 }
@@ -67,8 +69,8 @@ export async function generateCreditNoteNumber(): Promise<string> {
   // also matches — and lex-sorts ABOVE every numeric CN- (letters > digits), so
   // trusting only the lexicographic max would parse NaN → always yield CN-000001
   // → a permanent unique-violation retry loop. Scan a page (desc) and take the
-  // highest ALL-DIGITS suffix instead. Caught in sandbox QA 2026-07-08;
-  // generateInvoiceNumber has the same latent fragility (separate task).
+  // highest ALL-DIGITS suffix instead. Caught in sandbox QA 2026-07-08
+  // (generateInvoiceNumber above had the same bug, hit by real INV-MMQA-* rows).
   const { data } = await supabaseAdmin
     .from('payments')
     .select('invoice_number')

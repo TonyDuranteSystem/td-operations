@@ -445,13 +445,13 @@ export async function createManualReferralCredit(
   ].filter(Boolean).join(",")
   let dq = supabase
     .from("referrals")
-    .select("id, status, credited_amount, commission_amount")
+    .select("id, status, credited_amount, commission_amount, commission_currency")
     .or(referrerOr)
     .neq("status", "cancelled")
   if (referredAccountId) dq = dq.eq("referred_account_id", referredAccountId)
   else if (referredContactId) dq = dq.eq("referred_contact_id", referredContactId)
   const { data: existing } = await dq.limit(1)
-  const existingRow = (existing ?? [])[0] as { id: string; status: string; credited_amount: number | null; commission_amount: number | null } | undefined
+  const existingRow = (existing ?? [])[0] as { id: string; status: string; credited_amount: number | null; commission_amount: number | null; commission_currency: string | null } | undefined
 
   if (existingRow) {
     // Self-heal: a prior attempt (or the organic path) left this referral
@@ -470,9 +470,10 @@ export async function createManualReferralCredit(
           },
           supabase,
         )
-        // Keep the recovered row coherent: fill commission fields it may lack
-        // (a converted row from the organic path can carry a NULL amount).
-        if (!existingRow.commission_amount) {
+        // Keep the recovered row coherent with the USD credit actually issued:
+        // fill a missing amount, and stamp the reward currency (a legacy row can
+        // carry EUR, which would render "€ paid" for a $ credit).
+        if (!existingRow.commission_amount || existingRow.commission_currency !== "USD") {
           await supabase
             .from("referrals")
             .update({ commission_type: "credit_note", commission_pct: REFERRAL_COMMISSION_PCT, commission_amount: recoverAmount, commission_currency: "USD" })

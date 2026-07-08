@@ -164,10 +164,14 @@ export async function reconcileReferralBacklog(
           },
           supabase,
         )
-        // Attribute the row to the credited account too (it was contact-keyed).
-        if (!r.referrer_account_id) {
-          await supabase.from("referrals").update({ referrer_account_id: decision.accountId }).eq("id", r.id)
-        }
+        // Keep the row coherent with the credit that was actually issued:
+        // attribute it to the credited account (it may have been contact-keyed)
+        // and stamp the reward currency USD — the figure was taken as-is per the
+        // reward rule, and leaving EUR here would render "€ paid" for a $ credit.
+        await supabase
+          .from("referrals")
+          .update({ referrer_account_id: decision.accountId, commission_currency: "USD" })
+          .eq("id", r.id)
         await closeCommissionTask(r.referred_name, supabase)
         row.applied = true
       } catch (e) {

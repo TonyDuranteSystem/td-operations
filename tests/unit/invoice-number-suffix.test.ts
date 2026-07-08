@@ -11,6 +11,8 @@ describe('maxNumericSuffix — numeric max of PREFIX-NNNNNN numbers, malformed-s
     // logic parsed NaN → always CN-000001 → permanent unique-violation loop.
     expect(maxNumericSuffix(['CN-QA0001', 'CN-000011', 'CN-000002'], 'CN-')).toBe(11)
     expect(maxNumericSuffix(['CN-0999XY', 'CN-099999'], 'CN-')).toBe(99999)
+    // Same poisoning for invoices — real rows found in sandbox (INV-MMQA-*).
+    expect(maxNumericSuffix(['INV-MMQA-3', 'INV-MMQA-2', 'INV-002080'], 'INV-')).toBe(2080)
   })
 
   it('returns 0 when there are no valid numbers (first credit note ever)', () => {
