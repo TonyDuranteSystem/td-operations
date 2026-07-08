@@ -39,7 +39,36 @@ export const OTHER_BUCKET_LABEL = "Other"
  */
 export function isOperatingExpenseRow(category: string | null | undefined, amount: number): boolean {
   const cat = category ?? "uncategorized"
-  return cat === "expense" || cat === "fee" || (cat === "uncategorized" && amount < 0)
+  return cat === "expense" || cat === "fee" || cat === "refund" || (cat === "uncategorized" && amount < 0)
+}
+
+/** S2 slice 6a — the per-row contribution to the operating-expenses breakdown,
+ * with the SAME semantics as the P&L headline (computePnlTotals): SIGNED, so a
+ * vendor reversal/refund REDUCES its bucket instead of inflating it. The old
+ * Math.abs breakdown summed $2,067,145 while the headline said $1,937,283 on
+ * Dynamiq 2024 (the client caught it) — the sum of these contributions over
+ * every isOperatingExpenseRow row now equals the headline by construction. */
+export function expenseBreakdownContribution(amount: number): number {
+  return -amount
+}
+
+/** Build the operating-expense breakdown lines — headline-consistent (see
+ * expenseBreakdownContribution). Shared by the portal and staff view routes. */
+export function buildExpenseBreakdown(
+  rows: Array<{ category: string | null; amount: number; ai_bucket: unknown }>,
+  buckets: ExpenseBucket[],
+): Array<{ slug: string; label: string; total: number }> {
+  const bucketLabelMap = new Map(buckets.map(b => [b.slug, b.label]))
+  const validSlugs = new Set(buckets.map(b => b.slug))
+  const totals = new Map<string, number>()
+  for (const r of rows) {
+    if (!isOperatingExpenseRow(r.category, r.amount)) continue
+    const slug = bucketSlugForRow(r.ai_bucket, validSlugs)
+    totals.set(slug, (totals.get(slug) ?? 0) + expenseBreakdownContribution(r.amount))
+  }
+  return Array.from(totals.entries())
+    .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
+    .sort((a, b) => b.total - a.total)
 }
 
 /** The breakdown bucket slug for a row: its ai_bucket when that is a known active

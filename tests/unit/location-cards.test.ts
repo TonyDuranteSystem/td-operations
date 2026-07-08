@@ -154,3 +154,17 @@ describe("buildLocationCards — periods", () => {
     expect(periods).toHaveLength(0)
   })
 })
+
+// S2 slice 6b — the own-entity matching name (year-suffix workspace labels).
+import { normalizeCompanyNameForMatching } from "@/lib/tax/workspace-recategorize"
+
+describe("normalizeCompanyNameForMatching", () => {
+  it("strips standalone year tokens (the Dynamiq workspace-label case)", () => {
+    expect(normalizeCompanyNameForMatching("Dynamiq SR LLC 2024")).toBe("Dynamiq SR LLC")
+    expect(normalizeCompanyNameForMatching("2023 Acme LLC")).toBe("Acme LLC")
+  })
+  it("leaves embedded digits and normal names alone", () => {
+    expect(normalizeCompanyNameForMatching("Studio 2020Vision LLC")).toBe("Studio 2020Vision LLC")
+    expect(normalizeCompanyNameForMatching("Uxio Test LLC")).toBe("Uxio Test LLC")
+  })
+})

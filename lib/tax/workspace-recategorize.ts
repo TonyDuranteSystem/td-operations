@@ -89,12 +89,36 @@ async function loadRulesForWorkspace(linkedAccountId: string | null, workspaceId
  * client path. (The AI-assist pass is separate — `recategorizeWorkspaceAi`,
  * run as a job at Generate time.)
  */
+/** PURE (S2 slice 6b) — the name used for own-entity transfer matching.
+ * Workspace labels carry year suffixes ("Dynamiq SR LLC 2024") that defeat
+ * the token matcher — the $87.7k revenue-inflation root cause on the Dynamiq
+ * workspace. Strip standalone year tokens; prefer the linked account's REAL
+ * name when one exists (handled by the caller passing it in). */
+export function normalizeCompanyNameForMatching(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(tok => !/^(19|20)\d{2}$/.test(tok))
+    .join(" ")
+    .trim()
+}
+
 export async function recategorizeWorkspace(
   workspaceId: string,
   opts: { linkedAccountId: string | null; companyName: string; memberNames: string[] },
 ): Promise<WorkspaceRecategorizeResult> {
   const rows = await fetchAllWorkspaceTransactions(workspaceId)
   if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, uncategorizedRemaining: 0 }
+
+  // S2 slice 6b: own-entity matching runs on the REAL company name — the
+  // linked account's when linked, else the workspace label with year tokens
+  // stripped (a standalone workspace named "<Company> <year>" must still
+  // match "<Company>" wires).
+  let matchingCompanyName = opts.companyName
+  if (opts.linkedAccountId) {
+    const { data: acct } = await db.from("accounts").select("company_name").eq("id", opts.linkedAccountId).maybeSingle()
+    if (acct?.company_name) matchingCompanyName = String(acct.company_name)
+  }
+  matchingCompanyName = normalizeCompanyNameForMatching(matchingCompanyName)
 
   const rules = await loadRulesForWorkspace(opts.linkedAccountId, workspaceId)
   // Declared related entities (Phase 3R slice 4): forked workspaces inherit
@@ -107,7 +131,7 @@ export async function recategorizeWorkspace(
       relatedEntities = await fetchDeclaredEntities(db, opts.linkedAccountId, wsRow.tax_year as number)
     }
   }
-  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, opts.memberNames, opts.companyName, relatedEntities)
+  const { updates, transferPairs } = computeRecategorizationUpdates(rows, rules, opts.memberNames, matchingCompanyName, relatedEntities)
 
   let recategorized = 0
   for (const [id, u] of Array.from(updates.entries())) {

@@ -226,6 +226,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [attestChecked, setAttestChecked] = useState(false)
+  // S2 slice 3 — explicit acknowledgment when provided balances don't tie.
+  const [mismatchAcked, setMismatchAcked] = useState(false)
   const [attested, setAttested] = useState(false)
   const [newBucket, setNewBucket] = useState('')
   // Add-a-statement uploader (wires the existing owner-only /upload endpoint
@@ -809,6 +811,10 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         return it
           ? 'Uno dei tuoi estratti conto non torna — di solito mancano dei mesi o l\'export è stato filtrato. Ricaricare l\'intero anno renderebbe il dato esatto.'
           : 'One of your statements doesn\'t add up — usually some months are missing or the export was filtered. Re-uploading the full year would make it exact.'
+      case 'prior_year_clash':
+        return it
+          ? `La dichiarazione dell'anno scorso indica una liquidità finale diversa dai saldi di apertura che hai verificato (differenza di $${fmt(Math.abs(item.amount ?? 0))}). Il nostro team deve risolverlo — potrebbe servire una correzione della dichiarazione precedente.`
+          : `Last year's return shows a different ending cash than the opening balances you verified (off by $${fmt(Math.abs(item.amount ?? 0))}). Our team must resolve this — the prior return may need an amendment.`
       case 'no_prior_year':
         return it
           ? 'Non abbiamo la dichiarazione dell\'anno scorso, quindi i saldi iniziali di quest\'anno provengono dai tuoi estratti conto. Se ce l\'hai, condividerla collegherebbe i due anni.'
@@ -844,7 +850,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       const res = await fetch(`${API}/attest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, tax_year: taxYear }),
+        body: JSON.stringify({ account_id: accountId, tax_year: taxYear, acknowledge_balance_mismatches: mismatchAcked }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -2275,9 +2281,13 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       <div className="mt-2 text-xs text-emerald-700">{it ? '✓ Nessuna attività — registrato.' : '✓ No activity — recorded.'}</div>
                     ) : q.answer === 'had_activity' ? (
                       <div className="mt-2 text-xs text-amber-700">
-                        {it
-                          ? 'Hai indicato che c\'era attività: elimina il file qui sotto e carica l\'export dell\'intero anno.'
-                          : 'You said there was activity: delete the file below and upload the entire-year export.'}
+                        {q.kind === 'missing_bank'
+                          ? (it
+                            ? 'Hai indicato che questo conto era attivo: carica il suo estratto conto qui sotto.'
+                            : 'You said this account was active: upload its statements below.')
+                          : (it
+                            ? 'Hai indicato che c\'era attività: elimina il file qui sotto e carica l\'export dell\'intero anno.'
+                            : 'You said there was activity: delete the file below and upload the entire-year export.')}
                       </div>
                     ) : (
                       <div className="mt-2 flex flex-wrap gap-2">
@@ -2286,14 +2296,18 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                           onClick={() => void answerCoverage(q, 'no_activity')}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
-                          {it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months'}
+                          {q.kind === 'missing_bank'
+                            ? (it ? 'No — conto chiuso o non usato quest\'anno' : 'No — account closed or unused this year')
+                            : (it ? 'No — nessuna attività in quei mesi' : 'No — no activity in those months')}
                         </button>
                         <button
                           disabled={busy !== null}
                           onClick={() => void answerCoverage(q, 'had_activity')}
                           className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
                         >
-                          {it ? 'Sì — c\'era attività (devo ricaricare)' : 'Yes — there was activity (I need to re-upload)'}
+                          {q.kind === 'missing_bank'
+                            ? (it ? 'Sì — c\'era attività (lo carico)' : 'Yes — it had activity (I will upload it)')
+                            : (it ? 'Sì — c\'era attività (devo ricaricare)' : 'Yes — there was activity (I need to re-upload)')}
                         </button>
                       </div>
                     )}
@@ -2380,6 +2394,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                     </li>
                   </ul>
                 </div>
+                {(view.draft.bank_balances?.mismatched_banks?.length ?? 0) > 0 && (
+                  <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 mb-2">
+                    <input type="checkbox" checked={mismatchAcked} onChange={e => setMismatchAcked(e.target.checked)} className="mt-0.5" />
+                    <span>
+                      {it
+                        ? `I saldi che ho fornito non tornano per: ${(view.draft.bank_balances?.mismatched_banks ?? []).join(', ')}. Ho ricontrollato e confermo comunque — so che potrebbe mancare una transazione.`
+                        : `The balances I provided do not tie for: ${(view.draft.bank_balances?.mismatched_banks ?? []).join(', ')}. I re-checked and confirm anyway — I understand a transaction may be missing.`}
+                    </span>
+                  </label>
+                )}
                 <label className="flex items-start gap-2 text-sm text-zinc-700">
                   <input type="checkbox" checked={attestChecked} onChange={e => setAttestChecked(e.target.checked)} className="mt-0.5" />
                   <span>
@@ -2389,7 +2413,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </span>
                 </label>
                 <button
-                  disabled={!attestChecked || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busy !== null}
+                  disabled={!attestChecked || ((view.draft.bank_balances?.mismatched_banks?.length ?? 0) > 0 && !mismatchAcked) || view.ingestFailed > 0 || !view.completeness.can_accept_as_is || view.coverage.unanswered > 0 || view.coverage.incomplete > 0 || view.ingestPending > 0 || busy !== null}
                   onClick={() => void attest()}
                   className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 >

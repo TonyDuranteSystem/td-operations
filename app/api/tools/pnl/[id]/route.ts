@@ -83,21 +83,14 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       else { cur.count++; if (date < cur.from) cur.from = date; if (date > cur.to) cur.to = date }
     }
 
-    // Expense breakdown by bucket (same policy as the portal route).
-    const { getExpenseBuckets, isOperatingExpenseRow, bucketSlugForRow, OTHER_BUCKET_LABEL } = await import('@/lib/tax/expense-buckets')
+    // Expense breakdown by bucket (same policy as the portal route) —
+    // headline-consistent since S2 slice 6a (signed math incl. refunds).
+    const { getExpenseBuckets, buildExpenseBreakdown } = await import('@/lib/tax/expense-buckets')
     const buckets = await getExpenseBuckets(db)
-    const bucketLabelMap = new Map(buckets.map(b => [b.slug, b.label]))
-    const validSlugs = new Set(buckets.map(b => b.slug))
-    const breakdownMap = new Map<string, number>()
-    for (const r of reviewable) {
-      const amt = Number(r.amount)
-      if (!isOperatingExpenseRow(r.category as string | null, amt)) continue
-      const slug = bucketSlugForRow(r.ai_bucket, validSlugs)
-      breakdownMap.set(slug, (breakdownMap.get(slug) ?? 0) + Math.abs(amt))
-    }
-    const expense_breakdown = Array.from(breakdownMap.entries())
-      .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
-      .sort((a, b) => b.total - a.total)
+    const expense_breakdown = buildExpenseBreakdown(
+      reviewable.map(r => ({ category: (r.category as string | null) ?? null, amount: Number(r.amount), ai_bucket: r.ai_bucket })),
+      buckets,
+    )
 
     // In-flight / failed workspace ingest jobs (by distinct file path).
     const { data: ingestJobs } = await supabaseAdmin

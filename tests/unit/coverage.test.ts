@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { coverageQuestions, unansweredCoverage, incompleteCoverage, type CoverageTx } from "@/lib/tax/coverage"
+import { coverageQuestions, unansweredCoverage, incompleteCoverage, type CoverageTx, missingBankQuestions } from "@/lib/tax/coverage"
 
 function tx(date: string, bank = "Mercury", type: string | null = "Checking"): CoverageTx {
   return { bank_name: bank, account_type: type, transaction_date: date }
@@ -56,5 +56,33 @@ describe("answers", () => {
   it("'had activity' answers mark the export incomplete", () => {
     const answers = { [qs[0].key]: { answer: "had_activity" as const, at: "2026-01-01" } }
     expect(incompleteCoverage(qs, answers)).toHaveLength(1)
+  })
+})
+
+// S2 slice 4 — banks known from last year with no current-year rows.
+
+describe("missingBankQuestions", () => {
+  const currentTxs = [
+    { bank_name: "Mercury", account_type: "Checking", transaction_date: "2024-03-01" },
+    { bank_name: "Wise", account_type: "EUR", transaction_date: "2024-05-01" },
+  ]
+
+  it("asks about a prior-year bank with zero current rows (the missing-Chase class)", () => {
+    const qs = missingBankQuestions(["Chase Checking", "Mercury Checking"], currentTxs, 2024)
+    expect(qs).toHaveLength(1)
+    expect(qs[0].bank_key).toBe("Chase Checking")
+    expect(qs[0].kind).toBe("missing_bank")
+    expect(qs[0].key).toBe("Chase Checking|missing_bank|2024")
+  })
+
+  it("bank-level match: any account of the same bank counts as present", () => {
+    // Prior year had "Wise Checking"; this year only "Wise EUR" uploaded — same bank, no question.
+    const qs = missingBankQuestions(["Wise Checking"], currentTxs, 2024)
+    expect(qs).toHaveLength(0)
+  })
+
+  it("dedupes and no questions when everything is present", () => {
+    expect(missingBankQuestions(["Mercury Checking", "Mercury Checking"], currentTxs, 2024)).toHaveLength(0)
+    expect(missingBankQuestions([], currentTxs, 2024)).toHaveLength(0)
   })
 })

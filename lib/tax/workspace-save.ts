@@ -39,9 +39,18 @@ export function decideSaveToClient(input: {
   existingCount: number
   inFlightJobs: number
   mode?: SaveMode
+  /** Rows the CLIENT answered on the target year (S2 slice 5). Replace would
+   * DELETE their decisions — refused outright; Merge is add-only and safe. */
+  clientAnswerCount?: number
 }): SaveDecision {
   if (input.inFlightJobs > 0) {
     return { action: "refuse", reason: "The client's statements are still being processed — try again once ingestion finishes." }
+  }
+  if (input.mode === "replace" && (input.clientAnswerCount ?? 0) > 0) {
+    return {
+      action: "refuse",
+      reason: `The client has answered ${input.clientAnswerCount} transaction(s) on this year — Replace would erase their decisions. Use Merge (add only), or resolve their answers with the client first.`,
+    }
   }
   if (input.existingCount === 0) return { action: "insert" }
   if (input.mode === "merge") return { action: "merge" }
@@ -185,7 +194,38 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
     .eq("tax_year", taxYear)
 
   const inFlightJobs = await countInFlightIngestJobs(targetAccountId, taxYear)
-  const decision = decideSaveToClient({ existingCount: existingCount ?? 0, inFlightJobs, mode })
+
+  // S2 slice 5 — count the CLIENT's own decisions on the target year: group/bulk
+  // answers (notes 'manual: client answer…' / 'manual: bulk client answer…')
+  // plus rows swept by client-authored location batches ('manual: period|country
+  // answer <batch>' where the batch's actor_role='client'). Replace with any of
+  // these present is refused in decideSaveToClient — a re-published workspace
+  // must never erase what the client already decided.
+  let clientAnswerCount = 0
+  try {
+    const { count: directAnswers } = await supabaseAdmin
+      .from("bank_transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", targetAccountId)
+      .eq("tax_year", taxYear)
+      .or("notes.like.manual: client answer%,notes.like.manual: bulk client answer%")
+    clientAnswerCount += directAnswers ?? 0
+    const { data: clientBatches } = await db
+      .from("pnl_period_answers")
+      .select("row_count")
+      .eq("account_id", targetAccountId)
+      .eq("tax_year", taxYear)
+      .eq("actor_role", "client")
+      .is("undone_at", null)
+    for (const b of (clientBatches ?? []) as Array<{ row_count: number }>) clientAnswerCount += Number(b.row_count) || 0
+  } catch (e) {
+    // Fail CLOSED for Replace: an unknown answer count must not unlock a
+    // destructive path. A huge sentinel keeps merge/insert unaffected.
+    console.error("[workspace-save] client-answer count failed — refusing Replace defensively:", e)
+    clientAnswerCount = Number.MAX_SAFE_INTEGER
+  }
+
+  const decision = decideSaveToClient({ existingCount: existingCount ?? 0, inFlightJobs, mode, clientAnswerCount })
   if (decision.action === "refuse") {
     return { ok: false, action: "refuse", reason: decision.reason, inserted: 0, deleted: 0, failed: 0 }
   }

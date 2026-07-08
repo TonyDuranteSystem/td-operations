@@ -23,7 +23,7 @@ export interface CoverageQuestion {
   /** Stable key: `${bank_key}|leading|2025-03` etc. — the answer store key. */
   key: string
   bank_key: string
-  kind: "leading" | "trailing" | "internal"
+  kind: "leading" | "trailing" | "internal" | "missing_bank"
   /** Months (YYYY-MM) the question covers. */
   months: string[]
   /** EN question text — the UI renders both languages from the parts. */
@@ -98,4 +98,35 @@ export function unansweredCoverage(questions: CoverageQuestion[], answers: Cover
  *  replace the file. These also block attestation, with a different message. */
 export function incompleteCoverage(questions: CoverageQuestion[], answers: CoverageAnswers): CoverageQuestion[] {
   return questions.filter(q => answers[q.key]?.answer === "had_activity")
+}
+
+/** S2 slice 4 — banks we KNOW about (prior-year books) with ZERO rows this
+ * year. The system uses what it already knows instead of discovering a whole
+ * missing bank from a $750k discrepancy (the Dynamiq Chase case). Same answer
+ * store: "no_activity" = closed/unused (resolved); "had_activity" = the client
+ * must upload it (blocks like an incomplete export). PURE.
+ */
+export function missingBankQuestions(
+  knownBankKeys: string[],
+  currentTxs: CoverageTx[],
+  taxYear: number,
+): CoverageQuestion[] {
+  const present = new Set(currentTxs.map(t => `${t.bank_name} ${t.account_type ?? "Checking"}`))
+  const presentBanks = new Set(Array.from(present).map(k => k.split(" ")[0].toLowerCase()))
+  const out: CoverageQuestion[] = []
+  for (const known of Array.from(new Set(knownBankKeys)).sort()) {
+    if (present.has(known)) continue
+    // Match on the BANK level too — "Chase Checking" counts as present if any
+    // "Chase …" account uploaded (sub-account labels drift year to year).
+    const bankToken = known.split(" ")[0].toLowerCase()
+    if (bankToken && presentBanks.has(bankToken)) continue
+    out.push({
+      key: `${known}|missing_bank|${taxYear}`,
+      bank_key: known,
+      kind: "missing_bank",
+      months: [],
+      question: `You used ${known} last year but we have no ${taxYear} statements for it — did it have any ${taxYear} activity?`,
+    })
+  }
+  return out
 }

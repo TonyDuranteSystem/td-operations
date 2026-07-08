@@ -117,9 +117,22 @@ export async function GET(request: NextRequest) {
 
     // Coverage questions (§3.4): the months an export doesn't span — gate 1
     // can't see what a file left out; the client's answer closes the hole.
-    const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
+    const { coverageQuestions, missingBankQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
     const answers = (sub?.financials_meta?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
-    const covQs = coverageQuestions((sources ?? []).map(r => ({ bank_name: r.bank_name, account_type: r.account_type, transaction_date: r.transaction_date })), taxYear)
+    const covTxs = (sources ?? []).map(r => ({ bank_name: r.bank_name, account_type: r.account_type, transaction_date: r.transaction_date }))
+    // S2 slice 4 — banks known from LAST year with no rows this year become an
+    // explicit question (the missing-Chase class), instead of a silent hole.
+    const { data: priorBanks } = await supabaseAdmin
+      .from('bank_transactions')
+      .select('bank_name, account_type')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear - 1)
+      .limit(5000)
+    const knownBankKeys = Array.from(new Set((priorBanks ?? []).map(r => `${r.bank_name} ${r.account_type ?? 'Checking'}`)))
+    const covQs = [
+      ...coverageQuestions(covTxs, taxYear),
+      ...missingBankQuestions(knownBankKeys, covTxs, taxYear),
+    ]
     const coverage = {
       questions: covQs.map(q => ({ ...q, answer: answers[q.key]?.answer ?? null })),
       unanswered: unansweredCoverage(covQs, answers).length,
@@ -128,70 +141,28 @@ export async function GET(request: NextRequest) {
 
     // Flexible expense buckets (#2) — the live catalog list the review groups by
     // and the "add a bucket" field offers.
-    const { getExpenseBuckets, isOperatingExpenseRow, bucketSlugForRow, OTHER_BUCKET_LABEL } = await import('@/lib/tax/expense-buckets')
+    const { getExpenseBuckets, buildExpenseBreakdown } = await import('@/lib/tax/expense-buckets')
     const buckets = await getExpenseBuckets(db)
 
     // Operating-expense breakdown by accountant bucket (Luca: "more detail in the
     // P&L"). Matches the P&L's Operating-expenses composition: outflows booked
     // expense/fee PLUS uncategorized outflows (which default to business expense).
     // COGS + distributions are shown on their own lines, so excluded here.
-    const bucketLabelMap = new Map(buckets.map(b => [b.slug, b.label]))
-    const validSlugs = new Set(buckets.map(b => b.slug))
-    const breakdownMap = new Map<string, number>()
-    for (const r of uncatRows) {
-      const amt = Number(r.amount)
-      if (!isOperatingExpenseRow(r.category as string | null, amt)) continue
-      const slug = bucketSlugForRow(r.ai_bucket, validSlugs)
-      breakdownMap.set(slug, (breakdownMap.get(slug) ?? 0) + Math.abs(amt))
-    }
     // slug travels with each line so the client can lazy-load that category's
-    // transactions on click (Luca's drill-down, dev_task 1bee0ffe).
-    const expense_breakdown = Array.from(breakdownMap.entries())
-      .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
-      .sort((a, b) => b.total - a.total)
+    // transactions on click (Luca's drill-down, dev_task 1bee0ffe). Breakdown is
+    // headline-consistent since S2 slice 6a (signed math incl. refunds).
+    const expense_breakdown = buildExpenseBreakdown(
+      uncatRows.map(r => ({ category: (r.category as string | null) ?? null, amount: Number(r.amount), ai_bucket: r.ai_bucket })),
+      buckets,
+    )
 
-    // Ingestion status — the financials are computed on demand from
-    // bank_transactions, which land asynchronously as each per-file
-    // ingest_bank_statement job completes (a busy account's full year of PDF
-    // statements takes ~45 min via AI extraction). Without this, the page
-    // renders a misleading all-zeros P&L while jobs are still running and the
-    // client thinks the tool is broken (Luca QA, 2026-06-25). We surface the
-    // in-flight + failed counts so the UI can show "still preparing" instead of
-    // fake zeros, and so attestation is blocked until ingestion is complete.
-    // tax_year is stored as a JSON number in the payload → compare as text.
-    const { data: ingestJobs } = await supabaseAdmin
-      .from('job_queue')
-      .select('status, result, payload')
-      .eq('job_type', 'ingest_bank_statement')
-      .eq('account_id', accountId)
-      .in('status', ['pending', 'processing', 'failed', 'completed'])
-    // Count by distinct FILE (payload.path), not by job: the stuck-job reaper
-    // re-enqueues, so one file can have several rows (a merged file Luca uploaded
-    // had 3 failed rows). Counting jobs told the client "3 files couldn't be
-    // read" for 1 file. A file is DONE if ANY of its jobs completed successfully
-    // (result.ok !== false on a completed row) — earlier failed/retried attempts
-    // for that same path are then irrelevant. ('cancelled' is excluded by the
-    // query above — superseded enqueues must not count as failures.)
-    const byPath = new Map<string, { succeeded: boolean; pending: boolean; failed: boolean }>()
-    for (const j of (ingestJobs ?? []) as Array<{ status: string; result: { ok?: boolean } | null; payload: { tax_year?: number | string; path?: string } | null }>) {
-      // Scope to THIS tax year (the account may have statements for other years).
-      if (String(j.payload?.tax_year ?? '') !== String(taxYear)) continue
-      const path = j.payload?.path
-      if (!path) continue
-      const e = byPath.get(path) ?? { succeeded: false, pending: false, failed: false }
-      if (j.status === 'completed' && j.result?.ok !== false) e.succeeded = true
-      else if (j.status === 'pending' || j.status === 'processing') e.pending = true
-      // Unreadable file → completes with ok:false; transient/throw → 'failed'.
-      else if (j.status === 'failed' || (j.status === 'completed' && j.result?.ok === false)) e.failed = true
-      byPath.set(path, e)
-    }
-    let ingestPending = 0
-    let ingestFailed = 0
-    for (const e of Array.from(byPath.values())) {
-      if (e.succeeded) continue // the file made it in — ignore earlier attempts
-      if (e.pending) ingestPending++
-      else if (e.failed) ingestFailed++
-    }
+    // Ingestion status — per-FILE states via the shared helper (S2 slice 3;
+    // the attest route enforces the same truth server-side). A file is DONE if
+    // ANY of its jobs completed successfully; 'cancelled' never counts.
+    const { listIngestFileStates, unresolvedFailedFiles } = await import('@/lib/tax/ingest-status')
+    const fileStates = await listIngestFileStates(accountId, taxYear)
+    const ingestPending = fileStates.filter(f => !f.succeeded && f.pending).length
+    const ingestFailed = unresolvedFailedFiles(fileStates).length
 
     // Location-period + country cards (Phase B2, 2026-07-08): same pure
     // builder as the staff tool (lib/tax/location-cards.ts), fed from the
@@ -261,8 +232,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Self-healing AI chain state (Phase 3R): the client sees a neutral
-    // text-only "still finishing automatically" note during backoff waits —
-    // never a control (review cond.: a stopped client run must be VISIBLE).
     let aiState: string = 'idle'
     let aiRemaining = 0
     try {

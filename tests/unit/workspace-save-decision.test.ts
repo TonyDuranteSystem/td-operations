@@ -31,3 +31,23 @@ describe('decideSaveToClient', () => {
     expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'replace' }).action).toBe('replace')
   })
 })
+
+describe('decideSaveToClient — client-answer protection (S2 slice 5)', () => {
+  it('refuses Replace when the client has answered anything', () => {
+    const d = decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'replace', clientAnswerCount: 7 })
+    expect(d.action).toBe('refuse')
+    expect(d.reason).toMatch(/answered 7/)
+  })
+
+  it('Merge stays allowed with client answers present (add-only, never overwrites)', () => {
+    expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'merge', clientAnswerCount: 7 }).action).toBe('merge')
+  })
+
+  it('Replace still works when the client has answered nothing', () => {
+    expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'replace', clientAnswerCount: 0 }).action).toBe('replace')
+  })
+
+  it('fail-closed sentinel refuses Replace', () => {
+    expect(decideSaveToClient({ existingCount: 120, inFlightJobs: 0, mode: 'replace', clientAnswerCount: Number.MAX_SAFE_INTEGER }).action).toBe('refuse')
+  })
+})

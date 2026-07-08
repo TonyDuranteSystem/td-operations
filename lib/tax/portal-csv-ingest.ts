@@ -35,6 +35,11 @@ export interface IngestResult {
   /** Rows that error'd on insert (never dedup skips) — non-zero is already
    * error-audited; surfaced here so job steps/receipts can show it. */
   failed?: number
+  /** AI-extraction balance reconciliation (PDF path; S2 slice 3). false =
+   * transactions don't add to the statement's own closing balance — the
+   * per-bank balance anchors are what verify such a file. Null/undefined =
+   * not checkable (CSV fast path, no printed balances). */
+  reconciliation?: { reconciled: boolean | null; detail?: string } | null
 }
 
 export interface IngestPortalCsvInput {
@@ -133,7 +138,7 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   )
   const months = Array.from(new Set(categorized.map(t => t.transaction_date.slice(0, 7)))).sort()
   if (analysis.identicalFile) {
-    return { ok: true, alert: analysis.alert, inserted: 0, parsed: categorized.length, months, bankDetected, uncategorizedRemaining: 0, sourceFileId }
+    return { ok: true, alert: analysis.alert, inserted: 0, parsed: categorized.length, months, bankDetected, uncategorizedRemaining: 0, sourceFileId, reconciliation: parsed.reconciliation ?? null }
   }
 
   // 4. Insert — the unique index drops exact-duplicate rows (structural L2).
@@ -243,5 +248,5 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     await resetFinancialsAttestation(accountId, taxYear, `new file ingested (${inserted} transactions)`)
   }
 
-  return { ok: true, alert: analysis.alert, inserted, parsed: categorized.length, months, bankDetected, uncategorizedRemaining, sourceFileId, failed: failedCount }
+  return { ok: true, alert: analysis.alert, inserted, parsed: categorized.length, months, bankDetected, uncategorizedRemaining, sourceFileId, failed: failedCount, reconciliation: parsed.reconciliation ?? null }
 }

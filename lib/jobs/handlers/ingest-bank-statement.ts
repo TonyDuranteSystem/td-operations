@@ -127,6 +127,9 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     result.steps.push(step("ingest", "ok",
       `${fileName}: ${r.inserted} inserted / ${r.parsed} parsed (${r.bankDetected}, ${r.months.join(", ") || "no months"})${r.failed ? ` — ⚠ ${r.failed} row(s) FAILED to insert (error-audited)` : ""}${r.alert ? ` — ${r.alert}` : ""}`))
     result.summary = `Ingested ${fileName}: ${r.inserted} transactions`
+    // S2 slice 3: persist the AI-extraction reconciliation verdict on the job
+    // result so receipts/staff can see "read but unverified" PDFs.
+    ;(result as unknown as Record<string, unknown>).reconciliation = r.reconciliation ?? null
 
     // If this was the LAST statement for the account+year, tell the client their
     // P&L is ready (one-time, locale-aware). Self-gates + never throws, so it

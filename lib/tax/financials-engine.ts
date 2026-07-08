@@ -79,6 +79,12 @@ export interface FinancialDraft {
   beginning_cash: number | null
   /** Where beginning_cash came from — drives the UI note + gate wording. */
   beginning_cash_source: "prior_return" | "statements" | "provided" | null
+  /** S2 slice 4 — the prior return's ending cash and the client-verified
+   *  openings BOTH exist and disagree beyond materiality. The prior return
+   *  still WINS the beginning-cash pick (deterministic), but this clash is a
+   *  human decision (amend the prior year vs correct the balances) — flagged
+   *  everywhere, never auto-resolved. */
+  prior_opening_clash: { prior: number; provided: number; delta: number } | null
   beginning_capital_total: number
   ending_cash: number
   /** v1: assets = cash. */
@@ -216,6 +222,17 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   const usingProvidedOpening = priorCash === null && !usingStatementOpening
     && balanceSummary.total_opening_usd !== null && allocatable.length > 0
   const providedOpening = usingProvidedOpening ? balanceSummary.total_opening_usd : null
+  // S2 slice 4 — prior-return vs client-openings clash ($5 materiality; small
+  // timing noise is not a finding). Exactly the Dynamiq discovery ($1.14M on
+  // the filed return vs $218k of real openings), systematized.
+  const PRIOR_CLASH_MATERIALITY_USD = 5
+  const priorOpeningClash = priorCash !== null && balanceSummary.total_opening_usd !== null
+    && Math.abs(priorCash - balanceSummary.total_opening_usd) > PRIOR_CLASH_MATERIALITY_USD
+    ? { prior: priorCash, provided: balanceSummary.total_opening_usd, delta: priorCash - balanceSummary.total_opening_usd }
+    : null
+  if (priorOpeningClash) {
+    notes.push(`Prior-year return shows ending cash ${priorOpeningClash.prior.toFixed(2)} but the verified per-bank openings total ${priorOpeningClash.provided.toFixed(2)} (off by ${priorOpeningClash.delta.toFixed(2)}) — the prior return may need an amendment. Our team must resolve this before filing.`)
+  }
   if (balanceSummary.mismatched_banks.length > 0) {
     for (const m of balanceSummary.banks.filter(x => x.tie === "mismatch")) {
       notes.push(`${m.bank_key}: opening + transactions differ from the closing balance by ${(m.delta_usd as number).toFixed(2)} USD — a transaction is likely missing or duplicated in that account's statements.`)
@@ -300,6 +317,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     members: memberCapital,
     banks,
     bank_balances: banks.length > 0 ? balanceSummary : null,
+    prior_opening_clash: priorOpeningClash,
     beginning_cash: beginningCash,
     beginning_cash_source: beginningCashSource,
     beginning_capital_total: beginningCapitalTotal,

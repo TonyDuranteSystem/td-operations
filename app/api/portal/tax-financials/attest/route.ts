@@ -51,12 +51,38 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // HARD gate (S2 slice 3): a file that failed to read with no successful
+    // attempt means the books are INCOMPLETE — attesting on them would be
+    // false assurance. The client resolves it (delete + re-upload a proper
+    // export) or staff clears the failed job.
+    const { listIngestFileStates, unresolvedFailedFiles } = await import('@/lib/tax/ingest-status')
+    const failedFiles = unresolvedFailedFiles(await listIngestFileStates(accountId, taxYear))
+    if (failedFiles.length > 0) {
+      const names = failedFiles.map(f => f.path.split('/').pop()).join(', ')
+      return NextResponse.json(
+        { error: `${failedFiles.length} statement file(s) could not be read (${names}) — the numbers do not include them. Delete and re-upload each as the bank exports it (CSV, or the official PDF), then confirm.` },
+        { status: 422 },
+      )
+    }
+
     // The hard gate: every blocking gate must pass right now.
     const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')
     const view = await getFinancialsView(accountId, taxYear)
     if (!view.canConfirm) {
       const blocked = view.gates.filter(g => g.blocking && g.status === 'fail').map(g => g.detail).join(' ')
       return NextResponse.json({ error: blocked || 'Not everything is verified yet.' }, { status: 422 })
+    }
+
+    // ACKNOWLEDGE tier (S2 slice 3): per-bank balance mismatches do not
+    // imprison the client (trust model — informational P&L), but they must be
+    // consciously accepted, never silently attested past. The UI shows a
+    // separate checkbox listing the exact banks; its state arrives here.
+    const mismatched = view.draft.bank_balances?.mismatched_banks ?? []
+    if (mismatched.length > 0 && body.acknowledge_balance_mismatches !== true) {
+      return NextResponse.json(
+        { error: `The balances you provided do not tie for: ${mismatched.join(', ')}. Review them (a transaction may be missing) or tick the acknowledgment to confirm anyway.`, needs_acknowledgment: mismatched },
+        { status: 422 },
+      )
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -74,7 +100,7 @@ export async function POST(request: NextRequest) {
 
     // Coverage must be resolved too (§3.4) — gate 1 can't see what an export
     // left out; the client's answers are the completeness guarantee.
-    const { coverageQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
+    const { coverageQuestions, missingBankQuestions, unansweredCoverage, incompleteCoverage } = await import('@/lib/tax/coverage')
     // Paginated — finalize-time coverage must see ALL rows, not the first 1000,
     // or a >1000-tx client could attest on a truncated month-span (the gate
     // that sends data toward filing).
@@ -89,7 +115,14 @@ export async function POST(request: NextRequest) {
       if (error) throw new Error(error.message)
       return data ?? []
     })
-    const covQs = coverageQuestions(covRows, taxYear)
+    const { data: priorBanks } = await supabaseAdmin
+      .from('bank_transactions')
+      .select('bank_name, account_type')
+      .eq('account_id', accountId)
+      .eq('tax_year', taxYear - 1)
+      .limit(5000)
+    const knownBankKeys = Array.from(new Set((priorBanks ?? []).map(r => `${r.bank_name} ${r.account_type ?? 'Checking'}`)))
+    const covQs = [...coverageQuestions(covRows, taxYear), ...missingBankQuestions(knownBankKeys, covRows, taxYear)]
     const covAnswers = (sub.financials_meta?.coverage_answers ?? {}) as import('@/lib/tax/coverage').CoverageAnswers
     const unanswered = unansweredCoverage(covQs, covAnswers)
     const incomplete = incompleteCoverage(covQs, covAnswers)
@@ -105,7 +138,7 @@ export async function POST(request: NextRequest) {
       at: new Date().toISOString(),
       actor: 'client',
       event: 'financials_attested',
-      note: `Client attested the generated P&L and Balance Sheet for ${taxYear} (gates: ${view.gates.map(g => `${g.id}=${g.status}`).join(', ')}).`,
+      note: `Client attested the generated P&L and Balance Sheet for ${taxYear} (gates: ${view.gates.map(g => `${g.id}=${g.status}`).join(', ')})${mismatched.length > 0 ? ` — ACKNOWLEDGED unresolved balance mismatch on: ${mismatched.join(', ')}` : ''}.`,
     }
     const { error } = await supabaseAdmin
       .from('tax_return_submissions')

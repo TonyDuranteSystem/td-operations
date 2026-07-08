@@ -36,6 +36,7 @@ export type CompletenessCode =
   | "ownership_incomplete"      // gate 5 fail — ownership % not fully resolved
   | "unattributed_owner_moves"  // contributions/distributions not matched to a member
   | "missing_fx_rate"           // a non-USD currency has no IRS rate on file
+  | "prior_year_clash"          // prior return ending cash ≠ verified openings — human decision (amend?)
 
 export interface CompletenessItem {
   code: CompletenessCode
@@ -72,6 +73,12 @@ export function buildCompletenessSummary(input: CompletenessInput): Completeness
   const g1 = gate(gates, 1)
   if (g1?.status === "fail") {
     items.push({ code: "reconciliation_gap", severity: "warn", detail: g1.detail })
+  }
+
+  // S2 slice 4 — prior return vs verified openings clash: a human decision
+  // (amend the prior year vs correct the balances), never auto-resolved.
+  if (draft.prior_opening_clash) {
+    items.push({ code: "prior_year_clash", severity: "warn", amount: draft.prior_opening_clash.delta })
   }
 
   // No prior-year return — beginning balances came from the statements' opening.

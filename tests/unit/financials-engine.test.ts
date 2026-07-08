@@ -301,3 +301,47 @@ describe("buildFinancialDraft — foreign-currency conversion to USD (Phase 2)",
     expect(draft.notes.some(n => n.toLowerCase().includes("exchange rate"))).toBe(false)
   })
 })
+
+// S2 slice 4 — prior-return vs verified-openings clash (the Dynamiq $750k discovery).
+describe("prior_opening_clash", () => {
+  const tx = (over: Record<string, unknown>) => ({
+    id: "t1", transaction_date: "2024-06-01", description: "x", counterparty: null,
+    amount: 100, currency: "USD", category: "income", subcategory: null,
+    bank_name: "Mercury", account_type: "Checking", balance_after: null, ...over,
+  })
+  const priorReturn = {
+    case: "filed_elsewhere",
+    status: "validated",
+    extracted: { schedule_l: { ending: { cash: 1_142_397 } }, k1s: [] },
+  } as never
+
+  it("flags when the prior return and provided openings disagree materially — prior still wins the pick", () => {
+    const d = buildFinancialDraft({
+      taxYear: 2024,
+      transactions: [tx({})] as never,
+      members: [{ name: "Sofia", pct: 100 }] as never,
+      priorReturn,
+      providedBalances: [{ bank_key: "Mercury Checking", currency: "USD", opening_balance: 218_084.89, closing_balance: null, source: "client" }],
+    })
+    expect(d.prior_opening_clash).not.toBeNull()
+    expect(d.prior_opening_clash?.delta).toBeCloseTo(1_142_397 - 218_084.89, 2)
+    expect(d.beginning_cash_source).toBe("prior_return")
+    expect(d.notes.join(" ")).toMatch(/amendment/)
+  })
+
+  it("no flag within materiality or when either side is missing", () => {
+    const close = buildFinancialDraft({
+      taxYear: 2024,
+      transactions: [tx({})] as never,
+      members: [{ name: "Sofia", pct: 100 }] as never,
+      priorReturn,
+      providedBalances: [{ bank_key: "Mercury Checking", currency: "USD", opening_balance: 1_142_395, closing_balance: null, source: "client" }],
+    })
+    expect(close.prior_opening_clash).toBeNull()
+    const noProvided = buildFinancialDraft({
+      taxYear: 2024, transactions: [tx({})] as never,
+      members: [{ name: "Sofia", pct: 100 }] as never, priorReturn,
+    })
+    expect(noProvided.prior_opening_clash).toBeNull()
+  })
+})
