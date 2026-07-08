@@ -75,6 +75,7 @@ export async function GET(req: NextRequest) {
     // runs, everything falls back to live. Index errors fall back too —
     // search must never be worse than before.
     let servedFromIndex = false
+    let gmailDegraded = false
     if (
       (!channel || channel === "gmail") &&
       searchQuery &&
@@ -339,7 +340,19 @@ export async function GET(req: NextRequest) {
         }
       } catch (gmailErr) {
         console.error("Gmail fetch error:", gmailErr)
-        // Don't fail the whole request — just skip Gmail
+        // A Gmail failure must NOT masquerade as an empty inbox: returning
+        // 200 + [] made the UI wipe a perfectly good list every time Gmail
+        // rate-limited us (bulk archive → push storm → refetch storm → 429 →
+        // "No conversations", Antonio 2026-07-08). Gmail-only view → error
+        // status so the client keeps its previous data; merged view → keep
+        // the chat channels but flag the degradation.
+        if (channel === "gmail") {
+          return NextResponse.json(
+            { error: "Gmail is temporarily unavailable — showing the last loaded list." },
+            { status: 503 }
+          )
+        }
+        gmailDegraded = true
       }
     }
 
@@ -354,6 +367,7 @@ export async function GET(req: NextRequest) {
       conversations: conversations.slice(0, limit),
       total: conversations.length,
       ...(gmailNextPageToken ? { nextPageToken: gmailNextPageToken } : {}),
+      ...(gmailDegraded ? { gmailDegraded: true } : {}),
     })
   } catch (error) {
     console.error("Inbox conversations error:", error)

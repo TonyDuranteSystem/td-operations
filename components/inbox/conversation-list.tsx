@@ -105,17 +105,28 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
 
   const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
     queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
-    queryFn: () => {
-      if (isWhatsApp) {
-        return fetch('/api/inbox/whatsapp/conversations').then((r) => r.json())
+    queryFn: async () => {
+      // Throw on non-2xx (R099): a failed refetch must NOT replace the list
+      // with emptiness — react-query keeps the previous data on error, so a
+      // Gmail rate-limit hiccup leaves the inbox visible instead of showing
+      // "No conversations" until a manual refresh (Antonio 2026-07-08).
+      const url = isWhatsApp
+        ? '/api/inbox/whatsapp/conversations'
+        : (() => {
+            const params = new URLSearchParams()
+            if (activeChannel) params.set('channel', activeChannel)
+            if (labelFilter) params.set('label', labelFilter)
+            if (searchQuery) params.set('q', searchQuery)
+            if (mailbox) params.set('mailbox', mailbox)
+            params.set('limit', '100')
+            return `/api/inbox/conversations?${params}`
+          })()
+      const res = await fetch(url)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(json.error || 'Failed to load conversations')
       }
-      const params = new URLSearchParams()
-      if (activeChannel) params.set('channel', activeChannel)
-      if (labelFilter) params.set('label', labelFilter)
-      if (searchQuery) params.set('q', searchQuery)
-      if (mailbox) params.set('mailbox', mailbox)
-      params.set('limit', '100')
-      return fetch(`/api/inbox/conversations?${params}`).then((r) => r.json())
+      return json
     },
     refetchInterval: searchQuery ? false : 30_000,
   })

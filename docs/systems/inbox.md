@@ -144,6 +144,15 @@ Function.
   `chat-<clientKey>`, portal-chats surface prompt) — used by the Portal
   Chats **Worker** tab (`components/portal-chats/thread-worker-panel.tsx`),
   per-client persistent memory.
+- **Degradation contract** (2026-07-09): a Gmail fetch failure in
+  `/api/inbox/conversations` returns **503** for the gmail-only view (merged
+  view returns the chat channels + `gmailDegraded: true`) and the list's
+  queryFn throws on non-2xx — react-query then KEEPS the previous list
+  instead of replacing it with "No conversations" (the old 200-with-empty
+  behavior blanked the inbox whenever Gmail rate-limited us). Push-driven
+  invalidations are debounced 2.5s trailing: bulk archive/delete of N
+  emails fires N push events; without the debounce that meant N
+  back-to-back full refetches (each up to ~300 Gmail calls) → 429 → blank.
 - **Real-time push** (Phase 3b, 2026-07-08): Gmail `users.watch` (INBOX, both
   mailboxes) publishes to Pub/Sub topic `gmail-push` in GCP project
   `claude-gmail-connector-488713`; the push subscription `gmail-push-sub`

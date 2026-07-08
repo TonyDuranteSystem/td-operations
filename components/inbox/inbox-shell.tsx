@@ -82,22 +82,33 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
   // Real-time inbox refresh: Gmail push (users.watch → Pub/Sub → webhook →
   // gmail_push_events row) — new mail appears within seconds instead of the
-  // 30s poll, which remains the fallback.
+  // 30s poll, which remains the fallback. DEBOUNCED (trailing 2.5s): every
+  // archive/delete also fires a push event, so a bulk action on N emails
+  // used to trigger N back-to-back full refetches (each up to ~300 Gmail
+  // calls server-side) — a storm that rate-limited Gmail and blanked the
+  // list (Antonio 2026-07-08). One refetch after the burst settles.
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
+    let debounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
       .channel('inbox-gmail-push')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'gmail_push_events' },
         () => {
-          queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-          queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-          queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+          if (debounce) clearTimeout(debounce)
+          debounce = setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+            queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+            queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+          }, 2500)
         }
       )
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      if (debounce) clearTimeout(debounce)
+      supabase.removeChannel(channel)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
