@@ -4,6 +4,13 @@ import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import {
+  isInstantSearchQuery,
+  isBackfillDone,
+  searchIndexThreadIds,
+  fetchThreadRows,
+  groupRowsToConversations,
+} from "@/lib/email-index/query"
 import type { InboxConversation } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -61,8 +68,52 @@ export async function GET(req: NextRequest) {
     const emailLookupPromise =
       !channel || channel === "gmail" ? buildEmailLookup() : Promise.resolve(new Map())
 
+    // ─── Instant search (email index) ────────────────────
+    // Plain-word queries answer from the local index (<100ms) instead of
+    // live Gmail (seconds). Gmail-operator queries (from:, has:, …), label
+    // views, and pagination keep the live path; while the index (re)backfill
+    // runs, everything falls back to live. Index errors fall back too —
+    // search must never be worse than before.
+    let servedFromIndex = false
+    if (
+      (!channel || channel === "gmail") &&
+      searchQuery &&
+      !labelFilter &&
+      !pageToken &&
+      isInstantSearchQuery(searchQuery)
+    ) {
+      const mailboxKey = mailbox === "antonio" ? "antonio" : "support"
+      try {
+        if (await isBackfillDone(mailboxKey)) {
+          const threadIds = await searchIndexThreadIds(searchQuery, mailboxKey, Math.min(limit, 50))
+          const rows = await fetchThreadRows(mailboxKey, threadIds)
+          const markLabelNames = new Map<string, string>()
+          try {
+            const gmailUser = mailboxKey === "antonio"
+              ? "antonio.durante@tonydurante.us"
+              : "support@tonydurante.us"
+            const labelsRes = (await gmailGet("/labels", {}, gmailUser)) as {
+              labels?: Array<{ id: string; name: string }>
+            }
+            for (const l of labelsRes.labels ?? []) {
+              if (l.name.startsWith(MARK_LABEL_PREFIX)) markLabelNames.set(l.id, l.name)
+            }
+          } catch {
+            // Color marks are cosmetic — never fail instant search over them
+          }
+          const emailLookup = await emailLookupPromise
+          conversations.push(
+            ...groupRowsToConversations(rows, { markLabelNames, emailLookup })
+          )
+          servedFromIndex = true
+        }
+      } catch (err) {
+        console.warn("[inbox] instant search failed, falling back to live Gmail:", err)
+      }
+    }
+
     // ─── Gmail threads ──────────────────────────────────
-    if (!channel || channel === "gmail") {
+    if ((!channel || channel === "gmail") && !servedFromIndex) {
       try {
         // Gmail threads API returns max ~100 per page. Fetch up to 2 pages (200 threads).
         // With INBOX as default, this is more than enough (Gmail inbox has ~20-50 threads).

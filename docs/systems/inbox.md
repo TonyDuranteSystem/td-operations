@@ -172,8 +172,27 @@ Function.
   `gmail_watch_state.backfill_page_token/index_history_id`) and (b) the
   gmail-push webhook (incremental `syncIncremental` per notification,
   best-effort). Engine: `lib/email-index/sync.ts`. RLS: staff read;
-  antonio@ rows ADMIN-ONLY (mirrors `checkMailboxAccess`). Leg 2 (pending):
-  instant inbox search, client-emails + green dots reading the index.
+  antonio@ rows ADMIN-ONLY (mirrors `checkMailboxAccess`).
+- **Email index — leg 2 surfaces** (2026-07-09, dev_task 224726be): query
+  layer `lib/email-index/query.ts` (pure grouping unit-tested). Rows carry
+  `label_ids text[]` (raw Gmail labelIds; migration `20260709-0300` — added
+  mid-backfill, so it WIPES the index and restarts the backfill; labels are
+  what let the index exclude TRASH/SPAM, scope the green dot to in:inbox
+  parity, detect DRAFT threads, and resolve Marked/* color labels). Three
+  consumers, each gated on `isBackfillDone(mailbox)` AND falling back to the
+  live-Gmail path on any index error — index serving is never worse than
+  live: (a) **instant search** in `/api/inbox/conversations`: plain-word
+  queries (no Gmail operators — `isInstantSearchQuery`) answer from the
+  tsvector index in ~ms; operator queries (`from:`, `has:` …), label views
+  and pagination stay live; (b) **client email cards**
+  (`/api/portal-chats/client-emails`): thread ids from
+  `clientEmailThreadIds` (two indexed queries — from_email in-list +
+  to_emails array-overlap; deliberately NOT a PostgREST `or(in.(),ov.{})`,
+  whose quoting silently breaks) + linked threads, grouped by
+  `groupRowsToConversations`, same system-notification noise rule; (c)
+  **green dots** (`/api/portal-chats/email-unread`):
+  `unreadInboxExternalEmails` (UNREAD+INBOX rows → full-thread externals)
+  feeding the unchanged `bucketUnreadEmails`.
 
 ## Access control
 

@@ -116,6 +116,7 @@ export function buildIndexRow(
       ? new Date(parseInt(msg.internalDate)).toISOString()
       : null,
     is_unread: msg.labelIds?.includes("UNREAD") ?? false,
+    label_ids: msg.labelIds ?? [],
     has_attachment:
       msg.payload?.mimeType === "multipart/mixed" ||
       msg.payload?.mimeType === "multipart/related",

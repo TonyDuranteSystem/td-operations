@@ -5,6 +5,12 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { isSystemNotificationSubject } from "@/lib/inbox/system-email-filter"
+import {
+  isBackfillDone,
+  clientEmailThreadIds,
+  fetchThreadRows,
+  groupRowsToConversations,
+} from "@/lib/email-index/query"
 import type { InboxConversation } from "@/lib/types"
 
 const OUR_EMAILS = ["support@tonydurante.us", "antonio.durante@tonydurante.us"]
@@ -98,7 +104,32 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ conversations: [], emails: [] })
     }
 
-    // 2. All mail to/from any of those addresses (support@ mailbox)
+    // 2a. INDEX PATH (leg 2): complete any-age history from email_index,
+    // no live Gmail round trips. Gated on backfill completion; any index
+    // error falls back to the live path below — never worse than before.
+    try {
+      if (await isBackfillDone("support")) {
+        const autoIds = await clientEmailThreadIds(emails)
+        const autoSet = new Set(autoIds)
+        const allIds = [
+          ...autoIds,
+          ...Array.from(linkedIds).filter((id) => !autoSet.has(id)),
+        ]
+        const rows = await fetchThreadRows("support", allIds)
+        const conversations = groupRowsToConversations(rows, {
+          linkedThreadIds: linkedIds,
+        }).filter(
+          // Same noise rule as the live path: our automated portal
+          // notifications stay hidden unless deliberately linked.
+          (c) => c.linked || !isSystemNotificationSubject(c.subject ?? "")
+        )
+        return NextResponse.json({ conversations, emails })
+      }
+    } catch (err) {
+      console.warn("client-emails index path failed, falling back to live:", err)
+    }
+
+    // 2b. LIVE PATH — all mail to/from any of those addresses (support@)
     let autoIds: string[] = []
     if (emails.length > 0) {
       const clause = emails.map((e) => `from:${e} OR to:${e}`).join(" OR ")
