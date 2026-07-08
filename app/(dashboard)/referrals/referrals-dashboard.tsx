@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { ReferralRow } from './page'
 import { AddReferralModal } from './add-referral-modal'
-import { ReconcileBacklogButton } from './reconcile-backlog-button'
+import { IssueCreditAction } from './issue-credit-action'
 
 interface Props {
   referrals: ReferralRow[]
@@ -90,10 +90,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
             <p className="text-sm text-zinc-500">Track referrals, commissions, and payouts</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <ReconcileBacklogButton />
-          <AddReferralModal />
-        </div>
+        <AddReferralModal />
       </div>
 
       {/* Stats */}
@@ -251,9 +248,15 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                           )}
                         </td>
                         <td className="px-5 py-3">
-                          <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.color)}>
-                            {s.label}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.color)}>
+                              {s.label}
+                            </span>
+                            {/* A converted referral has no credit note yet — issue it right here. */}
+                            {r.status === 'converted' && (
+                              <IssueCreditAction referralId={r.id} referredName={r.referred_name} defaultAmount={r.commission_amount} />
+                            )}
+                          </div>
                         </td>
                         <td className="px-5 py-3 text-right">
                           {r.commission_amount

@@ -344,9 +344,8 @@ export function sameReferredIdentity(a: BacklogReferralInput, b: BacklogReferral
 }
 
 /**
- * Decide what to do with ONE converted-but-uncredited backlog referral. Pure —
- * unit tested; the reconciler script (scripts/reconcile-referral-backlog.ts)
- * supplies the context and executes the decision.
+ * Decide what to do with ONE converted-but-uncredited referral. Pure — unit
+ * tested. Shared decision logic for surfacing per-row "Issue credit" state.
  *
  * Rules (mirror the live auto-credit path):
  *  - A credited/paid sibling for the SAME (referrer → referred) → this row is a
