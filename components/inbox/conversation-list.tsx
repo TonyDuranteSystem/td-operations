@@ -163,7 +163,18 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         return (
           <div
             key={conv.id}
-            style={mark && !isSelected ? { boxShadow: `inset 3px 0 0 0 ${mark.hex}` } : undefined}
+            // Marked rows are tinted with the mark color across the WHOLE row
+            // (Antonio 2026-07-08: "the chat in the picker colored, not just
+            // the dot"). Selection state wins over the tint; the colored left
+            // edge stays in both states.
+            style={
+              mark
+                ? {
+                    boxShadow: `inset 3px 0 0 0 ${mark.hex}`,
+                    ...(isSelected || isChecked ? {} : { backgroundColor: `${mark.hex}1f` }),
+                  }
+                : undefined
+            }
             className={cn(
               'group w-full text-left px-4 py-3 border-b transition-colors hover:bg-zinc-50 flex items-start gap-2',
               isSelected && 'bg-blue-50 border-l-2 border-l-blue-500',
