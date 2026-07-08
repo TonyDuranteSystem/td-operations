@@ -31,6 +31,7 @@ function formatDate(dateStr: string) {
 
 export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps) {
   const [selected, setSelected] = useState<InboxConversation | null>(null)
+  const [directionFilter, setDirectionFilter] = useState<'all' | 'received' | 'sent'>('all')
   const queryClient = useQueryClient()
 
   const params = new URLSearchParams()
@@ -48,7 +49,10 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
     refetchInterval: 60_000,
   })
 
-  const conversations = data?.conversations ?? []
+  const allConversations = data?.conversations ?? []
+  const conversations = allConversations.filter(
+    c => directionFilter === 'all' || c.direction === directionFilter
+  )
 
   if (selected) {
     return (
@@ -79,17 +83,33 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-white shrink-0">
-        <p className="text-xs text-zinc-500">
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-white shrink-0">
+        <p className="text-xs text-zinc-500 truncate">
           Emails with this client{data?.emails?.length ? ` (${data.emails.join(', ')})` : ''} — support@ mailbox
         </p>
-        <button
-          onClick={() => refetch()}
-          className="p-1 rounded hover:bg-zinc-100 text-zinc-400"
-          title="Refresh"
-        >
-          <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {(['all', 'received', 'sent'] as const).map(f => (
+            <button
+              key={f}
+              onClick={() => setDirectionFilter(f)}
+              className={cn(
+                'px-2 py-0.5 rounded text-[11px] font-medium transition-colors capitalize',
+                directionFilter === f
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'text-zinc-400 hover:bg-zinc-100'
+              )}
+            >
+              {f}
+            </button>
+          ))}
+          <button
+            onClick={() => refetch()}
+            className="p-1 rounded hover:bg-zinc-100 text-zinc-400"
+            title="Refresh"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
+          </button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -99,8 +119,10 @@ export function ThreadEmailPanel({ accountId, contactId }: ThreadEmailPanelProps
       ) : conversations.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
           <Mail className="h-8 w-8 mb-2 stroke-1" />
-          <p className="text-sm">No emails with this client</p>
-          {data?.emails?.length === 0 && (
+          <p className="text-sm">
+            {allConversations.length > 0 ? `No ${directionFilter} emails` : 'No emails with this client'}
+          </p>
+          {data?.emails?.length === 0 && allConversations.length === 0 && (
             <p className="text-xs mt-1">No email address on the CRM contact</p>
           )}
         </div>

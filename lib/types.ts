@@ -527,6 +527,9 @@ export interface InboxConversation {
   colorMark?: string | null
   /** True when this thread was manually linked to the client (email_links) */
   linked?: boolean
+  /** Client email views: 'received' = last message is from the client,
+   *  'sent' = last message is from us */
+  direction?: 'received' | 'sent'
 }
 
 export interface InboxAttachment {

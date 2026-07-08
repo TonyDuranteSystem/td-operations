@@ -4,7 +4,10 @@ import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
+import { isSystemNotificationSubject } from "@/lib/inbox/system-email-filter"
 import type { InboxConversation } from "@/lib/types"
+
+const OUR_EMAILS = ["support@tonydurante.us", "antonio.durante@tonydurante.us"]
 
 export const dynamic = "force-dynamic"
 
@@ -122,17 +125,26 @@ export async function GET(req: NextRequest) {
       const lastMsg = thread.messages?.[thread.messages.length - 1]
       if (!firstMsg || !lastMsg) continue
 
+      const subject = getHeader(firstMsg.payload?.headers, "Subject")
+      // Our own automated notifications ("N new updates in your portal",
+      // "New message from the Tony Durante team") drown the real
+      // correspondence — hidden here unless deliberately linked. Full record
+      // stays in Gmail and the main Inbox.
+      if (isSystemNotificationSubject(subject) && !linkedIds.has(thread.id)) continue
+
+      const lastFrom = getHeader(lastMsg.payload?.headers, "From").toLowerCase()
       const lastDate = getHeader(lastMsg.payload?.headers, "Date")
       conversations.push({
         id: `gmail:${thread.id}`,
         channel: "gmail",
         name: displayNameFromHeader(getHeader(firstMsg.payload?.headers, "From")),
         preview: decodeHtmlEntities(lastMsg.snippet || firstMsg.snippet || ""),
+        direction: OUR_EMAILS.some((e) => lastFrom.includes(e)) ? "sent" : "received",
         unread: thread.messages.filter((m) => m.labelIds?.includes("UNREAD")).length,
         lastMessageAt: lastDate
           ? new Date(lastDate).toISOString()
           : new Date(parseInt(lastMsg.internalDate || "0")).toISOString(),
-        subject: getHeader(firstMsg.payload?.headers, "Subject"),
+        subject,
         hasAttachment: thread.messages.some(
           (m) =>
             m.payload?.mimeType === "multipart/mixed" ||

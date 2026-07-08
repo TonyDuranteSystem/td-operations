@@ -84,7 +84,11 @@ Function.
   ONE link per thread; re-linking replaces the client. Linked threads merge
   into the client email views (`client-emails` endpoint, `linked: true`
   badge) — Portal Chats Email tab AND the account page's new **Emails** tab
-  (`account-detail.tsx` renders `ThreadEmailPanel`).
+  (`account-detail.tsx` renders `ThreadEmailPanel`). The client views HIDE
+  our own automated notification emails (portal digest + chat-notify
+  subjects, `lib/inbox/system-email-filter.ts`; a deliberately linked one is
+  kept) and classify each thread `received`/`sent` by the LAST message's
+  sender — the panel has All/Received/Sent filter chips.
 - **Worker panel** (2026-07-08, Antonio: "the same worker I have in Slack
   with the same power in inbox"): the thread header's **Worker** button
   (replaces the old AI Assist dispatch) opens
