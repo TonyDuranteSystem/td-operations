@@ -108,7 +108,11 @@ Function.
   send_portal_message / code-task rail are NOT included — R111 preserved).
   Conversation memory persists PER EMAIL THREAD via
   threadId `inbox-<mailbox>-<gmailThreadId>`. Mailbox-gated
-  (`checkMailboxAccess`); route `maxDuration = 300`. The SAME route also
+  (`checkMailboxAccess`); route `maxDuration = 300`. On the FIRST turn the
+  route reads the thread itself (last 5 messages, plain text, capped) and
+  hands the worker the transcript + the gmail thread id/mailbox for
+  `gmail_read_thread` self-serve — the worker never claims it can't see the
+  open email (best-effort: a Gmail hiccup degrades to snippet context). The SAME route also
   serves a CLIENT MODE (`clientKey: acct-<id>|contact-<id>`, threadId
   `chat-<clientKey>`, portal-chats surface prompt) — used by the Portal
   Chats **Worker** tab (`components/portal-chats/thread-worker-panel.tsx`),

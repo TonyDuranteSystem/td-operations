@@ -74,8 +74,17 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               },
         }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || 'Worker failed — please try again.')
+      const raw = await res.text()
+      let data: { reply?: string; error?: string } = {}
+      try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
+      if (!res.ok) {
+        throw new Error(
+          data.error ||
+          (res.status === 504
+            ? 'The worker ran out of time (over 5 minutes) — ask a narrower question or try again.'
+            : `Worker error ${res.status} — please try again.`)
+        )
+      }
       sentContextRef.current = true
       setMessages(prev => [...prev, { role: 'worker', text: data.reply || '(empty reply)' }])
     } catch (err) {

@@ -51,6 +51,21 @@ describe('buildInboxWorkerUserBody', () => {
     expect(body).toContain('Staff member: who is this client?')
   })
 
+  it('prefers the server-built transcript and includes the gmail_read_thread hint', () => {
+    const body = buildInboxWorkerUserBody('explain this email', {
+      subject: 'LLC',
+      transcript: '--- Tamás (Jul 8) ---\nHi Tony, what is the difference between SMLLC and MMLLC?',
+      latestMessage: 'snippet that should NOT be used',
+      gmailThreadId: 'abc123',
+      mailboxAddress: 'support@tonydurante.us',
+    })
+    expect(body).toContain('THREAD TRANSCRIPT')
+    expect(body).toContain('SMLLC and MMLLC')
+    expect(body).not.toContain('snippet that should NOT be used')
+    expect(body).toContain('gmail_read_thread')
+    expect(body).toContain('abc123')
+  })
+
   it('passes the message through without context (later turns)', () => {
     expect(buildInboxWorkerUserBody('and the deadlines?', null)).toBe('and the deadlines?')
   })

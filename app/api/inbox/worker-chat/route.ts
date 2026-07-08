@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { callWorker } from "@/lib/ai-agent/worker-tools"
+import { gmailGet, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
@@ -69,8 +70,38 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Not authorized for this mailbox" }, { status: 403 })
     }
     const mailboxKey = body.mailbox === "antonio" ? "antonio" : "support"
+    const mailboxAddress = mailboxKey === "antonio"
+      ? "antonio.durante@tonydurante.us"
+      : "support@tonydurante.us"
     threadId = `inbox-${mailboxKey}-${gmailThreadId}`
-    userBody = buildInboxWorkerUserBody(message, body.context ?? null)
+
+    // First turn (context present): READ THE EMAIL server-side — the worker
+    // must have the thread in front of it, not a 100-char snippet (Antonio
+    // 2026-07-08: "if I call it in an open email it must read the email").
+    // Best-effort: a Gmail hiccup degrades to snippet context, never blocks.
+    let context = body.context ?? null
+    if (context) {
+      try {
+        const thread = (await gmailGet(`/threads/${gmailThreadId}`, { format: "full" }, mailboxAddress)) as {
+          messages: GmailAPIMessage[]
+        }
+        const msgs = (thread.messages ?? []).slice(-5) // last 5 messages
+        const transcript = msgs
+          .map((m) => {
+            const from = getHeader(m.payload?.headers, "From")
+            const date = getHeader(m.payload?.headers, "Date")
+            const text = extractBody(m.payload).slice(0, 3000)
+            return `--- ${from} (${date}) ---\n${text}`
+          })
+          .join("\n\n")
+        context = { ...context, transcript, gmailThreadId, mailboxAddress }
+      } catch (err) {
+        console.warn("[worker-chat] thread transcript fetch failed (using snippet):", err)
+        context = { ...context, gmailThreadId, mailboxAddress }
+      }
+    }
+
+    userBody = buildInboxWorkerUserBody(message, context)
     surface = "inbox"
   } else {
     // clientKey: 'acct-<uuid>' | 'contact-<uuid>' — a per-client memory

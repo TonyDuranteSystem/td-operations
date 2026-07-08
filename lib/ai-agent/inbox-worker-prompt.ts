@@ -20,6 +20,11 @@ export interface InboxEmailContext {
   mailbox?: string
   /** Plain-text body of the latest message in the thread (caller-truncated) */
   latestMessage?: string
+  /** Server-built plain-text transcript of the thread (preferred over latestMessage) */
+  transcript?: string
+  /** Gmail thread id + mailbox address so the worker can gmail_read_thread itself */
+  gmailThreadId?: string
+  mailboxAddress?: string
 }
 
 const SURFACE_ADDENDA = {
@@ -77,13 +82,18 @@ export function buildInboxWorkerUserBody(
 ): string {
   if (!ctx) return message
   const lines = [
-    "[CRM INBOX CONTEXT — the staff member is viewing this email thread]",
+    "[CRM INBOX CONTEXT — the staff member is viewing this email thread. You have ALREADY read it below — do not say you cannot see the email.]",
     ctx.mailbox ? `Mailbox: ${ctx.mailbox}@` : "",
     ctx.sender ? `From: ${ctx.sender}` : "",
     ctx.subject ? `Subject: ${ctx.subject}` : "",
-    ctx.latestMessage
-      ? `Latest message (plain text, may be truncated):\n${ctx.latestMessage.slice(0, 6000)}`
+    ctx.gmailThreadId && ctx.mailboxAddress
+      ? `Gmail thread id: ${ctx.gmailThreadId} (mailbox ${ctx.mailboxAddress}) — use gmail_read_thread with as_user="${ctx.mailboxAddress}" if you need more than the transcript below.`
       : "",
+    ctx.transcript
+      ? `THREAD TRANSCRIPT (plain text, oldest→newest, may be truncated):\n${ctx.transcript.slice(0, 12000)}`
+      : ctx.latestMessage
+        ? `Latest message (plain text, may be truncated):\n${ctx.latestMessage.slice(0, 6000)}`
+        : "",
     "",
     `Staff member: ${message}`,
   ].filter((l) => l !== "")
