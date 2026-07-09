@@ -67,6 +67,8 @@ interface NavItem {
   href: string
   icon: React.ElementType
   badge?: number
+  /** Presence dot (no number) — Team Chat shows this for a new DM / @mention. */
+  dotBadge?: boolean
   /** Secondary purple badge — used for the Portal Chats "What's New" unhandled count. */
   purpleBadge?: number
   adminOnly?: boolean
@@ -189,6 +191,9 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse">
             {item.badge > 999 ? '999+' : item.badge}
           </span>
+        )}
+        {item.dotBadge && (
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="New direct message or @mention" />
         )}
         {item.purpleBadge != null && item.purpleBadge > 0 && (
           <span
@@ -326,6 +331,19 @@ export function Sidebar({
   // Subscribe to new client messages + internal team messages for real-time badge updates
   useEffect(() => {
     const supabase = createClient()
+    // A new internal message could be channel chatter (which must NOT light the
+    // Team Chat dot) or a DM/@mention (which must). We can't tell from the row
+    // alone, so refetch the server's DM+mention-only count (debounced).
+    let teamDebounce: ReturnType<typeof setTimeout> | null = null
+    const refetchTeamChat = () => {
+      if (teamDebounce) clearTimeout(teamDebounce)
+      teamDebounce = setTimeout(() => {
+        fetch('/api/dashboard/badges')
+          .then(r => r.json())
+          .then(d => { if (typeof d.teamChat === 'number') setLiveTeamChat(d.teamChat) })
+          .catch(() => {})
+      }, 1000)
+    }
     const channel = supabase
       .channel('admin-portal-chats-badge')
       .on(
@@ -350,14 +368,13 @@ export function Sidebar({
           table: 'internal_messages',
         },
         () => {
-          if (pathnameRef.current !== '/team-chat') {
-            setLiveTeamChat(prev => prev + 1)
-          }
+          if (pathnameRef.current !== '/team-chat') refetchTeamChat()
         }
       )
       .subscribe()
 
     return () => {
+      if (teamDebounce) clearTimeout(teamDebounce)
       supabase.removeChannel(channel)
     }
   }, [])
@@ -415,7 +432,8 @@ export function Sidebar({
       if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
       // Tasks badge removed — daily work tracked via message action tags instead
       if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
-      if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
+      // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.
+      if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, dotBadge: true }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
       return item

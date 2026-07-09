@@ -623,7 +623,7 @@ export default function TeamWorkspacePage() {
                 )
               })}
 
-              <SectionHeader label="Direct Messages" onAdd={() => setShowNewDm(true)} />
+              <SectionHeader label="Direct Messages" dot={dms.some(d => d.unread_count > 0)} onAdd={() => setShowNewDm(true)} />
               {dms.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No DMs yet.</p>}
               {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
@@ -827,10 +827,13 @@ export default function TeamWorkspacePage() {
   )
 }
 
-function SectionHeader({ label, onAdd }: { label: string; onAdd?: () => void }) {
+function SectionHeader({ label, onAdd, dot }: { label: string; onAdd?: () => void; dot?: boolean }) {
   return (
     <div className="flex items-center justify-between px-2 mt-4 mb-1">
-      <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">{label}</p>
+      <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide flex items-center gap-1.5">
+        {label}
+        {dot && <span className="w-2 h-2 rounded-full bg-red-500" title="New messages" />}
+      </p>
       {onAdd && <button onClick={onAdd} className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200"><Plus className="h-3.5 w-3.5" /></button>}
     </div>
   )

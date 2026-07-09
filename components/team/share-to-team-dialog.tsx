@@ -31,6 +31,8 @@ export interface ShareItem {
   color?: string
   entity_type?: string
   entity_id?: string
+  /** Full source text (whole email / portal message) embedded in the message body. */
+  body?: string
 }
 
 interface TeamMember {

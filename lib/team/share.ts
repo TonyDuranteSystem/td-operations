@@ -10,6 +10,11 @@ import { validateTeamCard, type TeamCard } from '@/lib/team/workspace'
 
 export const MAX_SHARE_ITEMS = 25
 
+/** Max characters of shared source text embedded in the chat message body.
+ *  Keeps a giant quoted email thread from flooding the chat; the card links to
+ *  the original for the full thing. Normal transactional emails fit well under. */
+export const SHARE_BODY_CAP = 4000
+
 export interface ShareItemInput {
   kind?: string
   title?: string
@@ -18,6 +23,28 @@ export interface ShareItemInput {
   color?: string
   entity_type?: string
   entity_id?: string
+  /** Full source text (whole email / portal message) to embed in the message body. */
+  body?: string
+}
+
+/**
+ * Compose the chat message body for one shared item: the sharer's note followed
+ * by the item's full source text. The source text is capped (with a truncation
+ * marker) so an enormous email thread doesn't flood the chat — the card still
+ * links to the original. Both parts are optional; returns '' if both are empty
+ * (the card alone still renders).
+ */
+export function composeShareMessage(
+  note: string | undefined | null,
+  body: string | undefined | null,
+  cap: number = SHARE_BODY_CAP,
+): string {
+  const n = (note ?? '').trim()
+  let b = (body ?? '').trim()
+  if (b.length > cap) {
+    b = b.slice(0, cap).trimEnd() + '\n\n…(truncated — open the original from the card above)'
+  }
+  return [n, b].filter(Boolean).join('\n\n')
 }
 
 export interface BuildShareCardsResult {

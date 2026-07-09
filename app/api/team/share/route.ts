@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
 import { findOrCreateDm } from '@/lib/team/dm'
 import { listTeamMembers } from '@/lib/team/directory'
-import { buildShareCards, MAX_SHARE_ITEMS } from '@/lib/team/share'
+import { buildShareCards, composeShareMessage, MAX_SHARE_ITEMS } from '@/lib/team/share'
 import { getSupportPersonUserId } from '@/lib/settings'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { NextRequest, NextResponse } from 'next/server'
@@ -88,12 +88,15 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString()
   const displayName = getUserDisplayName(user)
 
-  // One message per item (note + card). Bulk insert keeps them in order.
-  const rows = cards.map(card => ({
+  // One message per item. The message body = the sharer's note + the item's full
+  // source text (whole email / portal message), capped; the card is the titled
+  // link back. Bulk insert keeps them in order.
+  const rawItems = Array.isArray(body.items) ? body.items : []
+  const rows = cards.map((card, i) => ({
     thread_id: threadId,
     sender_id: user.id,
     sender_name: displayName,
-    message: note, // sharer's notes; may be empty (the card carries the item)
+    message: composeShareMessage(note, rawItems[i]?.body),
     card,
     mentions: [],
     mentioned_user_ids: [],

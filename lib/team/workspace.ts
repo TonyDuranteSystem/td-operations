@@ -157,6 +157,29 @@ export interface TeamCard {
   entity_id?: string
 }
 
+export interface TeamThreadCountRow {
+  thread_type?: string | null
+  unread_count?: number | null
+  mention_count?: number | null
+}
+
+/**
+ * Team-chat notification count for the sidebar/menu signal.
+ *
+ * Deliberately narrow (Antonio 2026-07-09): a signal ONLY for a new **DM** or an
+ * **@mention** — NOT ordinary channel/discussion unread (that was the noisy "48").
+ * DMs contribute their unread_count; every other thread type contributes only its
+ * mention_count (so channel chatter you weren't tagged in never lights the dot).
+ */
+export function countTeamNotifications(threads: TeamThreadCountRow[] | null | undefined): number {
+  let n = 0
+  for (const t of threads ?? []) {
+    if (t.thread_type === 'dm') n += Number(t.unread_count) || 0
+    else n += Number(t.mention_count) || 0
+  }
+  return n
+}
+
 /** Validate a TeamCard shape. Returns a user-friendly error or null. */
 export function validateTeamCard(card: unknown): string | null {
   if (card == null) return null

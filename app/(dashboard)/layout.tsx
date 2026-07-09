@@ -8,6 +8,7 @@ import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { isAdmin, isDashboardUser } from '@/lib/auth'
+import { countTeamNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
@@ -18,9 +19,9 @@ export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
 }
 
-async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
+async function getBadgeCounts(supabase: ReturnType<typeof createClient>, userId: string) {
   try {
-    const [tasksResult, portalChatsResult, internalResult, reconReviewResult] = await Promise.allSettled([
+    const [tasksResult, portalChatsResult, teamThreadsResult, reconReviewResult] = await Promise.allSettled([
       supabase
         .from('tasks')
         .select('id', { count: 'exact', head: true })
@@ -30,10 +31,10 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
         .select('id', { count: 'exact', head: true })
         .eq('sender_type', 'client')
         .is('read_at', null),
-      supabaseAdmin
-        .from('internal_messages')
-        .select('id', { count: 'exact', head: true })
-        .is('read_at', null),
+      // Per-user team-chat unread (real read model via internal_thread_reads).
+      // Replaces the always-0 `internal_messages.read_at IS NULL` count.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabaseAdmin as any).rpc('get_team_threads', { p_user_id: userId }),
       supabaseAdmin
         .from('td_bank_feeds')
         .select('id', { count: 'exact', head: true })
@@ -53,9 +54,11 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       console.error('[getBadgeCounts] portal_messages rejected:', portalChatsResult.reason)
     }
 
-    // Add internal team unread messages to portal chats badge
-    if (internalResult.status === 'fulfilled' && !internalResult.value.error) {
-      portalChatsCount += internalResult.value.count ?? 0
+    // Team-chat signal — its OWN badge now, and ONLY unread DMs + @mentions
+    // (not channel chatter). Old code folded ALL internal unread into portalChats.
+    let teamChat = 0
+    if (teamThreadsResult.status === 'fulfilled' && !teamThreadsResult.value.error) {
+      teamChat = countTeamNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
 
     // Inbox unread count — WhatsApp/Telegram from Supabase view
@@ -99,9 +102,9 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       commUnread = count ?? 0
     } catch { /* ignore */ }
 
-    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, overdueInvoices, reconciliationReview, commUnread }
+    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, teamChat, overdueInvoices, reconciliationReview, commUnread }
   } catch {
-    return { inbox: 0, tasks: 0, portalChats: 0, reconciliationReview: 0, commUnread: 0 }
+    return { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
   }
 }
 
@@ -119,7 +122,7 @@ export default async function DashboardLayout({
 
   const admin = isAdmin(user)
   const dashboardUser = isDashboardUser(user)
-  const badgeCounts = await getBadgeCounts(supabase)
+  const badgeCounts = await getBadgeCounts(supabase, user.id)
 
   // Check if AI agent is enabled for this user
   let showAiAgent = dashboardUser

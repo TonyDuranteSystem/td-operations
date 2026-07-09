@@ -33,6 +33,17 @@ const channelLabels: Record<InboxChannel, string> = {
   whatsapp: 'WhatsApp',
 }
 
+/** Strip an email's HTML to readable plain text (drops style/script, collapses
+ *  blank runs). Browser-only (uses the DOM); mirrors the Forward flow's logic. */
+function stripEmailHtml(html: string): string {
+  const tmp = document.createElement('div')
+  tmp.innerHTML = (html || '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+  const raw = tmp.textContent || tmp.innerText || ''
+  return raw.split('\n').map(l => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 interface GmailLabel {
   id: string
   name: string
@@ -162,6 +173,26 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     entity_type: 'email',
     entity_id: c.id,
   }), [activeMailbox])
+
+  // Single-email share: fetch the full email body and embed it as the shared
+  // message's text (Antonio wants the entire email, not just the snippet). Falls
+  // back to a card-only share if the fetch fails.
+  const openShareForSelectedEmail = useCallback(async () => {
+    if (!selected) return
+    setShareFromBulk(false)
+    const base = buildEmailShareItem(selected)
+    try {
+      const params = activeMailbox ? `?mailbox=${activeMailbox}` : ''
+      const res = await fetch(`/api/inbox/messages/${encodeURIComponent(selected.id)}${params}`)
+      const data = await res.json().catch(() => ({}))
+      const msgs: Array<{ content?: string }> = data?.messages || []
+      const last = msgs[msgs.length - 1]
+      const fullText = stripEmailHtml(last?.content || '') || selected.preview || ''
+      setShareItems([{ ...base, body: fullText }])
+    } catch {
+      setShareItems([base])
+    }
+  }, [selected, activeMailbox, buildEmailShareItem])
 
   // Bulk "Share to Support": resolve the selected ids to conversation objects
   // from the react-query cache (the list that populated the checkboxes), then
@@ -742,7 +773,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                       <>
                         <HoverHint label="Share to team chat">
                           <button
-                            onClick={() => { setShareFromBulk(false); setShareItems([buildEmailShareItem(selected)]) }}
+                            onClick={openShareForSelectedEmail}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-700 text-xs font-medium transition-colors"
                           >
                             <Send className="h-3.5 w-3.5" />

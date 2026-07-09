@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
+import { createClient as createServerClient } from '@/lib/supabase/server'
+import { countTeamNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { gmailGet } from '@/lib/gmail'
 import { NextResponse } from 'next/server'
 
@@ -21,8 +23,16 @@ function getDb() {
  */
 export async function GET() {
   try {
+    // Who is asking — team-chat unread is PER-USER (a DM/share is "unread" only
+    // for its recipient), so we need the caller's id to compute it correctly.
+    let userId: string | null = null
+    try {
+      const { data: { user } } = await createServerClient().auth.getUser()
+      userId = user?.id ?? null
+    } catch { /* unauthenticated → teamChat stays 0 */ }
+
     // Run all queries in parallel
-    const [portalResult, internalResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult, reconReviewResult] = await Promise.allSettled([
+    const [portalResult, teamThreadsResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult, reconReviewResult] = await Promise.allSettled([
       // Portal chats: count unread client messages using select('id') instead of head:true
       getDb()
         .from('portal_messages')
@@ -30,12 +40,12 @@ export async function GET() {
         .eq('sender_type', 'client')
         .is('read_at', null)
         .limit(500),
-      // Internal team messages: count unread from other team members
-      getDb()
-        .from('internal_messages')
-        .select('id')
-        .is('read_at', null)
-        .limit(500),
+      // Internal team chat: per-user unread via get_team_threads (the real
+      // read model — internal_thread_reads). The old `read_at IS NULL` count was
+      // always 0 because every message is inserted with read_at=now().
+      userId
+        ? getDb().rpc('get_team_threads', { p_user_id: userId })
+        : Promise.resolve({ data: [], error: null }),
       // Gmail: support@ unread
       gmailGet('/labels/INBOX', {}, 'support@tonydurante.us') as Promise<{ messagesUnread?: number }>,
       // Gmail: antonio@ unread
@@ -70,12 +80,10 @@ export async function GET() {
 
     const portalChats = portalClientCount
 
-    // Team chat badge (internal team messages unread from others)
+    // Team chat signal — ONLY unread DMs + @mentions (not channel chatter).
     let teamChat = 0
-    if (internalResult.status === 'fulfilled') {
-      if (!internalResult.value.error) {
-        teamChat = internalResult.value.data?.length ?? 0
-      }
+    if (teamThreadsResult.status === 'fulfilled' && !teamThreadsResult.value.error) {
+      teamChat = countTeamNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
 
     // Gmail unread

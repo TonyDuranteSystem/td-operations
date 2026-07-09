@@ -2940,6 +2940,7 @@ export default function PortalChatsPage() {
                                 kind: 'client_message',
                                 title: clientName,
                                 subtitle: msg.message,
+                                body: msg.message, // full text embedded in the shared message
                                 url: backUrl,
                                 entity_type: 'portal_message',
                                 entity_id: msg.id,
