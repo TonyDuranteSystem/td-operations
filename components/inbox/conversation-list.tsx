@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Mail, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey } from '@/lib/inbox/color-marks'
@@ -14,6 +14,8 @@ interface ConversationListProps {
   onDeleted?: (id: string) => void
   deletedIds?: Set<string>
   unreadOverrides?: Map<string, number>
+  /** Optimistically set a row's unread override in the parent (badge + bold). */
+  onUnreadOverride?: (id: string, unread: number) => void
   // Bulk selection
   bulkMode: boolean
   selectedIds: Set<string>
@@ -50,8 +52,32 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, unreadOverrides, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, unreadOverrides, onUnreadOverride, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
+
+  // Toggle a row read/unread from the list (next to the row Delete). Uses the
+  // parent's optimistic unread override for instant badge/bold feedback and
+  // only invalidates stats/labels — NEVER the conversations list itself, whose
+  // ~300-Gmail-call refetch under load is what blanked the inbox (2026-07-08).
+  const markMutation = useMutation({
+    mutationFn: async ({ conv, action }: { conv: InboxConversation; action: 'mark_read' | 'mark_unread' }) => {
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action, mailbox }),
+      })
+      if (!res.ok) throw new Error('Failed to update')
+      return action
+    },
+    onMutate: ({ conv, action }) => {
+      onUnreadOverride?.(conv.id, action === 'mark_unread' ? Math.max(conv.unread, 1) : 0)
+    },
+    onSuccess: (action) => {
+      toast.success(action === 'mark_unread' ? 'Marked as unread' : 'Marked as read')
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+    },
+  })
 
   const deleteMutation = useMutation({
     mutationFn: async (conv: InboxConversation) => {
@@ -266,19 +292,34 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               </div>
             </button>
 
-            {/* Delete button — visible on hover (Gmail only) */}
+            {/* Row actions — read/unread toggle + Delete (Gmail only). Reveal on
+                hover on desktop; ALWAYS visible on mobile (touch has no hover, so
+                the row actions would be unreachable — Antonio's phone PWA). */}
             {conv.channel === 'gmail' && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  deleteMutation.mutate(conv)
-                }}
-                disabled={deleteMutation.isPending}
-                className="shrink-0 self-center opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-all"
-                title="Delete"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <div className="shrink-0 self-center flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    markMutation.mutate({ conv, action: conv.unread > 0 ? 'mark_read' : 'mark_unread' })
+                  }}
+                  disabled={markMutation.isPending}
+                  className="p-1.5 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors"
+                  title={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}
+                >
+                  {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    deleteMutation.mutate(conv)
+                  }}
+                  disabled={deleteMutation.isPending}
+                  className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             )}
           </div>
         )

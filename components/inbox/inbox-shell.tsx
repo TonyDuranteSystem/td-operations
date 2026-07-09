@@ -686,6 +686,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             onDeleted={handleEmailDeleted}
             deletedIds={deletedIds}
             unreadOverrides={unreadOverrides}
+            onUnreadOverride={(id, v) => setUnreadOverrides(prev => new Map(prev).set(id, v))}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
