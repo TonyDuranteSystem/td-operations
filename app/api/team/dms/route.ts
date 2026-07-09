@@ -1,7 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
-import { dmKey } from '@/lib/team/workspace'
+import { findOrCreateDm } from '@/lib/team/dm'
 import { listTeamMembers } from '@/lib/team/directory'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -30,43 +29,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'That teammate was not found.' }, { status: 404 })
   }
 
-  const key = dmKey(user.id, otherId)
-
-  // Reuse an existing DM thread if present.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: existing } = await (supabaseAdmin as any)
-    .from('internal_threads')
-    .select('*')
-    .eq('dm_key', key)
-    .maybeSingle()
-  if (existing) {
-    return NextResponse.json({ thread: existing, reused: true })
+  try {
+    const { thread, reused } = await findOrCreateDm(user.id, otherId)
+    return NextResponse.json(reused ? { thread, reused: true } : { thread })
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Failed to open DM' },
+      { status: 500 },
+    )
   }
-
-  const now = new Date().toISOString()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: thread, error } = await (supabaseAdmin as any)
-    .from('internal_threads')
-    .insert({
-      thread_type: 'dm',
-      dm_key: key,
-      title: `DM: ${key}`,
-      created_by: user.id,
-      last_activity_at: now,
-    })
-    .select()
-    .single()
-
-  if (error) {
-    if ((error as { code?: string }).code === '23505') {
-      // Race — someone created it between our check and insert. Fetch and return.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: raced } = await (supabaseAdmin as any)
-        .from('internal_threads').select('*').eq('dm_key', key).maybeSingle()
-      if (raced) return NextResponse.json({ thread: raced, reused: true })
-    }
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ thread })
 }

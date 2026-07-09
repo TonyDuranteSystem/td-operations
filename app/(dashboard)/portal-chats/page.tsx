@@ -23,6 +23,7 @@ import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
 import { MessageReactions } from '@/components/chat/message-reactions'
+import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import type { MessageReaction } from '@/lib/portal/reactions'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
@@ -232,6 +233,7 @@ export default function PortalChatsPage() {
   // "To Do" quick action opens this small dialog (pre-filled with the message
   // text) so staff can write/trim the note before the card is created.
   const [todoNote, setTodoNote] = useState<{ messageId: string; note: string } | null>(null)
+  const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
   const [pendingAdminFiles, setPendingAdminFiles] = useState<PendingAdminFile[]>([])
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
@@ -2925,6 +2927,28 @@ export default function PortalChatsPage() {
                             <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => {
+                              const acctId = selectedCompanyId || selectedAccountId
+                              const clientName = selectedName?.company || selectedName?.contact || 'Client'
+                              const backUrl = acctId
+                                ? `/portal-chats?account=${acctId}&message=${msg.id}`
+                                : selectedContactId
+                                  ? `/portal-chats?contact=${selectedContactId}&message=${msg.id}`
+                                  : undefined
+                              setShareItems([{
+                                kind: 'client_message',
+                                title: clientName,
+                                subtitle: msg.message,
+                                url: backUrl,
+                                entity_type: 'portal_message',
+                                entity_id: msg.id,
+                              }])
+                            }}
+                          >
+                            <Send className="h-3.5 w-3.5 text-zinc-400" /> Share to team chat
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-violet-700 hover:bg-violet-50 cursor-pointer outline-none"
                             onSelect={() => setTodoNote({ messageId: msg.id, note: msg.message })}
                           >
@@ -3786,6 +3810,15 @@ export default function PortalChatsPage() {
           queryClient.invalidateQueries({ queryKey: ['open-message-actions'] })
         }}
       />
+
+      {/* Share to team chat — opened by the per-message "Share to team chat" action. */}
+      {shareItems && (
+        <ShareToTeamDialog
+          items={shareItems}
+          label={`Message from ${selectedName?.company || selectedName?.contact || 'client'}`}
+          onClose={() => setShareItems(null)}
+        />
+      )}
 
       {/* To-Do note dialog — opened by the per-message "To Do" action. Pre-filled
           with the message text; staff can edit/trim before creating the card. */}

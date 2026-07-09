@@ -1,5 +1,6 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
-_Last verified against code: 2026-07-08c — Claude (cosmetic only, PWA mobile UX pass dev_task `e1f28dce`: the Gmail search-bar row and the bulk-action bar in `inbox-shell.tsx` gained `flex-wrap` so their buttons wrap below the input at phone width instead of overflowing. No behavior change.)_
+_Last verified against code: 2026-07-08d — Claude (**Share to team chat**: `inbox-shell.tsx` gained a per-thread "Share to team chat" header button + a bulk "Share to team" button (multi-select → one message each) + a NEW inbox deep-link `/inbox?thread=gmail:<id>&mailbox=` hydrated from `window.location` on mount, so a shared email links back. Uses the shared `ShareToTeamDialog`; full detail in team-workspace.md → "Share to team chat". Sandbox-only, not yet on prod.)_
+_Prior 2026-07-08c — Claude (cosmetic only, PWA mobile UX pass dev_task `e1f28dce`: the Gmail search-bar row and the bulk-action bar in `inbox-shell.tsx` gained `flex-wrap` so their buttons wrap below the input at phone width instead of overflowing. No behavior change.)_
 _Prior 2026-07-08b — Claude (reply pipeline Gmail-parity: multipart HTML replies, RFC 2047 To-encoding, isHtml flag from real MIME type, quoted-text collapse, 4-row email composer with Enter=newline, post-send delayed refetches; earlier same day: inbox audit + rendering/threading/color-marks overhaul; responsive thread header)_
 
 ## What it is

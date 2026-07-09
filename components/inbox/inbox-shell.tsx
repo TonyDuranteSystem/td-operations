@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2 } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -15,6 +15,7 @@ import { ComposeDialog } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
 import { LinkClientDialog } from './link-client-dialog'
+import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
@@ -60,6 +61,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const [workerOpen, setWorkerOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
+  const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
+  const [shareFromBulk, setShareFromBulk] = useState(false)
+  const [deepLinkDone, setDeepLinkDone] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
   const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
@@ -111,6 +115,72 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Deep-link: /inbox?thread=gmail:<id>&mailbox=support|antonio opens a specific
+  // email (used by the "Share to team chat" card link back to the source). Read
+  // from window.location once on mount (no useSearchParams → no Suspense need on
+  // this client component). The messages endpoint gives us subject + sender to
+  // fill the thread header; MessageThread fetches the body itself.
+  useEffect(() => {
+    if (deepLinkDone) return
+    setDeepLinkDone(true)
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const thread = params.get('thread')
+    if (!thread || !thread.startsWith('gmail:')) return
+    const mailbox = params.get('mailbox') === 'antonio' ? 'antonio' : 'support'
+    setActiveMailbox(mailbox)
+    setActiveChannel('gmail')
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/inbox/messages/${encodeURIComponent(thread)}?mailbox=${mailbox}`)
+        const data = await res.json().catch(() => ({}))
+        setSelected({
+          id: thread,
+          channel: 'gmail',
+          name: data?.name || '',
+          preview: '',
+          unread: 0,
+          lastMessageAt: '',
+          subject: data?.subject || '',
+        })
+      } catch {
+        // Fall back to a bare stub so the thread still opens by id.
+        setSelected({ id: thread, channel: 'gmail', name: '', preview: '', unread: 0, lastMessageAt: '' })
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkDone])
+
+  // Build a ShareItem for an email conversation (email → 'link' card: subject as
+  // title, sender + snippet as subtitle, deep-link back to /inbox).
+  const buildEmailShareItem = useCallback((c: InboxConversation): ShareItem => ({
+    kind: 'link',
+    title: c.subject || c.name || 'Email',
+    subtitle: c.name ? (c.preview ? `${c.name} · ${c.preview}` : c.name) : (c.preview || ''),
+    url: `/inbox?thread=${encodeURIComponent(c.id)}&mailbox=${activeMailbox}`,
+    entity_type: 'email',
+    entity_id: c.id,
+  }), [activeMailbox])
+
+  // Bulk "Share to Support": resolve the selected ids to conversation objects
+  // from the react-query cache (the list that populated the checkboxes), then
+  // open the share dialog with one item per email.
+  const handleBulkShare = useCallback(() => {
+    const cached = queryClient.getQueriesData<{ conversations: InboxConversation[] }>({ queryKey: ['inbox-conversations'] })
+    const map = new Map<string, InboxConversation>()
+    for (const [, data] of cached) {
+      (data?.conversations || []).forEach(c => map.set(c.id, c))
+    }
+    const items = Array.from(selectedIds).map(id => {
+      const c = map.get(id)
+      return c
+        ? buildEmailShareItem(c)
+        : { kind: 'link' as const, title: 'Email', url: `/inbox?thread=${encodeURIComponent(id)}&mailbox=${activeMailbox}`, entity_type: 'email', entity_id: id }
+    })
+    setShareFromBulk(true)
+    setShareItems(items)
+  }, [queryClient, selectedIds, buildEmailShareItem, activeMailbox])
 
   const handleEmailDeleted = useCallback((id: string) => {
     setDeletedIds(prev => {
@@ -533,6 +603,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               )}
             </div>
             <button
+              onClick={handleBulkShare}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Share to team
+            </button>
+            <button
               onClick={clearSelection}
               className="p-1 rounded hover:bg-zinc-200 text-zinc-500 ml-1"
               title="Clear selection"
@@ -757,6 +834,14 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                             <Link2 className="h-4 w-4" />
                           </button>
                         </HoverHint>
+                        <HoverHint label="Share to team chat">
+                          <button
+                            onClick={() => { setShareFromBulk(false); setShareItems([buildEmailShareItem(selected)]) }}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-600 transition-colors"
+                          >
+                            <Send className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
                         <HoverHint label="Delete (moves to Trash)">
                           <button
                             onClick={() => emailActionMutation.mutate({ action: 'trash' })}
@@ -824,6 +909,17 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           conversation={selected}
           mailbox={activeMailbox}
           onClose={() => setLinkOpen(false)}
+        />
+      )}
+
+      {shareItems && (
+        <ShareToTeamDialog
+          items={shareItems}
+          label={shareFromBulk
+            ? `${shareItems.length} email${shareItems.length === 1 ? '' : 's'}`
+            : `Email — ${shareItems[0]?.title || ''}`}
+          onShared={shareFromBulk ? clearSelection : undefined}
+          onClose={() => { setShareItems(null); setShareFromBulk(false) }}
         />
       )}
     </div>

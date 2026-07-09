@@ -26,6 +26,7 @@ export type AppSettingKey =
   | "td_communication_settings" // object — TD Communication admin panel system settings. Shape: { enabled: boolean (portal tab visibility), disclaimer_en/it: string, default_sla_days: number }. Read/written via lib/td-communication/comm-settings.ts; edited in the CRM TD Communication → Settings tab.
   | "td_communication_landing" // object — TD Communication landing page content (Phase 9). Shape: TdCommLandingState { draft, published: LandingContent, published_at/by, updated_at/by }. Two snapshots (draft/published); Publish promotes draft→published. Read/written via lib/td-communication/landing.ts; edited in the CRM TD Communication → Landing Page tab AND /collab.
   | "slack_mirror_enabled" // boolean — when true, the Team Workspace mirrors Slack channels the bot is in (webhook ingest + conversations.history backfill) into slack_channels/slack_messages and shows a read-only "Slack" section with Open-in-Slack links. Default FALSE (dormant). Consumed in lib/team/slack-mirror.ts + the workspace UI. Toggle when ready to run Slack alongside the CRM.
+  | "support_person_user_id" // string (auth user UUID) — the staff member whose DM receives "Send to Support" shares from Inbox + Portal Chats. Stores the ACTUAL user id (no name-resolution at runtime — brittle). Seeded to Luca. Read via getSupportPersonUserId(); consumed in app/api/team/share. If unset, the share endpoint returns a "no support person configured" error rather than guessing.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,
@@ -72,6 +73,16 @@ export async function isPortalAdminEmailEnabled(): Promise<boolean> {
 export async function isSlackMirrorEnabled(): Promise<boolean> {
   const v = await getAppSetting<boolean>("slack_mirror_enabled", false)
   return v === true
+}
+
+/** The staff user id whose DM receives "Send to Support" shares. Returns the
+ *  stored UUID, or null when unconfigured (the share endpoint then surfaces a
+ *  clear error instead of guessing a person). No runtime name-resolution — the
+ *  value is a real auth user id, seeded once. */
+export async function getSupportPersonUserId(): Promise<string | null> {
+  const v = await getAppSetting<string | null>("support_person_user_id", null)
+  const id = typeof v === "string" ? v.trim() : ""
+  return id.length > 0 ? id : null
 }
 
 /** Minimum agreement_year for the portal renewal-MSA banner to render.
