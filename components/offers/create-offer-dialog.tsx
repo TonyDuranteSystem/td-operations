@@ -4,6 +4,7 @@ import { useState, useEffect, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
+import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -176,6 +177,21 @@ export function CreateOfferDialog({
   useEffect(() => {
     if (open) setClientNameValue(clientName)
   }, [open, clientName])
+
+  // Referrer — starts from the lead's inherited name (free text). Staff can pick
+  // a real client/company/partner to pin it by ID so the pay->credit chain issues
+  // the reward Credit Note to exactly the right party. Reset when the dialog opens.
+  const initialReferrer = (): ReferrerValue => ({
+    name: referrerName || '',
+    type: referrerType === 'partner' ? 'partner' : referrerName ? 'client' : null,
+    contactId: null,
+    accountId: null,
+  })
+  const [referrer, setReferrer] = useState<ReferrerValue>(initialReferrer)
+  useEffect(() => {
+    if (open) setReferrer(initialReferrer())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, referrerName, referrerType])
 
   // Fetch service catalog from DB when dialog opens
   useEffect(() => {
@@ -667,8 +683,10 @@ export function CreateOfferDialog({
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
             bundled_pipelines: derivedPipelines,
-            referrer_name: referrerName || null,
-            referrer_type: referrerType || null,
+            referrer_name: referrer.name.trim() || null,
+            referrer_type: referrer.type || null,
+            referrer_contact_id: referrer.contactId,
+            referrer_account_id: referrer.accountId,
             // Managed-partner deal (per-sale): flat-fee setup share (paid at
             // activation) + renewal share (paid each year). USD.
             partner_id: partnerId || null,
@@ -755,9 +773,9 @@ export function CreateOfferDialog({
               />
             </div>
             <p className="text-sm text-zinc-600">{clientEmail}</p>
-            {referrerName && (
-              <p className="text-xs text-blue-600">Referrer: {referrerName} ({referrerType || 'client'})</p>
-            )}
+            <div className="pt-1">
+              <ReferrerPicker value={referrer} onChange={setReferrer} />
+            </div>
           </div>
 
           {/* Partner deal (optional, per-sale) */}

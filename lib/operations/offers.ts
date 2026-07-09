@@ -176,6 +176,9 @@ export interface CreateOfferParams {
   referrer_email?: string | null
   referrer_type?: "client" | "partner" | null
   referrer_account_id?: string | null
+  /** Pins a CONTACT referrer by id (the offer picker). Lets the pay->credit
+   *  chain resolve the referrer without a name match. Null for free-text refs. */
+  referrer_contact_id?: string | null
   referrer_commission_type?: "percentage" | "price_difference" | "credit_note" | null
   referrer_commission_pct?: number | null
   referrer_agreed_price?: number | null
@@ -442,6 +445,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const refEmail = params.referrer_email ?? null
     let refType = params.referrer_type ?? null
     let refAccountId = params.referrer_account_id ?? null
+    const refContactId = params.referrer_contact_id ?? null
     let refCommissionType = params.referrer_commission_type ?? null
     let refCommissionPct = params.referrer_commission_pct ?? null
     let referralAutoFilled = false
@@ -519,6 +523,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         referrer_email: refEmail,
         referrer_type: refType,
         referrer_account_id: refAccountId,
+        referrer_contact_id: refContactId,
         referrer_commission_type: refCommissionType,
         referrer_commission_pct: refCommissionPct,
         referrer_agreed_price: params.referrer_agreed_price ?? null,

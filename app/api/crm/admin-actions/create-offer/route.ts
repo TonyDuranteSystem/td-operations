@@ -49,6 +49,8 @@ export async function POST(req: NextRequest) {
       immediate_actions: body.immediate_actions,
       referrer_name: body.referrer_name,
       referrer_type: body.referrer_type,
+      referrer_contact_id: body.referrer_contact_id ?? null,
+      referrer_account_id: body.referrer_account_id ?? null,
       // Managed-partner deal (per-sale): a partner sells at a custom price with a
       // setup share (paid at activation) + a renewal share (paid each year).
       partner_id: body.partner_id ?? null,

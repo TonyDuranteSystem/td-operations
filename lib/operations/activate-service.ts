@@ -154,7 +154,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Get the offer to determine contract_type and bundled_pipelines
   const { data: offer } = await supabase
     .from("offers")
-    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout")
+    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout")
     .eq("token", activation.offer_token)
     .single()
 
@@ -1149,35 +1149,45 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   let referralNoteLine = ""
   try {
     if (offer && shouldRunReferralCredit(offer)) {
-      // a. Find or create referrer contact
-      let referrerContactId: string | null = null
-      const { data: referrerContacts } = await supabase
-        .from("contacts")
-        .select("id")
-        .ilike("full_name", offer.referrer_name)
-        .limit(1)
+      const offerReferrerAccountId = offer.referrer_account_id || null
+      const offerReferrerContactId = (offer as { referrer_contact_id?: string | null }).referrer_contact_id || null
 
-      if (referrerContacts && referrerContacts.length > 0) {
-        referrerContactId = referrerContacts[0].id
-      } else {
-        // Create minimal contact for the referrer
-        const { data: newReferrer } = await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
-          supabase
-            .from("contacts")
-            .insert({
-              full_name: offer.referrer_name,
-              email: offer.referrer_email || null,
-              referrer_type: offer.referrer_type || null,
-            })
-            .select("id")
-            .single(),
-          "contacts.insert"
-        )
-        referrerContactId = newReferrer?.id || null
+      // a. Resolve the referrer contact. Prefer the id the offer picker pinned
+      //    (deterministic — no name guessing). If the referrer is an ACCOUNT
+      //    (company/partner) with no contact, skip contact resolution entirely —
+      //    the credit lands on that account. Only free-text referrers (no ids at
+      //    all) fall back to the legacy name-match, then create-a-contact.
+      let referrerContactId: string | null = offerReferrerContactId
+
+      if (!referrerContactId && !offerReferrerAccountId) {
+        const { data: referrerContacts } = await supabase
+          .from("contacts")
+          .select("id")
+          .ilike("full_name", offer.referrer_name)
+          .limit(1)
+
+        if (referrerContacts && referrerContacts.length > 0) {
+          referrerContactId = referrerContacts[0].id
+        } else {
+          // Create minimal contact for the referrer (free-text referrer only)
+          const { data: newReferrer } = await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
+            supabase
+              .from("contacts")
+              .insert({
+                full_name: offer.referrer_name,
+                email: offer.referrer_email || null,
+                referrer_type: offer.referrer_type || null,
+              })
+              .select("id")
+              .single(),
+            "contacts.insert"
+          )
+          referrerContactId = newReferrer?.id || null
+        }
       }
 
-      if (referrerContactId) {
+      if (referrerContactId || offerReferrerAccountId) {
         // b. Parse setup fee from cost_summary
         let setupFeeTotal = 0
         try {

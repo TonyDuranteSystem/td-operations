@@ -8783,6 +8783,7 @@ export type Database = {
           recurring_costs: Json | null
           referrer_account_id: string | null
           referrer_agreed_price: number | null
+          referrer_contact_id: string | null
           referrer_commission_pct: number | null
           referrer_commission_type: string | null
           referrer_email: string | null
@@ -8842,6 +8843,7 @@ export type Database = {
           recurring_costs?: Json | null
           referrer_account_id?: string | null
           referrer_agreed_price?: number | null
+          referrer_contact_id?: string | null
           referrer_commission_pct?: number | null
           referrer_commission_type?: string | null
           referrer_email?: string | null
@@ -8901,6 +8903,7 @@ export type Database = {
           recurring_costs?: Json | null
           referrer_account_id?: string | null
           referrer_agreed_price?: number | null
+          referrer_contact_id?: string | null
           referrer_commission_pct?: number | null
           referrer_commission_type?: string | null
           referrer_email?: string | null
