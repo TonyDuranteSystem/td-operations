@@ -455,6 +455,7 @@ describe("processSlackEvent", () => {
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
       enableCodeTasks: true,
       enableSlackSend: true,
+      enableTeamChatSend: true,
       enableDbRead: true,
       enableThreadRecall: true,
       enableWebSearch: true,

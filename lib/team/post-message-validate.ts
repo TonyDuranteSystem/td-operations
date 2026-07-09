@@ -1,0 +1,37 @@
+/**
+ * Pure validators for posting into Team Chat (shared by the server choke-point
+ * lib/team/post-message.ts and its unit tests). No server-only imports so it is
+ * safe to unit-test / import anywhere.
+ */
+import { validateTeamCard } from '@/lib/team/workspace'
+
+export const TEAM_MESSAGE_MAX = 5000
+
+/**
+ * Validate the target selector: exactly one of channel / thread_id / dm_user_id.
+ * Returns an error string or null.
+ */
+export function validateTeamPostTarget(input: {
+  channel?: string | null
+  thread_id?: string | null
+  dm_user_id?: string | null
+}): string | null {
+  const set = [input.channel, input.thread_id, input.dm_user_id].filter(
+    (v) => typeof v === 'string' && v.trim().length > 0,
+  )
+  if (set.length === 0) return 'A target is required: one of channel, thread_id, or dm_user_id.'
+  if (set.length > 1) return 'Provide exactly ONE target: channel, thread_id, or dm_user_id (not several).'
+  return null
+}
+
+/**
+ * Validate the message body + optional card. Returns an error or null.
+ */
+export function validateTeamPostMessage(message: string, card?: unknown): string | null {
+  const m = (message ?? '').toString().trim()
+  if (!m) return 'message is required.'
+  if (m.length > TEAM_MESSAGE_MAX) return `Message too long (max ${TEAM_MESSAGE_MAX} characters).`
+  const cardErr = validateTeamCard(card ?? null)
+  if (cardErr) return cardErr
+  return null
+}

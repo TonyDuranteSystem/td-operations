@@ -88,6 +88,7 @@ import { registerCatalogTools } from "@/lib/mcp/tools/catalog"
 import { registerAgentMessageTools } from "@/lib/mcp/tools/agent-messages"
 import { registerAgentApprovalTools } from "@/lib/mcp/tools/agent-approvals"
 import { registerAgentThreadTools } from "@/lib/mcp/tools/agent-threads"
+import { registerTeamChatTools } from "@/lib/mcp/tools/team-chat"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -149,6 +150,7 @@ const handler = createMcpHandler(
     registerAgentMessageTools(server)
     registerAgentApprovalTools(server)
     registerAgentThreadTools(server)
+    registerTeamChatTools(server)
   },
   {
     capabilities: {},

@@ -355,6 +355,33 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
 }
 
 /**
+ * team_chat_send — post into the INTERNAL Team Workspace ("team chat") AS
+ * Claude. Staff-only, never client-visible. Injected ONLY when
+ * CallWorkerOptions.enableTeamChatSend is set (Slack worker + @claude Team Chat
+ * trigger) — kept OUT of the Hermes research worker (R108). Shares the
+ * lib/team/post-message.ts choke-point with the team_chat_send MCP tool.
+ */
+export const TEAM_CHAT_SEND_TOOL: ToolDef = {
+  name: "team_chat_send",
+  description: [
+    "Post a message into the INTERNAL Team Workspace ('team chat') AS Claude. Staff-only (Antonio, Luca) — NEVER visible to clients (this is NOT a client message or email).",
+    "Use for team coordination: announce a fix/deploy, flag something to check, ask a teammate to test. @mention a teammate (e.g. '@Luca' or '@Antonio') to push them.",
+    "Target — provide EXACTLY ONE: channel (slug/name like 'td-dev' or 'general'), thread_id (existing team thread UUID), or dm_user_id (staff UUID to DM).",
+    "Only call AFTER Antonio has explicitly approved the draft in THIS thread ('send it' / 'go'). Show the draft (target + exact text) first and wait — same rule as send_email / send_portal_message. Do NOT call speculatively.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      channel: { type: "string", description: "Channel slug or name (e.g. 'td-dev', 'general'). Provide exactly one target." },
+      thread_id: { type: "string", description: "Existing team thread UUID. Provide exactly one target." },
+      dm_user_id: { type: "string", description: "Staff user UUID to DM as Claude. Provide exactly one target." },
+      message: { type: "string", description: "Message body. @mention staff (e.g. '@Luca') to push them." },
+    },
+    required: ["message"],
+  },
+}
+
+/**
  * send_email — Slack-only direct email send (gated via enableEmailSend), mirroring
  * SEND_PORTAL_MESSAGE_TOOL. Delegates to the shared `send_email` AGENT_TOOL (which
  * supports sender selection support@/antonio@ + same-thread replies). Like the portal
@@ -1701,6 +1728,27 @@ export async function executeWorkerTool(
         : params
     return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined)
   }
+  if (name === "team_chat_send") {
+    // Staff-only internal team-chat send AS Claude (gated at the tool-list level
+    // via enableTeamChatSend; availableNames re-check = defense-in-depth, R108 —
+    // must never fire for the Hermes research worker even if a name leaks).
+    if (!availableNames?.has("team_chat_send")) {
+      return `❌ Tool "team_chat_send" is not permitted in this worker call (team-chat send not enabled).`
+    }
+    try {
+      const { postTeamMessage } = await import("@/lib/team/post-message")
+      const p = params as { channel?: string; thread_id?: string; dm_user_id?: string; message?: string }
+      const result = await postTeamMessage({
+        channel: p.channel,
+        thread_id: p.thread_id,
+        dm_user_id: p.dm_user_id,
+        message: p.message ?? "",
+      })
+      return `✅ Posted to team chat (${result.thread_type} thread ${result.thread_id})${result.mentioned_user_ids.length ? `, pushed ${result.mentioned_user_ids.length} mentioned teammate(s)` : ""}.`
+    } catch (e) {
+      return `❌ Could not post to team chat: ${e instanceof Error ? e.message : String(e)}`
+    }
+  }
   // Client Threads — Slack-only. Executor-gate too (defense-in-depth, R108): the
   // tag WRITE and the lookup READ must never fire for the Hermes research worker
   // even if a name leaks. tag is only offered for #td-support (enableClientThreadTag).
@@ -2000,6 +2048,14 @@ export interface CallWorkerOptions {
    * client-send tool must never reach the Hermes worker.
    */
   enableSlackSend?: boolean
+  /**
+   * Expose the internal team-chat send tool (team_chat_send) for this call.
+   * Posts AS Claude into the staff-only Team Workspace. Set by the Slack worker
+   * (processSlackEvent) and the @claude Team Chat trigger (processClaudeReply).
+   * The Hermes/Telegram research path never sets this (R108) — no send tool ever
+   * reaches the Hermes worker.
+   */
+  enableTeamChatSend?: boolean
   /**
    * Expose the Slack-only read-only run_sql_query tool for this call (dig-in gear).
    * Set by the Slack worker (processSlackEvent). When true, RUN_SQL_QUERY_TOOL is
@@ -2510,6 +2566,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // every other action still routes through propose_action.
   if (opts.enableSlackSend && !tools.some((t) => t.name === SEND_PORTAL_MESSAGE_TOOL.name)) {
     tools = [...tools, SEND_PORTAL_MESSAGE_TOOL]
+  }
+
+  // Internal team-chat send (staff-only, posts as Claude). Gated on
+  // enableTeamChatSend so it NEVER reaches the Hermes research worker (R108).
+  if (opts.enableTeamChatSend && !tools.some((t) => t.name === TEAM_CHAT_SEND_TOOL.name)) {
+    tools = [...tools, TEAM_CHAT_SEND_TOOL]
   }
 
   // Slack-only: append the read-only SQL tool for deep client investigation (dig-in
