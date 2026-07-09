@@ -5,8 +5,10 @@ describe("buildReferrerLinkedCopy", () => {
   it("builds Italian copy with a first-name greeting", () => {
     const c = buildReferrerLinkedCopy("it", "Marco")
     expect(c.greeting).toBe("Ciao Marco,")
-    expect(c.subject).toContain("segnalazione")
+    expect(c.subject).toContain("referral")
     expect(c.ctaLabel).toBe("Vai al Portale")
+    // Points to the portal Referral section (same word in both languages).
+    expect(c.chat).toContain("sezione Referral")
     // Privacy: never names the referred person.
     expect(c.chat.toLowerCase()).not.toContain("amin")
   })

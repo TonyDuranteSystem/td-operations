@@ -20,19 +20,19 @@ export function buildReferrerLinkedCopy(
     : (isIt ? "Ciao," : "Hi,")
   if (isIt) {
     return {
-      subject: "Grazie per la tua segnalazione",
-      chat: "Grazie per la tua segnalazione! L'abbiamo registrata. Quando la persona che hai segnalato diventerà nostro cliente, riceverai la tua ricompensa. Ti aggiorneremo.",
+      subject: "Grazie per il tuo referral",
+      chat: "Grazie per il tuo referral! L'abbiamo registrato. Quando la persona che hai segnalato diventerà nostro cliente, riceverai la tua ricompensa. Puoi seguire i tuoi referral e trovare il tuo link da condividere nella sezione Referral del portale. Ti aggiorneremo.",
       greeting,
-      body: "Abbiamo registrato la tua segnalazione. Quando la persona che hai segnalato diventerà nostro cliente, riceverai la tua ricompensa. Ti terremo aggiornato.",
+      body: "Abbiamo registrato il tuo referral. Quando la persona che hai segnalato diventerà nostro cliente, riceverai la tua ricompensa. Puoi seguire i tuoi referral e trovare il tuo link da condividere nella sezione Referral del portale. Ti terremo aggiornato.",
       ctaLabel: "Vai al Portale",
       footer: "Tony Durante LLC — Portale Clienti",
     }
   }
   return {
     subject: "Thank you for your referral",
-    chat: "Thank you for your referral! We've registered it. When the person you referred becomes our client, you'll receive your reward. We'll keep you posted.",
+    chat: "Thank you for your referral! We've registered it. When the person you referred becomes our client, you'll receive your reward. You can track your referrals and find your link to share in the Referral section of your portal. We'll keep you posted.",
     greeting,
-    body: "We've registered your referral. When the person you referred becomes our client, you'll receive your reward. We'll keep you posted.",
+    body: "We've registered your referral. When the person you referred becomes our client, you'll receive your reward. You can track your referrals and find your link to share in the Referral section of your portal. We'll keep you posted.",
     ctaLabel: "Go to Portal",
     footer: "Tony Durante LLC — Client Portal",
   }
