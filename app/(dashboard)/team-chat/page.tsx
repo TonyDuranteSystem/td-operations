@@ -501,7 +501,7 @@ export default function TeamWorkspacePage() {
 
   if (view === 'board') {
     return (
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-2 border-b border-zinc-200 bg-white shrink-0">
           <ViewToggle view={view} setView={setView} />
           <span className="text-sm font-semibold text-zinc-800">Team Workspace</span>
@@ -514,7 +514,7 @@ export default function TeamWorkspacePage() {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
       {/* Sidebar — full-screen pane on mobile until a conversation is open */}
       <div className={`${(selectedId || selectedSlackId) ? 'hidden md:flex' : 'flex'} w-full md:w-64 md:shrink-0 border-r border-zinc-200 bg-zinc-50 flex-col`}>
         <div className="px-4 py-3 border-b border-zinc-200">

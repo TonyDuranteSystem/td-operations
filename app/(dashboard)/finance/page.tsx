@@ -313,7 +313,9 @@ export default async function FinancePage({
   const overdueCount = allInvoices.filter(i => i.invoice_status === 'Overdue').length
 
   return (
-    <div className="h-full">
+    // lg:calc subtracts the sticky 56px desktop DashboardHeader so the finance
+    // shell fits <main> exactly (its panes scroll internally). See inbox/page.tsx.
+    <div className="h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
       <FinanceDashboard
         activeTab={activeTab}
         clientList={clientList}
