@@ -116,8 +116,12 @@ fi
 echo "🔍 Running ESLint on changed files..."
 CHANGED_TS=$(git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
 if [ -n "$CHANGED_TS" ]; then
-  echo "$CHANGED_TS" | xargs npx eslint --max-warnings 0 2>&1 | tail -10
-  if [ $? -ne 0 ]; then
+  # Capture eslint's real exit code BEFORE piping to tail (a pipe would make
+  # $? reflect tail, which always succeeds — the gate would never block).
+  ESLINT_OUT=$(echo "$CHANGED_TS" | xargs npx eslint --max-warnings 0 2>&1)
+  ESLINT_STATUS=$?
+  echo "$ESLINT_OUT" | tail -10
+  if [ "$ESLINT_STATUS" -ne 0 ]; then
     echo ""
     echo "❌ PUSH BLOCKED — ESLint errors in changed files."
     echo "   Run 'npm run lint:fix' to auto-fix, or fix manually."
@@ -157,9 +161,13 @@ else
 fi
 
 echo "🧪 Running unit tests before push..."
-npm run test:unit 2>&1 | tail -5
+# Capture the real exit code BEFORE piping to tail (piping would make $? reflect
+# tail, which always exits 0 — a failing suite would slip through, 2026-07-08).
+npm run test:unit > /tmp/td-unit.log 2>&1
+UNIT_STATUS=$?
+tail -5 /tmp/td-unit.log
 
-if [ $? -ne 0 ]; then
+if [ "$UNIT_STATUS" -ne 0 ]; then
   echo ""
   echo "❌ UNIT TESTS FAILED — push blocked."
   echo "   Run 'npm run test:unit' to see failures, fix them, then push again."
@@ -168,9 +176,12 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "🧪 Running integration tests before push (P1.7 characterization)..."
-npm run test:integration 2>&1 | tail -5
+# Capture the real exit code BEFORE piping to tail (same pipe-swallows-$? bug).
+npm run test:integration > /tmp/td-integration.log 2>&1
+INTEGRATION_STATUS=$?
+tail -5 /tmp/td-integration.log
 
-if [ $? -ne 0 ]; then
+if [ "$INTEGRATION_STATUS" -ne 0 ]; then
   echo ""
   echo "❌ INTEGRATION TESTS FAILED — push blocked."
   echo "   Run 'npm run test:integration' to see failures, fix them, then push again."
