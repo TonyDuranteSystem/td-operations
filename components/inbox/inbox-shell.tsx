@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -91,9 +91,18 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     } catch { return new Set() }
   })
   const queryClient = useQueryClient()
+  // Print/Save-as-PDF handler registered by the open MessageThread (it holds the
+  // email bodies; the toolbar only holds the conversation metadata).
+  const printRef = useRef<(() => void) | null>(null)
 
   const isWhatsApp = activeChannel === 'whatsapp'
   const isGmail = selected?.channel === 'gmail'
+  // Read/unread state of the OPEN email: optimistic override wins, else the row.
+  const openUnread = selected
+    ? (unreadOverrides.has(selected.id)
+        ? (unreadOverrides.get(selected.id) ?? 0) > 0
+        : selected.unread > 0)
+    : false
 
   // Real-time inbox refresh: Gmail push (users.watch → Pub/Sub → webhook →
   // gmail_push_events row) — new mail appears within seconds instead of the
@@ -874,6 +883,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                             <Link2 className="h-4 w-4" />
                           </button>
                         </HoverHint>
+                        <HoverHint label="Print / Save as PDF">
+                          <button
+                            onClick={() => printRef.current?.()}
+                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                          >
+                            <Printer className="h-4 w-4" />
+                          </button>
+                        </HoverHint>
+                        <HoverHint label={openUnread ? 'Mark as read' : 'Mark as unread'}>
+                          <button
+                            onClick={() => emailActionMutation.mutate({ action: openUnread ? 'mark_read' : 'mark_unread' })}
+                            disabled={emailActionMutation.isPending}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-600 hover:text-zinc-800 text-xs font-medium transition-colors ml-1"
+                          >
+                            {openUnread ? <Mail className="h-3.5 w-3.5" /> : <MailOpen className="h-3.5 w-3.5" />}
+                            {openUnread ? 'Mark read' : 'Mark unread'}
+                          </button>
+                        </HoverHint>
                         <HoverHint label="Delete (moves to Trash)">
                           <button
                             onClick={() => emailActionMutation.mutate({ action: 'trash' })}
@@ -896,7 +923,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               ) : (
                 <div className="flex flex-1 min-h-0">
                   <div className="flex-1 flex flex-col min-w-0">
-                    <MessageThread conversation={selected} mailbox={activeMailbox} />
+                    <MessageThread
+                      conversation={selected}
+                      mailbox={activeMailbox}
+                      registerPrint={(fn) => { printRef.current = fn }}
+                    />
                     <ComposeReply conversation={selected} mailbox={activeMailbox} />
                   </div>
                   {workerOpen && (

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import type { InboxMessage, InboxConversation } from '@/lib/types'
 import { sanitizeEmailHtml } from '@/lib/html-escape'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
+import { printEmailThread } from '@/lib/inbox/print-email'
 import { EmailHtmlFrame } from './email-html-frame'
 
 /**
@@ -33,6 +34,10 @@ function PlainEmailBody({ content }: { content: string }) {
 
 interface MessageThreadProps {
   conversation: InboxConversation
+  /** Optional: receives a Print/Save-as-PDF handler for the loaded email thread
+   *  (null while unavailable). Lets a parent toolbar trigger printing the thread
+   *  it doesn't itself hold the bodies for. Omitted by the portal-chats reuse. */
+  registerPrint?: (fn: (() => void) | null) => void
 }
 
 interface ThreadResponse {
@@ -55,7 +60,7 @@ function formatMessageTime(dateStr: string) {
   })
 }
 
-export function MessageThread({ conversation, mailbox }: MessageThreadProps & { mailbox?: string }) {
+export function MessageThread({ conversation, mailbox, registerPrint }: MessageThreadProps & { mailbox?: string }) {
   const queryClient = useQueryClient()
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -122,6 +127,31 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
     scrollRef.current.scrollTop = isEmailThread ? 0 : scrollRef.current.scrollHeight
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.messages])
+
+  // Expose a Print/Save-as-PDF handler for the loaded email thread to a parent
+  // toolbar. Prints messages chronologically (oldest first), Gmail-print style.
+  useEffect(() => {
+    if (!registerPrint) return
+    const msgs = data?.channel === 'gmail' ? data?.messages : undefined
+    if (!msgs || msgs.length === 0) {
+      registerPrint(null)
+      return
+    }
+    registerPrint(() =>
+      printEmailThread({
+        subject: data?.subject,
+        messages: msgs.map((m) => ({
+          sender: m.sender,
+          direction: m.direction,
+          createdAt: m.createdAt,
+          content: m.content || '',
+          isHtml: m.isHtml,
+        })),
+        formatTime: formatMessageTime,
+      })
+    )
+    return () => registerPrint(null)
+  }, [data, registerPrint])
 
   if (isLoading) {
     return (
