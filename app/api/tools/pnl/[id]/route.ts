@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { fetchAllPaged } from '@/lib/bank-transactions-fetch'
+import { canonicalBankName } from '@/lib/tax/bank-identity'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -80,7 +81,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       const key = (r.source_file_id as string) ?? 'unknown'
       const cur = bySource.get(key)
       const date = String(r.transaction_date ?? '')
-      if (!cur) bySource.set(key, { bank_name: String(r.bank_name ?? ''), count: 1, from: date, to: date })
+      if (!cur) bySource.set(key, { bank_name: canonicalBankName(String(r.bank_name ?? '')), count: 1, from: date, to: date })
       else { cur.count++; if (date < cur.from) cur.from = date; if (date > cur.to) cur.to = date }
       const ref = (r.account_ref as string | null) ?? null
       if (ref) {

@@ -11,6 +11,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { fetchAllPaged } from '@/lib/bank-transactions-fetch'
+import { canonicalBankName } from '@/lib/tax/bank-identity'
 import { isAccountOwner } from '@/lib/portal/owner-access'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -102,7 +103,7 @@ export async function GET(request: NextRequest) {
     for (const r of sources ?? []) {
       const key = r.source_file_id ?? 'unknown'
       const cur = bySource.get(key)
-      if (!cur) bySource.set(key, { bank_name: r.bank_name, count: 1, from: r.transaction_date, to: r.transaction_date })
+      if (!cur) bySource.set(key, { bank_name: canonicalBankName(r.bank_name), count: 1, from: r.transaction_date, to: r.transaction_date })
       else {
         cur.count++
         if (r.transaction_date < cur.from) cur.from = r.transaction_date
