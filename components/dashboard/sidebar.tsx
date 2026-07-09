@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
   LayoutDashboard,
   MessageSquare,
@@ -192,9 +193,6 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
             {item.badge > 999 ? '999+' : item.badge}
           </span>
         )}
-        {item.dotBadge && (
-          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="New direct message or @mention" />
-        )}
         {item.purpleBadge != null && item.purpleBadge > 0 && (
           <span
             className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-500 text-white min-w-[20px] text-center"
@@ -204,7 +202,80 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
           </span>
         )}
       </Link>
+      {item.dotBadge && <TeamNotifDot onNavigate={onMobileClose} />}
     </div>
+  )
+}
+
+/**
+ * The clickable Team Chat notification dot: a red dot that, on click, pops a
+ * small list of the user's unread DMs + @mentions (each deep-linked) so they can
+ * triage priority without opening Team Chat. Fixed-positioned popover (measured
+ * off the dot) so the narrow scrollable sidebar can't clip it.
+ */
+function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState<TeamNotifItem[] | null>(null)
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: 60, top: 100 })
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  const toggle = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const next = !open
+    setOpen(next)
+    if (next) {
+      const r = btnRef.current?.getBoundingClientRect()
+      if (r) setPos({ left: r.right + 8, top: r.top - 4 })
+      setItems(null)
+      fetch('/api/team/notifications')
+        .then(res => res.json())
+        .then(d => setItems(Array.isArray(d.items) ? d.items : []))
+        .catch(() => setItems([]))
+    }
+  }
+
+  return (
+    <span className="shrink-0 flex items-center">
+      <button
+        ref={btnRef}
+        onClick={toggle}
+        className="w-2.5 h-2.5 mr-1 rounded-full bg-red-500 animate-pulse"
+        title="New — click to see what"
+        aria-label="Team chat notifications"
+      />
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={toggle} />
+          <div
+            className="fixed z-50 w-60 max-w-[80vw] bg-white rounded-lg shadow-xl border border-zinc-200 py-1 cursor-default"
+            style={{ left: pos.left, top: pos.top }}
+            onClick={e => e.stopPropagation()}
+          >
+            <p className="px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">New for you</p>
+            {items === null && <p className="px-3 py-2 text-xs text-zinc-400">Loading…</p>}
+            {items !== null && items.length === 0 && <p className="px-3 py-2 text-xs text-zinc-400">Nothing new.</p>}
+            {items?.map(it => (
+              <Link
+                key={it.id}
+                href={it.url}
+                onClick={() => { setOpen(false); onNavigate?.() }}
+                className="flex items-center gap-2 px-3 py-2 hover:bg-zinc-50"
+              >
+                <span className={cn(
+                  'text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0',
+                  it.kind === 'dm' ? 'bg-blue-100 text-blue-700' : 'bg-violet-100 text-violet-700',
+                )}>
+                  {it.kind === 'dm' ? 'DM' : '@'}
+                </span>
+                <span className="flex-1 truncate text-sm text-zinc-800">{it.label}</span>
+                {it.count > 1 && <span className="text-[10px] text-zinc-400 shrink-0">{it.count}</span>}
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
+    </span>
   )
 }
 

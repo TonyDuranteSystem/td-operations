@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countTeamNotifications } from '@/lib/team/workspace'
+import { countTeamNotifications, buildTeamNotifications } from '@/lib/team/workspace'
 
 describe('countTeamNotifications', () => {
   it('returns 0 for null/empty', () => {
@@ -49,5 +49,52 @@ describe('countTeamNotifications', () => {
       { thread_type: 'channel' },
       {},
     ])).toBe(0)
+  })
+})
+
+describe('buildTeamNotifications', () => {
+  const me = 'me-123'
+  const nameFor = (id: string) => ({ 'luca-1': 'Luca', 'anna-2': 'Anna' }[id])
+
+  it('labels a DM with the OTHER person and deep-links it', () => {
+    const out = buildTeamNotifications([
+      { id: 't1', thread_type: 'dm', dm_key: 'luca-1:me-123', unread_count: 2, mention_count: 0 },
+    ], me, nameFor)
+    expect(out).toEqual([
+      { id: 't1', kind: 'dm', label: 'Luca', count: 2, url: '/team-chat?thread=t1' },
+    ])
+  })
+
+  it('labels a mention with its channel/discussion label', () => {
+    const out = buildTeamNotifications([
+      { id: 't2', thread_type: 'channel', label: 'td-dev', unread_count: 40, mention_count: 1 },
+    ], me, nameFor)
+    expect(out).toEqual([
+      { id: 't2', kind: 'mention', label: 'td-dev', count: 1, url: '/team-chat?thread=t2' },
+    ])
+  })
+
+  it('excludes read DMs and unmentioned channel chatter', () => {
+    const out = buildTeamNotifications([
+      { id: 'a', thread_type: 'dm', dm_key: 'luca-1:me-123', unread_count: 0, mention_count: 0 },
+      { id: 'b', thread_type: 'channel', label: 'td-dev', unread_count: 99, mention_count: 0 },
+    ], me, nameFor)
+    expect(out).toEqual([])
+  })
+
+  it('orders DMs before mentions, then by count', () => {
+    const out = buildTeamNotifications([
+      { id: 'm1', thread_type: 'channel', label: 'td-dev', unread_count: 0, mention_count: 3 },
+      { id: 'd1', thread_type: 'dm', dm_key: 'luca-1:me-123', unread_count: 1, mention_count: 0 },
+      { id: 'd2', thread_type: 'dm', dm_key: 'anna-2:me-123', unread_count: 5, mention_count: 0 },
+    ], me, nameFor)
+    expect(out.map(o => o.id)).toEqual(['d2', 'd1', 'm1'])
+  })
+
+  it('falls back to a generic label when the other user is unknown', () => {
+    const out = buildTeamNotifications([
+      { id: 't', thread_type: 'dm', dm_key: 'ghost-9:me-123', unread_count: 1 },
+    ], me, nameFor)
+    expect(out[0].label).toBe('Direct message')
   })
 })

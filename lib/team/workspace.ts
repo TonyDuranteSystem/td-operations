@@ -180,6 +180,53 @@ export function countTeamNotifications(threads: TeamThreadCountRow[] | null | un
   return n
 }
 
+export interface TeamNotifThreadRow {
+  id: string
+  thread_type?: string | null
+  dm_key?: string | null
+  unread_count?: number | null
+  mention_count?: number | null
+  label?: string | null
+}
+
+export interface TeamNotifItem {
+  id: string
+  kind: 'dm' | 'mention'
+  /** Display label: the other person (DM) or the channel/discussion (mention). */
+  label: string
+  count: number
+  /** Deep-link to the thread. */
+  url: string
+}
+
+/**
+ * Build the "what's new" list behind the Team Chat notification dot: one row per
+ * unread DM (labelled with the other person) and per @mention (labelled with the
+ * channel/discussion it's in) — SAME scope as `countTeamNotifications` (no plain
+ * channel unread). Lets the user triage without opening Team Chat. DMs first,
+ * then by count. `nameFor` resolves a user id → display name.
+ */
+export function buildTeamNotifications(
+  threads: TeamNotifThreadRow[] | null | undefined,
+  userId: string,
+  nameFor: (id: string) => string | undefined,
+): TeamNotifItem[] {
+  const items: TeamNotifItem[] = []
+  for (const t of threads ?? []) {
+    if (t.thread_type === 'dm') {
+      const unread = Number(t.unread_count) || 0
+      if (unread <= 0) continue
+      const otherId = (t.dm_key ?? '').split(':').find(id => id && id !== userId) ?? ''
+      items.push({ id: t.id, kind: 'dm', label: nameFor(otherId) || 'Direct message', count: unread, url: `/team-chat?thread=${t.id}` })
+    } else {
+      const mentions = Number(t.mention_count) || 0
+      if (mentions <= 0) continue
+      items.push({ id: t.id, kind: 'mention', label: t.label || 'Mention', count: mentions, url: `/team-chat?thread=${t.id}` })
+    }
+  }
+  return items.sort((a, b) => (a.kind === b.kind ? b.count - a.count : a.kind === 'dm' ? -1 : 1))
+}
+
 /** Validate a TeamCard shape. Returns a user-friendly error or null. */
 export function validateTeamCard(card: unknown): string | null {
   if (card == null) return null
