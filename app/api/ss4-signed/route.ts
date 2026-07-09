@@ -55,6 +55,11 @@ export async function POST(req: NextRequest) {
     // Track the merged PDF bytes for email attachment
     let mergedPdfBytes: Uint8Array | null = null
     let mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
+    // Set when the Articles of Organization could not be found anywhere (Drive
+    // OR the documents table / Storage) so the IRS package is SS-4-only. Drives
+    // a LOUD staff warning in the email below + an error-audit report — the fax
+    // package must NEVER go out silently incomplete (2026-07-08 Slack report).
+    let articlesMissing = false
 
     // ─── 1. CREATE TASK FOR LUCA ───
     if (ss4.account_id) {
@@ -280,6 +285,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 4. COMBINE SIGNED SS-4 + ARTICLES OF ORGANIZATION (IRS Package) ───
+    // Article resolution order: (1) the Drive "1. Company" folder (canonical
+    // filing location); (2) fallback to the documents table, which fetches the
+    // binary from wherever it actually lives — Drive OR Supabase Storage — so a
+    // formation whose Articles never got relocated to Drive still produces a
+    // COMPLETE package. If BOTH fail, we never silently ship an SS-4-only fax:
+    // articlesMissing drives a loud staff warning + an error-audit report below.
     if (ss4.account_id) {
       try {
         const { data: acct } = await supabaseAdmin
@@ -288,68 +299,104 @@ export async function POST(req: NextRequest) {
           .eq("id", ss4.account_id)
           .single()
 
-        if (acct?.drive_folder_id) {
-          const { listFolder, downloadFileBinary, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+        // Signed SS-4 bytes (needed regardless of where the Articles come from).
+        const { data: ss4Files } = await supabaseAdmin.storage
+          .from("signed-ss4")
+          .list(ss4.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+        const ss4File = ss4Files?.[0]
+        const { data: ss4Blob } = ss4File
+          ? await supabaseAdmin.storage.from("signed-ss4").download(`${ss4.token}/${ss4File.name}`)
+          : { data: null }
+        const ss4Bytes = ss4Blob ? new Uint8Array(await ss4Blob.arrayBuffer()) : null
 
-          // Find Articles of Organization in Drive (in "1. Company" subfolder)
+        // Resolve the Articles PDF — Drive folder scan first, then documents table.
+        let articlesBuffer: Buffer | null = null
+        let articlesSource = ""
+        let companyFolderId: string | null = null
+        if (acct?.drive_folder_id) {
+          const { listFolder, downloadFileBinary } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
             f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
           )
-
-          let articlesFileId: string | null = null
+          companyFolderId = companyFolder?.id ?? null
           if (companyFolder?.id) {
             const companyFiles = await listFolder(companyFolder.id) as { files?: { id: string; name: string; mimeType: string }[] }
             const articlesFile = companyFiles.files?.find(f =>
               /articles/i.test(f.name) && f.mimeType === "application/pdf"
             )
-            articlesFileId = articlesFile?.id || null
+            if (articlesFile?.id) {
+              const { buffer } = await downloadFileBinary(articlesFile.id)
+              articlesBuffer = buffer
+              articlesSource = "drive"
+            }
           }
+        }
+        if (!articlesBuffer) {
+          const { resolveArticlesForSs4 } = await import("@/lib/ss4/resolve-articles-pdf")
+          articlesBuffer = await resolveArticlesForSs4({
+            serviceDeliveryId: formationSdId,
+            accountId: ss4.account_id as string,
+          })
+          if (articlesBuffer) articlesSource = "documents-fallback"
+        }
 
-          if (articlesFileId) {
-            // Download the signed SS-4 from Storage
-            const { data: ss4Files } = await supabaseAdmin.storage
-              .from("signed-ss4")
-              .list(ss4.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+        if (ss4Bytes && articlesBuffer) {
+          // Merge: signed SS-4 (page 1 only) + Articles into one PDF
+          const mergedPdf = await PDFDocument.create()
 
-            const ss4File = ss4Files?.[0]
-            const { data: ss4Blob } = ss4File
-              ? await supabaseAdmin.storage.from("signed-ss4").download(`${ss4.token}/${ss4File.name}`)
-              : { data: null }
+          const ss4Doc = await PDFDocument.load(ss4Bytes)
+          // Only copy page 1 (SS-4 form) — page 2 is info only
+          const ss4Pages = await mergedPdf.copyPages(ss4Doc, [0])
+          ss4Pages.forEach(p => mergedPdf.addPage(p))
 
-            // Download Articles from Drive
-            const { buffer: articlesBuffer } = await downloadFileBinary(articlesFileId)
+          const articlesDoc = await PDFDocument.load(articlesBuffer)
+          const articlesPages = await mergedPdf.copyPages(articlesDoc, articlesDoc.getPageIndices())
+          articlesPages.forEach(p => mergedPdf.addPage(p))
 
-            if (ss4Blob && articlesBuffer) {
-              const ss4Bytes = new Uint8Array(await ss4Blob.arrayBuffer())
+          mergedPdfBytes = await mergedPdf.save()
+          mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
 
-              // Merge: signed SS-4 (page 1 only) + Articles into one PDF
-              const mergedPdf = await PDFDocument.create()
+          // Upload combined PDF to Drive when the account has a folder. Stable
+          // name -> UPSERT: webhook retry refreshes in place, no copies. When
+          // there is no Drive folder we still produced the merged bytes for the
+          // email attachment, so staff get the complete package regardless.
+          if (acct?.drive_folder_id) {
+            const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+            const targetFolderId = companyFolderId || acct.drive_folder_id
+            const driveResult = await uploadBinaryToDriveUpsert(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
+            results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles uploaded (${articlesSource}): ${driveResult.id} (${ss4Pages.length + articlesPages.length} pages)` })
 
-              const ss4Doc = await PDFDocument.load(ss4Bytes)
-              // Only copy page 1 (SS-4 form) — page 2 is info only
-              const ss4Pages = await mergedPdf.copyPages(ss4Doc, [0])
-              ss4Pages.forEach(p => mergedPdf.addPage(p))
-
-              const articlesDoc = await PDFDocument.load(articlesBuffer)
-              const articlesPages = await mergedPdf.copyPages(articlesDoc, articlesDoc.getPageIndices())
-              articlesPages.forEach(p => mergedPdf.addPage(p))
-
-              mergedPdfBytes = await mergedPdf.save()
-
-              // Upload combined PDF to Drive
-              const targetFolderId = companyFolder?.id || acct.drive_folder_id
-              mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
-              // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
-              const driveResult = await uploadBinaryToDriveUpsert(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
-
-              results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles uploaded: ${driveResult.id} (${ss4Pages.length + articlesPages.length} pages)` })
-            } else {
-              results.push({ step: "irs_package", status: "error", detail: "Could not download SS-4 or Articles for merging" })
+            // Register the combined package as an INTERNAL workspace document
+            // (SD-scoped) so it appears in the formation workspace and is the
+            // file the SS-4 fax panel faxes to the IRS. NEVER client-visible
+            // (portal_visible:false — it carries the SS-4 = responsible party's
+            // tax ID). Idempotent by drive_file_id: a re-sign upserts the SAME
+            // Drive file in place, so this returns the existing row and the fax
+            // panel always reflects the latest signed package (no duplicate row).
+            try {
+              await autoSaveDocument({
+                accountId: ss4.account_id,
+                fileName: mergedFileName,
+                documentType: "SS-4 + Articles (IRS Package)",
+                category: 1,
+                driveFileId: driveResult.id,
+                portalVisible: false,
+                serviceDeliveryId: formationSdId,
+              })
+              results.push({ step: "irs_package_doc", status: "ok", detail: "Combined package registered in workspace" })
+            } catch (e) {
+              results.push({ step: "irs_package_doc", status: "error", detail: e instanceof Error ? e.message : String(e) })
             }
           } else {
-            results.push({ step: "irs_package", status: "skipped", detail: "Articles of Organization not found in Drive" })
+            results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles built (${articlesSource}), not uploaded — account has no Drive folder` })
           }
+        } else if (!ss4Bytes) {
+          results.push({ step: "irs_package", status: "error", detail: "Signed SS-4 PDF could not be loaded from Storage — package not built" })
+        } else {
+          // Articles found NOWHERE — do not ship an SS-4-only package silently.
+          articlesMissing = true
+          results.push({ step: "irs_package", status: "error", detail: "Articles of Organization not found in Drive OR documents — IRS package is SS-4 ONLY, attach Articles manually before faxing" })
         }
       } catch (e) {
         results.push({ step: "irs_package", status: "error", detail: e instanceof Error ? e.message : String(e) })
@@ -379,8 +426,16 @@ export async function POST(req: NextRequest) {
     try {
       const { gmailPost } = await import("@/lib/gmail")
 
-      const subject = `SS-4 Signed — Ready to Fax: ${ss4.company_name}`
+      const subject = `${articlesMissing ? "⚠️ ARTICLES MISSING — " : ""}SS-4 Signed — Ready to Fax: ${ss4.company_name}`
       const emailBody = [
+        ...(articlesMissing
+          ? [
+              `⚠️ ACTION REQUIRED: The Articles of Organization could NOT be attached automatically.`,
+              `This package contains the SS-4 ONLY. Attach the Articles of Organization manually`,
+              `before faxing to the IRS (the IRS package must include both documents).`,
+              ``,
+            ]
+          : []),
         `The SS-4 (EIN Application) for ${ss4.company_name} has been signed and is READY TO FAX to the IRS.`,
         ``,
         `Company: ${ss4.company_name}`,
@@ -391,7 +446,9 @@ export async function POST(req: NextRequest) {
         `IRS Fax Number: (855) 641-6935`,
         ``,
         attachmentBytes
-          ? `The signed SS-4 is attached. Print and fax to the IRS.`
+          ? articlesMissing
+            ? `The signed SS-4 is attached (SS-4 ONLY — add the Articles before faxing).`
+            : `The combined SS-4 + Articles package is attached. Print and fax to the IRS.`
           : `ACTION REQUIRED: Download the signed SS-4 PDF from the client's Drive folder and fax it to the IRS.`,
         ``,
         `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}?preview=td`,
@@ -454,6 +511,30 @@ export async function POST(req: NextRequest) {
       })
     } catch (e) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
+
+    // Loud, durable signal when the fax package went out SS-4-only — so the
+    // miss is investigable (not just a line in the email) and surfaces on the
+    // system-health widget. Best-effort; never blocks the response.
+    if (articlesMissing) {
+      try {
+        const { reportSystemError } = await import("@/lib/system-errors")
+        await reportSystemError({
+          source: "server",
+          route: "/api/ss4-signed",
+          method: "POST",
+          message: `IRS package built SS-4-only — Articles of Organization not found for ${ss4.company_name}`,
+          context: {
+            ss4_id: ss4.id,
+            token,
+            account_id: ss4.account_id,
+            contact_id: ss4.contact_id,
+            service_delivery_id: formationSdId,
+          },
+        })
+      } catch {
+        // Never let error reporting break the response.
+      }
     }
 
     // Log to action_log for CRM Recent Activity + realtime notifications
