@@ -13,22 +13,18 @@
 --
 -- Idempotent: only fills account_ref IS NULL. Re-runnable.
 
--- 1a. Chase family → "Chase" (bank_transactions)
-UPDATE bank_transactions
-   SET account_ref = 'Chase'
- WHERE account_ref IS NULL
-   AND btrim(lower(regexp_replace(bank_name, '[^a-zA-Z0-9]+', ' ', 'g'))) IN
-       ('chase','chase bank','chase bank na','chase bank n a','jpmorgan','jp morgan',
-        'jpmorgan chase','jp morgan chase','jpmorgan chase bank','jpmorgan chase bank na','jpmorgan chase bank n a');
+-- Drift families (exact bank_name match, both tables). The alias lists are the
+-- production distinct names run through lib/tax/bank-identity.ts::canonicalBankName.
+-- Chase family → "Chase"
+UPDATE bank_transactions          SET account_ref='Chase'  WHERE account_ref IS NULL AND bank_name IN ('Chase','JPMorgan Chase Bank, N.A.');
+UPDATE pnl_workspace_transactions SET account_ref='Chase'  WHERE account_ref IS NULL AND bank_name IN ('Chase','JPMorgan Chase Bank, N.A.');
+-- Slash family → "Slash"
+UPDATE bank_transactions          SET account_ref='Slash'  WHERE account_ref IS NULL AND bank_name IN ('Slash','Slash Financial, Inc.');
+UPDATE pnl_workspace_transactions SET account_ref='Slash'  WHERE account_ref IS NULL AND bank_name IN ('Slash','Slash Financial, Inc.');
+-- Kraken → "Kraken"
+UPDATE bank_transactions          SET account_ref='Kraken' WHERE account_ref IS NULL AND bank_name='Kraken (Payward Interactive, Inc.)';
+UPDATE pnl_workspace_transactions SET account_ref='Kraken' WHERE account_ref IS NULL AND bank_name='Kraken (Payward Interactive, Inc.)';
 
--- 1b. Chase family → "Chase" (pnl_workspace_transactions)
-UPDATE pnl_workspace_transactions
-   SET account_ref = 'Chase'
- WHERE account_ref IS NULL
-   AND btrim(lower(regexp_replace(bank_name, '[^a-zA-Z0-9]+', ' ', 'g'))) IN
-       ('chase','chase bank','chase bank na','chase bank n a','jpmorgan','jp morgan',
-        'jpmorgan chase','jp morgan chase','jpmorgan chase bank','jpmorgan chase bank na','jpmorgan chase bank n a');
-
--- 2. Everything else → its own (already-canonical / unknown-but-stable) name.
+-- Everything else → its own (already-canonical / unknown-but-stable) name.
 UPDATE bank_transactions          SET account_ref = btrim(bank_name) WHERE account_ref IS NULL AND bank_name IS NOT NULL;
 UPDATE pnl_workspace_transactions SET account_ref = btrim(bank_name) WHERE account_ref IS NULL AND bank_name IS NOT NULL;
