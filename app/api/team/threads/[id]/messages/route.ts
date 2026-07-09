@@ -4,7 +4,7 @@ import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { validateTeamCard } from '@/lib/team/workspace'
 import { resolveMentions } from '@/lib/team/directory'
 import { triggerClaudeReply } from '@/lib/team/claude-trigger'
-import { sendPushToAdminUsers, sendPushToAdminExcluding } from '@/lib/portal/web-push'
+import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import type { ChatAttachment } from '@/lib/types'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -61,7 +61,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: thread } = await (supabaseAdmin as any)
     .from('internal_threads')
-    .select('id, thread_type, account_id')
+    .select('id, thread_type, account_id, dm_key')
     .eq('id', threadId)
     .single()
   if (!thread) return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
@@ -122,23 +122,28 @@ export async function POST(
   // Notifications (best-effort, never block the send).
   try {
     const preview = message.slice(0, 120) || (attachments?.length ? `📎 ${attachments[0].name}` : card ? '📇 Shared a card' : 'New message')
+    // Push ONLY for a DM (to the other participant) or an @mention (to the
+    // mentioned teammates) — Antonio 2026-07-09. Ordinary channel/discussion
+    // chatter no longer buzzes the whole team (matches the DM/@mention dot).
     if (mentions.userIds.length > 0) {
-      // Targeted: only the mentioned teammates.
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${displayName} mentioned you`,
         body: preview,
         url: `/team-chat?thread=${threadId}`,
         tag: `team-mention-${threadId}`,
       })
-    } else {
-      // General thread activity: notify the rest of the team (not the sender).
-      await sendPushToAdminExcluding(user.id, {
-        title: displayName,
-        body: preview,
-        url: `/team-chat?thread=${threadId}`,
-        tag: `team-thread-${threadId}`,
-      })
+    } else if (thread.thread_type === 'dm') {
+      const otherId = (thread.dm_key ?? '').split(':').find((id: string) => id && id !== user.id)
+      if (otherId) {
+        await sendPushToAdminUsers([otherId], {
+          title: displayName,
+          body: preview,
+          url: `/team-chat?thread=${threadId}`,
+          tag: `team-dm-${threadId}`,
+        })
+      }
     }
+    // else: channel / general / discussion without a mention → intentionally silent.
   } catch {
     // non-critical
   }

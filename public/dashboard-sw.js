@@ -1,6 +1,6 @@
 // Dashboard Service Worker — PWA installability, push handling, offline fallback
 // Bump CACHE_NAME whenever the precached assets change.
-var CACHE_NAME = 'td-dashboard-v1'
+var CACHE_NAME = 'td-dashboard-v2'
 var OFFLINE_URL = '/offline'
 
 self.addEventListener('install', function (event) {
@@ -77,9 +77,18 @@ self.addEventListener('notificationclick', function (event) {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windowClients) {
+      // Reuse any open app window and take it to the notification's actual target
+      // (a team-chat notification must open Team Chat, not always /portal-chats).
       for (var i = 0; i < windowClients.length; i++) {
         var client = windowClients[i]
-        if (client.url.indexOf('/portal-chats') !== -1 && 'focus' in client) {
+        if ('focus' in client) {
+          if ('navigate' in client) {
+            return client.navigate(url).then(function (c) {
+              return (c || client).focus()
+            }).catch(function () {
+              return client.focus()
+            })
+          }
           return client.focus()
         }
       }

@@ -35,6 +35,28 @@ export function RealtimeNotifications() {
     })
   }, [])
 
+  // Thread ids of the DMs the current user is in — so we chime/toast ONLY for a
+  // DM to me (or an @mention), never plain channel chatter (Antonio 2026-07-09).
+  // Refreshed every 60s so a brand-new DM starts pinging within a minute.
+  const myDmThreadIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch('/api/team/threads')
+        .then(r => r.json())
+        .then((d: { threads?: Array<{ id: string; thread_type?: string }> }) => {
+          if (cancelled || !Array.isArray(d.threads)) return
+          myDmThreadIdsRef.current = new Set(
+            d.threads.filter(t => t.thread_type === 'dm').map(t => t.id),
+          )
+        })
+        .catch(() => {})
+    }
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [])
+
   const playSound = useCallback(() => {
     try {
       if (!audioCtxRef.current) {
@@ -167,12 +189,21 @@ export function RealtimeNotifications() {
           // Don't notify for own messages
           if (payload.new?.sender_id && payload.new.sender_id === currentUserIdRef.current) return
 
+          // ONLY ping for a DM to me or an @mention of me — never plain channel
+          // chatter (matches the DM/@mention dot; Antonio 2026-07-09).
+          const mine = currentUserIdRef.current
+          const mentionsMe = !!mine && Array.isArray(payload.new?.mentioned_user_ids)
+            && payload.new.mentioned_user_ids.includes(mine)
+          const isMyDm = !!payload.new?.thread_id && myDmThreadIdsRef.current.has(payload.new.thread_id)
+          if (!mentionsMe && !isMyDm) return
+
           const senderName = payload.new?.sender_name || 'Team member'
+          const threadId = payload.new?.thread_id
 
           playSound()
 
           toast(
-            `Team: ${senderName}`,
+            mentionsMe ? `@mention · ${senderName}` : `DM · ${senderName}`,
             {
               description: typeof payload.new?.message === 'string'
                 ? payload.new.message.slice(0, 80)
@@ -181,7 +212,7 @@ export function RealtimeNotifications() {
               duration: 6000,
               action: {
                 label: 'Open',
-                onClick: () => router.push('/team-chat'),
+                onClick: () => router.push(threadId ? `/team-chat?thread=${threadId}` : '/team-chat'),
               },
             }
           )
