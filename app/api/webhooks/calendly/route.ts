@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import { extractInviteeFields, buildLeadNotes } from "@/lib/calendly/parse-invitee"
 import { createPendingReferral } from "@/lib/operations/referral"
+import { notifyReferrerLinked } from "@/lib/operations/referral-notify"
 
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
@@ -299,7 +300,7 @@ export async function POST(req: NextRequest) {
     // Fail-safe — never block lead creation (self-referral / dedup handled in helper).
     if (referrerContactId) {
       try {
-        await createPendingReferral(
+        const refRes = await createPendingReferral(
           {
             referrerContactId,
             referredLeadId: newLead.id,
@@ -308,6 +309,10 @@ export async function POST(req: NextRequest) {
           },
           db
         )
+        if (refRes.created) {
+          // Tell the referrer their link was registered (chat + email). Fire-and-forget.
+          void notifyReferrerLinked({ referralId: refRes.id, referrerContactId, referredLeadId: newLead.id })
+        }
       } catch {
         /* attribution is additive — never block lead creation */
       }

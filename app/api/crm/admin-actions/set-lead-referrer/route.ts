@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { createPendingReferral, reconcilePendingReferral, type PendingReferralRow } from "@/lib/operations/referral"
+import { notifyReferrerLinked } from "@/lib/operations/referral-notify"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -114,6 +115,13 @@ export async function POST(request: Request) {
       )
       if (res.created) {
         created = res.id
+        // Tell the referrer (chat + email), once per referrer-per-lead. Fire-and-forget.
+        void notifyReferrerLinked({
+          referralId: res.id,
+          referrerContactId: createFor.contactId,
+          referrerAccountId: createFor.accountId,
+          referredLeadId: leadId,
+        })
       } else if ('reason' in res) {
         createSkip = res.reason
       }

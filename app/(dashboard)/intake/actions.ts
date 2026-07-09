@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import type { Json } from '@/lib/database.types'
 import { createPendingReferral } from '@/lib/operations/referral'
+import { notifyReferrerLinked } from '@/lib/operations/referral-notify'
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -127,7 +128,7 @@ export async function createLeadFromIntake(
     // never blocks lead creation (self-referral / dedup handled in the helper).
     if (parsed.referrer_contact_id) {
       try {
-        await createPendingReferral(
+        const refRes = await createPendingReferral(
           {
             referrerContactId: parsed.referrer_contact_id,
             referredLeadId: newLead.id,
@@ -136,6 +137,10 @@ export async function createLeadFromIntake(
           },
           supabaseAdmin
         )
+        if (refRes.created) {
+          // Tell the referrer their link was registered (chat + email). Fire-and-forget.
+          void notifyReferrerLinked({ referralId: refRes.id, referrerContactId: parsed.referrer_contact_id, referredLeadId: newLead.id })
+        }
       } catch {
         /* attribution is additive — never block lead creation */
       }
