@@ -147,9 +147,12 @@ export default async function DashboardLayout({
           isAdmin={admin}
           badgeCounts={badgeCounts}
         />
-        <main className="flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50">
+        {/* pt-14 (not a spacer div) compensates for the fixed mobile top bar:
+            padding keeps h-full pages sized to the CONTENT box, so internal
+            scroll panes end exactly at the viewport bottom. A spacer div made
+            every h-full page overflow the viewport by 56px on mobile. */}
+        <main className="flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50 pt-14 lg:pt-0">
           <DashboardHeader />
-          <div className="h-14 lg:hidden" />
           {children}
         </main>
         <CommandPalette />
