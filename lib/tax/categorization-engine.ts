@@ -142,6 +142,7 @@ export interface CategorizableRow {
   transaction_ref: string | null
   bank_name: string | null
   account_type: string | null
+  account_ref?: string | null
   category: string
   subcategory: string | null
   is_related_party: boolean | null
@@ -213,6 +214,7 @@ export function computeRecategorizationUpdates(
     currency: r.currency as string,
     bank_name: r.bank_name as string,
     account_type: (r.account_type as string) ?? "",
+    account_ref: (r.account_ref as string) ?? null,
     category: updates.get(r.id as string)?.category ?? (r.category as string),
   })).filter(c => !(rows.find(r => r.id === c.id)?.notes ?? "").startsWith("manual:"))
 
@@ -295,7 +297,7 @@ export async function recategorizeAccountYear(
   const rows = await fetchAllBankTransactionsByYear<CategorizableRow>(
     accountId,
     taxYear,
-    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
+    "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, account_ref, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence",
   )
   if (rows.length === 0) return { scanned: 0, recategorized: 0, transferPairs: 0, aiCategorized: 0, aiErrors: [], uncategorizedRemaining: 0, aiStats: EMPTY_AI_STATS() }
 

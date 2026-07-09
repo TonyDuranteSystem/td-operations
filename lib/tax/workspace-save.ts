@@ -107,7 +107,7 @@ export interface SaveToClientResult {
 }
 
 const WS_SAVE_COLUMNS =
-  "tax_year, transaction_date, description, category, subcategory, counterparty, amount, currency, balance_after, bank_name, account_type, transaction_ref, source_file_id, is_related_party, notes, loc_code, loc_source, loc_confidence"
+  "tax_year, transaction_date, description, category, subcategory, counterparty, amount, currency, balance_after, bank_name, account_type, account_ref, transaction_ref, source_file_id, is_related_party, notes, loc_code, loc_source, loc_confidence"
 
 interface WsSaveRow {
   tax_year: number
@@ -121,6 +121,7 @@ interface WsSaveRow {
   balance_after: number | null
   bank_name: string | null
   account_type: string | null
+  account_ref: string | null
   transaction_ref: string
   source_file_id: string | null
   is_related_party: boolean | null
@@ -231,6 +232,7 @@ export async function saveWorkspaceToClient(input: SaveToClientInput): Promise<S
         balance_after: tx.balance_after,
         bank_name: tx.bank_name,
         account_type: tx.account_type,
+        account_ref: tx.account_ref,
         transaction_ref: tx.transaction_ref,
         source_file_id: tx.source_file_id,
         is_related_party: tx.is_related_party,

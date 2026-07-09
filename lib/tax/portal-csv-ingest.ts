@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { parseBankStatement, categorizeTransaction } from "@/lib/bank-statement-parser"
 import { sha256Hex, uploadSourceId, analyzeDuplicates, loadExistingRows } from "./statement-uploads"
 import { recategorizeAccountYear } from "./categorization-engine"
+import { buildAccountRef } from "./bank-identity"
 
 export interface IngestResult {
   ok: boolean
@@ -44,12 +45,15 @@ export interface IngestPortalCsvInput {
   bankLabel: string
   /** checking | credit_card (from the wizard's per-bank section). */
   accountKind: string
+  /** Client-provided account number/label for this file (account_number-mode
+   *  institutions). Used to build the account identity; null for currency/crypto. */
+  accountNumber?: string | null
   buffer: Buffer
   fileName: string
 }
 
 export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<IngestResult> {
-  const { accountId, taxYear, bankLabel, buffer, fileName } = input
+  const { accountId, taxYear, bankLabel, accountNumber, buffer, fileName } = input
   const sha = sha256Hex(buffer)
   const sourceFileId = uploadSourceId(sha)
   const fail = (error: string): IngestResult => ({
@@ -113,10 +117,14 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
     .filter(n => n.length > 0)
 
   const bankDetected = parsed.bank_name && parsed.bank_name !== "unknown" ? parsed.bank_name : bankLabel
+  // Canonicalize the institution name and build the account identity ONCE per file
+  // (one uploaded file = one account). Every row gets the canonical name + the
+  // account_ref key so the account can never split on a name variant again.
+  const ident = buildAccountRef({ rawBankName: bankDetected, accountNumber })
   const categorized = parsed.transactions
     .map(tx => categorizeTransaction(tx, memberNames, []))
     .filter(tx => tx.transaction_date.startsWith(String(taxYear)))
-    .map(tx => ({ ...tx, bank_name: tx.bank_name && tx.bank_name !== "unknown" ? tx.bank_name : bankDetected }))
+    .map(tx => ({ ...tx, bank_name: ident.canonical, account_ref: ident.account_ref }))
 
   if (categorized.length === 0) {
     return fail(
@@ -128,7 +136,7 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
   // 3. Duplicate analysis (L1/L2/L3) against what's already in the system.
   const existing = await loadExistingRows(accountId, taxYear)
   const analysis = analyzeDuplicates(
-    { sha256: sha, bankName: bankDetected, refs: categorized.map(t => t.transaction_ref), dates: categorized.map(t => t.transaction_date) },
+    { sha256: sha, bankName: ident.canonical, refs: categorized.map(t => t.transaction_ref), dates: categorized.map(t => t.transaction_date) },
     existing,
   )
   const months = Array.from(new Set(categorized.map(t => t.transaction_date.slice(0, 7)))).sort()
@@ -164,6 +172,7 @@ export async function ingestPortalCsv(input: IngestPortalCsvInput): Promise<Inge
         balance_after: tx.balance_after,
         bank_name: tx.bank_name,
         account_type: tx.account_type,
+        account_ref: tx.account_ref,
         transaction_ref: tx.transaction_ref,
         source_file_id: sourceFileId,
         is_related_party: tx.is_related_party,

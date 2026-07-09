@@ -23,7 +23,8 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   try {
     const form = await request.formData()
     const file = form.get('file')
-    const bankLabel = String(form.get('bank_label') ?? 'Bank')
+    const bankLabel = String(form.get('bank_label') ?? form.get('bank_name') ?? 'Bank')
+    const accountNumber = String(form.get('account_number') ?? '').trim() || null
     if (!(file instanceof File)) return NextResponse.json({ error: 'No file uploaded.' }, { status: 400 })
     if (file.size === 0) return NextResponse.json({ error: 'This file is empty — please upload the statement as your bank exports it.' }, { status: 400 })
     if (file.size > 20 * 1024 * 1024) {
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const r = await saveAndEnqueueWorkspaceUpload({ workspaceId: params.id, bankLabel, buffer, fileName: file.name })
+    const r = await saveAndEnqueueWorkspaceUpload({ workspaceId: params.id, bankLabel, accountNumber, buffer, fileName: file.name })
     return NextResponse.json({ queued: r.queued, alreadyQueued: r.alreadyQueued, fileName: file.name })
   } catch (err) {
     console.error('[tools/pnl] upload failed:', err)

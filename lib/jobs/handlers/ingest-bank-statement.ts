@@ -29,6 +29,8 @@ interface IngestStatementPayload {
   path: string
   /** Fallback bank label; the parser re-detects the real bank from content. */
   bank_label?: string
+  /** Client-provided account number/label — the account identity for this file. */
+  account_number?: string | null
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -119,6 +121,7 @@ export async function handleIngestBankStatement(job: Job): Promise<JobResult> {
     taxYear: p.tax_year,
     bankLabel: p.bank_label || "Bank",
     accountKind: "checking", // unused by the ingester; kept for the interface
+    accountNumber: p.account_number ?? null,
     buffer,
     fileName,
   })

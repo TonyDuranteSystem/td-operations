@@ -26,6 +26,7 @@ import { sameName, type ResolvedMember } from "./ownership-resolution"
 import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 import { toUsd, type FxRates } from "./fx"
 import { mergeBankBalances, type ProvidedBankBalance, type BankBalancesSummary } from "./bank-balances"
+import { accountKeyOf } from "./bank-identity"
 
 export interface DraftTransaction {
   id: string
@@ -38,6 +39,9 @@ export interface DraftTransaction {
   subcategory: string | null
   bank_name: string
   account_type: string | null
+  /** Client-confirmed account identity key (Chase#5678 / Wise). Null/absent for rows
+   *  not yet backfilled — accountKeyOf falls back to the canonical bank name. */
+  account_ref?: string | null
   balance_after: number | null
 }
 
@@ -168,10 +172,10 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   const pnl = computePnlTotals(transactions, { defaultUncategorizedBySign: input.defaultUncategorizedBySign })
 
   // ── Per-bank cash positions (gate 1 inputs) ──
-  const bankKeys = Array.from(new Set(transactions.map(t => `${t.bank_name} ${t.account_type ?? "Checking"}`)))
+  const bankKeys = Array.from(new Set(transactions.map(t => accountKeyOf(t))))
   const banks: BankCashPosition[] = bankKeys.map(key => {
     const rows = transactions
-      .filter(t => `${t.bank_name} ${t.account_type ?? "Checking"}` === key)
+      .filter(t => accountKeyOf(t) === key)
       .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date))
     const firstWithBalance = rows.find(r => r.balance_after !== null)
     const lastWithBalance = [...rows].reverse().find(r => r.balance_after !== null)

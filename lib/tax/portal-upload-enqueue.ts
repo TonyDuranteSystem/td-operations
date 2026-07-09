@@ -30,6 +30,8 @@ export interface SaveAndEnqueueInput {
   taxYear: number
   /** Client's free-text bank name — fallback identity only; parser re-detects. */
   bankLabel: string
+  /** Client-provided account number/label for this file (account identity). */
+  accountNumber?: string | null
   buffer: Buffer
   fileName: string
 }
@@ -55,7 +57,7 @@ export interface SaveAndEnqueueResult {
 export async function saveAndEnqueueStatementUpload(
   input: SaveAndEnqueueInput,
 ): Promise<SaveAndEnqueueResult> {
-  const { accountId, taxYear, bankLabel, buffer, fileName } = input
+  const { accountId, taxYear, bankLabel, accountNumber, buffer, fileName } = input
 
   const sha = sha256Hex(buffer)
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_")
@@ -98,7 +100,7 @@ export async function saveAndEnqueueStatementUpload(
   //    the 5-min process-jobs cron is the safety-net drainer.
   const { error: jobErr } = await supabaseAdmin.from("job_queue").insert({
     job_type: "ingest_bank_statement",
-    payload: { account_id: accountId, tax_year: taxYear, path, bank_label: bankLabel },
+    payload: { account_id: accountId, tax_year: taxYear, path, bank_label: bankLabel, account_number: accountNumber ?? null },
     priority: 4,
     account_id: accountId,
     created_by: "portal_tax_upload",

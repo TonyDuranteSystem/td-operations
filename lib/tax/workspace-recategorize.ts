@@ -36,7 +36,7 @@ import { getExpenseBuckets } from "./expense-buckets"
 const db = supabaseAdmin as any
 
 const WS_TX_COLUMNS =
-  "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence"
+  "id, transaction_date, description, counterparty, amount, currency, balance_after, transaction_ref, bank_name, account_type, account_ref, category, subcategory, is_related_party, notes, ai_lean, ai_bucket, loc_code, loc_source, loc_confidence"
 
 export interface WorkspaceRecategorizeResult {
   scanned: number

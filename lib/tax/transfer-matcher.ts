@@ -13,6 +13,8 @@
  * set and persists the category changes.
  */
 
+import { accountKeyOf } from "./bank-identity"
+
 export interface TransferCandidate {
   /** Unique row identity (bank_transactions.id or transaction_ref). */
   id: string
@@ -22,6 +24,10 @@ export interface TransferCandidate {
   bank_name: string
   /** Sub-account discriminator (account_type / account label). */
   account_type: string
+  /** Client-confirmed account identity key. When present it is the authoritative
+   *  "which account" — so two accounts at the SAME bank are correctly seen as
+   *  different, and one account under two bank-name spellings is seen as the same. */
+  account_ref?: string | null
   category: string
 }
 
@@ -182,8 +188,10 @@ export function matchTransferPairs(
       if (usedInflows.has(inn.id)) continue
       if (inn.currency !== out.currency) continue
       if (Math.abs(Math.abs(inn.amount) - Math.abs(out.amount)) > 0.005) continue
-      // must cross accounts: different bank, or same bank different sub-account
-      if (inn.bank_name === out.bank_name && inn.account_type === out.account_type) continue
+      // must cross accounts. account_ref (when present) is the authoritative account
+      // identity — same ref + same currency = same account, not a transfer; two
+      // accounts at one bank have distinct refs and DO qualify.
+      if (accountKeyOf(inn) === accountKeyOf(out)) continue
       const days = daysBetween(inn.transaction_date, out.transaction_date)
       if (days > windowDays) continue
       if (!best || days < best.days) best = { inflow: inn, days }

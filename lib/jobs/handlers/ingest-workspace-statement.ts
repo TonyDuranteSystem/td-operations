@@ -26,6 +26,8 @@ interface IngestWorkspacePayload {
   path: string
   /** Fallback bank label; the parser re-detects the real bank from content. */
   bank_label?: string
+  /** Staff-provided account number/label — the account identity for this file. */
+  account_number?: string | null
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -123,6 +125,7 @@ export async function handleIngestWorkspaceStatement(job: Job): Promise<JobResul
     workspaceId: p.workspace_id,
     taxYear: ws.tax_year as number,
     bankLabel: p.bank_label || "Bank",
+    accountNumber: p.account_number ?? null,
     buffer,
     fileName,
     linkedAccountId: (ws.linked_account_id as string | null) ?? null,

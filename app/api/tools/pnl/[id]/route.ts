@@ -67,7 +67,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     const sources = await fetchAllPaged<Record<string, unknown>>(async (from, to) => {
       const { data, error } = await db
         .from('pnl_workspace_transactions')
-        .select('source_file_id, bank_name, account_type, transaction_date')
+        .select('source_file_id, bank_name, account_type, account_ref, transaction_date')
         .eq('workspace_id', workspaceId)
         .order('id', { ascending: true })
         .range(from, to)
@@ -75,12 +75,21 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       return (data ?? []) as Record<string, unknown>[]
     })
     const bySource = new Map<string, { bank_name: string; count: number; from: string; to: string }>()
+    const byAccount = new Map<string, { account_ref: string; bank: string; acct: string; count: number }>()
     for (const r of sources) {
       const key = (r.source_file_id as string) ?? 'unknown'
       const cur = bySource.get(key)
       const date = String(r.transaction_date ?? '')
       if (!cur) bySource.set(key, { bank_name: String(r.bank_name ?? ''), count: 1, from: date, to: date })
       else { cur.count++; if (date < cur.from) cur.from = date; if (date > cur.to) cur.to = date }
+      const ref = (r.account_ref as string | null) ?? null
+      if (ref) {
+        const a = byAccount.get(ref)
+        if (!a) {
+          const hash = ref.indexOf('#')
+          byAccount.set(ref, { account_ref: ref, bank: hash >= 0 ? ref.slice(0, hash) : ref, acct: hash >= 0 ? ref.slice(hash + 1) : '', count: 1 })
+        } else a.count++
+      }
     }
 
     // Expense breakdown by bucket (same policy as the portal route).
@@ -294,6 +303,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       format_proposals,
       attested: false, // workspaces have no attestation
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
+      accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       generated_at: generatedAt,
       // Staff prior-return control (2026-07-06): case+status only — the UI
       // decides whether to show the set/clear buttons (never over a validated

@@ -15,6 +15,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { parseBankStatement, categorizeTransaction } from "@/lib/bank-statement-parser"
 import { sha256Hex, uploadSourceId } from "./statement-uploads"
 import { recategorizeWorkspace } from "./workspace-recategorize"
+import { buildAccountRef } from "./bank-identity"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -24,6 +25,8 @@ export interface WorkspaceIngestInput {
   taxYear: number
   /** Free-text bank name — fallback identity only, never routing. */
   bankLabel: string
+  /** Staff-provided account number/label (account_number-mode institutions). */
+  accountNumber?: string | null
   buffer: Buffer
   fileName: string
   /** Fork → the linked client (for rules); blank → null. */
@@ -49,7 +52,7 @@ export interface WorkspaceIngestResult {
 }
 
 export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<WorkspaceIngestResult> {
-  const { workspaceId, taxYear, bankLabel, buffer, fileName, linkedAccountId, companyName, memberNames } = input
+  const { workspaceId, taxYear, bankLabel, accountNumber, buffer, fileName, linkedAccountId, companyName, memberNames } = input
   const sha = sha256Hex(buffer)
   const sourceFileId = uploadSourceId(sha)
   const fail = (error: string): WorkspaceIngestResult => ({
@@ -104,10 +107,12 @@ export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<W
 
   // 2. Categorize (legacy built-ins + member detection) and keep the tax year.
   const bankDetected = parsed.bank_name && parsed.bank_name !== "unknown" ? parsed.bank_name : bankLabel
+  // Canonical institution name + account identity, once per file (one file = one account).
+  const ident = buildAccountRef({ rawBankName: bankDetected, accountNumber })
   const categorized = parsed.transactions
     .map(tx => categorizeTransaction(tx, memberNames, []))
     .filter(tx => tx.transaction_date.startsWith(String(taxYear)))
-    .map(tx => ({ ...tx, bank_name: tx.bank_name && tx.bank_name !== "unknown" ? tx.bank_name : bankDetected }))
+    .map(tx => ({ ...tx, bank_name: ident.canonical, account_ref: ident.account_ref }))
 
   if (categorized.length === 0) {
     return fail(
@@ -137,6 +142,7 @@ export async function ingestWorkspaceCsv(input: WorkspaceIngestInput): Promise<W
         balance_after: tx.balance_after,
         bank_name: tx.bank_name,
         account_type: tx.account_type,
+        account_ref: tx.account_ref,
         transaction_ref: tx.transaction_ref,
         source_file_id: sourceFileId,
         is_related_party: tx.is_related_party,

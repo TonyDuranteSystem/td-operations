@@ -13,9 +13,12 @@
  * confirm numbers whose completeness is still an open question.
  */
 
+import { accountKeyOf } from "./bank-identity"
+
 export interface CoverageTx {
   bank_name: string
   account_type: string | null
+  account_ref?: string | null
   transaction_date: string
 }
 
@@ -43,7 +46,7 @@ export function coverageQuestions(txs: CoverageTx[], taxYear: number): CoverageQ
   const all = monthRange(taxYear)
   const byBank = new Map<string, Set<string>>()
   for (const t of txs) {
-    const key = `${t.bank_name} ${t.account_type ?? "Checking"}`
+    const key = accountKeyOf(t)
     if (!byBank.has(key)) byBank.set(key, new Set())
     byBank.get(key)!.add(monthOf(t.transaction_date))
   }

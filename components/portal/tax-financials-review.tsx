@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { groupKeyRoot } from '@/lib/tax/question-groups'
+import { resolveInstitution } from '@/lib/tax/bank-identity'
 import ValidationBreakdownPanel from './validation-breakdown'
 
 /** Prominent processing card (Antonio, 2026-07-03: "hourglass or a timer and
@@ -36,6 +37,7 @@ interface Member { name: string; pct: number; beginning_capital: number; contrib
 interface QuestionGroup { group_key: string; label: string; count: number; total: number; currency?: string; direction: 'in' | 'out'; transaction_ids: string[]; sample: string; ai_lean?: 'business' | 'personal' | 'unsure'; ai_bucket?: string; current_category?: string; current_subcategory?: string }
 interface Bucket { slug: string; label: string }
 interface FileCard { source_file_id: string; bank_name: string; count: number; from: string; to: string }
+interface AccountOnFile { account_ref: string; bank: string; acct: string; count: number }
 
 interface CoverageQuestion { key: string; bank_key: string; kind: string; months: string[]; question: string; answer: 'no_activity' | 'had_activity' | null }
 
@@ -85,6 +87,7 @@ interface View {
   expense_breakdown?: { slug: string; label: string; total: number }[]
   attested: boolean
   files: FileCard[]
+  accounts?: AccountOnFile[]
   /** STAFF WORKSPACE ONLY (Antonio, 2026-07-02): null/absent = upload stage —
    *  the tool shows the statement manager + "Generate P&L", no totals. The
    *  portal API never sends these; every use below is gated on isStaff. */
@@ -234,7 +237,16 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // uploader that didn't exist.
   const [uploadBank, setUploadBank] = useState('')
   const [uploadKind, setUploadKind] = useState('checking')
+  const [uploadAccount, setUploadAccount] = useState('')
+  // Escape hatch for an unknown institution that has no single account number
+  // (a multi-currency service or crypto we don't recognize) — lets the client
+  // skip the required number without getting stuck.
+  const [uploadNoAcct, setUploadNoAcct] = useState(false)
   const [uploadNote, setUploadNote] = useState<string | null>(null)
+  // Institution identity mode (from the curated seed): banks need an account
+  // number; multi-currency / crypto do not. Drives the required field + warning.
+  const uploadInst = useMemo(() => resolveInstitution(uploadBank), [uploadBank])
+  const uploadNeedsAccount = uploadBank.trim().length > 0 && uploadInst.mode === 'account_number' && !uploadNoAcct
   // P&L expense-category drill-down (Luca's request, dev_task 1bee0ffe).
   const [openCat, setOpenCat] = useState<string | null>(null)
   // Triage tiers (2026-07-03): which collapsed review sections are open.
@@ -729,13 +741,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   }
 
   // Upload one statement file; throws on failure with the server's message.
-  const uploadOneStatement = async (file: File, bank: string): Promise<void> => {
+  const uploadOneStatement = async (file: File, bank: string, account: string): Promise<void> => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('account_id', accountId)
     fd.append('tax_year', String(taxYear))
     fd.append('bank_name', bank)
     fd.append('account_kind', uploadKind)
+    fd.append('account_number', account)
     const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
     const d = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -748,7 +761,14 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
   // collected and surfaced without aborting the rest of the batch.
   const uploadStatements = async (files: File[]) => {
     const bank = uploadBank.trim()
+    const account = uploadAccount.trim()
     if (!bank) { setError(it ? 'Indica il nome della banca prima di caricare.' : 'Enter the bank name before uploading.'); return }
+    if (uploadNeedsAccount && !account) {
+      setError(it
+        ? 'Inserisci il numero di conto di questa banca prima di caricare — serve per non confondere due conti diversi.'
+        : 'Enter this bank\'s account number before uploading — it\'s what keeps two different accounts apart.')
+      return
+    }
     if (files.length === 0) return
     setError(null)
     setUploadNote(null)
@@ -759,7 +779,7 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
       for (let i = 0; i < files.length; i++) {
         setUploadNote(it ? `Caricamento ${i + 1} di ${files.length}…` : `Uploading ${i + 1} of ${files.length}…`)
         try {
-          await uploadOneStatement(files[i], bank)
+          await uploadOneStatement(files[i], bank, account)
           ok++
           await load()
         } catch (e) {
@@ -767,6 +787,8 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
         }
       }
       setUploadBank('')
+      setUploadAccount('')
+      setUploadNoAcct(false)
       setUploadNote(
         (it
           ? `✓ ${ok} di ${files.length} file ricevuti — stiamo leggendo le transazioni, i numeri compaiono tra poco.`
@@ -1036,6 +1058,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               ? 'Scegli il conto, poi seleziona uno o più file CSV di quella banca per l\'intero anno. Non unire o modificare i file — caricali separati, uno per banca.'
               : 'Pick the account, then select one or more CSV files for that bank\'s full year. Don\'t merge or edit the files — upload them separately, one per bank.'}
           </p>
+          {(view.accounts?.length ?? 0) > 0 && (
+            <div className="mt-2">
+              <div className="text-xs text-zinc-500">
+                {it ? 'I tuoi conti già caricati — tocca per riusare lo stesso (evita di riscrivere il numero):' : 'Your accounts on file — tap to reuse the same one (no retyping the number):'}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {view.accounts!.map(a => (
+                  <button
+                    key={a.account_ref}
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => { setUploadBank(a.bank); setUploadAccount(a.acct); setUploadNoAcct(false) }}
+                    className="rounded-full border border-zinc-300 bg-white px-2.5 py-0.5 text-xs text-zinc-700 hover:border-zinc-900 disabled:opacity-50"
+                  >
+                    {a.acct ? `${a.bank} ••${a.acct}` : a.bank}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <input
               value={uploadBank}
@@ -1044,6 +1086,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               disabled={busy !== null}
               className="rounded-md border border-zinc-300 px-2 py-1 text-xs disabled:opacity-50"
             />
+            {uploadNeedsAccount && (
+              <input
+                value={uploadAccount}
+                onChange={e => setUploadAccount(e.target.value)}
+                placeholder={it ? 'Numero di conto (o ultime 4 cifre)' : 'Account number (or last 4 digits)'}
+                disabled={busy !== null}
+                className="rounded-md border border-red-400 px-2 py-1 text-xs disabled:opacity-50"
+              />
+            )}
             <select
               value={uploadKind}
               onChange={e => setUploadKind(e.target.value)}
@@ -1070,6 +1121,26 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
               />
             </label>
           </div>
+          {uploadNeedsAccount && (
+            <div className="mt-2 rounded-md border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700">
+              {it
+                ? '⚠️ Ricontrolla il numero di conto dopo averlo scritto — se è sbagliato, il tuo P&L sarà sbagliato.'
+                : '⚠️ Double-check the account number after you type it — if it\'s wrong, your P&L will be wrong.'}
+            </div>
+          )}
+          {uploadBank.trim().length > 0 && !uploadInst.matched && (
+            <label className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
+              <input
+                type="checkbox"
+                checked={uploadNoAcct}
+                onChange={e => setUploadNoAcct(e.target.checked)}
+                disabled={busy !== null}
+              />
+              {it
+                ? 'È un servizio multivaluta o crypto (senza numero di conto unico)'
+                : 'This is a multi-currency service or crypto (no single account number)'}
+            </label>
+          )}
           {uploadNote && <div className="mt-2 text-xs text-emerald-700">{uploadNote}</div>}
         </div>
       </section>

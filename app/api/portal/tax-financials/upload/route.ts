@@ -40,6 +40,10 @@ export async function POST(request: NextRequest) {
     const accountId = String(form.get('account_id') ?? '')
     const taxYear = Number(form.get('tax_year'))
     const bankLabel = String(form.get('bank_name') ?? '').trim()
+    // Account identity for this file (account_number-mode institutions). Optional at
+    // the API — the client UI enforces it as required for banks; currency/crypto
+    // services legitimately have none.
+    const accountNumber = String(form.get('account_number') ?? '').trim() || null
 
     if (!file || !accountId || !Number.isInteger(taxYear) || !bankLabel) {
       return NextResponse.json({ error: 'file, account_id, tax_year and bank_name are required' }, { status: 400 })
@@ -68,7 +72,7 @@ export async function POST(request: NextRequest) {
 
     const buffer = Buffer.from(await file.arrayBuffer())
     const { saveAndEnqueueStatementUpload } = await import('@/lib/tax/portal-upload-enqueue')
-    const result = await saveAndEnqueueStatementUpload({ accountId, taxYear, bankLabel, buffer, fileName: file.name })
+    const result = await saveAndEnqueueStatementUpload({ accountId, taxYear, bankLabel, accountNumber, buffer, fileName: file.name })
 
     // Kick the worker so the file starts processing promptly. AWAITED + bounded
     // (triggerWorker has a 5s timeout) so it never dangles past the response —

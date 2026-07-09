@@ -80,18 +80,25 @@ export async function GET(request: NextRequest) {
     })))
 
     // Per-file sources for the delete/replace cards (§6) + coverage below.
-    const sources = await fetchAllPaged(async (from, to) => {
-      const { data, error } = await supabaseAdmin
+    type SourceRow = { source_file_id: string | null; bank_name: string; account_type: string | null; account_ref: string | null; transaction_date: string }
+    const sources = await fetchAllPaged<SourceRow>(async (from, to) => {
+      // account_ref is not yet in the generated types (prod DDL pending) — as-any
+      // escape, same pattern as ai_lean/ai_bucket elsewhere in this route.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabaseAdmin as any)
         .from('bank_transactions')
-        .select('source_file_id, bank_name, account_type, transaction_date')
+        .select('source_file_id, bank_name, account_type, account_ref, transaction_date')
         .eq('account_id', accountId)
         .eq('tax_year', taxYear)
         .order('id', { ascending: true })
         .range(from, to)
       if (error) throw new Error(error.message)
-      return data ?? []
+      return (data ?? []) as SourceRow[]
     })
     const bySource = new Map<string, { bank_name: string; count: number; from: string; to: string }>()
+    // Distinct accounts already on file (pick-your-account: the client reuses an
+    // existing identity instead of retyping the number, so a typo can't re-split).
+    const byAccount = new Map<string, { account_ref: string; bank: string; acct: string; count: number }>()
     for (const r of sources ?? []) {
       const key = r.source_file_id ?? 'unknown'
       const cur = bySource.get(key)
@@ -100,6 +107,14 @@ export async function GET(request: NextRequest) {
         cur.count++
         if (r.transaction_date < cur.from) cur.from = r.transaction_date
         if (r.transaction_date > cur.to) cur.to = r.transaction_date
+      }
+      const ref = (r as { account_ref?: string | null }).account_ref
+      if (ref) {
+        const a = byAccount.get(ref)
+        if (!a) {
+          const hash = ref.indexOf('#')
+          byAccount.set(ref, { account_ref: ref, bank: hash >= 0 ? ref.slice(0, hash) : ref, acct: hash >= 0 ? ref.slice(hash + 1) : '', count: 1 })
+        } else a.count++
       }
     }
 
@@ -284,6 +299,7 @@ export async function GET(request: NextRequest) {
       ingestFailed,
       attested: sub?.confirmation_accepted === true,
       files: Array.from(bySource.entries()).map(([source_file_id, s]) => ({ source_file_id, ...s })),
+      accounts: Array.from(byAccount.values()).sort((a, b) => b.count - a.count),
       aiState,
       aiRemaining,
       periods,

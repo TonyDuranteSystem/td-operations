@@ -16,6 +16,8 @@ export interface SaveAndEnqueueWorkspaceInput {
   workspaceId: string
   /** Free-text bank name — fallback identity only; parser re-detects. */
   bankLabel: string
+  /** Staff-provided account number/label for this file (account identity). */
+  accountNumber?: string | null
   buffer: Buffer
   fileName: string
 }
@@ -29,7 +31,7 @@ export interface SaveAndEnqueueWorkspaceResult {
 export async function saveAndEnqueueWorkspaceUpload(
   input: SaveAndEnqueueWorkspaceInput,
 ): Promise<SaveAndEnqueueWorkspaceResult> {
-  const { workspaceId, bankLabel, buffer, fileName } = input
+  const { workspaceId, bankLabel, accountNumber, buffer, fileName } = input
 
   const sha = sha256Hex(buffer)
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_")
@@ -63,7 +65,7 @@ export async function saveAndEnqueueWorkspaceUpload(
   // 3. DIRECT insert (no triggerWorker dangle — same discipline as the portal path).
   const { error: jobErr } = await supabaseAdmin.from("job_queue").insert({
     job_type: "ingest_workspace_statement",
-    payload: { workspace_id: workspaceId, path, bank_label: bankLabel },
+    payload: { workspace_id: workspaceId, path, bank_label: bankLabel, account_number: accountNumber ?? null },
     priority: 4,
     related_entity_type: "pnl_workspace",
     related_entity_id: workspaceId,

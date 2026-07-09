@@ -47,7 +47,7 @@ export async function getWorkspaceFinancialsView(workspaceId: string): Promise<W
       .from("pnl_workspace_transactions")
       // notes + is_related_party ride the SAME fetch for Validation Mode
       // (provenance split / related-party summary) — one pass, no re-query.
-      .select("id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, balance_after, notes, is_related_party")
+      .select("id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, account_ref, balance_after, notes, is_related_party")
       .eq("workspace_id", workspaceId)
       .order("id", { ascending: true })
       .range(from, to)
