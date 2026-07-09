@@ -578,9 +578,14 @@ export async function materializeFormationCompany(
     const ownerName = ownerContact ? [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ") : ""
 
     let companyContactsSubfolderId: string | null = null
+    // "1. Company" subfolder — where the Articles of Organization + EIN letter
+    // belong. Captured so step 10a-bis can relocate flow-uploaded Articles that
+    // are still parked in Supabase Storage into Drive.
+    let companyDocsSubfolderId: string | null = null
     try {
       const folderResult = await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
       companyContactsSubfolderId = folderResult.subfolders["2. Contacts"] ?? null
+      companyDocsSubfolderId = folderResult.subfolders["1. Company"] ?? null
       steps.push({
         step: "drive_folder",
         status: "ok",
@@ -813,6 +818,36 @@ export async function materializeFormationCompany(
           step: "flow_docs_account_backfill",
           status: "error",
           detail: backfillErr instanceof Error ? backfillErr.message : String(backfillErr),
+        })
+      }
+    }
+
+    // 10a-bis. Relocate flow-uploaded Articles that are still parked in Supabase
+    // Storage into the company's Drive "1. Company" folder. The workspace
+    // "Filed with State" upload happens BEFORE the company exists, so the binary
+    // can't reach Drive at upload time — only a `storage:` documents pointer is
+    // written (step 10a above just backfilled its account_id). Without this the
+    // Articles never land in Drive AND the signed-SS-4 IRS merge (which scans
+    // the Drive "1. Company" folder) can't find them, producing an SS-4-only fax
+    // package (Art of Profit Academy / Numero Uno Social / Automatiko,
+    // 2026-07-08). Best-effort + idempotent — never fails materialization.
+    if (companyDocsSubfolderId && linkedSdIds.length > 0) {
+      try {
+        const { relocateFormationFlowDocs } = await import("@/lib/flows/relocate-flow-storage-docs")
+        const rel = await relocateFormationFlowDocs({
+          companySubfolderId: companyDocsSubfolderId,
+          serviceDeliveryIds: linkedSdIds,
+        })
+        steps.push({
+          step: "flow_docs_to_drive",
+          status: rel.errors.length > 0 ? "error" : "ok",
+          detail: `${rel.relocated} relocated, ${rel.skipped} skipped${rel.errors.length > 0 ? ` — errors: ${rel.errors.join("; ")}` : ""}`,
+        })
+      } catch (relErr) {
+        steps.push({
+          step: "flow_docs_to_drive",
+          status: "error",
+          detail: relErr instanceof Error ? relErr.message : String(relErr),
         })
       }
     }

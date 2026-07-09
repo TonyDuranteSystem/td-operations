@@ -18,6 +18,14 @@ export const FAXAGE_URL = 'https://www.faxage.com/httpsfax.php'
 /** Default IRS e-file fax number; overridable via FAXAGE_IRS_NUMBER. */
 export const DEFAULT_IRS_FAX_NUMBER = '8552151627'
 
+/**
+ * IRS EIN (SS-4) fax number for DOMESTIC filings — (855) 641-6935. Pre-fills the
+ * Company Formation SS-4 fax panel (Antonio, 2026-07-09). Distinct from
+ * DEFAULT_IRS_FAX_NUMBER (855-215-1627, the international EIN number). Staff
+ * confirm/edit the number before sending, so this is a starting value only.
+ */
+export const IRS_EIN_FAX_DOMESTIC = '8556416935'
+
 export interface FaxageCredentials {
   username: string
   /** Faxage account "company" — usually the same as username. */

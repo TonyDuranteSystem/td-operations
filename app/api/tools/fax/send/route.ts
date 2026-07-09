@@ -77,6 +77,14 @@ export async function POST(req: NextRequest) {
   const serviceDeliveryId: string | null = typeof body.service_delivery_id === 'string' && body.service_delivery_id.trim()
     ? body.service_delivery_id.trim()
     : null
+  // Opt-in double-send guard. When set (the SS-4 fax panel passes it), refuse a
+  // repeat fax for the same flow unless the caller explicitly confirms a resend
+  // — faxing the IRS is irreversible. General fax-tool callers omit these, so
+  // their behavior is unchanged.
+  const dedupeSdId: string | null = typeof body.dedupe_service_delivery_id === 'string' && body.dedupe_service_delivery_id.trim()
+    ? body.dedupe_service_delivery_id.trim()
+    : null
+  const confirmResend: boolean = body.confirm_resend === true
 
   // Validate the recipient number.
   if (!isValidFaxNo(faxnoRaw)) {
@@ -86,6 +94,30 @@ export async function POST(req: NextRequest) {
     )
   }
   const faxno = normalizeFaxNo(faxnoRaw)
+
+  // Double-send guard (opt-in). A prior 'fax_sent' for this flow → block with a
+  // 409 the caller can turn into an explicit "send again?" confirm.
+  if (dedupeSdId && !confirmResend) {
+    const { data: prior } = await supabaseAdmin
+      .from('action_log')
+      .select('created_at, details')
+      .eq('action_type', 'fax_sent')
+      .eq('service_delivery_id', dedupeSdId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (prior) {
+      const details = (prior.details as { job_id?: string; faxno?: string } | null) ?? {}
+      return NextResponse.json(
+        {
+          success: false,
+          already_faxed: { at: prior.created_at, job_id: details.job_id ?? null, faxno: details.faxno ?? null },
+          error: 'A fax was already sent for this flow. Confirm to send it again.',
+        },
+        { status: 409 },
+      )
+    }
+  }
 
   // Resolve the file to send: either a selected document (downloaded from Drive)
   // or an uploaded base64 file from the client.

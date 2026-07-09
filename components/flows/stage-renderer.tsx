@@ -10,6 +10,7 @@ import { SignatureSend } from './signature-send'
 import { SignatureStatus } from './signature-status'
 import { WaitingNotice } from './waiting-notice'
 import { FaxIrs } from './fax-irs'
+import { Ss4FaxPanel } from './ss4-fax-panel'
 import { ActivateRa } from './activate-ra'
 import { Ss4Panel } from './ss4-panel'
 import { EinEntry } from './ein-entry'
@@ -81,6 +82,8 @@ function renderComponent(
       return <WaitingNotice key={key} label={component.label} />
     case 'fax_irs':
       return <FaxIrs key={key} account={account} serviceType={serviceDelivery.service_type} />
+    case 'ss4_fax_panel':
+      return <Ss4FaxPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'activate_ra':
       return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'ss4_panel':
