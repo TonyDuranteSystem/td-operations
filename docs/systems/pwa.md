@@ -17,6 +17,7 @@ Both surfaces install as PWAs: the staff **CRM dashboard** (this doc's focus) an
 
 ## The rules
 1. Mobile-first is mandatory for dashboard UI: Antonio uses every page from a ~380px phone. Tables need scroll wrappers (`overflow-x-auto` + `min-w-[...]`) or card collapse; toolbars need `flex-wrap`; grids need responsive prefixes.
+1b. **Height chain (2026-07-08 scroll-trap incident):** the dashboard `<main>` compensates for the fixed mobile top bar with `pt-14 lg:pt-0` — PADDING, never a spacer div, so `h-full` pages size to the content box and end exactly at the viewport bottom. Any tab/pane rendered inside an `overflow-hidden` parent MUST own its vertical scroll (`h-full overflow-y-auto`, like finance's tabs) — a plain block there renders but can NEVER be scrolled (the "can't scroll invoices" production bug; invisible to static review, only a rendered ~390px viewport shows it).
 2. Any new public PWA asset (SW, manifest, precached page) goes in `PUBLIC_PREFIXES`.
 3. Bump `CACHE_NAME` when changing what the SW precaches.
 4. No data/page caching in the SW beyond the offline fallback.

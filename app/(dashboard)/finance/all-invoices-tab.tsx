@@ -319,7 +319,11 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
   }
 
   return (
-    <div className="p-6 space-y-4">
+    // h-full + overflow-y-auto: this tab renders inside finance-dashboard's
+    // overflow-hidden pane, so it MUST own its vertical scroll (same pattern
+    // as expenses-tab). Desktop hid the bug because the table capped its own
+    // height; the mobile card list scrolls through this container.
+    <div className="h-full overflow-y-auto p-6 space-y-4">
       {/* Automatic-reminder (dunning) controls — admin only */}
       {isAdmin && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-4 py-2.5 text-sm">
