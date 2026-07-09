@@ -2076,6 +2076,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Default-safe: an unresolved sender (slackUserId undefined) is NOT Antonio.
     enableCodeTasks: slackUserId === SLACK_USER_ANTONIO,
     enableSlackSend: true,
+    // Internal team-chat send (staff-only, posts as Claude); same draft →
+    // explicit "send it" discipline as the other send rails.
+    enableTeamChatSend: true,
     // Client Threads: lookup (READ) available in any Slack channel; tagging (WRITE)
     // only in #td-support (NOISE GATE 1). Kept off the Hermes worker (R108).
     enableClientThreadRead: true,
@@ -2235,6 +2238,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           // Same Antonio-only restriction as the primary call above.
           enableCodeTasks: slackUserId === SLACK_USER_ANTONIO,
           enableSlackSend: true,
+          enableTeamChatSend: true,
           enableDbRead: true,
           enableThreadRecall: true,
           enableWebSearch: true,

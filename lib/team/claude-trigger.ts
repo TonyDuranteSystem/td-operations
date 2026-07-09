@@ -219,6 +219,10 @@ export async function processClaudeReply(params: {
       // (discipline enforced by SLACK_WORKER_SYSTEM_PROMPT, same as Slack).
       enableEmailSend: true,
       enableSlackSend: true,
+      // Internal team-chat send (staff-only, posts as Claude). Same draft →
+      // explicit "send it" discipline. Answering @claude already runs in team
+      // chat; this lets it post to OTHER team channels/threads on approval.
+      enableTeamChatSend: true,
       // Code-task rail Antonio-only (R111), keyed on the prompt author.
       enableCodeTasks: senderIsAntonio,
       clientKey,
