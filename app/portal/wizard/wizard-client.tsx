@@ -278,7 +278,14 @@ export function WizardClient({
   // Exactly one of {owner, each additional member} must be selected. This block
   // is inert for SMLLC and for non-formation wizards (the members step + owner
   // signer radio only render when isMMLLC).
-  const isMMLLC = entityType === 'MMLLC'
+  //
+  // Bank applications (Relay/Payset) are NOT formation: they collect their own
+  // owner/partner ownership (equity_pct / partner_equity_pct) and must never
+  // inherit formation's SS-4 signer question or its members-ownership-sum rule.
+  // So isMMLLC is forced off for banking wizards — the bank form is judged only
+  // on its own fields. (Adam Mihaly / LUMA Beauty, 2026-07-09.)
+  const isBankingWizard = wizardType === 'banking_relay' || wizardType === 'banking_payset'
+  const isMMLLC = entityType === 'MMLLC' && !isBankingWizard
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
