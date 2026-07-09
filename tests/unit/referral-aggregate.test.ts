@@ -5,6 +5,7 @@ import {
   formatMoney,
   sumEarnedByCurrency,
   formatEarnedSummary,
+  leadStatusBadge,
   type AccountMembership,
 } from '@/lib/portal/referral-aggregate'
 
@@ -117,5 +118,26 @@ describe('formatEarnedSummary', () => {
 
   it('renders €0 when nothing earned', () => {
     expect(formatEarnedSummary({})).toBe('€0')
+  })
+})
+
+describe('leadStatusBadge', () => {
+  it('maps known funnel statuses (EN + IT)', () => {
+    expect(leadStatusBadge('Offer Sent').label_en).toBe('Offer Sent')
+    expect(leadStatusBadge('Offer Sent').label_it).toBe('Offerta inviata')
+    expect(leadStatusBadge('Call Done').label_en).toBe('Call Done')
+    expect(leadStatusBadge('Paid').color).toContain('emerald')
+  })
+
+  it('keeps Lost as Lost (per Antonio)', () => {
+    expect(leadStatusBadge('Lost').label_en).toBe('Lost')
+    expect(leadStatusBadge('Lost').label_it).toBe('Perso')
+    expect(leadStatusBadge('Lost').color).toContain('red')
+  })
+
+  it('falls back to the raw value for unknown/empty status', () => {
+    expect(leadStatusBadge('Weird').label_en).toBe('Weird')
+    expect(leadStatusBadge('').label_en).toBe('Pending')
+    expect(leadStatusBadge(null).label_en).toBe('Pending')
   })
 })

@@ -4,13 +4,15 @@ import { useState, useEffect } from 'react'
 import { Copy, Check, Share2, Gift } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, type Locale } from '@/lib/portal/i18n'
-import { formatMoney } from '@/lib/portal/referral-aggregate'
+import { formatMoney, leadStatusBadge } from '@/lib/portal/referral-aggregate'
 
 interface ReferralRow {
   id: string
   referred_name: string
   company_name: string | null
   status: string
+  /** The referred lead's live funnel status, when the referral is tied to a lead. */
+  lead_status?: string | null
   commission_amount: number | null
   commission_currency: string
   credited_amount: number | null
@@ -133,7 +135,13 @@ export function ReferralPage({ referrals, payouts, locale }: Props) {
         <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
           <div className="divide-y">
             {referrals.map((r) => {
-              const s = statusConfig[r.status] || { label_en: r.status, label_it: r.status, color: 'bg-zinc-100 text-zinc-700' }
+              // Show the referred LEAD's live funnel status (Call Done → Offer
+              // Sent → Paid → Lost) whenever the referral is tied to a lead and
+              // not cancelled; otherwise fall back to the reward status.
+              const useLead = !!r.lead_status && r.status !== 'cancelled'
+              const s = useLead
+                ? leadStatusBadge(r.lead_status)
+                : (statusConfig[r.status] || { label_en: r.status, label_it: r.status, color: 'bg-zinc-100 text-zinc-700' })
               const label = locale === 'it' ? s.label_it : s.label_en
               const displayName = r.company_name || r.referred_name
               const totalPaid = (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0)

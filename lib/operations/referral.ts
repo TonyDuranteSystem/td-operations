@@ -5,51 +5,73 @@ import { calculateCommission } from "@/lib/referral-utils"
 export const REFERRAL_COMMISSION_PCT = 10
 
 export interface PendingReferralParams {
-  referrerContactId: string
+  /** The referrer person. Optional when an account referrer is given instead. */
+  referrerContactId?: string | null
+  /** The referrer company / partner account (the credit target). Optional when a contact is given. */
+  referrerAccountId?: string | null
   referredLeadId: string
   referredName: string
   referredEmail: string
+  /** 'client' (default) or 'partner' — governs the commission model downstream. */
+  referrerType?: "client" | "partner"
 }
 
 export type PendingReferralResult =
   | { created: true; id: string }
-  | { created: false; reason: "self_referral" | "duplicate" | "error"; detail?: string }
+  | { created: false; reason: "self_referral" | "duplicate" | "missing_referrer" | "error"; detail?: string }
 
 /**
  * Create a pending referral linking a referring client to a referred lead.
+ * The referrer is a CONTACT and/or an ACCOUNT (company/partner) — at least one.
  * Guards:
- *  - self-referral: the referrer cannot refer their own email
- *  - duplicate: one referral per (referrer, referred lead)
+ *  - missing_referrer: neither a contact nor an account referrer was provided
+ *  - self-referral: a contact referrer cannot refer their own email
+ *  - duplicate: one referral per (referrer contact/account, referred lead)
  * The referral is created in 'pending' status; it advances to 'converted' when
- * the referred lead becomes a paying client, then 'credited' when the reward is issued.
+ * the referred lead becomes a paying client (activate-service Step 3.5b), then
+ * 'credited' when the reward is issued.
  */
 export async function createPendingReferral(
   params: PendingReferralParams,
   supabase: SupabaseClient
 ): Promise<PendingReferralResult> {
-  const { referrerContactId, referredLeadId, referredName, referredEmail } = params
+  const { referredLeadId, referredName, referredEmail } = params
+  const referrerContactId = params.referrerContactId ?? null
+  const referrerAccountId = params.referrerAccountId ?? null
+  const referrerType = params.referrerType ?? "client"
 
-  // Self-referral guard
-  const { data: refContact } = await supabase
-    .from("contacts")
-    .select("email")
-    .eq("id", referrerContactId)
-    .maybeSingle()
-  if (
-    refContact?.email &&
-    referredEmail &&
-    refContact.email.toLowerCase() === referredEmail.toLowerCase()
-  ) {
-    return { created: false, reason: "self_referral" }
+  if (!referrerContactId && !referrerAccountId) {
+    return { created: false, reason: "missing_referrer" }
   }
 
-  // Dedup guard
-  const { data: existing } = await supabase
+  // Self-referral guard (only meaningful for a contact referrer with an email).
+  if (referrerContactId) {
+    const { data: refContact } = await supabase
+      .from("contacts")
+      .select("email")
+      .eq("id", referrerContactId)
+      .maybeSingle()
+    if (
+      refContact?.email &&
+      referredEmail &&
+      refContact.email.toLowerCase() === referredEmail.toLowerCase()
+    ) {
+      return { created: false, reason: "self_referral" }
+    }
+  }
+
+  // Dedup guard — one ACTIVE referral per (referrer identity, referred lead).
+  // Cancelled rows never block a fresh link (a re-assignment cancels then recreates).
+  let dedup = supabase
     .from("referrals")
     .select("id")
-    .eq("referrer_contact_id", referrerContactId)
     .eq("referred_lead_id", referredLeadId)
+    .neq("status", "cancelled")
     .limit(1)
+  dedup = referrerContactId
+    ? dedup.eq("referrer_contact_id", referrerContactId)
+    : dedup.eq("referrer_account_id", referrerAccountId as string)
+  const { data: existing } = await dedup
   if (existing && existing.length > 0) {
     return { created: false, reason: "duplicate" }
   }
@@ -58,9 +80,10 @@ export async function createPendingReferral(
     .from("referrals")
     .insert({
       referrer_contact_id: referrerContactId,
+      referrer_account_id: referrerAccountId,
       referred_lead_id: referredLeadId,
       referred_name: referredName,
-      referrer_type: "client",
+      referrer_type: referrerType,
       status: "pending",
     } as Record<string, unknown> as never)
     .select("id")
@@ -70,6 +93,63 @@ export async function createPendingReferral(
     return { created: false, reason: "error", detail: error?.message }
   }
   return { created: true, id: (data as { id: string }).id }
+}
+
+/** A pending-referral row as seen when reconciling a lead's referrer. */
+export interface PendingReferralRow {
+  id: string
+  referrer_contact_id: string | null
+  referrer_account_id: string | null
+  status: string
+}
+
+/** The referrer picked on a lead, or null when cleared / free-text only. */
+export interface ReferrerPick {
+  contactId: string | null
+  accountId: string | null
+}
+
+/**
+ * Decide how to reconcile a lead's PENDING auto-referrals when staff set/change/
+ * clear the lead's referrer. Pure — unit tested.
+ *
+ * Rules (only `pending` rows are ever touched — a converted/credited/paid row is
+ * never cancelled here):
+ *  - next null (cleared or free-text only) → cancel every pending row, create nothing.
+ *  - next set and a pending row has the same referrer identity (contact, or an
+ *    account-only pick) → keep it, cancel any OTHER pending rows; and if its
+ *    credit account drifted from the pick (staff changed "credit goes to"), emit
+ *    an updateAccountId so the referral's credit target follows.
+ *  - next set and no pending row matches → cancel all pending rows, create for next.
+ */
+export function reconcilePendingReferral(
+  existing: PendingReferralRow[],
+  next: ReferrerPick | null,
+): { cancelIds: string[]; createFor: ReferrerPick | null; updateAccountId: { id: string; accountId: string | null } | null } {
+  const pending = existing.filter(r => r.status === "pending")
+
+  if (!next || (!next.contactId && !next.accountId)) {
+    return { cancelIds: pending.map(r => r.id), createFor: null, updateAccountId: null }
+  }
+
+  // The pending row representing the SAME referrer identity (contact wins; else
+  // an account-only pick matches a row with that account and no contact).
+  const keeper = next.contactId
+    ? pending.find(r => r.referrer_contact_id === next.contactId) ?? null
+    : (next.accountId ? pending.find(r => !r.referrer_contact_id && r.referrer_account_id === next.accountId) ?? null : null)
+
+  const cancelIds = pending.filter(r => r.id !== keeper?.id).map(r => r.id)
+
+  if (!keeper) {
+    return { cancelIds, createFor: next, updateAccountId: null }
+  }
+
+  // Same identity kept — if the chosen credit account changed, sync it.
+  const nextAccount = next.accountId ?? null
+  const updateAccountId = (keeper.referrer_account_id ?? null) !== nextAccount
+    ? { id: keeper.id, accountId: nextAccount }
+    : null
+  return { cancelIds, createFor: null, updateAccountId }
 }
 
 export interface CreditReferrerParams {

@@ -445,7 +445,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const refEmail = params.referrer_email ?? null
     let refType = params.referrer_type ?? null
     let refAccountId = params.referrer_account_id ?? null
-    const refContactId = params.referrer_contact_id ?? null
+    let refContactId = params.referrer_contact_id ?? null
     let refCommissionType = params.referrer_commission_type ?? null
     let refCommissionPct = params.referrer_commission_pct ?? null
     let referralAutoFilled = false
@@ -469,6 +469,21 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
           refCommissionPct = refCommissionPct ?? 10
         }
       }
+    }
+
+    // 6b. Inherit the lead's PINNED referrer ids when the caller didn't provide
+    // them, so the offer's referrer matches the lead's (a deterministic credit
+    // target — no name guessing). Runs regardless of the name-autofill gate above.
+    if (params.lead_id && !refContactId && !refAccountId) {
+      const { data: leadRef } = await supabaseAdmin
+        .from("leads")
+        .select("referrer_contact_id, referrer_account_id")
+        .eq("id", params.lead_id)
+        .maybeSingle()
+      const lr = leadRef as { referrer_contact_id: string | null; referrer_account_id: string | null } | null
+      if (lr?.referrer_contact_id) refContactId = lr.referrer_contact_id
+      if (lr?.referrer_account_id) refAccountId = lr.referrer_account_id
+      if ((lr?.referrer_contact_id || lr?.referrer_account_id) && !refType) refType = "client"
     }
 
     // 7. Currency + bank details

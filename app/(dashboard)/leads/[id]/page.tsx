@@ -15,6 +15,7 @@ import { LeadLifecycleBar } from './components/lead-lifecycle-bar'
 import { LeadNotesEditor } from './components/lead-notes-editor'
 import { CallSummaryCard } from './components/call-summary-card'
 import { EditableField } from './components/editable-field'
+import { LeadReferrerField } from './components/lead-referrer-field'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
@@ -303,10 +304,15 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                 />
               </dd>
             </div>
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col gap-1">
               <dt className="text-muted-foreground">Referrer</dt>
               <dd>
-                <EditableField leadId={lead.id} field="referrer_name" value={lead.referrer_name} clearable placeholder="Name" />
+                <LeadReferrerField
+                  leadId={lead.id}
+                  initialName={lead.referrer_name}
+                  initialContactId={lead.referrer_contact_id}
+                  initialAccountId={lead.referrer_account_id}
+                />
                 {offer?.referrer_name && offer.referrer_name !== lead.referrer_name && (
                   <span className="text-[10px] text-zinc-400 block mt-0.5">
                     Offer: {offer.referrer_name}{offer.referrer_type ? ` (${offer.referrer_type})` : ''}

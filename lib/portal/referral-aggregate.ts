@@ -69,6 +69,29 @@ export function formatMoney(amount: number | null | undefined, currency: string 
   return `${currencySymbol(currency)}${Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`
 }
 
+/**
+ * Map a referred LEAD's funnel status to a badge for the referrer's portal
+ * Referral page, so the referrer sees where the person they referred is in the
+ * journey (Call Done → Offer Sent → Paid …). A Lost lead keeps showing "Lost"
+ * (per Antonio). Unknown/empty statuses fall back to the raw value in grey.
+ * Pure — unit tested.
+ */
+export function leadStatusBadge(status: string | null | undefined): { label_en: string; label_it: string; color: string } {
+  const map: Record<string, { label_en: string; label_it: string; color: string }> = {
+    'New': { label_en: 'New', label_it: 'Nuovo', color: 'bg-zinc-100 text-zinc-700' },
+    'Call Scheduled': { label_en: 'Call Scheduled', label_it: 'Call fissata', color: 'bg-blue-100 text-blue-800' },
+    'Call Done': { label_en: 'Call Done', label_it: 'Call fatta', color: 'bg-indigo-100 text-indigo-800' },
+    'Offer Sent': { label_en: 'Offer Sent', label_it: 'Offerta inviata', color: 'bg-amber-100 text-amber-800' },
+    'Negotiating': { label_en: 'Negotiating', label_it: 'In trattativa', color: 'bg-orange-100 text-orange-800' },
+    'Paid': { label_en: 'Paid', label_it: 'Pagato', color: 'bg-emerald-100 text-emerald-800' },
+    'Converted': { label_en: 'Converted', label_it: 'Convertito', color: 'bg-emerald-100 text-emerald-800' },
+    'Lost': { label_en: 'Lost', label_it: 'Perso', color: 'bg-red-100 text-red-800' },
+    'Suspended': { label_en: 'Suspended', label_it: 'Sospeso', color: 'bg-zinc-100 text-zinc-500' },
+  }
+  const key = (status || '').trim()
+  return map[key] ?? { label_en: key || 'Pending', label_it: key || 'In attesa', color: 'bg-zinc-100 text-zinc-700' }
+}
+
 export interface EarnedRow {
   credited_amount: number | null
   paid_amount: number | null

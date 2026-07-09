@@ -47,7 +47,7 @@ export default async function PortalReferralsPage() {
     .from('referrals')
     .select(`
       id, referred_name, status, commission_amount, commission_currency,
-      credited_amount, paid_amount, created_at,
+      credited_amount, paid_amount, created_at, referred_lead_id,
       referred_account:accounts!referrals_referred_account_id_fkey(company_name)
     `)
     .eq('is_test', false)
@@ -58,6 +58,18 @@ export default async function PortalReferralsPage() {
     : referralQuery.eq('referrer_contact_id', contactId)
 
   const { data: referrals } = await referralQuery
+
+  // Fetch the LIVE funnel status of each referred lead so the referrer sees the
+  // journey (Call Done → Offer Sent → Paid). Batched.
+  const referredLeadIds = Array.from(new Set((referrals ?? []).map(r => (r as { referred_lead_id: string | null }).referred_lead_id).filter(Boolean) as string[]))
+  const leadStatusById = new Map<string, string>()
+  if (referredLeadIds.length > 0) {
+    const { data: leadRows } = await supabaseAdmin
+      .from('leads')
+      .select('id, status')
+      .in('id', referredLeadIds)
+    for (const l of leadRows ?? []) leadStatusById.set(l.id, l.status as string)
+  }
 
   const referralIds = (referrals ?? []).map(r => r.id)
 
@@ -70,17 +82,21 @@ export default async function PortalReferralsPage() {
         .order('created_at', { ascending: false })
     : { data: [] }
 
-  const referralRows = (referrals ?? []).map(r => ({
-    id: r.id,
-    referred_name: r.referred_name,
-    company_name: (r.referred_account as unknown as { company_name: string } | null)?.company_name ?? null,
-    status: r.status,
-    commission_amount: r.commission_amount,
-    commission_currency: r.commission_currency || 'EUR',
-    credited_amount: r.credited_amount,
-    paid_amount: r.paid_amount,
-    created_at: r.created_at,
-  }))
+  const referralRows = (referrals ?? []).map(r => {
+    const leadId = (r as { referred_lead_id: string | null }).referred_lead_id
+    return {
+      id: r.id,
+      referred_name: r.referred_name,
+      company_name: (r.referred_account as unknown as { company_name: string } | null)?.company_name ?? null,
+      status: r.status,
+      lead_status: leadId ? (leadStatusById.get(leadId) ?? null) : null,
+      commission_amount: r.commission_amount,
+      commission_currency: r.commission_currency || 'EUR',
+      credited_amount: r.credited_amount,
+      paid_amount: r.paid_amount,
+      created_at: r.created_at,
+    }
+  })
 
   const payoutRows = (payouts ?? []).map(p => ({
     id: p.id,

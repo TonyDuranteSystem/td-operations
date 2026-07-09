@@ -7362,6 +7362,8 @@ export type Database = {
           offer_year1_currency: Database["public"]["Enums"]["currency"] | null
           phone: string | null
           reason: string | null
+          referrer_account_id: string | null
+          referrer_contact_id: string | null
           referrer_name: string | null
           referrer_partner_id: string | null
           source: string | null
@@ -7402,6 +7404,8 @@ export type Database = {
           offer_year1_currency?: Database["public"]["Enums"]["currency"] | null
           phone?: string | null
           reason?: string | null
+          referrer_account_id?: string | null
+          referrer_contact_id?: string | null
           referrer_name?: string | null
           referrer_partner_id?: string | null
           source?: string | null
@@ -7442,6 +7446,8 @@ export type Database = {
           offer_year1_currency?: Database["public"]["Enums"]["currency"] | null
           phone?: string | null
           reason?: string | null
+          referrer_account_id?: string | null
+          referrer_contact_id?: string | null
           referrer_name?: string | null
           referrer_partner_id?: string | null
           source?: string | null

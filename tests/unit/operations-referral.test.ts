@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-syntax */
 import { describe, it, expect, vi } from "vitest"
-import { createPendingReferral, creditReferrerForLead } from "@/lib/operations/referral"
+import { createPendingReferral, creditReferrerForLead, reconcilePendingReferral, type PendingReferralRow } from "@/lib/operations/referral"
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 // Mock the invoice creator — guard-branch tests never reach it; the happy path
@@ -13,6 +13,7 @@ function builder(result: unknown) {
   const b: Record<string, unknown> = {
     select: () => b,
     eq: () => b,
+    neq: () => b,
     insert: () => b,
     update: () => b,
     limit: () => b,
@@ -73,6 +74,76 @@ describe("createPendingReferral", () => {
     ])
     const res = await createPendingReferral(base, s)
     expect(res).toEqual({ created: false, reason: "error", detail: "boom" })
+  })
+})
+
+describe("createPendingReferral — referrer variants", () => {
+  it("returns missing_referrer when neither contact nor account is given", async () => {
+    const s = supa([])
+    const res = await createPendingReferral(
+      { referredLeadId: "lead-1", referredName: "X", referredEmail: "x@y.com" },
+      s,
+    )
+    expect(res).toEqual({ created: false, reason: "missing_referrer" })
+  })
+
+  it("creates an account-only referral (no self-referral email check)", async () => {
+    // Account path skips the contacts email query: 1) dedup 2) insert.
+    const s = supa([
+      { data: [] }, // dedup: none
+      { data: { id: "r-acc" } }, // insert
+    ])
+    const res = await createPendingReferral(
+      { referrerAccountId: "acct-9", referredLeadId: "lead-1", referredName: "X", referredEmail: "x@y.com" },
+      s,
+    )
+    expect(res).toEqual({ created: true, id: "r-acc" })
+  })
+})
+
+describe("reconcilePendingReferral", () => {
+  const row = (o: Partial<PendingReferralRow>): PendingReferralRow => ({
+    id: "r", referrer_contact_id: null, referrer_account_id: null, status: "pending", ...o,
+  })
+
+  it("cancels all pending rows and creates nothing when cleared", () => {
+    const existing = [row({ id: "a", referrer_contact_id: "c1" })]
+    expect(reconcilePendingReferral(existing, null)).toEqual({ cancelIds: ["a"], createFor: null, updateAccountId: null })
+  })
+
+  it("keeps a matching pending row and creates nothing", () => {
+    const existing = [row({ id: "a", referrer_contact_id: "c1", referrer_account_id: "acctX" })]
+    expect(reconcilePendingReferral(existing, { contactId: "c1", accountId: "acctX" }))
+      .toEqual({ cancelIds: [], createFor: null, updateAccountId: null })
+  })
+
+  it("syncs the credit account when the same contact's company changes", () => {
+    const existing = [row({ id: "a", referrer_contact_id: "c1", referrer_account_id: "old" })]
+    expect(reconcilePendingReferral(existing, { contactId: "c1", accountId: "new" }))
+      .toEqual({ cancelIds: [], createFor: null, updateAccountId: { id: "a", accountId: "new" } })
+  })
+
+  it("cancels the old pending row and creates for the new referrer", () => {
+    const existing = [row({ id: "a", referrer_contact_id: "c1" })]
+    expect(reconcilePendingReferral(existing, { contactId: "c2", accountId: null }))
+      .toEqual({ cancelIds: ["a"], createFor: { contactId: "c2", accountId: null }, updateAccountId: null })
+  })
+
+  it("never touches a converted/credited row", () => {
+    const existing = [
+      row({ id: "done", referrer_contact_id: "c1", status: "credited" }),
+      row({ id: "p", referrer_contact_id: "c9", status: "pending" }),
+    ]
+    // Switching to c1: the credited row is NOT 'pending' so it's ignored; the
+    // stale pending c9 is cancelled and a fresh c1 link is created.
+    expect(reconcilePendingReferral(existing, { contactId: "c1", accountId: null }))
+      .toEqual({ cancelIds: ["p"], createFor: { contactId: "c1", accountId: null }, updateAccountId: null })
+  })
+
+  it("matches an account-only pick only when the row has no contact", () => {
+    const existing = [row({ id: "a", referrer_account_id: "acct1" })]
+    expect(reconcilePendingReferral(existing, { contactId: null, accountId: "acct1" }))
+      .toEqual({ cancelIds: [], createFor: null, updateAccountId: null })
   })
 })
 
