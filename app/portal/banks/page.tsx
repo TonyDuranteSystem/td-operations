@@ -12,29 +12,52 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getLocale } from '@/lib/portal/i18n'
-import { Landmark, FileText, ShieldAlert, PencilLine, ExternalLink } from 'lucide-react'
+import { Landmark, FileText, ShieldAlert, PencilLine, ExternalLink, ArrowRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
 interface BankOption {
   name: string
-  /** Official site — opens in a new tab. */
+  /**
+   * Where the tile links. For self-service banks this is the provider's
+   * official site (opens in a new tab). For MANAGED banks (Relay, Payset)
+   * this is the internal wizard form URL — same-tab navigation, no new tab.
+   */
   url: string
   /** Currency / positioning tag. */
   tag: string
   descEn: string
   descIt: string
+  /**
+   * Managed = TD prepares and submits the application on the client's behalf.
+   * The tile opens the internal intake form (`/portal/wizard?type=...`)
+   * instead of the bank's own site. Relay + Payset only — this is the flow
+   * the team still runs (Antonio confirmed 2026-07-08). Self-service banks
+   * omit this flag and link out to the provider.
+   */
+  managed?: boolean
 }
 
-// Recommended fintech providers. Links go to each provider's official site —
-// verify before changing. Antonio can edit this list freely.
+// Recommended fintech providers. Managed banks (Relay, Payset) open the
+// internal "we submit for you" intake form; the rest link to each provider's
+// official site — verify external URLs before changing. Antonio can edit this
+// list freely.
 const RECOMMENDED_BANKS: BankOption[] = [
   {
     name: 'Relay',
-    url: 'https://relayfi.com/',
+    url: '/portal/wizard?type=banking_relay',
     tag: 'USD',
-    descEn: 'US business banking built for online companies — multiple accounts and cards.',
-    descIt: 'Conto business USA pensato per aziende online — più conti e carte.',
+    managed: true,
+    descEn: 'US business account (USD) — fill in your details and we prepare and submit the application for you.',
+    descIt: 'Conto business USA (USD) — inserisci i tuoi dati e prepariamo e inviamo la richiesta per te.',
+  },
+  {
+    name: 'Payset',
+    url: '/portal/wizard?type=banking_payset',
+    tag: 'EUR / Multi-currency',
+    managed: true,
+    descEn: 'EUR/IBAN multi-currency account — fill in your details and we submit the application for you.',
+    descIt: 'Conto multivaluta EUR/IBAN — inserisci i tuoi dati e inviamo la richiesta per te.',
   },
   {
     name: 'Mercury',
@@ -49,13 +72,6 @@ const RECOMMENDED_BANKS: BankOption[] = [
     tag: 'Multi-currency',
     descEn: 'Multi-currency account for international payments and transfers.',
     descIt: 'Conto multivaluta per pagamenti e bonifici internazionali.',
-  },
-  {
-    name: 'Payset',
-    url: 'https://payset.io/',
-    tag: 'EUR / Multi-currency',
-    descEn: 'Multi-currency accounts with EUR/IBAN — good for European payments.',
-    descIt: 'Conti multivaluta con EUR/IBAN — ottimo per pagamenti europei.',
   },
   {
     name: 'Wise',
@@ -82,6 +98,8 @@ const COPY = {
       'Banks ask what your company does. Give a specific, accurate description — what you sell, to whom, and how you get paid. Vague answers like "consulting" or "online business" slow approval or cause rejections.',
     recommendedTitle: 'Recommended providers',
     apply: 'Apply',
+    applyManaged: 'Start application',
+    managedBadge: 'We submit for you',
     help: 'Not sure which one fits you best? Message us anytime in the portal chat.',
   },
   it: {
@@ -99,6 +117,8 @@ const COPY = {
       'Le banche chiedono cosa fa la tua azienda. Fornisci una descrizione precisa e accurata: cosa vendi, a chi e come vieni pagato. Risposte vaghe come "consulenza" o "business online" rallentano l’approvazione o causano rifiuti.',
     recommendedTitle: 'Provider consigliati',
     apply: 'Candidati',
+    applyManaged: 'Compila richiesta',
+    managedBadge: 'Ce ne occupiamo noi',
     help: 'Non sai quale fa per te? Scrivici quando vuoi nella chat del portale.',
   },
 }
@@ -167,9 +187,15 @@ export default async function PortalBanksPage() {
             <a
               key={bank.name}
               href={bank.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="group flex flex-col gap-1.5 rounded-xl border border-zinc-200 bg-white p-4 transition-colors hover:border-blue-300 hover:bg-blue-50/30"
+              // Managed tiles (Relay, Payset) navigate to the internal intake
+              // form in the same tab. Self-service tiles open the provider's
+              // site in a new tab.
+              {...(bank.managed ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+              className={`group flex flex-col gap-1.5 rounded-xl border p-4 transition-colors ${
+                bank.managed
+                  ? 'border-blue-200 bg-blue-50/40 hover:border-blue-400 hover:bg-blue-50'
+                  : 'border-zinc-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'
+              }`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-semibold text-zinc-900">{bank.name}</span>
@@ -177,10 +203,15 @@ export default async function PortalBanksPage() {
                   {bank.tag}
                 </span>
               </div>
+              {bank.managed && (
+                <span className="inline-flex w-fit items-center rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                  {c.managedBadge}
+                </span>
+              )}
               <p className="text-xs text-zinc-500">{locale === 'it' ? bank.descIt : bank.descEn}</p>
               <span className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-blue-600 group-hover:text-blue-700">
-                {c.apply}
-                <ExternalLink className="h-3 w-3" />
+                {bank.managed ? c.applyManaged : c.apply}
+                {bank.managed ? <ArrowRight className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
               </span>
             </a>
           ))}
