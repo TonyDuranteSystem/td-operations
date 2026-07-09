@@ -740,6 +740,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
                     {isGmail && (
                       <>
+                        <HoverHint label="Share to team chat">
+                          <button
+                            onClick={() => { setShareFromBulk(false); setShareItems([buildEmailShareItem(selected)]) }}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-700 text-xs font-medium transition-colors"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                            Share
+                          </button>
+                        </HoverHint>
                         <HoverHint label="Archive">
                           <button
                             onClick={() => emailActionMutation.mutate({ action: 'archive' })}
@@ -832,14 +841,6 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-600 transition-colors"
                           >
                             <Link2 className="h-4 w-4" />
-                          </button>
-                        </HoverHint>
-                        <HoverHint label="Share to team chat">
-                          <button
-                            onClick={() => { setShareFromBulk(false); setShareItems([buildEmailShareItem(selected)]) }}
-                            className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-600 transition-colors"
-                          >
-                            <Send className="h-4 w-4" />
                           </button>
                         </HoverHint>
                         <HoverHint label="Delete (moves to Trash)">
