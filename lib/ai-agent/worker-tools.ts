@@ -406,6 +406,11 @@ export const SEND_EMAIL_TOOL: ToolDef = {
       body: { type: "string", description: "Email body in plain text." },
       from: { type: "string", enum: ["support", "antonio"], description: "Mailbox to send from: 'support' (default) or 'antonio'." },
       reply_to_message_id: { type: "string", description: "Gmail message ID to reply to (keeps it in the same thread). Must belong to the `from` mailbox." },
+      attach: {
+        type: "array",
+        items: { type: "string" },
+        description: "Inbox only. Refs (from the FILES THE STAFF MEMBER ATTACHED list) of the staff's uploaded file(s) to attach to this email. When set, the email is PREPARED and the staff confirms with a Confirm button — it is NOT sent immediately. You may only attach a file the staff uploaded to THIS message; never a file from an email/attachment or from Drive.",
+      },
     },
     required: ["to", "subject", "body"],
   },
@@ -1808,6 +1813,36 @@ export async function executeWorkerTool(
     const cleaned: Record<string, unknown> = { ...params }
     if (typeof cleaned.body === "string") cleaned.body = stripDraftMarkdown(cleaned.body)
     if (typeof cleaned.subject === "string") cleaned.subject = stripDraftMarkdown(cleaned.subject)
+
+    // ATTACHMENT PATH: if the model asked to attach files, the worker does NOT
+    // send. It freezes a "prepared send" and the staff confirms with a Confirm
+    // button in the panel — the human is the second gate before a file leaves.
+    // Attachable files are ONLY the staff's uploads THIS turn (emailSendPrep.sendable),
+    // never a Drive id, never an inbound-email attachment. Refuse if attach is asked
+    // for on a surface that didn't set up the prep context.
+    const attach = Array.isArray(params.attach) ? params.attach.filter((r): r is string => typeof r === "string") : []
+    if (attach.length > 0) {
+      const prep = sendContext?.emailSendPrep
+      if (!prep) {
+        return `❌ Attaching a file is only available in the Inbox worker. I can't attach here.`
+      }
+      const { prepareWorkerEmailSend } = await import("@/lib/inbox/worker-email-send")
+      const result = await prepareWorkerEmailSend({
+        threadUuid: prep.threadUuid,
+        gmailThreadId: prep.gmailThreadId,
+        mailbox: prep.mailbox,
+        replyToMessageId: typeof cleaned.reply_to_message_id === "string" ? cleaned.reply_to_message_id : prep.defaultReplyToMessageId,
+        to: typeof cleaned.to === "string" ? cleaned.to : "",
+        subject: typeof cleaned.subject === "string" ? cleaned.subject : "",
+        body: typeof cleaned.body === "string" ? cleaned.body : "",
+        attachRefs: attach,
+        sendable: prep.sendable,
+        allowedRecipients: sendContext?.pinnedEmailRecipients ?? [],
+        actor: sendContext?.actor ?? "unknown",
+      })
+      return result.message
+    }
+
     const emailResult = await executeTool("send_email", cleaned)
     // Attribution audit (fire-and-forget): record WHICH staff member triggered a
     // CRM-panel email send. Only on a real success (the shared tool returns
@@ -2306,6 +2341,17 @@ export interface CallWorkerOptions {
    * an inbound email could aim it. This is the floor under the prompt rule.
    */
   pinnedEmailRecipients?: string[]
+  /**
+   * Inbox worker only: context to PREPARE an email-with-attachment (the Confirm
+   * flow). `sendable` is the staff's uploads this turn — the only attachable files.
+   */
+  emailSendPrep?: {
+    threadUuid: string
+    gmailThreadId?: string | null
+    mailbox: string
+    defaultReplyToMessageId?: string | null
+    sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+  }
 }
 
 /** One email attachment the worker may open, resolved server-side. */
@@ -2342,6 +2388,18 @@ export interface WorkerSendContext {
    * content; a server-observed attempt cannot.
    */
   capturedOffThreadAttempts?: string[]
+  /**
+   * Present only on the Inbox worker: everything needed to PREPARE an
+   * email-with-attachment for staff confirmation. `sendable` is the staff's
+   * uploads THIS turn — the only files the worker may attach.
+   */
+  emailSendPrep?: {
+    threadUuid: string
+    gmailThreadId?: string | null
+    mailbox: string
+    defaultReplyToMessageId?: string | null
+    sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
+  }
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -2875,7 +2933,8 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     opts.sendActor ||
     opts.pinnedPortalRecipient ||
     opts.pinnedEmailAttachments?.length ||
-    opts.pinnedEmailRecipients !== undefined
+    opts.pinnedEmailRecipients !== undefined ||
+    opts.emailSendPrep
   const capturedOffThreadAttempts: string[] = []
   const sendContext: WorkerSendContext | undefined = hasPin
     ? {
@@ -2886,6 +2945,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
         ...(opts.pinnedEmailRecipients !== undefined
           ? { pinnedEmailRecipients: opts.pinnedEmailRecipients }
           : {}),
+        ...(opts.emailSendPrep ? { emailSendPrep: opts.emailSendPrep } : {}),
       }
     : undefined
 

@@ -1,0 +1,275 @@
+/**
+ * Inbox worker "send an email WITH an attachment" — prepare + confirm.
+ *
+ * The worker never sends a file directly. Flow:
+ *   1. prepareWorkerEmailSend(): resolves the recipient (must be on the thread),
+ *      resolves each attachment from the staff's THIS-TURN uploads (private
+ *      bucket, never Drive, never an inbound-email file), enforces the outbound
+ *      size limit, and freezes the whole payload in `worker_prepared_sends`
+ *      (status='pending'). Returns a SERVER-AUTHORED confirmation line.
+ *   2. The panel shows a Confirm/Cancel button built from that row.
+ *   3. confirmWorkerEmailSend(): an explicit staff click re-validates everything
+ *      and dispatches the frozen payload. The human — not the model — is gate 2.
+ *
+ * Text-only worker sends do NOT come through here; they send immediately with the
+ * recipient pin. This path exists only for the file case.
+ */
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { buildRawEmail } from "@/lib/email/raw-mime"
+import { checkRecipientsAllowed } from "@/lib/inbox/email-recipients"
+import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
+
+/**
+ * Outbound cap on the SUM of attachment bytes (raw, pre-base64). Gmail rejects a
+ * message over ~25 MB and base64 inflates ~33%, so 18 MB of raw attachments
+ * leaves headroom for the body + encoding. Distinct from the 20 MB READ cap.
+ */
+export const MAX_OUTBOUND_ATTACHMENT_BYTES = 18 * 1024 * 1024
+
+/** One file the staff uploaded THIS turn that the worker may attach. */
+export interface SendableUpload {
+  ref: string
+  path: string
+  name: string
+  contentType?: string
+  size?: number
+}
+
+export interface PrepareInput {
+  threadUuid: string
+  gmailThreadId?: string | null
+  mailbox: string
+  replyToMessageId?: string | null
+  /** Model-supplied recipient — validated against the pin here. */
+  to: string
+  subject: string
+  body: string
+  /** Refs the model asked to attach; resolved against `sendable`. */
+  attachRefs: string[]
+  /** The ONLY files attachable — this turn's staff uploads. */
+  sendable: SendableUpload[]
+  /** Addresses on the open thread; recipient must be one of these. */
+  allowedRecipients: string[]
+  actor: string
+}
+
+export type PrepareResult =
+  | { ok: true; preparedId: string; message: string }
+  | { ok: false; message: string }
+
+const SENDERS: Record<string, { email: string; name: string }> = {
+  "support@tonydurante.us": { email: "support@tonydurante.us", name: "Tony Durante" },
+  "antonio.durante@tonydurante.us": { email: "antonio.durante@tonydurante.us", name: "Antonio Durante" },
+}
+
+function mb(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/**
+ * Resolve + validate + freeze. Does NOT send. Returns a confirmation string the
+ * worker relays; the actual payload is in the DB row for the confirm endpoint.
+ */
+export async function prepareWorkerEmailSend(input: PrepareInput): Promise<PrepareResult> {
+  // Recipient must be on the thread (defence in depth — the executor also checks).
+  const verdict = checkRecipientsAllowed(input.to, input.allowedRecipients)
+  if (verdict.ok === false) {
+    return {
+      ok: false,
+      message: `❌ Can't send: ${verdict.rejected.join(", ")} is not on this email thread. You may only email people already on it.`,
+    }
+  }
+
+  // Resolve each ref against the staff's uploads. A ref not in the set — or no
+  // refs at all — is a hard refusal: the model can never attach anything else.
+  if (!input.attachRefs.length) {
+    return { ok: false, message: "❌ No file to attach was found on this message. Drop the file into the panel on the same message you say to send it." }
+  }
+  const resolved: SendableUpload[] = []
+  for (const ref of input.attachRefs) {
+    const hit = input.sendable.find((s) => s.ref === ref)
+    if (!hit) {
+      const avail = input.sendable.map((s) => `${s.ref} (${s.name})`).join(", ") || "none"
+      return { ok: false, message: `❌ "${ref}" is not a file you attached to this message. Attachable now: ${avail}.` }
+    }
+    if (!isValidWorkerUploadPath(hit.path)) {
+      return { ok: false, message: `❌ "${hit.name}" can't be attached (invalid upload).` }
+    }
+    resolved.push(hit)
+  }
+
+  // Outbound size guard — sum of raw bytes, before we build anything.
+  const totalBytes = resolved.reduce((n, r) => n + (r.size ?? 0), 0)
+  if (totalBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) {
+    return {
+      ok: false,
+      message: `❌ Too large to email: ${mb(totalBytes)} of attachments (max ${mb(MAX_OUTBOUND_ATTACHMENT_BYTES)}). Send it another way.`,
+    }
+  }
+
+  // Freeze the exact payload the staff will confirm.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabaseAdmin as any)
+    .from("worker_prepared_sends")
+    .insert({
+      thread_uuid: input.threadUuid,
+      gmail_thread_id: input.gmailThreadId ?? null,
+      mailbox: input.mailbox,
+      reply_to_message_id: input.replyToMessageId ?? null,
+      to_address: input.to,
+      subject: input.subject,
+      body: input.body,
+      attachments: resolved.map((r) => ({ path: r.path, name: r.name, content_type: r.contentType, size: r.size })),
+      actor: input.actor,
+      status: "pending",
+    })
+    .select("id")
+    .single()
+  if (error || !data) {
+    console.error("[worker-email-send] prepare insert failed:", error)
+    return { ok: false, message: "❌ Couldn't prepare the email — please try again." }
+  }
+
+  const fileList = resolved.map((r) => `${r.name} (${mb(r.size ?? 0)})`).join(", ")
+  return {
+    ok: true,
+    preparedId: data.id,
+    message: `Ready to send to ${input.to} with ${fileList} attached. Ask the staff member to press Confirm to send — I won't send it on my own.`,
+  }
+}
+
+export type ConfirmResult =
+  | { ok: true; gmailMessageId: string; to: string }
+  | { ok: false; reason: string }
+
+/**
+ * Dispatch a prepared send after an explicit staff Confirm. Re-validates
+ * everything and sends the FROZEN payload. Idempotent: a second confirm on an
+ * already-sent row is refused (double-send guard).
+ */
+export async function confirmWorkerEmailSend(preparedId: string, actorEmail: string): Promise<ConfirmResult> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+
+  // Claim the row: pending → sent in one guarded update (TOCTOU + double-send).
+  const { data: claimed } = await db
+    .from("worker_prepared_sends")
+    .update({ status: "sent", resolved_at: new Date().toISOString() })
+    .eq("id", preparedId)
+    .eq("status", "pending")
+    .select("*")
+    .single()
+  if (!claimed) {
+    return { ok: false, reason: "This email was already sent or cancelled." }
+  }
+
+  try {
+    const { gmailGet, gmailPost, getHeader } = await import("@/lib/gmail")
+    const { plainTextToParagraphs } = await import("@/lib/operations/email")
+    const { APP_BASE_URL } = await import("@/lib/config")
+
+    const sender = SENDERS[claimed.mailbox] ?? SENDERS["support@tonydurante.us"]
+
+    // Re-validate recipient is still on the thread (the thread may have changed
+    // since prepare). Fail closed — never send to an address that dropped off.
+    if (claimed.gmail_thread_id) {
+      try {
+        const thread = (await gmailGet(`/threads/${claimed.gmail_thread_id}`, { format: "metadata" }, sender.email)) as {
+          messages?: Array<{ payload?: { headers?: Array<{ name: string; value: string }> } }>
+        }
+        const { collectThreadRecipients } = await import("@/lib/inbox/email-recipients")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const allowed = collectThreadRecipients((thread.messages ?? []) as any)
+        if (checkRecipientsAllowed(claimed.to_address, allowed).ok === false) {
+          await db.from("worker_prepared_sends").update({ status: "cancelled", resolved_at: new Date().toISOString() }).eq("id", preparedId)
+          return { ok: false, reason: `${claimed.to_address} is no longer on this thread — send cancelled for safety.` }
+        }
+      } catch {
+        // couldn't re-read — proceed on the frozen recipient, it was validated at prepare
+      }
+    }
+
+    // Download each frozen attachment from the private bucket by PATH (service key).
+    const files: Array<{ filename: string; contentType?: string; base64: string }> = []
+    let totalBytes = 0
+    for (const att of claimed.attachments as Array<{ path: string; name: string; content_type?: string; size?: number }>) {
+      if (!isValidWorkerUploadPath(att.path)) throw new Error(`invalid attachment path`)
+      const { data, error } = await supabaseAdmin.storage.from(WORKER_UPLOAD_BUCKET).download(att.path)
+      if (error || !data) throw new Error(`couldn't read ${att.name}`)
+      const buf = Buffer.from(await data.arrayBuffer())
+      totalBytes += buf.length
+      files.push({ filename: att.name, contentType: att.content_type, base64: buf.toString("base64") })
+    }
+    if (totalBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) throw new Error("attachments exceed the outbound size limit")
+
+    // Branded HTML — same shell the worker's text sends use.
+    const signoff = sender.email.startsWith("antonio") ? "Antonio Durante" : "The Tony Durante LLC Team"
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
+<div style="text-align:center;padding:4px 0 18px 0;border-bottom:1px solid #e5e7eb;margin-bottom:24px">
+<img src="${APP_BASE_URL}/images/tony-logos.png" alt="Tony Durante LLC — Your Way to Freedom" style="width:100%;max-width:540px;height:auto;display:inline-block" />
+</div>
+${plainTextToParagraphs(claimed.body)}
+<p style="margin-top:24px">Best regards,<br />${signoff}</p>
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px">
+<p style="margin:4px 0"><strong style="color:#1a1a1a">Tony Durante LLC</strong></p>
+<p style="margin:4px 0"><a href="mailto:support@tonydurante.us" style="color:#2563eb;text-decoration:none">support@tonydurante.us</a></p>
+</div>
+</div>`
+
+    // Threading headers.
+    const headerLines = [
+      `From: ${sender.name} <${sender.email}>`,
+      `To: ${claimed.to_address}`,
+      `Subject: =?utf-8?B?${Buffer.from(claimed.subject).toString("base64")}?=`,
+    ]
+    let gmailThreadId: string | undefined
+    if (claimed.reply_to_message_id) {
+      try {
+        const orig = (await gmailGet(
+          `/messages/${claimed.reply_to_message_id}`,
+          { format: "metadata", metadataHeaders: "Message-ID,References" },
+          sender.email,
+        )) as { threadId: string; payload: { headers: Array<{ name: string; value: string }> } }
+        gmailThreadId = orig.threadId
+        const msgId = getHeader(orig.payload.headers, "Message-ID")
+        const refs = getHeader(orig.payload.headers, "References")
+        if (msgId) {
+          headerLines.push(`In-Reply-To: ${msgId}`)
+          headerLines.push(`References: ${refs ? refs + " " : ""}${msgId}`)
+        }
+      } catch {
+        /* send as new if the original can't be read */
+      }
+    }
+
+    const stamp = Date.now()
+    const raw = buildRawEmail(
+      { headerLines, htmlBody: html, plainText: claimed.body, attachments: files },
+      { outer: `outer_${stamp}`, alt: `alt_${stamp}` },
+    )
+    const payload: Record<string, unknown> = { raw }
+    if (gmailThreadId) payload.threadId = gmailThreadId
+
+    const sent = (await gmailPost("/messages/send", payload, sender.email)) as { id?: string }
+    const gmailMessageId = sent?.id ?? ""
+    await db.from("worker_prepared_sends").update({ gmail_message_id: gmailMessageId }).eq("id", preparedId)
+
+    // Audit.
+    try {
+      const { logAction } = await import("@/lib/mcp/action-log")
+      logAction({
+        actor: actorEmail,
+        action_type: "send",
+        table_name: "gmail",
+        summary: `Worker email WITH attachment sent to ${claimed.to_address}: "${String(claimed.subject).slice(0, 80)}" (${files.map((f) => f.filename).join(", ")})`,
+      })
+    } catch { /* non-fatal */ }
+
+    return { ok: true, gmailMessageId, to: claimed.to_address }
+  } catch (err) {
+    // Roll the row back to pending so the staff can retry rather than lose the draft.
+    await db.from("worker_prepared_sends").update({ status: "pending", resolved_at: null }).eq("id", preparedId).eq("status", "sent")
+    console.error("[worker-email-send] confirm/dispatch failed:", err)
+    return { ok: false, reason: err instanceof Error ? err.message : "send failed" }
+  }
+}

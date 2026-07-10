@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, Send, X } from 'lucide-react'
+import { Bot, Loader2, Paperclip, Send, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import { WorkerComposer } from '@/components/chat/worker-composer'
@@ -32,6 +32,13 @@ interface ChatMsg {
   pendingSendTo?: string
 }
 
+interface PreparedSend {
+  id: string
+  to: string
+  subject: string
+  attachments: Array<{ name: string; size?: number }>
+}
+
 interface WorkerChatPanelProps {
   conversation: InboxConversation
   mailbox?: string
@@ -43,12 +50,45 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null)
+  const [confirming, setConfirming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
   // The staff member's most recent request text — re-sent on a "Confirm & send"
   // click so the worker re-drafts and now actually sends to the confirmed address.
   const lastUserTextRef = useRef('')
   const attachments = useWorkerAttachments()
+
+  const resolvePreparedSend = async (action: 'confirm' | 'cancel') => {
+    if (!preparedSend || confirming) return
+    setConfirming(true)
+    try {
+      const res = await fetch('/api/inbox/worker-chat/confirm-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prepared_id: preparedSend.id, action }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'worker',
+          text: action === 'confirm'
+            ? `✅ Sent to ${preparedSend.to} with ${preparedSend.attachments.map(a => a.name).join(', ')} attached.`
+            : 'Cancelled — nothing was sent.',
+        },
+      ])
+      setPreparedSend(null)
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'worker', text: `⚠️ ${err instanceof Error && err.message ? err.message : 'Could not complete.'}` },
+      ])
+    } finally {
+      setConfirming(false)
+    }
+  }
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
 
@@ -129,7 +169,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; pendingSend?: { to?: string } | null } = {}
+      let data: { reply?: string; error?: string; pendingSend?: { to?: string } | null; preparedSend?: PreparedSend | null } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -140,11 +180,14 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         )
       }
       sentContextRef.current = true
+      // Off-thread recipient confirm (per-message button) — the other feature.
       setMessages(prev => [...prev, {
         role: 'worker',
         text: data.reply || '(empty reply)',
         ...(data.pendingSend?.to ? { pendingSendTo: data.pendingSend.to } : {}),
       }])
+      // Attachment confirm (Confirm & send box) — this feature.
+      if (data.preparedSend) setPreparedSend(data.preparedSend)
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -217,6 +260,41 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           </div>
         )}
       </div>
+
+      {preparedSend && (
+        <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
+          <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Confirm before sending</p>
+          <p className="text-sm text-zinc-800">
+            Email <span className="font-medium">{preparedSend.to}</span>
+            {preparedSend.subject ? <> — “{preparedSend.subject}”</> : null}
+          </p>
+          <div className="mt-1.5 space-y-1">
+            {preparedSend.attachments.map((a, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs text-zinc-600">
+                <Paperclip className="h-3 w-3 shrink-0" />
+                <span className="font-medium truncate">{a.name}</span>
+                {typeof a.size === 'number' && <span className="text-zinc-400">{(a.size / 1024 / 1024).toFixed(1)} MB</span>}
+              </div>
+            ))}
+          </div>
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              onClick={() => resolvePreparedSend('confirm')}
+              disabled={confirming}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {confirming ? 'Sending…' : 'Confirm & send'}
+            </button>
+            <button
+              onClick={() => resolvePreparedSend('cancel')}
+              disabled={confirming}
+              className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <WorkerComposer
         placeholder="Ask the worker about this email…"

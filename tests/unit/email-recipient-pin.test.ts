@@ -8,8 +8,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
  */
 
 const executeTool = vi.hoisted(() => vi.fn())
+const prepareWorkerEmailSend = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/ai-agent/tools", () => ({ executeTool, AGENT_TOOLS: [] }))
 vi.mock("@/lib/mcp/action-log", () => ({ logAction: vi.fn() }))
+vi.mock("@/lib/inbox/worker-email-send", () => ({ prepareWorkerEmailSend }))
 
 import {
   extractEmailAddresses,
@@ -111,6 +113,8 @@ describe("executeWorkerTool — send_email recipient pin", () => {
   beforeEach(() => {
     executeTool.mockReset()
     executeTool.mockResolvedValue('{"success":true}')
+    prepareWorkerEmailSend.mockReset()
+    prepareWorkerEmailSend.mockResolvedValue({ ok: true, preparedId: "p1", message: "Ready to send. Press Confirm." })
   })
 
   it("sends to an address on the thread", async () => {
@@ -236,5 +240,55 @@ describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm &
     })
     expect(r).toMatch(/CANNOT be bypassed/i)
     expect(r).toMatch(/Confirm & send/i)
+  })
+})
+
+describe("executeWorkerTool — send_email with attachment PREPARES, never sends", () => {
+  const available = new Set(["send_email"])
+  const withAttach = { to: "client@acme.com", subject: "Re: LLC", body: "here it is", attach: ["up1"] }
+  const prep = {
+    threadUuid: "t1",
+    gmailThreadId: "gt1",
+    mailbox: "support@tonydurante.us",
+    sendable: [{ ref: "up1", path: "worker-chat/x.pdf", name: "affidavit.pdf", size: 100 }],
+  }
+
+  beforeEach(() => {
+    executeTool.mockReset()
+    executeTool.mockResolvedValue('{"success":true}')
+    prepareWorkerEmailSend.mockReset()
+    prepareWorkerEmailSend.mockResolvedValue({ ok: true, preparedId: "p1", message: "Ready — press Confirm." })
+  })
+
+  it("routes an attach request to PREPARE and never calls the real sender", async () => {
+    const r = await executeWorkerTool("send_email", withAttach, available, null, null, {
+      pinnedEmailRecipients: ["client@acme.com"],
+      emailSendPrep: prep,
+    })
+    expect(prepareWorkerEmailSend).toHaveBeenCalledOnce()
+    expect(executeTool).not.toHaveBeenCalled() // NOT sent
+    expect(r).toMatch(/Confirm/)
+  })
+
+  it("refuses attach when the surface has no prep context (not the Inbox)", async () => {
+    const r = await executeWorkerTool("send_email", withAttach, available, null, null, {
+      pinnedEmailRecipients: ["client@acme.com"],
+    })
+    expect(r).toMatch(/only available in the Inbox/i)
+    expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
+    expect(executeTool).not.toHaveBeenCalled()
+  })
+
+  it("still applies the recipient pin BEFORE preparing (off-thread + attach = refused, no prepare)", async () => {
+    const r = await executeWorkerTool(
+      "send_email",
+      { ...withAttach, to: "evil@attacker.com" },
+      available,
+      null,
+      null,
+      { pinnedEmailRecipients: ["client@acme.com"], emailSendPrep: prep },
+    )
+    expect(r).toMatch(/Refused/)
+    expect(prepareWorkerEmailSend).not.toHaveBeenCalled()
   })
 })

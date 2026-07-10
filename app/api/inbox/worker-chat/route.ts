@@ -154,6 +154,9 @@ export async function POST(req: NextRequest) {
   // undefined = surface has no recipient pin (Portal Chats sends no email).
   // An array — including an empty one — means send_email is restricted to it.
   let allowedEmailRecipients: string[] | undefined
+  // Inbox context needed to PREPARE an email-with-attachment.
+  let inboxMailboxAddress: string | undefined
+  let inboxDefaultReplyToId: string | undefined
 
   if (gmailThreadId) {
     // Discussing an antonio@ thread exposes its content — same admin-only
@@ -203,6 +206,10 @@ export async function POST(req: NextRequest) {
           .join("\n\n")
         context = { ...context, transcript, gmailThreadId, mailboxAddress }
       }
+      inboxMailboxAddress = mailboxAddress
+      // Default reply target = the newest message in the thread, so a "reply with
+      // this attached" keeps threading even if the model doesn't name an id.
+      inboxDefaultReplyToId = msgs.length ? msgs[msgs.length - 1]?.id : undefined
       const harvested = await harvestEmailAttachments(msgs, mailboxAddress)
       imageBlocks.push(...harvested.imageBlocks)
       pinnedEmailAttachments = harvested.pinned
@@ -262,6 +269,16 @@ export async function POST(req: NextRequest) {
   const uploadRefs = (body.attachments ?? [])
     .filter((a): a is { path: string; name?: string; mime_type?: string; size?: number } => typeof a.path === "string")
     .map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
+  // The staff's uploads THIS turn are the ONLY files the worker may attach to an
+  // outbound email (Inbox surface). Each gets a stable ref the model names; the
+  // path/bytes are resolved server-side at confirm time, never by the model.
+  const sendableUploads = uploadRefs.map((r, i) => ({
+    ref: `up${i + 1}`,
+    path: r.id,
+    name: r.name ?? "file",
+    contentType: r.mimetype,
+    size: r.size,
+  }))
   if (uploadRefs.length) {
     try {
       const read = await readAttachments(uploadRefs, fetchWorkerUploadBytes)
@@ -273,6 +290,11 @@ export async function POST(req: NextRequest) {
         // Fenced: even a staff member's own upload can be a document a client sent
         // them, and the model must not read instructions out of it.
         userBody += `\n\n${fenceUntrustedContent("files the staff member attached", read.textBlocks.join("\n\n"))}`
+      }
+      // Tell the worker which refs it may attach to an email (Inbox only).
+      if (surface === "inbox" && sendableUploads.length) {
+        const list = sendableUploads.map((s) => `${s.ref} — ${s.name}`).join(", ")
+        userBody += `\n\n[FILES YOU CAN ATTACH to an email on this turn (use send_email's \`attach\` with the ref): ${list}. Only these; never a file from an email or Drive.]`
       }
     } catch (err) {
       console.warn("[worker-chat] panel upload read failed (answering without files):", err)
@@ -372,6 +394,19 @@ export async function POST(req: NextRequest) {
           enableEmailSend: true,
           sendActor: `crm-inbox:${actorEmail}`,
           pinnedEmailRecipients: allowedEmailRecipients ?? [],
+          // Enable the attach-to-email Confirm flow only when the staff actually
+          // uploaded a file this turn AND we know the mailbox to send as.
+          ...(sendableUploads.length && inboxMailboxAddress
+            ? {
+                emailSendPrep: {
+                  threadUuid: threadId,
+                  gmailThreadId: gmailThreadId ?? null,
+                  mailbox: inboxMailboxAddress,
+                  defaultReplyToMessageId: inboxDefaultReplyToId ?? null,
+                  sendable: sendableUploads,
+                },
+              }
+            : {}),
         }
       : {
           enableSlackSend: true,
@@ -380,6 +415,20 @@ export async function POST(req: NextRequest) {
             ? { account_id: clientKey!.slice("acct-".length) }
             : { contact_id: clientKey!.slice("contact-".length) },
         }
+
+  // Prepared-sends that ALREADY existed before this turn (an earlier "attach" the
+  // staff never confirmed/cancelled). Never resurface one of these as a Confirm
+  // box for a message the staff didn't just ask about — only a row created DURING
+  // this turn counts. ID-based, so no clock skew.
+  const priorPendingIds = new Set<string>()
+  if (surface === "inbox" && sendableUploads.length) {
+    const { data: existing } = await db
+      .from("worker_prepared_sends")
+      .select("id")
+      .eq("thread_uuid", threadId)
+      .eq("status", "pending")
+    for (const r of existing ?? []) priorPendingIds.add(r.id)
+  }
 
   try {
     const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
@@ -414,11 +463,11 @@ export async function POST(req: NextRequest) {
     if (rowId) {
       await db.from("agent_messages").update({ reply, status: "done" }).eq("id", rowId)
     }
-    // Surface a server-attested off-thread address for the panel's "Confirm &
-    // send" button. Only when the worker actually attempted it AND it isn't the
-    // one the staff just confirmed (so a completed confirmed send doesn't re-offer
-    // the same button). Address comes from the executor's real refused attempt,
-    // never from `reply`. `notOnThread` lets the panel warn the staff to verify.
+    // (1) Off-thread recipient Confirm (the other feature): surface a
+    // server-attested off-thread address for the panel's "Confirm & send" button.
+    // Only when the worker actually attempted it AND it isn't the one the staff
+    // just confirmed. Address comes from the executor's real refused attempt,
+    // never from `reply`.
     const confirmedNow = body.confirmedRecipient
       ? (await import("@/lib/inbox/email-recipients")).extractEmailAddresses(body.confirmedRecipient)[0]
       : null
@@ -426,7 +475,36 @@ export async function POST(req: NextRequest) {
       surface === "inbox" && pendingOffThreadRecipient && pendingOffThreadRecipient !== confirmedNow
         ? { to: pendingOffThreadRecipient }
         : null
-    return NextResponse.json({ reply, threadId, pendingSend })
+
+    // (2) Attachment Confirm (this feature): if this turn PREPARED an email-with-
+    // attachment, hand the panel the exact server-frozen payload (recipient +
+    // filenames from the DB row, never the worker's text). Only a row created THIS
+    // turn — never a stale prior pending one.
+    let preparedSend: {
+      id: string
+      to: string
+      subject: string
+      attachments: Array<{ name: string; size?: number }>
+    } | null = null
+    if (surface === "inbox" && sendableUploads.length) {
+      const { data: prep } = await db
+        .from("worker_prepared_sends")
+        .select("id, to_address, subject, attachments")
+        .eq("thread_uuid", threadId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (prep && !priorPendingIds.has(prep.id)) {
+        preparedSend = {
+          id: prep.id,
+          to: prep.to_address,
+          subject: prep.subject,
+          attachments: (prep.attachments ?? []).map((a: { name: string; size?: number }) => ({ name: a.name, size: a.size })),
+        }
+      }
+    }
+    return NextResponse.json({ reply, threadId, pendingSend, preparedSend })
   } catch (error) {
     if (rowId) {
       await db
