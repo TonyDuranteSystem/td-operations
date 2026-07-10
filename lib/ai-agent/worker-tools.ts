@@ -1823,8 +1823,13 @@ export async function executeWorkerTool(
     const attach = Array.isArray(params.attach) ? params.attach.filter((r): r is string => typeof r === "string") : []
     if (attach.length > 0) {
       const prep = sendContext?.emailSendPrep
-      if (!prep) {
-        return `❌ Attaching a file is only available in the Inbox worker. I can't attach here.`
+      if (!prep || !prep.sendable.length) {
+        // Two cases: not the Inbox (no prep at all), or the Inbox but the staff
+        // didn't attach a file to THIS message (uploads are per-message; the
+        // composer clears them on send). Tell the staff to re-drop it here.
+        return prep
+          ? `❌ There's no file on this message to attach. Ask the staff member to drop the file into the panel on the same message where they say to send it, then I can attach it.`
+          : `❌ Attaching a file to an email is only available in the Inbox worker.`
       }
       const { prepareWorkerEmailSend } = await import("@/lib/inbox/worker-email-send")
       const result = await prepareWorkerEmailSend({

@@ -26,6 +26,18 @@ import { isValidWorkerUploadPath, WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/at
  */
 export const MAX_OUTBOUND_ATTACHMENT_BYTES = 18 * 1024 * 1024
 
+/** A prepared send older than this can't be confirmed — the draft has gone stale. */
+export const PREPARED_SEND_TTL_MS = 30 * 60 * 1000
+
+/** Per-file hard ceiling at confirm — actual downloaded bytes, not the declared size. */
+export const MAX_OUTBOUND_PER_FILE_BYTES = MAX_OUTBOUND_ATTACHMENT_BYTES
+
+/**
+ * A failure that will ALWAYS fail (bad path, oversize bytes) — the row is
+ * cancelled, not rolled back to pending, so it can't be retried forever.
+ */
+class TerminalSendError extends Error {}
+
 /** One file the staff uploaded THIS turn that the worker may attach. */
 export interface SendableUpload {
   ref: string
@@ -163,6 +175,14 @@ export async function confirmWorkerEmailSend(preparedId: string, actorEmail: str
     return { ok: false, reason: "This email was already sent or cancelled." }
   }
 
+  // Staleness: a prepared send frozen long ago carries an out-of-date subject/body
+  // (the client may have moved on). Refuse an old one rather than send a now-wrong
+  // reply — mark it cancelled so it can't be retried. Nothing has been sent yet.
+  if (claimed.created_at && Date.now() - new Date(claimed.created_at).getTime() > PREPARED_SEND_TTL_MS) {
+    await db.from("worker_prepared_sends").update({ status: "cancelled", resolved_at: new Date().toISOString() }).eq("id", preparedId)
+    return { ok: false, reason: "This draft is too old to send — ask the worker to prepare it again." }
+  }
+
   try {
     const { gmailGet, gmailPost, getHeader } = await import("@/lib/gmail")
     const { plainTextToParagraphs } = await import("@/lib/operations/email")
@@ -190,17 +210,25 @@ export async function confirmWorkerEmailSend(preparedId: string, actorEmail: str
     }
 
     // Download each frozen attachment from the private bucket by PATH (service key).
+    // A bad path or an oversize is a PERMANENT failure — mark cancelled (via
+    // TerminalSendError below) so the row can't be retried forever.
     const files: Array<{ filename: string; contentType?: string; base64: string }> = []
     let totalBytes = 0
     for (const att of claimed.attachments as Array<{ path: string; name: string; content_type?: string; size?: number }>) {
-      if (!isValidWorkerUploadPath(att.path)) throw new Error(`invalid attachment path`)
+      if (!isValidWorkerUploadPath(att.path)) throw new TerminalSendError(`invalid attachment path`)
       const { data, error } = await supabaseAdmin.storage.from(WORKER_UPLOAD_BUCKET).download(att.path)
       if (error || !data) throw new Error(`couldn't read ${att.name}`)
       const buf = Buffer.from(await data.arrayBuffer())
+      // Enforce on ACTUAL bytes, per file AND cumulative, as we go — the declared
+      // size at prepare is client-supplied and untrustworthy. Cancel (don't retry)
+      // on oversize; a too-big file will always be too big.
       totalBytes += buf.length
+      if (buf.length > MAX_OUTBOUND_PER_FILE_BYTES || totalBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) {
+        throw new TerminalSendError(`attachments exceed the outbound size limit`)
+      }
       files.push({ filename: att.name, contentType: att.content_type, base64: buf.toString("base64") })
     }
-    if (totalBytes > MAX_OUTBOUND_ATTACHMENT_BYTES) throw new Error("attachments exceed the outbound size limit")
+    // (per-file + cumulative caps already enforced inside the loop above)
 
     // Branded HTML — same shell the worker's text sends use.
     const signoff = sender.email.startsWith("antonio") ? "Antonio Durante" : "The Tony Durante LLC Team"
@@ -216,10 +244,13 @@ ${plainTextToParagraphs(claimed.body)}
 </div>
 </div>`
 
-    // Threading headers.
+    // Threading headers. Strip CR/LF from the recipient before it enters a raw
+    // header — the recipient pin already validates the addresses, this is the
+    // belt-and-braces against header injection (subject is base64, so it's safe).
+    const toHeader = String(claimed.to_address).replace(/[\r\n]/g, " ").trim()
     const headerLines = [
       `From: ${sender.name} <${sender.email}>`,
-      `To: ${claimed.to_address}`,
+      `To: ${toHeader}`,
       `Subject: =?utf-8?B?${Buffer.from(claimed.subject).toString("base64")}?=`,
     ]
     let gmailThreadId: string | undefined
@@ -250,12 +281,15 @@ ${plainTextToParagraphs(claimed.body)}
     const payload: Record<string, unknown> = { raw }
     if (gmailThreadId) payload.threadId = gmailThreadId
 
+    // ── POINT OF NO RETURN ─────────────────────────────────────────────────
+    // The instant this resolves, the email HAS left. Nothing after it may roll
+    // the row back to pending, or a retry would send the SAME email a second
+    // time. Everything past here is best-effort bookkeeping in its own guard.
     const sent = (await gmailPost("/messages/send", payload, sender.email)) as { id?: string }
     const gmailMessageId = sent?.id ?? ""
-    await db.from("worker_prepared_sends").update({ gmail_message_id: gmailMessageId }).eq("id", preparedId)
 
-    // Audit.
     try {
+      await db.from("worker_prepared_sends").update({ gmail_message_id: gmailMessageId }).eq("id", preparedId)
       const { logAction } = await import("@/lib/mcp/action-log")
       logAction({
         actor: actorEmail,
@@ -263,13 +297,24 @@ ${plainTextToParagraphs(claimed.body)}
         table_name: "gmail",
         summary: `Worker email WITH attachment sent to ${claimed.to_address}: "${String(claimed.subject).slice(0, 80)}" (${files.map((f) => f.filename).join(", ")})`,
       })
-    } catch { /* non-fatal */ }
+    } catch (bookkeepingErr) {
+      // The send SUCCEEDED — never roll back. Just log the bookkeeping miss.
+      console.error("[worker-email-send] post-send bookkeeping failed (email WAS sent):", bookkeepingErr)
+    }
 
     return { ok: true, gmailMessageId, to: claimed.to_address }
   } catch (err) {
-    // Roll the row back to pending so the staff can retry rather than lose the draft.
-    await db.from("worker_prepared_sends").update({ status: "pending", resolved_at: null }).eq("id", preparedId).eq("status", "sent")
-    console.error("[worker-email-send] confirm/dispatch failed:", err)
+    // Reached ONLY on a failure BEFORE the send fired (resolve/download/build/
+    // gmailPost-throw). A TERMINAL failure (bad path, oversize) will always fail
+    // → cancel it so it can't be re-confirmed forever. A transient failure rolls
+    // back to pending so the staff can retry.
+    const terminal = err instanceof TerminalSendError
+    await db
+      .from("worker_prepared_sends")
+      .update(terminal ? { status: "cancelled", resolved_at: new Date().toISOString() } : { status: "pending", resolved_at: null })
+      .eq("id", preparedId)
+      .eq("status", "sent")
+    console.error("[worker-email-send] confirm/dispatch failed before send:", err)
     return { ok: false, reason: err instanceof Error ? err.message : "send failed" }
   }
 }

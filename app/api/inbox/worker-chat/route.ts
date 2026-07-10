@@ -169,6 +169,12 @@ export async function POST(req: NextRequest) {
       ? "antonio.durante@tonydurante.us"
       : "support@tonydurante.us"
     scope = `inbox-${mailboxKey}-${gmailThreadId}`
+    // Set OUTSIDE the Gmail-fetch try below: the mailbox is a constant from the
+    // request, not something the fetch produces. If it stayed inside the try, a
+    // Gmail hiccup would leave it unset and the attach path would refuse with a
+    // misleading "only available in the Inbox" instead of the honest recipient
+    // fail-closed. The empty-recipient guard is the real safety.
+    inboxMailboxAddress = mailboxAddress
 
     // READ THE EMAIL server-side — the worker must have the thread in front of it,
     // not a 100-char snippet (Antonio 2026-07-08: "if I call it in an open email it
@@ -206,7 +212,6 @@ export async function POST(req: NextRequest) {
           .join("\n\n")
         context = { ...context, transcript, gmailThreadId, mailboxAddress }
       }
-      inboxMailboxAddress = mailboxAddress
       // Default reply target = the newest message in the thread, so a "reply with
       // this attached" keeps threading even if the model doesn't name an id.
       inboxDefaultReplyToId = msgs.length ? msgs[msgs.length - 1]?.id : undefined
@@ -495,6 +500,7 @@ export async function POST(req: NextRequest) {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
+      // Only surface a row this turn actually created — never a stale prior one.
       if (prep && !priorPendingIds.has(prep.id)) {
         preparedSend = {
           id: prep.id,
