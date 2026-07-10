@@ -109,6 +109,27 @@ export async function PATCH(
     patch.work_status = body.work_status
     patch.resolved_at = body.work_status === 'handled' ? new Date().toISOString() : null
   }
+  // Conversation lifecycle (orthogonal to the kanban lane): Solved / Closed /
+  // reopen. Solved+Closed both stamp resolved_at (keeps the shared "open"
+  // predicate working) + resolved_by + move the kanban card to Done; the
+  // distinction lives in `resolution`. Reopen (null) clears all three and
+  // returns the card to To-do.
+  if ('resolution' in body) {
+    const res = body.resolution
+    if (res === 'solved' || res === 'closed') {
+      patch.resolution = res
+      patch.resolved_at = new Date().toISOString()
+      patch.resolved_by = user.id
+      patch.work_status = 'handled'
+    } else if (res === null) {
+      patch.resolution = null
+      patch.resolved_at = null
+      patch.resolved_by = null
+      patch.work_status = 'todo'
+    } else {
+      return NextResponse.json({ error: 'resolution must be "solved", "closed", or null.' }, { status: 400 })
+    }
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: 'No changes provided' }, { status: 400 })

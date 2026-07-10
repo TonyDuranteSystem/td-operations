@@ -61,6 +61,8 @@ export interface TeamThread {
   contact_id: string | null
   dm_key: string | null
   resolved_at: string | null
+  /** Client-conversation lifecycle: null = open, 'solved' = done, 'closed' = dropped. */
+  resolution: 'solved' | 'closed' | null
   archived_at: string | null
   created_by: string
   created_at: string

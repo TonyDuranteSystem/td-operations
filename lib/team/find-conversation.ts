@@ -62,13 +62,15 @@ export interface FindOrCreateConversationInput {
 }
 
 /**
- * Find an OPEN discussion for this client+topic (or create one). Returns the
+ * Find a reusable discussion for this client+topic (or create one). Returns the
  * thread, whether it was reused, and the resolved client name.
  *
- * Reuse predicate today: open (`resolved_at IS NULL`), not archived, same
- * `topic_slug`. NOTE for the resolution slice (S2): once Solved/Closed land, the
- * reuse filter must stop keying on `resolved_at IS NULL` or a solved thread will
- * fork a duplicate — that change ships WITH the resolution column, not here.
+ * Reuse predicate: not archived, same `topic_slug`, and **not `Closed`** — a
+ * Closed conversation was deliberately dropped, so new activity starts a fresh
+ * one. A `Solved` conversation IS reused and **reopened** (new activity means
+ * the matter is live again), clearing its resolution so it stops reading as
+ * done. This deliberately does NOT key on `resolved_at IS NULL` — that would
+ * fork a duplicate the moment a thread is solved (pre-build review, finding b).
  */
 export async function findOrCreateConversation(
   input: FindOrCreateConversationInput,
@@ -92,11 +94,24 @@ export async function findOrCreateConversation(
       .select('*')
       .eq('thread_type', 'discussion')
       .eq(col, ref.id)
-      .is('resolved_at', null)
       .is('archived_at', null)
+      .or('resolution.is.null,resolution.eq.solved') // reuse Open + Solved; skip Closed
     reuseQuery = topicSlug ? reuseQuery.eq('topic_slug', topicSlug) : reuseQuery.is('topic_slug', null)
     const { data: existing } = await reuseQuery.order('created_at', { ascending: false }).limit(1).maybeSingle()
-    if (existing) return { thread: existing, reused: true, clientName }
+    if (existing) {
+      // Reopen a previously-Solved thread — new activity means it's live again.
+      if (existing.resolution === 'solved' || existing.resolved_at) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: reopened } = await (supabaseAdmin as any)
+          .from('internal_threads')
+          .update({ resolution: null, resolved_at: null, resolved_by: null, work_status: 'todo', last_activity_at: now })
+          .eq('id', existing.id)
+          .select()
+          .single()
+        return { thread: reopened ?? existing, reused: true, clientName }
+      }
+      return { thread: existing, reused: true, clientName }
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

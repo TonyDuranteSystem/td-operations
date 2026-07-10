@@ -97,3 +97,56 @@ describe('findOrCreateConversation (S1)', () => {
     expect('error' in r && r.status).toBe(404)
   }, 60_000)
 })
+
+describe('resolution: Solved / Closed / reopen (S2)', () => {
+  async function setResolution(id: string, resolution: 'solved' | 'closed' | null) {
+    const patch =
+      resolution === null
+        ? { resolution: null, resolved_at: null, resolved_by: null, work_status: 'todo' }
+        : { resolution, resolved_at: new Date().toISOString(), resolved_by: CREATED_BY, work_status: 'handled' }
+    await supabaseAdmin.from('internal_threads').update(patch).eq('id', id)
+  }
+  async function read(id: string) {
+    const { data } = await supabaseAdmin
+      .from('internal_threads').select('resolution, resolved_at, resolved_by, work_status').eq('id', id).single()
+    return data as unknown as Record<string, unknown>
+  }
+
+  it('a SOLVED conversation is reused AND reopened on new activity', async () => {
+    const a = await make('Shipping')
+    await setResolution(a.thread.id, 'solved')
+    expect(await read(a.thread.id)).toMatchObject({ resolution: 'solved', work_status: 'handled' })
+
+    // A new share for the same client+topic reuses the solved thread and reopens it.
+    const b = await make('Shipping')
+    expect(b.reused).toBe(true)
+    expect(b.thread.id).toBe(a.thread.id)
+    expect(await read(a.thread.id)).toMatchObject({ resolution: null, resolved_at: null, work_status: 'todo' })
+  }, 60_000)
+
+  it('a CLOSED conversation is NOT reused — a fresh thread starts', async () => {
+    const a = await make('ITIN')
+    await setResolution(a.thread.id, 'closed')
+    expect(await read(a.thread.id)).toMatchObject({ resolution: 'closed' })
+
+    const b = await make('ITIN')
+    expect(b.thread.id).not.toBe(a.thread.id)
+    // The closed one stays closed and untouched.
+    expect(await read(a.thread.id)).toMatchObject({ resolution: 'closed' })
+  }, 60_000)
+
+  it('the resolution CHECK rejects a bad value', async () => {
+    const a = await make('Documents')
+    const { error } = await supabaseAdmin
+      .from('internal_threads').update({ resolution: 'banana' }).eq('id', a.thread.id)
+    expect(error).toBeTruthy()
+  }, 60_000)
+
+  it('get_team_threads returns the resolution field', async () => {
+    const a = await make('Lease')
+    await setResolution(a.thread.id, 'closed')
+    const { data } = await supabaseAdmin.rpc('get_team_threads', { p_user_id: CREATED_BY })
+    const row = (data as Array<Record<string, unknown>> | null)?.find(r => r.id === a.thread.id)
+    expect(row?.resolution).toBe('closed')
+  }, 60_000)
+})

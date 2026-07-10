@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import {
   Send, Loader2, Users, Hash, Paperclip, Smile, Mic, MicOff, FileText, X,
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
-  MessageSquare, Bot, CircleDot, Building2, Slack, ExternalLink,
+  MessageSquare, Bot, Building2, Slack, ExternalLink,
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
 } from 'lucide-react'
 import { TeamBoard } from './board'
@@ -466,10 +466,10 @@ export default function TeamWorkspacePage() {
     loadThreads()
   }, [loadThreads])
 
-  const toggleResolve = async () => {
+  const setResolution = async (resolution: 'solved' | 'closed' | null) => {
     if (!selected) return
     const r = await fetch(`/api/team/threads/${selected.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolved: !selected.resolved_at }),
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution }),
     })
     if (r.ok) loadThreads()
   }
@@ -688,9 +688,24 @@ export default function TeamWorkspacePage() {
                 {selected.description && <p className="text-[11px] text-zinc-500 truncate">{selected.description}</p>}
               </div>
               {selected.thread_type === 'discussion' && (
-                <button onClick={toggleResolve} className={cn('text-xs px-2.5 py-1 rounded-full border flex items-center gap-1', selected.resolved_at ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}>
-                  {selected.resolved_at ? <><Check className="h-3 w-3" /> Resolved</> : <><CircleDot className="h-3 w-3" /> Open</>}
-                </button>
+                selected.resolution === 'solved' ? (
+                  <button onClick={() => setResolution(null)} title="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-emerald-50 border-emerald-200 text-emerald-700">
+                    <Check className="h-3 w-3" /> Solved
+                  </button>
+                ) : selected.resolution === 'closed' ? (
+                  <button onClick={() => setResolution(null)} title="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-zinc-100 border-zinc-300 text-zinc-500">
+                    <X className="h-3 w-3" /> Closed
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => setResolution('solved')} title="Mark the work done" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                      <Check className="h-3 w-3" /> Solved
+                    </button>
+                    <button onClick={() => setResolution('closed')} title="Drop this — no action needed" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50">
+                      <X className="h-3 w-3" /> Closed
+                    </button>
+                  </div>
+                )
               )}
             </div>
 
