@@ -12,7 +12,7 @@
 import { useRef } from 'react'
 import { Loader2, Paperclip, Send, X, FileText, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useWorkerAttachments, type UploadedAttachment } from './use-worker-attachments'
+import type { UploadedAttachment, WorkerAttachments } from './use-worker-attachments'
 
 function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -27,11 +27,16 @@ interface WorkerComposerProps {
   onSend: (text: string, attachments: UploadedAttachment[]) => void | Promise<void>
   value: string
   onChange: (v: string) => void
+  /**
+   * Attachment state, owned by the PANEL — the drop target is the whole panel,
+   * not this strip, so the two have to read and write the same list.
+   */
+  attachments: WorkerAttachments
 }
 
-export function WorkerComposer({ placeholder, pending, disabled, onSend, value, onChange }: WorkerComposerProps) {
+export function WorkerComposer({ placeholder, pending, disabled, onSend, value, onChange, attachments: att }: WorkerComposerProps) {
   const fileRef = useRef<HTMLInputElement>(null)
-  const { files, uploading, add, remove, clear, uploaded, onPaste, onDrop } = useWorkerAttachments()
+  const { files, uploading, add, remove, clear, uploaded, onPaste } = att
 
   const ready = files.length > 0 && files.every((f) => f.path || f.error)
   // A message with nothing but a still-uploading file isn't sendable yet.
@@ -50,11 +55,7 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
   }
 
   return (
-    <div
-      className="border-t px-3 py-2.5 shrink-0"
-      onDrop={onDrop}
-      onDragOver={(e) => e.preventDefault()}
-    >
+    <div className="border-t px-3 py-2.5 shrink-0">
       {files.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pb-2">
           {files.map((f) => (

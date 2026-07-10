@@ -15,7 +15,8 @@ import { Bot, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import { WorkerComposer } from '@/components/chat/worker-composer'
-import type { UploadedAttachment } from '@/components/chat/use-worker-attachments'
+import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 
 interface ChatMsg {
   role: 'user' | 'worker'
@@ -35,6 +36,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   const [elapsed, setElapsed] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
+  const attachments = useWorkerAttachments()
 
   const clientKey = accountId ? `acct-${accountId}` : contactId ? `contact-${contactId}` : null
 
@@ -121,7 +123,11 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <WorkerDropZone
+      onFiles={files => void attachments.add(files)}
+      disabled={pending}
+      className="flex-1 flex flex-col min-h-0"
+    >
       <div className="flex items-center gap-2 px-4 py-2 border-b bg-violet-50/60 shrink-0">
         <Bot className="h-4 w-4 text-violet-600 shrink-0" />
         <p className="text-xs text-zinc-600 truncate">
@@ -164,7 +170,8 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         value={input}
         onChange={setInput}
         onSend={send}
+        attachments={attachments}
       />
-    </div>
+    </WorkerDropZone>
   )
 }

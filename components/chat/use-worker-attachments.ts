@@ -129,14 +129,12 @@ export function useWorkerAttachments() {
     [add],
   )
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      const dropped = Array.from(e.dataTransfer?.files ?? [])
-      if (dropped.length) void add(dropped)
-    },
-    [add],
-  )
-
-  return { files, uploading, add, remove, clear, uploaded, onPaste, onDrop }
+  // NOTE: drag-and-drop is NOT handled here. The drop target is the whole panel
+  // (see worker-dropzone.tsx) — a file dropped outside a registered target makes
+  // the browser navigate away from the page, so the thin composer strip was the
+  // wrong place for it.
+  return { files, uploading, add, remove, clear, uploaded, onPaste }
 }
+
+/** The shape the panel hands down to the composer and the drop zone. */
+export type WorkerAttachments = ReturnType<typeof useWorkerAttachments>

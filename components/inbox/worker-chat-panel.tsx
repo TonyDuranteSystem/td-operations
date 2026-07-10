@@ -17,7 +17,8 @@ import { Bot, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import { WorkerComposer } from '@/components/chat/worker-composer'
-import type { UploadedAttachment } from '@/components/chat/use-worker-attachments'
+import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import type { InboxConversation } from '@/lib/types'
 
 interface ChatMsg {
@@ -38,6 +39,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [elapsed, setElapsed] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
+  const attachments = useWorkerAttachments()
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
 
@@ -125,7 +127,11 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   }
 
   return (
-    <div className="w-full sm:w-[420px] shrink-0 border-l bg-white flex flex-col min-h-0">
+    <WorkerDropZone
+      onFiles={files => void attachments.add(files)}
+      disabled={pending}
+      className="w-full sm:w-[420px] shrink-0 border-l bg-white flex flex-col min-h-0"
+    >
       <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-violet-50/60 shrink-0">
         <Bot className="h-4 w-4 text-violet-600 shrink-0" />
         <div className="min-w-0 flex-1">
@@ -174,7 +180,8 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         value={input}
         onChange={setInput}
         onSend={send}
+        attachments={attachments}
       />
-    </div>
+    </WorkerDropZone>
   )
 }
