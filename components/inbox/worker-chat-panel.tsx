@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, X } from 'lucide-react'
+import { Bot, Loader2, Send, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import { WorkerComposer } from '@/components/chat/worker-composer'
@@ -24,6 +24,12 @@ import type { InboxConversation } from '@/lib/types'
 interface ChatMsg {
   role: 'user' | 'worker'
   text: string
+  /**
+   * Server-attested off-thread address the worker tried to email and was refused.
+   * When set, this worker bubble shows a "Confirm & send" button. The address
+   * comes from the server (the real refused attempt), never parsed from the reply.
+   */
+  pendingSendTo?: string
 }
 
 interface WorkerChatPanelProps {
@@ -39,6 +45,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [elapsed, setElapsed] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
+  // The staff member's most recent request text — re-sent on a "Confirm & send"
+  // click so the worker re-drafts and now actually sends to the confirmed address.
+  const lastUserTextRef = useRef('')
   const attachments = useWorkerAttachments()
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
@@ -75,12 +84,27 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
     return () => clearInterval(t)
   }, [pending])
 
-  const send = async (text: string, attachments: UploadedAttachment[]) => {
+  const send = async (
+    text: string,
+    attachments: UploadedAttachment[],
+    confirmedRecipient?: string,
+  ) => {
     if (!text || pending) return
-    const shown = attachments.length
-      ? `${text}\n\n📎 ${attachments.map(a => a.name).join(', ')}`
-      : text
-    setMessages(prev => [...prev, { role: 'user', text: shown }])
+    if (confirmedRecipient) {
+      // A "Confirm & send" click: record the staff's affirmative action, and drop
+      // every outstanding confirm button (the address is now authorised).
+      lastUserTextRef.current = text
+      setMessages(prev => [
+        ...prev.map(m => (m.pendingSendTo ? { ...m, pendingSendTo: undefined } : m)),
+        { role: 'user', text: `✓ Confirmed — send to ${confirmedRecipient}` },
+      ])
+    } else {
+      lastUserTextRef.current = text
+      const shown = attachments.length
+        ? `${text}\n\n📎 ${attachments.map(a => a.name).join(', ')}`
+        : text
+      setMessages(prev => [...prev, { role: 'user', text: shown }])
+    }
     setPending(true)
     try {
       const res = await fetch('/api/inbox/worker-chat', {
@@ -91,6 +115,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           gmailThreadId,
           mailbox,
           ...(attachments.length ? { attachments } : {}),
+          ...(confirmedRecipient ? { confirmedRecipient } : {}),
           // Email context only on the panel's first message — the worker's
           // persistent thread memory carries it afterwards.
           context: sentContextRef.current
@@ -104,7 +129,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string } = {}
+      let data: { reply?: string; error?: string; pendingSend?: { to?: string } | null } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -115,7 +140,11 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         )
       }
       sentContextRef.current = true
-      setMessages(prev => [...prev, { role: 'worker', text: data.reply || '(empty reply)' }])
+      setMessages(prev => [...prev, {
+        role: 'worker',
+        text: data.reply || '(empty reply)',
+        ...(data.pendingSend?.to ? { pendingSendTo: data.pendingSend.to } : {}),
+      }])
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -153,7 +182,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
+          <div key={i} className={cn('flex flex-col', m.role === 'user' ? 'items-end' : 'items-start')}>
             <div
               className={cn(
                 'max-w-[90%] rounded-2xl px-3.5 py-2 text-sm break-words',
@@ -164,6 +193,21 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             >
               {m.role === 'worker' ? <WorkerMarkdown text={m.text} /> : m.text}
             </div>
+            {m.role === 'worker' && m.pendingSendTo && (
+              <div className="mt-1.5 max-w-[90%] rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <p className="mb-1.5">
+                  This address is <b>not on the email thread</b> — check every character before sending:
+                </p>
+                <p className="font-mono text-[13px] text-zinc-900 break-all mb-2">{m.pendingSendTo}</p>
+                <button
+                  onClick={() => void send(lastUserTextRef.current, [], m.pendingSendTo)}
+                  disabled={pending}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-white font-medium hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  <Send className="h-3.5 w-3.5" /> Confirm &amp; send to this address
+                </button>
+              </div>
+            )}
           </div>
         ))}
         {pending && (

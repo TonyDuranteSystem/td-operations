@@ -172,3 +172,69 @@ describe("executeWorkerTool — send_email recipient pin", () => {
     expect(executeTool).not.toHaveBeenCalled()
   })
 })
+
+describe("executeWorkerTool — confirm-off-thread capture (the staff 'Confirm & send' path)", () => {
+  const available = new Set(["send_email"])
+  const good = { to: "client@acme.com", subject: "Re: LLC", body: "hi" }
+
+  beforeEach(() => {
+    executeTool.mockReset()
+    executeTool.mockResolvedValue('{"success":true}')
+  })
+
+  it("captures the refused off-thread address SERVER-SIDE for the confirm button", async () => {
+    const captured: string[] = []
+    const r = await executeWorkerTool(
+      "send_email",
+      { ...good, to: "Valerio <valerio@gmail.com>" },
+      available,
+      null,
+      null,
+      { pinnedEmailRecipients: ["client@acme.com"], capturedOffThreadAttempts: captured },
+    )
+    expect(r).toMatch(/Refused/)
+    expect(executeTool).not.toHaveBeenCalled()
+    // The parsed bare address (not the display-name form) is captured.
+    expect(captured).toEqual(["valerio@gmail.com"])
+  })
+
+  it("captures nothing when the send was allowed", async () => {
+    const captured: string[] = []
+    await executeWorkerTool("send_email", good, available, null, null, {
+      pinnedEmailRecipients: ["client@acme.com"], capturedOffThreadAttempts: captured,
+    })
+    expect(captured).toEqual([])
+  })
+
+  it("once the confirmed address is ON the widened allow-list, the SAME address sends", async () => {
+    // Simulates the route appending body.confirmedRecipient to the pin.
+    const captured: string[] = []
+    const r = await executeWorkerTool(
+      "send_email",
+      { ...good, to: "valerio@gmail.com" },
+      available,
+      null,
+      null,
+      { pinnedEmailRecipients: ["client@acme.com", "valerio@gmail.com"], capturedOffThreadAttempts: captured },
+    )
+    expect(r).toContain("success")
+    expect(executeTool).toHaveBeenCalledOnce()
+    expect(captured).toEqual([]) // allowed → nothing to confirm
+  })
+
+  it("does not double-capture the same address across retries in one turn", async () => {
+    const captured: string[] = []
+    const ctx = { pinnedEmailRecipients: ["client@acme.com"], capturedOffThreadAttempts: captured }
+    await executeWorkerTool("send_email", { ...good, to: "valerio@gmail.com" }, available, null, null, ctx)
+    await executeWorkerTool("send_email", { ...good, to: "valerio@gmail.com" }, available, null, null, ctx)
+    expect(captured).toEqual(["valerio@gmail.com"])
+  })
+
+  it("the bypass claim is gone and the confirm-button instruction is present in the refusal", async () => {
+    const r = await executeWorkerTool("send_email", { ...good, to: "valerio@gmail.com" }, available, null, null, {
+      pinnedEmailRecipients: ["client@acme.com"], capturedOffThreadAttempts: [],
+    })
+    expect(r).toMatch(/CANNOT be bypassed/i)
+    expect(r).toMatch(/Confirm & send/i)
+  })
+})
