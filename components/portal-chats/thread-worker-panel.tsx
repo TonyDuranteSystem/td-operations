@@ -11,9 +11,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, Send } from 'lucide-react'
+import { Bot, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
+import { WorkerComposer } from '@/components/chat/worker-composer'
+import type { UploadedAttachment } from '@/components/chat/use-worker-attachments'
 
 interface ChatMsg {
   role: 'user' | 'worker'
@@ -69,11 +71,12 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
     return () => { alive = false }
   }, [clientKey])
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (text: string, attachments: UploadedAttachment[]) => {
     if (!text || pending || !clientKey) return
-    setInput('')
-    setMessages(prev => [...prev, { role: 'user', text }])
+    const shown = attachments.length
+      ? `${text}\n\n📎 ${attachments.map(a => a.name).join(', ')}`
+      : text
+    setMessages(prev => [...prev, { role: 'user', text: shown }])
     setPending(true)
     try {
       const res = await fetch('/api/inbox/worker-chat', {
@@ -82,6 +85,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         body: JSON.stringify({
           message: text,
           clientKey,
+          ...(attachments.length ? { attachments } : {}),
           clientName: sentContextRef.current ? undefined : clientName,
         }),
       })
@@ -154,28 +158,13 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         )}
       </div>
 
-      <div className="border-t px-3 py-2.5 shrink-0">
-        <div className="flex items-end gap-2">
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
-            }}
-            placeholder={`Ask the worker about ${clientName}…`}
-            rows={4}
-            className="flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 min-h-[96px] max-h-64"
-          />
-          <button
-            onClick={send}
-            disabled={!input.trim() || pending}
-            className="shrink-0 p-2 rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors"
-            title="Send"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <WorkerComposer
+        placeholder={`Ask the worker about ${clientName}…`}
+        pending={pending}
+        value={input}
+        onChange={setInput}
+        onSend={send}
+      />
     </div>
   )
 }

@@ -874,6 +874,68 @@ export const READ_PORTAL_ATTACHMENT_TOOL: ToolDef = {
   },
 }
 
+export const READ_EMAIL_ATTACHMENT_TOOL: ToolDef = {
+  name: "read_email_attachment",
+  description: [
+    "Read a document attached to the email currently open in the Inbox (PDF, Word, Excel, CSV, zip, text).",
+    "Pass the `ref` exactly as listed under ATTACHMENTS ON THIS EMAIL in the message above — nothing else is readable.",
+    "Images attached to the email are already shown to you directly; you do NOT need this tool for them.",
+    "Use this when you need to know what a document actually says before answering or drafting.",
+  ].join("\n"),
+  parameters: {
+    type: "object",
+    properties: {
+      ref: { type: "string", description: "The attachment ref from the ATTACHMENTS ON THIS EMAIL list (e.g. 'att1')." },
+    },
+    required: ["ref"],
+  },
+}
+
+/**
+ * read_email_attachment handler — resolves the model-supplied ref against the
+ * server-pinned allow-list for THIS call, then downloads and extracts the text.
+ *
+ * The pin is the security boundary. Without it the model could name any
+ * (message_id, attachment_id) pair in either mailbox — including antonio@ from
+ * the Portal Chats panel, which never passes the mailbox access check.
+ */
+export async function readEmailAttachmentForWorker(
+  params: Record<string, unknown>,
+  pinned?: PinnedEmailAttachment[] | null,
+): Promise<string> {
+  const ref = typeof params.ref === "string" ? params.ref.trim() : ""
+  if (!ref) return "ref is required."
+  if (!pinned?.length) return "❌ There are no email attachments available to read in this conversation."
+
+  const match = pinned.find((a) => a.ref === ref)
+  if (!match) {
+    const available = pinned.map((a) => `${a.ref} (${a.name})`).join(", ")
+    return `❌ "${ref}" is not an attachment on this email. Available: ${available}.`
+  }
+
+  try {
+    const { getGmailAttachment } = await import("@/lib/gmail")
+    const { data } = await getGmailAttachment(match.messageId, match.attachmentId, match.mailbox)
+    const { readAttachmentBuffer } = await import("@/lib/ai-agent/attachment-reader")
+    const read = await readAttachmentBuffer(data, { id: match.ref, name: match.name, mimetype: match.mimetype }, false)
+    switch (read.kind) {
+      case "text":
+        return read.text
+      case "image":
+        return `"${match.name}" is an image — it was already shown to you with the message; look at it directly.`
+      case "document":
+      case "scanned":
+        // A tool result carries text only, so a no-text-layer PDF can't be handed
+        // back here. Say so plainly rather than return an empty extraction.
+        return `❌ "${match.name}" is a scanned PDF with no text layer, so its text can't be extracted.`
+      case "error":
+        return read.note
+    }
+  } catch (err) {
+    return `❌ Couldn't read "${match.name}": ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
 /** Trusted Supabase storage hostnames. Only URLs from these hosts are downloaded. */
 const TRUSTED_STORAGE_HOSTS = new Set([
   "ydzipybqeebtpcvsbtvs.supabase.co", // production
@@ -1831,6 +1893,15 @@ export async function executeWorkerTool(
     if (name === "read_portal_attachment") return readPortalAttachmentForWorker(params)
     return readDriveFileForWorker(params)
   }
+  // read_email_attachment — Inbox worker only. Doubly gated: the tool is offered
+  // only when the server pinned an attachment list, and the executor re-checks the
+  // name AND resolves the ref against that same pinned list (defense-in-depth).
+  if (name === "read_email_attachment") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (email attachment reading not enabled).`
+    }
+    return readEmailAttachmentForWorker(params, sendContext?.pinnedEmailAttachments)
+  }
   // recall_thread — on-demand FULL/searched recall of THIS conversation's permanent
   // transcript (Slack-only, gated via enableThreadRecall). The thread_id is injected
   // server-side (currentThreadId) — the model can't address another conversation.
@@ -1935,7 +2006,7 @@ export const WORKER_PROMPT_VERSION: string = createHash("sha256")
 // callWorker — Claude (sonnet-4-6) tool-use loop, scoped to WORKER_TOOLS
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface WorkerResponse {
+export interface WorkerResponse {
   reply: string
   toolsUsed: string[]
 }
@@ -2158,16 +2229,41 @@ export interface CallWorkerOptions {
    */
   sendActor?: string | null
   pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
+  /**
+   * The email attachments the worker is ALLOWED to open on this call, keyed by a
+   * short ref the server mints. read_email_attachment takes only that ref.
+   *
+   * This is a hard pin, not a convenience: a tool taking (message_id,
+   * attachment_id) would let the model open an attachment on ANY message in the
+   * mailbox — including antonio@ threads from the Portal Chats panel, which has
+   * no mailbox gate at all. The model can only name a ref the server put here.
+   */
+  pinnedEmailAttachments?: PinnedEmailAttachment[] | null
+}
+
+/** One email attachment the worker may open, resolved server-side. */
+export interface PinnedEmailAttachment {
+  /** Short server-minted handle the model uses (e.g. "att1"). */
+  ref: string
+  messageId: string
+  attachmentId: string
+  /** Mailbox the message lives in — the download must run as that user. */
+  mailbox: string
+  name: string
+  mimetype: string
+  size: number
 }
 
 /**
- * Per-call send context threaded from callWorker → runWorkerLoop →
- * executeWorkerTool. Carries the acting staff member (for audit attribution) and
- * an optional hard-pinned portal recipient (Portal Chats panel safety).
+ * Per-call context threaded from callWorker → runWorkerLoop → executeWorkerTool.
+ * Carries the acting staff member (for audit attribution), an optional
+ * hard-pinned portal recipient (Portal Chats panel safety), and the set of email
+ * attachments this call may open.
  */
 export interface WorkerSendContext {
   actor?: string | null
   pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
+  pinnedEmailAttachments?: PinnedEmailAttachment[] | null
 }
 
 /** First non-empty line of the request body, capped — used as the thread title. */
@@ -2605,6 +2701,14 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     }
   }
 
+  // read_email_attachment exists only when the SERVER pinned an attachment list
+  // for this call (Inbox worker on an email that has documents). There is no
+  // enable* flag on purpose: the presence of the pin IS the gate, so the tool can
+  // never be offered without the allow-list that constrains it.
+  if (opts.pinnedEmailAttachments?.length && !tools.some((t) => t.name === READ_EMAIL_ATTACHMENT_TOOL.name)) {
+    tools = [...tools, READ_EMAIL_ATTACHMENT_TOOL]
+  }
+
   // Slack-only: append the READ-ONLY Calendly tools (cal_list_bookings /
   // cal_get_event_details / cal_get_availability). Gated on enableCalendly so they
   // NEVER reach the Hermes research worker (R108) and never double-add. The executor
@@ -2686,8 +2790,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       : undefined
 
   const sendContext: WorkerSendContext | undefined =
-    opts.sendActor || opts.pinnedPortalRecipient
-      ? { actor: opts.sendActor ?? null, pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null }
+    opts.sendActor || opts.pinnedPortalRecipient || opts.pinnedEmailAttachments?.length
+      ? {
+          actor: opts.sendActor ?? null,
+          pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
+          pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
+        }
       : undefined
 
   const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext)

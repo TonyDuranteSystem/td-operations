@@ -2,8 +2,25 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
-import { callWorker } from "@/lib/ai-agent/worker-tools"
-import { gmailGet, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
+import type {
+  WorkerImageBlock,
+  WorkerDocumentBlock,
+  PinnedEmailAttachment,
+} from "@/lib/ai-agent/worker-tools"
+import {
+  buildImageBlock,
+  callWorkerWithAttachments,
+  fetchWorkerUploadBytes,
+  readAttachments,
+} from "@/lib/ai-agent/attachment-reader"
+import {
+  gmailGet,
+  getHeader,
+  extractBody,
+  extractAttachments,
+  getGmailAttachment,
+  type GmailAPIMessage,
+} from "@/lib/gmail"
 import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
@@ -16,6 +33,101 @@ import {
 export const dynamic = "force-dynamic"
 // Worker runs a multi-step tool loop over the DB/CRM — can take minutes.
 export const maxDuration = 300
+
+/**
+ * Images below this are almost always signature logos, tracking pixels and
+ * social icons carried by every corporate footer. Feeding them to vision floods
+ * the context with junk and costs money on every turn. A real screenshot is
+ * comfortably larger.
+ */
+const MIN_MEANINGFUL_IMAGE_BYTES = 8 * 1024
+/** Images attached to the user turn per call — each one is re-sent every loop iteration. */
+const MAX_EMAIL_IMAGES = 3
+/** Documents offered to read_email_attachment. Metadata only; nothing is downloaded up-front. */
+const MAX_EMAIL_DOCUMENTS = 8
+
+/**
+ * Resolve what's attached to the open email.
+ *
+ * Two different treatments, on purpose:
+ *  - IMAGES are downloaded and attached to the user turn, so the worker simply
+ *    SEES them. A tool it has to choose to call is a tool it will skip, and then
+ *    it answers about a screenshot it never looked at.
+ *  - DOCUMENTS are only LISTED, with a server-minted ref. Auto-extracting a
+ *    40-page PDF on every email the panel is opened on would burn tokens on the
+ *    majority of turns that never mention it. The worker pulls one on demand.
+ *
+ * Best-effort per attachment: one bad download must not cost the staff member
+ * their answer.
+ */
+async function harvestEmailAttachments(
+  msgs: GmailAPIMessage[],
+  mailboxAddress: string,
+): Promise<{ imageBlocks: WorkerImageBlock[]; pinned: PinnedEmailAttachment[]; note: string }> {
+  const imageBlocks: WorkerImageBlock[] = []
+  const pinned: PinnedEmailAttachment[] = []
+  const imageNames: string[] = []
+  const skipped: string[] = []
+
+  for (const m of msgs) {
+    if (!m.payload) continue
+    for (const att of extractAttachments(m.payload)) {
+      const isImage = att.mimeType?.startsWith("image/")
+
+      if (isImage) {
+        if (att.size > 0 && att.size < MIN_MEANINGFUL_IMAGE_BYTES) continue // footer junk
+        if (imageBlocks.length >= MAX_EMAIL_IMAGES) {
+          skipped.push(att.filename)
+          continue
+        }
+        try {
+          const { data } = await getGmailAttachment(m.id, att.attachmentId, mailboxAddress)
+          const block = buildImageBlock(data)
+          if (block) {
+            imageBlocks.push(block)
+            imageNames.push(att.filename)
+          } else {
+            skipped.push(`${att.filename} (too large or not a readable image)`)
+          }
+        } catch (err) {
+          console.warn(`[worker-chat] image attachment download failed for ${att.filename}:`, err)
+          skipped.push(`${att.filename} (couldn't download)`)
+        }
+        continue
+      }
+
+      if (pinned.length >= MAX_EMAIL_DOCUMENTS) {
+        skipped.push(att.filename)
+        continue
+      }
+      pinned.push({
+        ref: `att${pinned.length + 1}`,
+        messageId: m.id,
+        attachmentId: att.attachmentId,
+        mailbox: mailboxAddress,
+        name: att.filename,
+        mimetype: att.mimeType,
+        size: att.size,
+      })
+    }
+  }
+
+  const lines: string[] = []
+  if (imageNames.length) {
+    lines.push(`Images (already shown to you above — look at them directly): ${imageNames.join(", ")}`)
+  }
+  if (pinned.length) {
+    lines.push("Documents — call read_email_attachment with the ref to read one:")
+    for (const a of pinned) {
+      lines.push(`  ${a.ref} — ${a.name} (${a.mimetype}, ${Math.max(1, Math.round(a.size / 1024))} KB)`)
+    }
+  }
+  // Say what was dropped. A silent cap reads as "there was nothing else".
+  if (skipped.length) lines.push(`Not available: ${skipped.join(", ")}.`)
+
+  const note = lines.length ? `\n\n--- ATTACHMENTS ON THIS EMAIL ---\n${lines.join("\n")}` : ""
+  return { imageBlocks, pinned, note }
+}
 
 /**
  * GET — conversation history for a worker thread (panel reopen restores the
@@ -97,6 +209,12 @@ export async function POST(req: NextRequest) {
     // Client mode (portal-chats Worker tab) — per client
     clientKey?: string
     clientName?: string
+    /**
+     * Files the staff member pasted/dropped into the panel this turn. Already
+     * uploaded to the PRIVATE worker-attachments bucket via /upload-url — we get
+     * the object path, never the bytes (a base64 body would 413 at the edge).
+     */
+    attachments?: Array<{ path?: string; name?: string; mime_type?: string; size?: number }>
   }
   try {
     body = await req.json()
@@ -117,6 +235,10 @@ export async function POST(req: NextRequest) {
   let scope: string
   let userBody: string
   let surface: "inbox" | "portal-chats"
+  // Media handed straight to the model on this turn, and the documents it may open.
+  const imageBlocks: WorkerImageBlock[] = []
+  const documentBlocks: WorkerDocumentBlock[] = []
+  let pinnedEmailAttachments: PinnedEmailAttachment[] = []
 
   if (gmailThreadId) {
     // Discussing an antonio@ thread exposes its content — same admin-only
@@ -130,17 +252,25 @@ export async function POST(req: NextRequest) {
       : "support@tonydurante.us"
     scope = `inbox-${mailboxKey}-${gmailThreadId}`
 
-    // First turn (context present): READ THE EMAIL server-side — the worker
-    // must have the thread in front of it, not a 100-char snippet (Antonio
-    // 2026-07-08: "if I call it in an open email it must read the email").
-    // Best-effort: a Gmail hiccup degrades to snippet context, never blocks.
+    // READ THE EMAIL server-side — the worker must have the thread in front of it,
+    // not a 100-char snippet (Antonio 2026-07-08: "if I call it in an open email it
+    // must read the email"). Best-effort: a Gmail hiccup degrades to snippet
+    // context, never blocks.
+    //
+    // The thread is fetched on EVERY turn, not just the first. The transcript is
+    // still only injected on turn 1 (thread memory carries it afterwards), but the
+    // attachments have to be re-resolved each turn: images are re-attached so the
+    // worker can still see them on turn 3, and the read_email_attachment allow-list
+    // is per-call — harvest it once and "what does that PDF say?" fails the moment
+    // the conversation moves past the opening message.
     let context = body.context ?? null
-    if (context) {
-      try {
-        const thread = (await gmailGet(`/threads/${gmailThreadId}`, { format: "full" }, mailboxAddress)) as {
-          messages: GmailAPIMessage[]
-        }
-        const msgs = (thread.messages ?? []).slice(-5) // last 5 messages
+    let attachmentsBlock = ""
+    try {
+      const thread = (await gmailGet(`/threads/${gmailThreadId}`, { format: "full" }, mailboxAddress)) as {
+        messages: GmailAPIMessage[]
+      }
+      const msgs = (thread.messages ?? []).slice(-5) // last 5 messages
+      if (context) {
         const transcript = msgs
           .map((m) => {
             const from = getHeader(m.payload?.headers, "From")
@@ -150,13 +280,17 @@ export async function POST(req: NextRequest) {
           })
           .join("\n\n")
         context = { ...context, transcript, gmailThreadId, mailboxAddress }
-      } catch (err) {
-        console.warn("[worker-chat] thread transcript fetch failed (using snippet):", err)
-        context = { ...context, gmailThreadId, mailboxAddress }
       }
+      const harvested = await harvestEmailAttachments(msgs, mailboxAddress)
+      imageBlocks.push(...harvested.imageBlocks)
+      pinnedEmailAttachments = harvested.pinned
+      attachmentsBlock = harvested.note
+    } catch (err) {
+      console.warn("[worker-chat] thread fetch failed (using snippet, no attachments):", err)
+      if (context) context = { ...context, gmailThreadId, mailboxAddress }
     }
 
-    userBody = buildInboxWorkerUserBody(message, context)
+    userBody = `${buildInboxWorkerUserBody(message, context)}${attachmentsBlock}`
     surface = "inbox"
   } else {
     // clientKey: 'acct-<uuid>' | 'contact-<uuid>' — a per-client memory
@@ -168,6 +302,28 @@ export async function POST(req: NextRequest) {
     scope = `chat-${clientKey}`
     userBody = buildClientWorkerUserBody(message, { name: body.clientName })
     surface = "portal-chats"
+  }
+
+  // Files the staff member pasted/dropped into the panel THIS turn. They live in
+  // the private worker-attachments bucket; we read the bytes with the service key,
+  // which is why isValidWorkerUploadPath (inside the fetcher) is the gate — a
+  // caller-supplied path must never reach that client unchecked.
+  const uploadRefs = (body.attachments ?? [])
+    .filter((a): a is { path: string; name?: string; mime_type?: string; size?: number } => typeof a.path === "string")
+    .map((a) => ({ id: a.path, name: a.name, mimetype: a.mime_type, size: a.size }))
+  if (uploadRefs.length) {
+    try {
+      const read = await readAttachments(uploadRefs, fetchWorkerUploadBytes)
+      imageBlocks.push(...read.imageBlocks)
+      documentBlocks.push(...read.documentBlocks)
+      if (read.textBlocks.length) {
+        // Extracted text goes into the persisted body, so it's still there on later
+        // turns. Images can't be: only the "was shown" note survives the replay.
+        userBody += `\n\n--- FILES THE STAFF MEMBER ATTACHED ---\n${read.textBlocks.join("\n\n")}`
+      }
+    } catch (err) {
+      console.warn("[worker-chat] panel upload read failed (answering without files):", err)
+    }
   }
 
   // thread_id is a UUID column; same scope → same thread forever.
@@ -241,10 +397,18 @@ export async function POST(req: NextRequest) {
         }
 
   try {
-    const { reply } = await callWorker(userBody, {
+    const { reply } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       systemPromptOverride: buildWorkerSurfacePrompt(surface),
+      // Screenshots the staff member pasted, and images attached to the open
+      // email, go straight to the model. Scanned PDFs ride along as native
+      // document blocks. Everything else is already extracted into userBody.
+      ...(imageBlocks.length ? { images: imageBlocks } : {}),
+      ...(documentBlocks.length ? { documents: documentBlocks } : {}),
+      // Server-pinned allow-list. Its presence is what offers read_email_attachment;
+      // the model can only name a ref that appears here.
+      ...(pinnedEmailAttachments.length ? { pinnedEmailAttachments } : {}),
       // FULL SLACK-PARITY READ RAILS (Antonio 2026-07-08: "it must be able
       // to work how it works in Slack"). Same switches the Team Workspace
       // grants staff. The code-task rail stays OFF (Antonio-only, R111);
