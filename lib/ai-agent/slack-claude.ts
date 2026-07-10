@@ -17,6 +17,7 @@
 import { randomUUID, createHmac, timingSafeEqual } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock, type WorkerDocumentBlock } from "@/lib/ai-agent/worker-tools"
+import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
 import {
   classifySlackFile,
   extractTextFromBuffer,
@@ -111,9 +112,11 @@ BEHAVIOR:
    Do NOT act first.
 2. Question asked: answer directly and concisely.
 3. Discussion requested: engage conversationally. No unilateral decisions.
-4. To propose an action (send/update/create): describe it in plain English first, wait
-   for Antonio's explicit approval ("yes", "go", "send it", "do it") before calling
-   propose_action. Never self-approve or pre-emptively execute.
+4. Sending a message is the only action you take, and only on Antonio's "go": to send an
+   email or a portal message, draft it in plain English first and send only after his explicit
+   approval ("yes", "go", "send it", "do it"). For anything else that would change data (creating/
+   updating records, advancing stages, moving files), you cannot do it — lay out the exact steps
+   so Antonio can. Never claim you performed or queued an action.
 5. Need more context: look it up in the system FIRST (the client's CRM record, run_sql_query, KB/SOPs); ask Antonio only if it's genuinely not there — then ONE focused question, not five.
 
 ENGINEERING DISCIPLINE (ALWAYS — every gear, every answer):
@@ -180,17 +183,10 @@ Never send on the first turn that proposes the email, and never without his expl
 
 DRAFTS (the message you write FOR a client — email bodies + portal messages): write like a real person, warm and direct, the way Antonio or Luca would write it by hand. NO asterisks, NO markdown bold/italics, NO "#" headers, NO bullet-point dumps — a client reads this, and asterisks/markdown render as broken junk and scream "an AI wrote this". Just natural sentences and normal paragraphs. (This applies ONLY to the client-facing draft itself — your Slack replies to the team can still use *bold* etc.)
 
-CODE TASKS: When Antonio asks you to implement, build, fix, or deploy something:
-1. Investigate with read tools to understand what needs changing
-2. Call start_code_task with detailed instructions
-3. The Mac Mini builds it in an isolated worktree and pushes a REVIEW BRANCH — it does NOT auto-deploy
-4. Say "I've queued it — Mac Mini will build it on a review branch and report back here"
-ANTONIO-ONLY: start_code_task and promote_code_branch are restricted to Antonio — they are not even offered to you when the current message is from someone else (Luca or anyone on the team). If Luca or another teammate reports a bug or asks for a fix, investigate and discuss it normally, but do NOT imply you're building or shipping anything — say you'll flag it for Antonio to decide whether to build it.
-
-SHIPPING: When Antonio says "ship it"/"deploy it"/"push it" AFTER a code task posted its review branch:
-- Call promote_code_branch — it ships this thread's last task's branch to production. Don't queue a new task.
-- The runner never auto-deploys; promotion happens only here, on Antonio's word. No branch yet = nothing to ship.
-- "Ship" = promote to production. "Do it" = implement.
+CODE TASKS: You do NOT write, launch, or ship code. When Antonio (or anyone) asks you to implement,
+build, fix, or deploy something, investigate it with the read tools and report back — a plain-English
+diagnosis, root cause with file:line, and the suggested change — so Antonio can do the coding himself.
+Never say you're building, queuing, or shipping anything; you can't. Hand off a clear write-up instead.
 
 CONTEXT: You are in a shared Slack workspace with Antonio (CEO) and the team — e.g. Luca
 (support@tonydurante.us). Antonio is the decision-maker; you answer, discuss, and propose —
@@ -1966,7 +1962,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // NEVER call the LLM — the model only ever proposes, so consuming the code here
   // (not in the model) is what makes the propose→retype→re-propose loop impossible.
   const slackUserId = ctx.slack_user_id as string | undefined
-  if (isSixDigitCode(row.body) && isAuthorizedApprover(slackUserId)) {
+  // OFF (2026-07-10, Antonio): worker no longer queues actions → nothing to
+  // approve by code. Gated on the same reversible rail switch as team chat.
+  if (workerActionsEnabled() && isSixDigitCode(row.body) && isAuthorizedApprover(slackUserId)) {
     const outcome = await handleSlackApprovalCode({
       code: row.body,
       channelId,
@@ -2036,7 +2034,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
   // When the flexible action surface is enabled, append guidance on find_tool /
   // use_tool (only relevant then — the tools aren't in the list otherwise).
   if (process.env.ASSISTANT_FULL_REACH_ENABLED === "true") {
-    slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external is queued for Antonio's approval — show him the draft and wait for his explicit OK before proposing; a few tools (raw SQL, deletes) are blocked. Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available. CRITICAL: before ever telling Antonio a tool or capability "doesn't exist", you MUST search the full catalog with find_tool first — your named tools are only a small slice of what's available, so never answer "I don't have that" from memory. MATCH THE NOUN TO THE RIGHT DATA: a word usually has a DEDICATED tool — e.g. "offers" means the actual offer records (use_tool with offer_list), NOT leads or deals in an "Offer Sent" pipeline stage (a different thing with a different count). When the question is about offers / invoices / leases / calls / a specific record type, find_tool that exact noun and use its dedicated tool — do NOT substitute a search_leads / search_deals proxy and present it as the answer.`
+    slackSystemPrompt = `${slackSystemPrompt}\n\nFULL TOOL REACH: beyond your named tools you can reach the entire TD Operations toolset via find_tool + use_tool. Use find_tool("keyword") to find the exact tool name, then use_tool(name, params). Read-only tools run immediately; anything that changes data or is client-facing/external you CANNOT run — describe the exact change so Antonio can do it himself (a few tools like raw SQL and deletes are blocked outright). Prefer a named tool when one fits; reach for use_tool when the action isn't otherwise available. CRITICAL: before ever telling Antonio a tool or capability "doesn't exist", you MUST search the full catalog with find_tool first — your named tools are only a small slice of what's available, so never answer "I don't have that" from memory. MATCH THE NOUN TO THE RIGHT DATA: a word usually has a DEDICATED tool — e.g. "offers" means the actual offer records (use_tool with offer_list), NOT leads or deals in an "Offer Sent" pipeline stage (a different thing with a different count). When the question is about offers / invoices / leases / calls / a specific record type, find_tool that exact noun and use its dedicated tool — do NOT substitute a search_leads / search_deals proxy and present it as the answer.`
   }
 
   // Web research: only advertise it when the kill-switch is actually on, so the worker
@@ -2069,12 +2067,12 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Unset → falls back to ANTHROPIC_API_KEY inside the worker (never breaks).
     apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
     systemPromptOverride: slackSystemPrompt,
-    // Code-task rail (start_code_task / promote_code_branch) is restricted to
-    // Antonio. Only HIS message in this turn can launch or ship a Mac Mini
-    // coding session — Luca (or anyone else) can report a bug in the same
-    // thread without the worker deciding on its own to start fixing it.
-    // Default-safe: an unresolved sender (slackUserId undefined) is NOT Antonio.
-    enableCodeTasks: slackUserId === SLACK_USER_ANTONIO,
+    // Code-task rail OFF (2026-07-10, Antonio): no worker launches or ships a
+    // coding job anymore — he does code himself. The worker investigates a bug
+    // on "investigate it" and reports; it never starts a Mac Mini session.
+    // (Reverses the earlier Antonio-only gate; the by-hand CRM /code-tasks page
+    // is untouched.) The executor branches also refuse via the rail switch.
+    enableCodeTasks: false,
     enableSlackSend: true,
     // Internal team-chat send (staff-only, posts as Claude); same draft →
     // explicit "send it" discipline as the other send rails.
@@ -2235,8 +2233,8 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           // Dedicated key (cost isolation); unset → falls back to ANTHROPIC_API_KEY.
           apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
           systemPromptOverride: slackSystemPrompt,
-          // Same Antonio-only restriction as the primary call above.
-          enableCodeTasks: slackUserId === SLACK_USER_ANTONIO,
+          // Code-task rail OFF (2026-07-10, Antonio) — same as the primary call.
+          enableCodeTasks: false,
           enableSlackSend: true,
           enableTeamChatSend: true,
           enableDbRead: true,

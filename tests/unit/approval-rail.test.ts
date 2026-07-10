@@ -87,6 +87,9 @@ const ORIGINAL_ENV = { ...process.env }
 beforeEach(() => {
   h.store.length = 0
   process.env = { ...ORIGINAL_ENV }
+  // Worker action rail is OFF by default (2026-07-10); this suite tests the
+  // dormant-but-intact queue machinery, so switch it on for these tests.
+  process.env.WORKER_ACTIONS_ENABLED = "true"
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

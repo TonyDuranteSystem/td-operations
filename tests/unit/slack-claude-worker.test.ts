@@ -128,9 +128,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/do NOT act/i)
   })
 
-  it("instructs to wait for approval before propose_action", () => {
-    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/propose_action/i)
+  it("instructs to send only on explicit approval, and never claim to queue actions", () => {
+    // propose_action was removed 2026-07-10 — the worker no longer queues.
+    expect(SLACK_WORKER_SYSTEM_PROMPT).not.toMatch(/propose_action/i)
     expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/approval/i)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/go/i)
   })
 
   it("stays under the absolute bloat ceiling", () => {
@@ -447,8 +449,8 @@ describe("processSlackEvent", () => {
         slack_channel_id: "C0BAB08DSDN",
         slack_thread_ts: "1234567890.000100",
         slack_event_ts: "1234567890.000200",
-        // Antonio is the sender — code-task tools are restricted to him (see the
-        // "restricts code tasks to Antonio's messages only" test below).
+        // Antonio is the sender, but the code-task rail is now OFF for everyone
+        // (2026-07-10) — enableCodeTasks is always false.
         slack_user_id: "U0BAALR4Y4Q",
       },
     }
@@ -460,7 +462,7 @@ describe("processSlackEvent", () => {
       threadId: "thread-001",
       messageId: "row-id-001",
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
-      enableCodeTasks: true,
+      enableCodeTasks: false,
       enableSlackSend: true,
       enableTeamChatSend: true,
       enableDbRead: true,

@@ -103,7 +103,7 @@ export async function processClaudeReply(params: {
   placeholderId: string
   senderIsAntonio: boolean
 }): Promise<{ ok: boolean; reason?: string }> {
-  const { threadId, promptMessageId, placeholderId, senderIsAntonio } = params
+  const { threadId, promptMessageId, placeholderId } = params
 
   // Load the placeholder + guard against double-processing and self-trigger.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -267,8 +267,10 @@ export async function processClaudeReply(params: {
       // explicit "send it" discipline. Answering @claude already runs in team
       // chat; this lets it post to OTHER team channels/threads on approval.
       enableTeamChatSend: true,
-      // Code-task rail Antonio-only (R111), keyed on the prompt author.
-      enableCodeTasks: senderIsAntonio,
+      // Code-task rail OFF (2026-07-10, Antonio): the team-chat worker never
+      // launches or ships a coding job — it investigates and reports; Antonio
+      // does code himself. (Reverses the earlier Antonio-only gate.)
+      enableCodeTasks: false,
       clientKey,
       clientName,
     })

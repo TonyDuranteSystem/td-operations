@@ -151,9 +151,11 @@ export async function POST(
   // ── In-thread approval completion (Slack-parity rail) ──────────────────
   // An ADMIN message that is EXACTLY a 6-digit code completes the pending
   // proposal linked to this thread — deterministically, without the LLM.
-  // The code message itself was inserted above (visible in the chat); the
-  // outcome posts as a Claude reply. See lib/team/team-approval.ts.
-  if (isAdmin(user)) {
+  // OFF (2026-07-10, Antonio): the worker no longer queues actions, so there is
+  // nothing to approve by code. Gated on the same rail switch (reversible) — a
+  // 6-digit message is just a normal chat message while the rail is off.
+  const { workerActionsEnabled } = await import('@/lib/ai-agent/worker-actions-switch')
+  if (workerActionsEnabled() && isAdmin(user)) {
     const { isSixDigitCode, handleTeamApprovalCode } = await import('@/lib/team/team-approval')
     if (isSixDigitCode(message)) {
       const outcome = await handleTeamApprovalCode({ code: message, threadId, isAdminSender: true })

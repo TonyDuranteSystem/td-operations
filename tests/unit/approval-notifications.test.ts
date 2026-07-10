@@ -131,6 +131,9 @@ beforeEach(() => {
   for (const k of Object.keys(h.store)) delete h.store[k]
   h.ctl.throwTables.clear()
   h.ctl.insertErrorTables.clear()
+  // Worker action rail is OFF by default (2026-07-10); this suite exercises the
+  // dormant-but-intact proposeAction machinery, so switch it on for these tests.
+  process.env.WORKER_ACTIONS_ENABLED = "true"
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

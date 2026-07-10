@@ -42,6 +42,7 @@ import { normalizeToolParams } from "./enum-normalization"
 import { sendApprovalNotification } from "./approval-notifications"
 import { sendTelegramApprovalNotification } from "./telegram-notify"
 import { currentApprovalEnv } from "./approval-env"
+import { workerActionsEnabled, WORKER_ACTIONS_OFF_MESSAGE } from "./worker-actions-switch"
 import {
   readCodebaseFile,
   searchCodebase,
@@ -1395,14 +1396,18 @@ export async function findClientThreadsForWorker(input: {
 export const MEMORY_SAVE_TOOL: ToolDef = AGENT_TOOLS.find((t) => t.name === "memory_save")!
 
 /**
- * Tools handed to sonnet at request time: the read-only research subset PLUS
- * propose_action (which only queues, never executes) PLUS the read-only
- * codebase tools (so the worker can trace into source) PLUS memory_save
+ * Tools handed to sonnet at request time: the read-only research subset PLUS the
+ * read-only codebase tools (so the worker can trace into source) PLUS memory_save
  * (knowledge-only write). memory_recall arrives via the read-only subset.
+ *
+ * propose_action was REMOVED here (2026-07-10, Antonio): no worker or helper on
+ * any surface queues actions anymore. The tool + proposeAction() are still
+ * exported (the backend approval machinery stays dormant, reversible), but they
+ * are no longer offered to the model, and proposeAction() refuses while the rail
+ * is off — see worker-actions-switch.ts.
  */
 export const WORKER_TOOLS: ToolDef[] = [
   ...AGENT_TOOLS.filter((t) => WORKER_READ_ONLY_TOOL_NAMES.has(t.name)),
-  PROPOSE_ACTION_TOOL,
   CODEBASE_READ_TOOL,
   CODEBASE_SEARCH_TOOL,
   MEMORY_SAVE_TOOL,
@@ -1488,6 +1493,13 @@ export async function proposeAction(
   },
   opts?: { allowBridgeTools?: boolean },
 ): Promise<string> {
+  // Single choke point for the worker action rail (2026-07-10, Antonio). When the
+  // rail is off (default), NO surface can queue an action — this covers the
+  // propose_action tool path, the use_tool bridge path, and batchPropose, since
+  // all of them funnel through here. Reversible via WORKER_ACTIONS_ENABLED.
+  if (!workerActionsEnabled()) {
+    return WORKER_ACTIONS_OFF_MESSAGE
+  }
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
   // hashing, so a proposal with 'medium'/'todo' is accepted (→ 'Normal'/'To Do')
@@ -1702,6 +1714,9 @@ export async function executeWorkerTool(
   sendContext?: WorkerSendContext,
 ): Promise<string> {
   if (name === "start_code_task") {
+    // Defense-in-depth: the tool is no longer offered to the model, but if a name
+    // leaks the launch must still refuse while the rail is off (2026-07-10).
+    if (!workerActionsEnabled()) return WORKER_ACTIONS_OFF_MESSAGE
     const { _currentSlackCtx } = await import("./slack-claude")
     const instructions = typeof params.instructions === "string" ? params.instructions : ""
     const title = typeof params.title === "string" ? params.title : "Code task"
@@ -1717,6 +1732,7 @@ export async function executeWorkerTool(
     return "Code task queued (id:" + data.id + "). Mac Mini will implement it and post results back here."
   }
   if (name === "promote_code_branch") {
+    if (!workerActionsEnabled()) return WORKER_ACTIONS_OFF_MESSAGE
     const { _currentSlackCtx } = await import("./slack-claude")
     const threadTs = _currentSlackCtx.threadTs ?? null
     const channelId = _currentSlackCtx.channelId ?? null
@@ -2001,7 +2017,7 @@ export const WORKER_SYSTEM_PROMPT = [
   "  1. Investigate using the read-only tools available to you (CRM search/get, Gmail read, Drive list, KB/SOP search, and codebase_read/codebase_search to trace a question into the actual repo source).",
   "  2. Verify every factual claim against a fresh tool call. NEVER assume column names, schemas, client state, or past actions.",
   "  3. Reply with concise, plain-English findings suitable for Hermes to relay back to Antonio on Telegram.",
-  "  4. When an action is implied (send an email, create/update a record, advance a stage, move/upload a Drive file, log a conversation), call propose_action — do NOT describe-only. propose_action does NOT run the action; it queues a pending proposal that does nothing until Antonio approves it on the approval rail. You still cannot execute, send, or mutate business data directly — propose_action only queues.",
+  "  4. You cannot change data or take actions — no creating/updating records, advancing stages, moving files, or logging. When an action is implied, say plainly what you would do and that Antonio needs to do it himself; do NOT claim you did it or queued it.",
   "  5. Memory: BEFORE deciding how to handle a recurring kind of situation, call memory_recall to see how comparable situations were decided before. AFTER investigating, if you learned something durable from this conversation — a correction, a business decision, a pricing or policy rule — call memory_save to remember it for next time. memory_save writes ONLY to the knowledge store (never to client or business data), so it does not need approval.",
   "",
   "Output discipline:",
