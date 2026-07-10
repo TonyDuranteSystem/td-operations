@@ -1,4 +1,13 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
+
+// callWorkerWithAttachments dynamically imports callWorker from worker-tools.
+// Mock it ONCE, statically (hoisted) — the old per-test vi.doMock + resetModules
+// dance flaked under the full concurrent suite (a known vitest quirk). Only
+// callWorker is used from that module here; everything else in this file comes
+// from attachment-reader.
+const { callWorkerMock } = vi.hoisted(() => ({ callWorkerMock: vi.fn() }))
+vi.mock("@/lib/ai-agent/worker-tools", () => ({ callWorker: callWorkerMock }))
+
 import {
   sniffImageMediaType,
   buildImageBlock,
@@ -352,63 +361,50 @@ describe("capMediaBudget", () => {
 
 describe("callWorkerWithAttachments", () => {
   const png1 = { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "x" } }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let callWorkerWithAttachments: (body: string, opts: any) => Promise<{ reply: string; toolsUsed: string[] }>
+
+  beforeEach(async () => {
+    callWorkerMock.mockReset()
+    ;({ callWorkerWithAttachments } = await import("@/lib/ai-agent/attachment-reader"))
+  })
 
   it("passes options straight through on success", async () => {
-    const callWorker = vi.fn(async () => ({ reply: "ok", toolsUsed: [] }))
-    vi.doMock("@/lib/ai-agent/worker-tools", () => ({ callWorker }))
-    vi.resetModules()
-    const { callWorkerWithAttachments } = await import("@/lib/ai-agent/attachment-reader")
-
+    callWorkerMock.mockResolvedValue({ reply: "ok", toolsUsed: [] })
     const res = await callWorkerWithAttachments("hi", { images: [png1], enableDbRead: true })
     expect(res.reply).toBe("ok")
-    expect(callWorker).toHaveBeenCalledTimes(1)
-    vi.doUnmock("@/lib/ai-agent/worker-tools")
+    expect(callWorkerMock).toHaveBeenCalledTimes(1)
   })
 
   it("retries WITHOUT media on a media 400, keeping every other option", async () => {
-    const callWorker = vi
-      .fn()
+    callWorkerMock
       .mockRejectedValueOnce(new Error("400 could not process image"))
       .mockResolvedValueOnce({ reply: "text answer", toolsUsed: [] })
-    vi.doMock("@/lib/ai-agent/worker-tools", () => ({ callWorker }))
-    vi.resetModules()
-    const { callWorkerWithAttachments } = await import("@/lib/ai-agent/attachment-reader")
 
     const res = await callWorkerWithAttachments("hi", { images: [png1], enableDbRead: true, maxIterations: 7 })
     expect(res.reply).toBe("text answer")
-    expect(callWorker).toHaveBeenCalledTimes(2)
+    expect(callWorkerMock).toHaveBeenCalledTimes(2)
 
-    const retryOpts = callWorker.mock.calls[1][1]
+    const retryOpts = callWorkerMock.mock.calls[1][1]
     expect(retryOpts.images).toBeUndefined()
     expect(retryOpts.documents).toBeUndefined()
     // every other flag survives the retry — the bug the Slack hand-rebuild invites
     expect(retryOpts.enableDbRead).toBe(true)
     expect(retryOpts.maxIterations).toBe(7)
     // the model is told the file is missing, so it says so instead of guessing
-    expect(callWorker.mock.calls[1][0]).toMatch(/could not be processed/)
-    vi.doUnmock("@/lib/ai-agent/worker-tools")
+    expect(callWorkerMock.mock.calls[1][0]).toMatch(/could not be processed/)
   })
 
   it("re-throws a non-media error instead of retrying", async () => {
-    const callWorker = vi.fn().mockRejectedValue(new Error("500 boom"))
-    vi.doMock("@/lib/ai-agent/worker-tools", () => ({ callWorker }))
-    vi.resetModules()
-    const { callWorkerWithAttachments } = await import("@/lib/ai-agent/attachment-reader")
-
+    callWorkerMock.mockRejectedValue(new Error("500 boom"))
     await expect(callWorkerWithAttachments("hi", { images: [png1] })).rejects.toThrow(/500 boom/)
-    expect(callWorker).toHaveBeenCalledTimes(1)
-    vi.doUnmock("@/lib/ai-agent/worker-tools")
+    expect(callWorkerMock).toHaveBeenCalledTimes(1)
   })
 
   it("does not retry a media-shaped error when no media was attached", async () => {
-    const callWorker = vi.fn().mockRejectedValue(new Error("400 image"))
-    vi.doMock("@/lib/ai-agent/worker-tools", () => ({ callWorker }))
-    vi.resetModules()
-    const { callWorkerWithAttachments } = await import("@/lib/ai-agent/attachment-reader")
-
+    callWorkerMock.mockRejectedValue(new Error("400 image"))
     await expect(callWorkerWithAttachments("hi", {})).rejects.toThrow(/400 image/)
-    expect(callWorker).toHaveBeenCalledTimes(1)
-    vi.doUnmock("@/lib/ai-agent/worker-tools")
+    expect(callWorkerMock).toHaveBeenCalledTimes(1)
   })
 })
 
