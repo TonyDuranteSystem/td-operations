@@ -35,19 +35,25 @@ export function RealtimeNotifications() {
     })
   }, [])
 
-  // Thread ids of the DMs the current user is in — so we chime/toast ONLY for a
-  // DM to me (or an @mention), never plain channel chatter (Antonio 2026-07-09).
-  // Refreshed every 60s so a brand-new DM starts pinging within a minute.
+  // Thread ids that should ping me: the DMs I'm in, AND the client conversations
+  // I'm a participant of (opened / posted / shared into). Never plain channel
+  // chatter or a conversation I've never touched (Antonio 2026-07-09/10).
+  // Refreshed every 60s so a brand-new DM or conversation starts pinging within
+  // a minute.
   const myDmThreadIdsRef = useRef<Set<string>>(new Set())
+  const myConversationThreadIdsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     let cancelled = false
     const load = () => {
       fetch('/api/team/threads')
         .then(r => r.json())
-        .then((d: { threads?: Array<{ id: string; thread_type?: string }> }) => {
+        .then((d: { threads?: Array<{ id: string; thread_type?: string; is_participant?: boolean }> }) => {
           if (cancelled || !Array.isArray(d.threads)) return
           myDmThreadIdsRef.current = new Set(
             d.threads.filter(t => t.thread_type === 'dm').map(t => t.id),
+          )
+          myConversationThreadIdsRef.current = new Set(
+            d.threads.filter(t => t.thread_type === 'discussion' && t.is_participant).map(t => t.id),
           )
         })
         .catch(() => {})
@@ -189,13 +195,15 @@ export function RealtimeNotifications() {
           // Don't notify for own messages
           if (payload.new?.sender_id && payload.new.sender_id === currentUserIdRef.current) return
 
-          // ONLY ping for a DM to me or an @mention of me — never plain channel
-          // chatter (matches the DM/@mention dot; Antonio 2026-07-09).
+          // Ping for a DM to me, an @mention of me, or activity in a client
+          // conversation I'm a participant of — never plain channel chatter or a
+          // conversation I've never touched (Antonio 2026-07-09/10).
           const mine = currentUserIdRef.current
           const mentionsMe = !!mine && Array.isArray(payload.new?.mentioned_user_ids)
             && payload.new.mentioned_user_ids.includes(mine)
           const isMyDm = !!payload.new?.thread_id && myDmThreadIdsRef.current.has(payload.new.thread_id)
-          if (!mentionsMe && !isMyDm) return
+          const isMyConversation = !!payload.new?.thread_id && myConversationThreadIdsRef.current.has(payload.new.thread_id)
+          if (!mentionsMe && !isMyDm && !isMyConversation) return
 
           const senderName = payload.new?.sender_name || 'Team member'
           const threadId = payload.new?.thread_id
@@ -203,7 +211,7 @@ export function RealtimeNotifications() {
           playSound()
 
           toast(
-            mentionsMe ? `@mention · ${senderName}` : `DM · ${senderName}`,
+            mentionsMe ? `@mention · ${senderName}` : isMyDm ? `DM · ${senderName}` : `Conversation · ${senderName}`,
             {
               description: typeof payload.new?.message === 'string'
                 ? payload.new.message.slice(0, 80)

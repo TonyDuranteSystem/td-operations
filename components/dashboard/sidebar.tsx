@@ -264,9 +264,11 @@ function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
               >
                 <span className={cn(
                   'text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0',
-                  it.kind === 'dm' ? 'bg-blue-100 text-blue-700' : 'bg-violet-100 text-violet-700',
+                  it.kind === 'dm' ? 'bg-blue-100 text-blue-700'
+                    : it.kind === 'conversation' ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-violet-100 text-violet-700',
                 )}>
-                  {it.kind === 'dm' ? 'DM' : '@'}
+                  {it.kind === 'dm' ? 'DM' : it.kind === 'conversation' ? 'Client' : '@'}
                 </span>
                 <span className="flex-1 truncate text-sm text-zinc-800">{it.label}</span>
                 {it.count > 1 && <span className="text-[10px] text-zinc-400 shrink-0">{it.count}</span>}

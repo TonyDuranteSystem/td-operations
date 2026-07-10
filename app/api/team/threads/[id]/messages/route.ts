@@ -142,8 +142,30 @@ export async function POST(
           tag: `team-dm-${threadId}`,
         })
       }
+    } else if (thread.thread_type === 'discussion') {
+      // A client conversation: ping its PARTICIPANTS (anyone with a read row —
+      // opened / posted / shared into), never the whole team. The CLAUDE
+      // sentinel and the sender are excluded. This is the participant model that
+      // keeps channel chatter silent while a conversation you're in rings.
+      const { CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: participants } = await (supabaseAdmin as any)
+        .from('internal_thread_reads')
+        .select('user_id')
+        .eq('thread_id', threadId)
+      const ids = (participants ?? [])
+        .map((p: { user_id: string }) => p.user_id)
+        .filter((uid: string) => uid && uid !== user.id && uid !== CLAUDE_SENDER_UUID)
+      if (ids.length > 0) {
+        await sendPushToAdminUsers(ids, {
+          title: `${displayName} · ${thread.title ?? 'Conversation'}`,
+          body: preview,
+          url: `/team-chat?thread=${threadId}`,
+          tag: `team-conversation-${threadId}`,
+        })
+      }
     }
-    // else: channel / general / discussion without a mention → intentionally silent.
+    // else: channel / general → intentionally silent.
   } catch {
     // non-critical
   }

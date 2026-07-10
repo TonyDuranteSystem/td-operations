@@ -50,6 +50,30 @@ describe('countTeamNotifications', () => {
       {},
     ])).toBe(0)
   })
+
+  it('counts unread in a conversation you ARE a participant of', () => {
+    expect(countTeamNotifications([
+      { thread_type: 'discussion', unread_count: 4, mention_count: 0, is_participant: true },
+    ])).toBe(4)
+  })
+
+  it('still IGNORES unread in a conversation you are NOT a participant of', () => {
+    expect(countTeamNotifications([
+      { thread_type: 'discussion', unread_count: 9, mention_count: 0, is_participant: false },
+    ])).toBe(0)
+  })
+
+  it('a participant conversation uses unread (mentions already included, no double count)', () => {
+    expect(countTeamNotifications([
+      { thread_type: 'discussion', unread_count: 3, mention_count: 1, is_participant: true },
+    ])).toBe(3)
+  })
+
+  it('a non-participant conversation still counts an @mention', () => {
+    expect(countTeamNotifications([
+      { thread_type: 'discussion', unread_count: 9, mention_count: 2, is_participant: false },
+    ])).toBe(2)
+  })
 })
 
 describe('buildTeamNotifications', () => {
@@ -80,6 +104,25 @@ describe('buildTeamNotifications', () => {
       { id: 'b', thread_type: 'channel', label: 'td-dev', unread_count: 99, mention_count: 0 },
     ], me, nameFor)
     expect(out).toEqual([])
+  })
+
+  it('lists a participant conversation, but not one you have not touched', () => {
+    const out = buildTeamNotifications([
+      { id: 'c1', thread_type: 'discussion', label: 'Acme LLC', unread_count: 2, mention_count: 0, is_participant: true },
+      { id: 'c2', thread_type: 'discussion', label: 'Other LLC', unread_count: 5, mention_count: 0, is_participant: false },
+    ], me, nameFor)
+    expect(out).toEqual([
+      { id: 'c1', kind: 'conversation', label: 'Acme LLC', count: 2, url: '/team-chat?thread=c1' },
+    ])
+  })
+
+  it('orders DMs, then conversations, then mentions', () => {
+    const out = buildTeamNotifications([
+      { id: 'x', thread_type: 'channel', label: 'td-dev', unread_count: 0, mention_count: 1 },
+      { id: 'y', thread_type: 'discussion', label: 'Acme LLC', unread_count: 1, mention_count: 0, is_participant: true },
+      { id: 'z', thread_type: 'dm', dm_key: 'luca-1:me-123', unread_count: 1, mention_count: 0 },
+    ], me, nameFor)
+    expect(out.map(i => i.kind)).toEqual(['dm', 'conversation', 'mention'])
   })
 
   it('orders DMs before mentions, then by count', () => {

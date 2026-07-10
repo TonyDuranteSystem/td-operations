@@ -151,6 +151,42 @@ describe('resolution: Solved / Closed / reopen (S2)', () => {
   }, 60_000)
 })
 
+describe('participant flag + notification scope (S4)', () => {
+  const OTHER = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631' // antonio (any other staff uuid)
+
+  async function rpcRow(userId: string, threadId: string) {
+    const { data } = await supabaseAdmin.rpc('get_team_threads', { p_user_id: userId })
+    return (data as Array<Record<string, unknown>> | null)?.find(r => r.id === threadId)
+  }
+
+  it('the creator is a participant; a staffer who never touched it is NOT', async () => {
+    const a = await make('Banking')
+    // Creator seeded a read row via the opening message? No — creation does not
+    // seed the creator's read row, so simulate an OPEN by upserting it.
+    await supabaseAdmin.from('internal_thread_reads')
+      .upsert({ thread_id: a.thread.id, user_id: CREATED_BY, last_read_at: '1970-01-01T00:00:00Z' }, { onConflict: 'thread_id,user_id' })
+
+    const mine = await rpcRow(CREATED_BY, a.thread.id)
+    const theirs = await rpcRow(OTHER, a.thread.id)
+    expect(mine?.is_participant).toBe(true)
+    expect(theirs?.is_participant).toBe(false)
+  }, 60_000)
+
+  it('seeding a recipient read row makes them a participant with the unread showing', async () => {
+    const a = await make('Closure')
+    // Simulate the share-route seed: recipient gets a read row, last_read_at null.
+    await supabaseAdmin.from('internal_thread_reads')
+      .upsert({ thread_id: a.thread.id, user_id: OTHER, last_read_at: '1970-01-01T00:00:00Z' }, { onConflict: 'thread_id,user_id', ignoreDuplicates: true })
+    // A message from someone else so OTHER has something unread.
+    await supabaseAdmin.from('internal_messages').insert({
+      thread_id: a.thread.id, sender_id: CREATED_BY, sender_name: 'QA', message: 'shared item', read_at: new Date().toISOString(),
+    })
+    const row = await rpcRow(OTHER, a.thread.id)
+    expect(row?.is_participant).toBe(true)
+    expect(Number(row?.unread_count)).toBeGreaterThan(0)
+  }, 60_000)
+})
+
 describe('grouping fields in get_team_threads (S3)', () => {
   it('an account conversation carries an account client_key + the account name + topic', async () => {
     const a = await make('Documents')

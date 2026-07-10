@@ -161,20 +161,25 @@ export interface TeamThreadCountRow {
   thread_type?: string | null
   unread_count?: number | null
   mention_count?: number | null
+  /** True when the caller has an internal_thread_reads row (opened/posted/seeded). */
+  is_participant?: boolean | null
 }
 
 /**
  * Team-chat notification count for the sidebar/menu signal.
  *
- * Deliberately narrow (Antonio 2026-07-09): a signal ONLY for a new **DM** or an
- * **@mention** — NOT ordinary channel/discussion unread (that was the noisy "48").
- * DMs contribute their unread_count; every other thread type contributes only its
- * mention_count (so channel chatter you weren't tagged in never lights the dot).
+ * Signals for: a new **DM**, an **@mention**, or unread in a **client
+ * conversation you are a participant of** (you've opened, posted, or been
+ * shared into it) — Antonio 2026-07-10. Still NOT ordinary channel chatter or a
+ * conversation you've never touched (that was the noisy "48"). A participant
+ * discussion contributes its full unread_count (which already includes any
+ * mentions); every other non-DM thread contributes only its mention_count.
  */
 export function countTeamNotifications(threads: TeamThreadCountRow[] | null | undefined): number {
   let n = 0
   for (const t of threads ?? []) {
     if (t.thread_type === 'dm') n += Number(t.unread_count) || 0
+    else if (t.thread_type === 'discussion' && t.is_participant) n += Number(t.unread_count) || 0
     else n += Number(t.mention_count) || 0
   }
   return n
@@ -187,12 +192,13 @@ export interface TeamNotifThreadRow {
   unread_count?: number | null
   mention_count?: number | null
   label?: string | null
+  is_participant?: boolean | null
 }
 
 export interface TeamNotifItem {
   id: string
-  kind: 'dm' | 'mention'
-  /** Display label: the other person (DM) or the channel/discussion (mention). */
+  kind: 'dm' | 'mention' | 'conversation'
+  /** Display label: the other person (DM), or the channel/conversation. */
   label: string
   count: number
   /** Deep-link to the thread. */
@@ -218,13 +224,20 @@ export function buildTeamNotifications(
       if (unread <= 0) continue
       const otherId = (t.dm_key ?? '').split(':').find(id => id && id !== userId) ?? ''
       items.push({ id: t.id, kind: 'dm', label: nameFor(otherId) || 'Direct message', count: unread, url: `/team-chat?thread=${t.id}` })
+    } else if (t.thread_type === 'discussion' && t.is_participant) {
+      // A conversation you're part of: unread already includes any mentions.
+      const unread = Number(t.unread_count) || 0
+      if (unread <= 0) continue
+      items.push({ id: t.id, kind: 'conversation', label: t.label || 'Conversation', count: unread, url: `/team-chat?thread=${t.id}` })
     } else {
       const mentions = Number(t.mention_count) || 0
       if (mentions <= 0) continue
       items.push({ id: t.id, kind: 'mention', label: t.label || 'Mention', count: mentions, url: `/team-chat?thread=${t.id}` })
     }
   }
-  return items.sort((a, b) => (a.kind === b.kind ? b.count - a.count : a.kind === 'dm' ? -1 : 1))
+  // DMs first, then conversations, then mentions; by count within each kind.
+  const rank = (k: TeamNotifItem['kind']) => (k === 'dm' ? 0 : k === 'conversation' ? 1 : 2)
+  return items.sort((a, b) => (a.kind === b.kind ? b.count - a.count : rank(a.kind) - rank(b.kind)))
 }
 
 /** Validate a TeamCard shape. Returns a user-friendly error or null. */

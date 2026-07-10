@@ -94,6 +94,22 @@ export async function POST(request: NextRequest) {
       const members = await listTeamMembers()
       pushIds = members.filter(m => m.role === 'admin' && m.id !== user.id).map(m => m.id)
     }
+
+    // Seed each recipient as a PARTICIPANT of the conversation (a read row whose
+    // last_read_at is the epoch → every existing message, incl. the shared item,
+    // counts as unread for them, and they now get the conversation's ring + dot
+    // on every future message). `last_read_at` is NOT NULL, so we use the epoch
+    // rather than null. ignoreDuplicates so we never clobber a recipient who has
+    // already read further.
+    if (pushIds.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabaseAdmin as any)
+        .from('internal_thread_reads')
+        .upsert(
+          pushIds.map(uid => ({ thread_id: threadId, user_id: uid, last_read_at: '1970-01-01T00:00:00Z', updated_at: now })),
+          { onConflict: 'thread_id,user_id', ignoreDuplicates: true },
+        )
+    }
   } else {
     // ── Legacy DM targets (support person, or a chosen teammate) ──
     let recipientId: string
