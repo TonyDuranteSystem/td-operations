@@ -17,7 +17,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { Loader2, Send, Users, LifeBuoy, X } from 'lucide-react'
+import { Loader2, Send, Users, LifeBuoy, MessagesSquare, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -51,12 +51,32 @@ interface ShareToTeamDialogProps {
   onShared?: () => void
 }
 
-type Mode = 'support' | 'teammate'
+type Mode = 'conversation' | 'support' | 'teammate'
+
+interface ClientResult {
+  value: string
+  label: string
+  sublabel: string
+  kind: 'account' | 'contact' | 'lead'
+}
+interface TopicTemplate {
+  slug: string
+  display_name: string
+}
 
 export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTeamDialogProps) {
-  const [mode, setMode] = useState<Mode>('support')
+  // A single client email/message → default to a client Conversation. A bulk
+  // share (many items) can't sensibly become one client+topic thread, so it
+  // stays on the DM targets.
+  const bulk = items.length > 1
+  const [mode, setMode] = useState<Mode>(bulk ? 'support' : 'conversation')
   const [teammateId, setTeammateId] = useState<string>('')
   const [note, setNote] = useState('')
+
+  // Conversation target state.
+  const [clientQuery, setClientQuery] = useState('')
+  const [client, setClient] = useState<ClientResult | null>(null)
+  const [topic, setTopic] = useState<string>('')
 
   const { data: dir } = useQuery<{ members: TeamMember[]; current_user_id: string }>({
     queryKey: ['team-directory'],
@@ -64,9 +84,28 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
   })
   const members = (dir?.members ?? []).filter(m => m.id !== dir?.current_user_id)
 
+  const { data: topicData } = useQuery<{ templates: TopicTemplate[] }>({
+    queryKey: ['topic-templates'],
+    queryFn: () => fetch('/api/portal/chat/topic-templates').then(r => r.json()),
+    enabled: mode === 'conversation',
+  })
+  const topics = topicData?.templates ?? []
+
+  const { data: clientData, isFetching: clientSearching } = useQuery<{ results: ClientResult[] }>({
+    queryKey: ['team-client-search', clientQuery],
+    queryFn: () => fetch(`/api/team/client-search?q=${encodeURIComponent(clientQuery)}`).then(r => r.json()),
+    enabled: mode === 'conversation' && clientQuery.trim().length >= 2 && !client,
+  })
+  const clientResults = clientData?.results ?? []
+
   const shareMutation = useMutation({
     mutationFn: async () => {
-      const target = mode === 'support' ? 'support' : { user_id: teammateId }
+      const target =
+        mode === 'support'
+          ? 'support'
+          : mode === 'teammate'
+            ? { user_id: teammateId }
+            : { conversation: { client: client!.value, topic: topic || undefined } }
       const res = await fetch('/api/team/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -77,9 +116,12 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
       return data as { thread_id: string; count: number }
     },
     onSuccess: (data) => {
-      const where = mode === 'support'
-        ? 'Support'
-        : members.find(m => m.id === teammateId)?.name || 'teammate'
+      const where =
+        mode === 'support'
+          ? 'Support'
+          : mode === 'teammate'
+            ? members.find(m => m.id === teammateId)?.name || 'teammate'
+            : `${client?.label}${topic ? ` · ${topic}` : ''}`
       toast.success(`Shared ${data.count > 1 ? `${data.count} items` : 'item'} to ${where}`, {
         action: {
           label: 'Open',
@@ -95,8 +137,12 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
 
   const canSubmit =
     items.length > 0 &&
-    (mode === 'support' || (mode === 'teammate' && !!teammateId)) &&
-    !shareMutation.isPending
+    !shareMutation.isPending &&
+    (
+      (mode === 'support') ||
+      (mode === 'teammate' && !!teammateId) ||
+      (mode === 'conversation' && !!client)
+    )
 
   return (
     <>
@@ -117,32 +163,101 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
 
         <div className="p-4 space-y-3">
           {/* Target toggle */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => !bulk && setMode('conversation')}
+              disabled={bulk}
+              title={bulk ? 'Share one item at a time into a client conversation' : undefined}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs',
+                mode === 'conversation'
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+                bulk && 'opacity-40 cursor-not-allowed',
+              )}
+            >
+              <MessagesSquare className="h-4 w-4 shrink-0" />
+              <span>Conversation</span>
+            </button>
             <button
               onClick={() => setMode('support')}
               className={cn(
-                'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm',
+                'flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs',
                 mode === 'support'
                   ? 'border-blue-500 bg-blue-50 text-blue-700'
                   : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
               )}
             >
               <LifeBuoy className="h-4 w-4 shrink-0" />
-              <span>Send to Support</span>
+              <span>Support</span>
             </button>
             <button
               onClick={() => setMode('teammate')}
               className={cn(
-                'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm',
+                'flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs',
                 mode === 'teammate'
                   ? 'border-blue-500 bg-blue-50 text-blue-700'
                   : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
               )}
             >
               <Users className="h-4 w-4 shrink-0" />
-              <span>Discuss with…</span>
+              <span>Teammate</span>
             </button>
           </div>
+
+          {/* Conversation picker: client + topic */}
+          {mode === 'conversation' && (
+            <div className="space-y-2">
+              {client ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-sm">
+                  <span className="flex-1 truncate text-blue-800">{client.label}</span>
+                  <span className="text-[10px] uppercase text-blue-400">{client.kind}</span>
+                  <button onClick={() => { setClient(null); setClientQuery('') }} className="text-blue-400 hover:text-blue-600">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                  <input
+                    value={clientQuery}
+                    onChange={e => setClientQuery(e.target.value)}
+                    placeholder="Find a client (company, contact, or lead)…"
+                    className="w-full text-sm border rounded-lg pl-8 pr-3 py-2 outline-none placeholder:text-zinc-400 focus:border-blue-400"
+                  />
+                  {clientQuery.trim().length >= 2 && (
+                    <div className="mt-1 max-h-36 overflow-y-auto border rounded-lg divide-y">
+                      {clientSearching && <p className="text-xs text-zinc-400 px-3 py-2">Searching…</p>}
+                      {!clientSearching && clientResults.length === 0 && (
+                        <p className="text-xs text-zinc-400 px-3 py-2">No matches</p>
+                      )}
+                      {clientResults.map(r => (
+                        <button
+                          key={r.value}
+                          onClick={() => setClient(r)}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50"
+                        >
+                          <span className="flex-1 truncate text-zinc-800">{r.label}</span>
+                          <span className="text-[10px] uppercase text-zinc-400">{r.sublabel}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <select
+                value={topic}
+                onChange={e => setTopic(e.target.value)}
+                className="w-full text-sm border rounded-lg px-3 py-2 outline-none bg-white focus:border-blue-400"
+              >
+                <option value="">General (no specific topic)</option>
+                {topics.map(t => (
+                  <option key={t.slug} value={t.display_name}>{t.display_name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Teammate picker */}
           {mode === 'teammate' && (

@@ -5,6 +5,8 @@ import { findOrCreateDm } from '@/lib/team/dm'
 import { listTeamMembers } from '@/lib/team/directory'
 import { buildShareCards, composeShareMessage, MAX_SHARE_ITEMS } from '@/lib/team/share'
 import { getSupportPersonUserId } from '@/lib/settings'
+import { findOrCreateConversation } from '@/lib/team/find-conversation'
+import { parseClientRef } from '@/lib/team/conversations'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -46,47 +48,93 @@ export async function POST(request: NextRequest) {
   }
   const cards = built.cards
 
-  // Resolve the recipient staff user id.
-  let recipientId: string
-  if (body.target === 'support') {
-    const supportId = await getSupportPersonUserId()
-    if (!supportId) {
-      return NextResponse.json(
-        { error: 'No support person is configured. Set one before sharing to Support.' },
-        { status: 409 },
-      )
-    }
-    recipientId = supportId
-  } else if (body.target && typeof body.target === 'object' && typeof body.target.user_id === 'string') {
-    recipientId = body.target.user_id.trim()
-  } else {
-    return NextResponse.json({ error: 'A share target is required.' }, { status: 400 })
-  }
-  if (!recipientId) {
-    return NextResponse.json({ error: 'A share target is required.' }, { status: 400 })
-  }
-
-  // The recipient must be a real, active staff member.
-  const members = await listTeamMembers()
-  const recipient = members.find(m => m.id === recipientId)
-  if (!recipient) {
-    return NextResponse.json({ error: 'That teammate was not found.' }, { status: 404 })
-  }
-
-  // Find-or-create the DM (order-independent, race-safe).
-  let threadId: string
-  try {
-    const { thread } = await findOrCreateDm(user.id, recipientId)
-    threadId = thread.id
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not open the conversation.' },
-      { status: 500 },
-    )
-  }
-
   const now = new Date().toISOString()
   const displayName = getUserDisplayName(user)
+
+  // Resolve WHERE the share lands (threadId) and WHO gets pinged (pushIds).
+  // Three targets:
+  //   'support'                        → the support person's DM (legacy)
+  //   { user_id }                      → a chosen teammate's DM (legacy)
+  //   { conversation: { client, topic }} → a team-visible CLIENT CONVERSATION
+  let threadId: string
+  let pushIds: string[] = []
+  let openLabel = 'teammate'
+
+  const convTarget =
+    body.target && typeof body.target === 'object' && body.target.conversation
+      ? body.target.conversation
+      : null
+
+  if (convTarget) {
+    // ── Client conversation (team-visible discussion on a client + topic) ──
+    const ref = parseClientRef((convTarget.client ?? '').toString())
+    if (!ref) return NextResponse.json({ error: 'A valid client is required.' }, { status: 400 })
+    const topic: string | null = (convTarget.topic ?? '').toString().trim() || null
+
+    const found = await findOrCreateConversation({
+      ref,
+      topic,
+      createdBy: user.id,
+      createdByName: displayName,
+      forceNew: convTarget.force_new === true,
+    })
+    if ('error' in found) {
+      return NextResponse.json({ error: found.error }, { status: found.status })
+    }
+    threadId = found.thread.id
+    openLabel = found.thread.title ?? found.clientName
+
+    // Notify the support person (Luca) by default — the person picking up client
+    // work. If the sharer IS the support person, fall back to notifying admins so
+    // it never rings the sharer alone. (Full @tag routing is a later slice.)
+    const supportId = await getSupportPersonUserId()
+    if (supportId && supportId !== user.id) {
+      pushIds = [supportId]
+    } else {
+      const members = await listTeamMembers()
+      pushIds = members.filter(m => m.role === 'admin' && m.id !== user.id).map(m => m.id)
+    }
+  } else {
+    // ── Legacy DM targets (support person, or a chosen teammate) ──
+    let recipientId: string
+    if (body.target === 'support') {
+      const supportId = await getSupportPersonUserId()
+      if (!supportId) {
+        return NextResponse.json(
+          { error: 'No support person is configured. Set one before sharing to Support.' },
+          { status: 409 },
+        )
+      }
+      recipientId = supportId
+    } else if (body.target && typeof body.target === 'object' && typeof body.target.user_id === 'string') {
+      recipientId = body.target.user_id.trim()
+    } else {
+      return NextResponse.json({ error: 'A share target is required.' }, { status: 400 })
+    }
+    if (!recipientId) {
+      return NextResponse.json({ error: 'A share target is required.' }, { status: 400 })
+    }
+
+    // The recipient must be a real, active staff member.
+    const members = await listTeamMembers()
+    const recipient = members.find(m => m.id === recipientId)
+    if (!recipient) {
+      return NextResponse.json({ error: 'That teammate was not found.' }, { status: 404 })
+    }
+    openLabel = recipient.name
+
+    // Find-or-create the DM (order-independent, race-safe).
+    try {
+      const { thread } = await findOrCreateDm(user.id, recipientId)
+      threadId = thread.id
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : 'Could not open the conversation.' },
+        { status: 500 },
+      )
+    }
+    pushIds = recipientId !== user.id ? [recipientId] : []
+  }
 
   // One message per item. The message body = the sharer's note + the item's full
   // source text (whole email / portal message), capped; the card is the titled
@@ -128,13 +176,11 @@ export async function POST(request: NextRequest) {
       { onConflict: 'thread_id,user_id' },
     )
 
-  // Notify ONLY the recipient (never the whole team). No-op if you shared to
-  // your own DM (recipient === you).
-  const pushIds = recipientId !== user.id ? [recipientId] : []
+  // Notify the resolved recipient(s). Empty when you shared to your own DM.
   try {
     const count = cards.length
     await sendPushToAdminUsers(pushIds, {
-      title: `${displayName} shared ${count > 1 ? `${count} items` : 'an item'} with you`,
+      title: `${displayName} shared ${count > 1 ? `${count} items` : 'an item'} — ${openLabel}`,
       body: note ? note.slice(0, 120) : (cards[0].title || 'Shared to team chat'),
       url: `/team-chat?thread=${threadId}`,
       tag: `team-share-${threadId}`,
