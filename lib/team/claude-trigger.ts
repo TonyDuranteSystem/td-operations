@@ -194,15 +194,22 @@ export async function processClaudeReply(params: {
   const media = { imageBlocks: [] as WorkerImageBlock[], documentBlocks: [] as WorkerDocumentBlock[] }
   if (carrier) {
     try {
-      const { readAttachments, fetchTrustedStorageBytes, attachmentRefsFromChatRow } = await import(
+      const { readAttachments, fetchTrustedStorageBytes, attachmentRefsFromChatRow, capMediaBudget, fenceUntrustedContent } = await import(
         '@/lib/ai-agent/attachment-reader'
       )
       const read = await readAttachments(attachmentRefsFromChatRow(carrier), fetchTrustedStorageBytes)
-      media.imageBlocks = read.imageBlocks
-      media.documentBlocks = read.documentBlocks
+      // Keep the whole turn under the Anthropic request ceiling; name what's dropped.
+      const capped = capMediaBudget(read.imageBlocks, read.documentBlocks)
+      media.imageBlocks = capped.images
+      media.documentBlocks = capped.documents
       if (read.textBlocks.length) {
         const whose = carrier.id === prompt.id ? 'this message' : `an earlier message from ${carrier.sender_name}`
-        userBody += `\n\n--- FILES SHARED IN ${whose.toUpperCase()} ---\n${read.textBlocks.join('\n\n')}`
+        // Team Chat has email + portal send rails, so a shared file's text must
+        // never be able to read as an instruction or as an approval to send.
+        userBody += `\n\n${fenceUntrustedContent(`files shared in ${whose}`, read.textBlocks.join('\n\n'))}`
+      }
+      if (capped.dropped.length) {
+        userBody += `\n\n[Too much was attached to show you everything. Not shown: ${capped.dropped.join(', ')}.]`
       }
     } catch (err) {
       // Never block the reply on attachment reading.

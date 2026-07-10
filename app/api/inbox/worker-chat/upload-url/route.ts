@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isDashboardUser } from "@/lib/auth"
 import { validateChatAttachment } from "@/lib/portal/chat-attachment"
-import { WORKER_UPLOAD_BUCKET } from "@/lib/ai-agent/attachment-reader"
+import { WORKER_UPLOAD_BUCKET, MAX_ATTACHMENT_BYTES } from "@/lib/ai-agent/attachment-reader"
 import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
 
@@ -35,11 +35,19 @@ export async function POST(request: NextRequest) {
   const mimeType: string = typeof body.mime_type === "string" ? body.mime_type : ""
   if (!fileName) return NextResponse.json({ error: "file_name required" }, { status: 400 })
 
-  // Same size/type policy as every other chat upload — one place decides what a
-  // "normal file" is, so the surfaces never drift (executables stay blocked).
+  // Same type policy as every other chat upload (executables stay blocked)...
   const validationError = validateChatAttachment(fileName, fileSize, mimeType)
   if (validationError) {
     return NextResponse.json({ error: validationError }, { status: 400 })
+  }
+  // ...but a tighter size limit, matching what the worker's reader will accept.
+  // The client checks this too; that's a convenience, this is the control.
+  if (fileSize > MAX_ATTACHMENT_BYTES) {
+    const mb = MAX_ATTACHMENT_BYTES / 1024 / 1024
+    return NextResponse.json(
+      { error: `Too large for the worker to read: ${(fileSize / 1024 / 1024).toFixed(1)} MB (max ${mb} MB).` },
+      { status: 400 },
+    )
   }
 
   // The path shape is enforced again on read (isValidWorkerUploadPath) — the

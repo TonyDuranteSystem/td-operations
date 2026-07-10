@@ -36,19 +36,31 @@ interface WorkerComposerProps {
 
 export function WorkerComposer({ placeholder, pending, disabled, onSend, value, onChange, attachments: att }: WorkerComposerProps) {
   const fileRef = useRef<HTMLInputElement>(null)
-  const { files, uploading, add, remove, clear, uploaded, onPaste } = att
+  const { files, uploading, limitNotice, add, remove, clear, uploaded, failed, onPaste } = att
 
-  const ready = files.length > 0 && files.every((f) => f.path || f.error)
-  // A message with nothing but a still-uploading file isn't sendable yet.
-  const canSend = !pending && !disabled && !uploading && (value.trim().length > 0 || (files.length > 0 && ready))
+  const text = value.trim()
+  const readyFiles = files.filter((f) => f.path && !f.error)
+  const stillUploading = files.some((f) => !f.path && !f.error)
+  // Sendable when there's text, or at least one file that actually uploaded.
+  // Files that ERRORED don't count: treating them as "settled" made the button
+  // look enabled while clicking it did nothing.
+  const canSend = !pending && !disabled && !uploading && !stillUploading && (text.length > 0 || readyFiles.length > 0)
 
   const submit = async () => {
     if (!canSend) return
     const attachments = uploaded()
-    const text = value.trim()
-    // The worker needs SOMETHING to act on; a bare file gets an implicit ask.
+    // A bare file gets an implicit ask, so the worker has something to act on.
     const message = text || (attachments.length ? 'Look at the attached file(s).' : '')
     if (!message) return
+
+    // Never let a failed file vanish on send. The staff member has to know the
+    // affidavit didn't make it, or they'll trust an answer built without it.
+    const lost = failed()
+    if (lost.length) {
+      const names = lost.map((f) => f.name).join(', ')
+      if (!window.confirm(`${names} could not be uploaded and will NOT be sent.\n\nSend anyway?`)) return
+    }
+
     onChange('')
     clear()
     await onSend(message, attachments)
@@ -90,6 +102,8 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
           ))}
         </div>
       )}
+
+      {limitNotice && <p className="text-[11px] text-amber-700 pb-1.5">{limitNotice}</p>}
 
       <div className="flex items-end gap-2">
         <button

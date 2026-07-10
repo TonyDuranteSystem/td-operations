@@ -39,42 +39,86 @@ export interface UploadedAttachment {
 let counter = 0
 const nextLocalId = () => `f${++counter}-${Date.now()}`
 
+/** The server reads at most this many attachments per turn. */
+export const MAX_FILES = 5
+/**
+ * Mirrors MAX_ATTACHMENT_BYTES in lib/ai-agent/attachment-reader.ts. Kept as a
+ * plain number rather than imported, because that module pulls in server-only
+ * code. If one moves, move both.
+ */
+export const MAX_WORKER_FILE_MB = 20
+export const MAX_WORKER_FILE_BYTES = MAX_WORKER_FILE_MB * 1024 * 1024
+
 export function useWorkerAttachments() {
   const [files, setFiles] = useState<StagedAttachment[]>([])
   const [uploading, setUploading] = useState(false)
+  const [limitNotice, setLimitNotice] = useState<string | null>(null)
 
   const remove = useCallback((localId: string) => {
     setFiles((prev) => prev.filter((f) => f.localId !== localId))
+    setLimitNotice(null)
   }, [])
 
-  const clear = useCallback(() => setFiles([]), [])
+  const clear = useCallback(() => {
+    setFiles([])
+    setLimitNotice(null)
+  }, [])
 
   const add = useCallback(async (incoming: File[]) => {
     if (!incoming.length) return
-    // Cap at 5 — the server reads at most 5 per turn and silently dropping the
-    // rest would read as "the worker ignored my file".
-    const staged: StagedAttachment[] = []
-    for (const file of incoming) {
-      if (files.length + staged.length >= 5) break
-      staged.push({
-        localId: nextLocalId(),
-        name: file.name,
-        size: file.size,
-        mimeType: file.type || 'application/octet-stream',
-      })
+
+    // The cap must be computed against the CURRENT list, inside the updater.
+    // Reading `files.length` from the closure lets two fast pastes each see the
+    // pre-render count and stage 5 apiece — the server then reads only the first
+    // 5 and drops the rest, which is exactly the "the worker ignored my file"
+    // outcome this cap exists to prevent.
+    const accepted: Array<{ entry: StagedAttachment; file: File }> = []
+    let overflow = 0
+    setFiles((prev) => {
+      const room = Math.max(0, MAX_FILES - prev.length)
+      const take = incoming.slice(0, room)
+      overflow = incoming.length - take.length
+      for (const file of take) {
+        accepted.push({
+          entry: {
+            localId: nextLocalId(),
+            name: file.name,
+            size: file.size,
+            mimeType: file.type || 'application/octet-stream',
+          },
+          file,
+        })
+      }
+      return [...prev, ...accepted.map((a) => a.entry)]
+    })
+
+    // Never swallow a file the user tried to attach.
+    if (overflow > 0) {
+      setLimitNotice(`Only ${MAX_FILES} files at a time — ${overflow} not added.`)
+    } else {
+      setLimitNotice(null)
     }
-    setFiles((prev) => [...prev, ...staged])
+    if (!accepted.length) return
+
+    const staged = accepted.map((a) => a.entry)
+    const files_ = accepted.map((a) => a.file)
     setUploading(true)
 
     await Promise.all(
       staged.map(async (entry, i) => {
-        const file = incoming[i]
+        const file = files_[i]
         const fail = (error: string) =>
           setFiles((prev) => prev.map((f) => (f.localId === entry.localId ? { ...f, error } : f)))
 
-        // Same policy as every other chat upload — one source of truth.
+        // Same type policy as every other chat upload (executables blocked).
         const validationError = validateChatAttachment(file.name, file.size, file.type)
         if (validationError) return fail(validationError)
+        // ...but a tighter SIZE limit: chat allows 100MB, and the worker's reader
+        // refuses anything over 20MB. Without this the upload goes green and the
+        // worker then says it can't read the file — success followed by refusal.
+        if (file.size > MAX_WORKER_FILE_BYTES) {
+          return fail(`Too large for the worker to read: ${(file.size / 1024 / 1024).toFixed(1)} MB (max ${MAX_WORKER_FILE_MB} MB).`)
+        }
 
         try {
           const urlRes = await fetch('/api/inbox/worker-chat/upload-url', {
@@ -109,7 +153,7 @@ export function useWorkerAttachments() {
       }),
     )
     setUploading(false)
-  }, [files.length])
+  }, [])
 
   /** Files that actually made it to storage — the only ones worth sending. */
   const uploaded = useCallback((): UploadedAttachment[] => {
@@ -117,6 +161,9 @@ export function useWorkerAttachments() {
       .filter((f): f is StagedAttachment & { path: string } => Boolean(f.path) && !f.error)
       .map((f) => ({ path: f.path, name: f.name, mime_type: f.mimeType, size: f.size }))
   }, [files])
+
+  /** Files that failed. Sending must not silently drop them. */
+  const failed = useCallback(() => files.filter((f) => f.error), [files])
 
   /** Paste handler: pull image blobs (a screenshot) out of the clipboard. */
   const onPaste = useCallback(
@@ -133,7 +180,7 @@ export function useWorkerAttachments() {
   // (see worker-dropzone.tsx) — a file dropped outside a registered target makes
   // the browser navigate away from the page, so the thin composer strip was the
   // wrong place for it.
-  return { files, uploading, add, remove, clear, uploaded, onPaste }
+  return { files, uploading, limitNotice, add, remove, clear, uploaded, failed, onPaste }
 }
 
 /** The shape the panel hands down to the composer and the drop zone. */

@@ -916,11 +916,12 @@ export async function readEmailAttachmentForWorker(
   try {
     const { getGmailAttachment } = await import("@/lib/gmail")
     const { data } = await getGmailAttachment(match.messageId, match.attachmentId, match.mailbox)
-    const { readAttachmentBuffer } = await import("@/lib/ai-agent/attachment-reader")
+    const { readAttachmentBuffer, fenceUntrustedContent } = await import("@/lib/ai-agent/attachment-reader")
     const read = await readAttachmentBuffer(data, { id: match.ref, name: match.name, mimetype: match.mimetype }, false)
     switch (read.kind) {
       case "text":
-        return read.text
+        // Anyone can email us a PDF. Its text is data, never an instruction.
+        return fenceUntrustedContent(match.name, read.text)
       case "image":
         return `"${match.name}" is an image — it was already shown to you with the message; look at it directly.`
       case "document":

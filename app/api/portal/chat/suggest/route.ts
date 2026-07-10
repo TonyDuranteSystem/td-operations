@@ -5,6 +5,8 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import {
   attachmentRefsFromChatRow,
   callWorkerWithAttachments,
+  capMediaBudget,
+  fenceUntrustedContent,
   fetchTrustedStorageBytes,
   readAttachments,
 } from '@/lib/ai-agent/attachment-reader'
@@ -189,9 +191,19 @@ export async function POST(request: NextRequest) {
     if (lastClientRefs.length) {
       try {
         const read = await readAttachments(lastClientRefs, fetchTrustedStorageBytes)
-        media = { imageBlocks: read.imageBlocks, documentBlocks: read.documentBlocks }
+        // Keep the whole turn under the Anthropic request ceiling.
+        const capped = capMediaBudget(read.imageBlocks, read.documentBlocks)
+        media = { imageBlocks: capped.images, documentBlocks: capped.documents }
         if (read.textBlocks.length) {
-          lastMessageFiles = `\n\n--- FILES THE CLIENT ATTACHED TO THEIR LAST MESSAGE ---\n${read.textBlocks.join('\n\n')}`
+          // The client wrote this file. Fence it: it is data for the draft, not
+          // instructions to the worker.
+          lastMessageFiles = `\n\n${fenceUntrustedContent(
+            "files the client attached to their last message",
+            read.textBlocks.join('\n\n'),
+          )}`
+        }
+        if (capped.dropped.length) {
+          lastMessageFiles += `\n\n[Too much was attached to show you everything. Not shown: ${capped.dropped.join(', ')}.]`
         }
       } catch (err) {
         console.warn('[suggest] attachment read failed (drafting without files):', err)
