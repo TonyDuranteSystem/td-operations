@@ -72,6 +72,7 @@ export default function TeamWorkspacePage() {
   const [loadingSlack, setLoadingSlack] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set())
   const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; thread_id: string; thread_label: string; message: string; sender_name: string; created_at: string }[] | null>(null)
@@ -483,6 +484,21 @@ export default function TeamWorkspacePage() {
   const mentionThreads = threads.filter(t => t.mention_count > 0 && !t.archived_at)
   const totalMentions = mentionThreads.reduce((n, t) => n + t.mention_count, 0)
   const unfiledDiscussions = discussions.filter(t => !t.parent_channel_id)
+
+  // Group the (unfiled) client conversations by client. Threads arrive
+  // newest-activity-first from the RPC, so preserving insertion order gives
+  // newest client first AND newest topic first within each group.
+  const clientGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; threads: TeamThread[] }>()
+    for (const t of unfiledDiscussions) {
+      const key = t.client_key ?? 'internal'
+      const label = t.client_label ?? 'Internal / No client'
+      const g = groups.get(key)
+      if (g) g.threads.push(t)
+      else groups.set(key, { key, label, threads: [t] })
+    }
+    return Array.from(groups.values())
+  }, [unfiledDiscussions])
   const threadsInChannel = (cid: string) => threads.filter(t => t.thread_type !== 'channel' && t.parent_channel_id === cid)
   const toggleExpand = (cid: string) => setExpandedChannels(prev => { const n = new Set(prev); if (n.has(cid)) n.delete(cid); else n.add(cid); return n })
 
@@ -627,14 +643,39 @@ export default function TeamWorkspacePage() {
               {dms.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No DMs yet.</p>}
               {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
-              <SectionHeader label="Discussions" onAdd={() => setShowNewConversation(true)} />
-              {unfiledDiscussions.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
-              {unfiledDiscussions.map(t => (
-                <SidebarThread key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
-                  icon={<Building2 className="h-3.5 w-3.5" />} label={t.label} resolved={!!t.resolved_at}
-                  channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
-                  menuOpen={menuThreadId === t.id} onMenuToggle={o => setMenuThreadId(o ? t.id : null)} />
-              ))}
+              <SectionHeader label="Conversations" onAdd={() => setShowNewConversation(true)} />
+              {clientGroups.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
+              {clientGroups.map(g => {
+                const open = expandedClients.has(g.key)
+                const groupUnread = g.threads.some(t => t.unread_count > 0)
+                return (
+                  <div key={g.key}>
+                    <button
+                      onClick={() => setExpandedClients(prev => {
+                        const next = new Set(prev)
+                        if (next.has(g.key)) next.delete(g.key); else next.add(g.key)
+                        return next
+                      })}
+                      className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-zinc-100 text-left"
+                    >
+                      {open ? <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-zinc-400 shrink-0" />}
+                      <Building2 className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                      <span className={cn('flex-1 truncate text-sm', groupUnread ? 'font-semibold text-zinc-900' : 'text-zinc-600')}>{g.label}</span>
+                      {groupUnread && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="New activity" />}
+                      <span className="text-[10px] text-zinc-400 shrink-0">{g.threads.length}</span>
+                    </button>
+                    {open && g.threads.map(t => (
+                      <div key={t.id} className="ml-4">
+                        <SidebarThread t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
+                          icon={<span className={cn('w-1.5 h-1.5 rounded-full shrink-0', t.unread_count > 0 ? 'bg-red-500' : 'bg-zinc-300')} />}
+                          label={t.topic || 'General'} resolved={!!t.resolved_at}
+                          channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
+                          menuOpen={menuThreadId === t.id} onMenuToggle={o => setMenuThreadId(o ? t.id : null)} />
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
 
               {slackEnabled && (
                 <>

@@ -150,3 +150,16 @@ describe('resolution: Solved / Closed / reopen (S2)', () => {
     expect(row?.resolution).toBe('closed')
   }, 60_000)
 })
+
+describe('grouping fields in get_team_threads (S3)', () => {
+  it('an account conversation carries an account client_key + the account name + topic', async () => {
+    const a = await make('Documents')
+    const { data } = await supabaseAdmin.rpc('get_team_threads', { p_user_id: CREATED_BY })
+    const row = (data as Array<Record<string, unknown>> | null)?.find(r => r.id === a.thread.id)
+    expect(row?.client_key).toBe(`account:${QA_ACCOUNT}`)
+    expect(typeof row?.client_label).toBe('string')
+    expect((row?.client_label as string).length).toBeGreaterThan(0)
+    expect(row?.topic).toBe('Documents')
+    expect(row?.lead_id).toBeNull()
+  }, 60_000)
+})

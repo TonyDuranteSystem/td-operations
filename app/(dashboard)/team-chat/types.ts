@@ -59,7 +59,14 @@ export interface TeamThread {
   color: string | null
   account_id: string | null
   contact_id: string | null
+  lead_id: string | null
   dm_key: string | null
+  /** Discussion topic (e.g. "Billing"); null for topic-less or non-discussions. */
+  topic: string | null
+  /** Stable client grouping key: 'account:<id>' | 'contact:<id>' | 'lead:<id>' | 'internal'; null for channels/dm/general. */
+  client_key: string | null
+  /** Client group header name; 'Internal / No client' when unanchored. */
+  client_label: string | null
   resolved_at: string | null
   /** Client-conversation lifecycle: null = open, 'solved' = done, 'closed' = dropped. */
   resolution: 'solved' | 'closed' | null
