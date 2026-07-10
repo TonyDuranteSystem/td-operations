@@ -7,10 +7,8 @@ import {
   callWorkerWithAttachments,
   capMediaBudget,
   fenceUntrustedContent,
-  fetchTrustedStorageBytes,
-  readAttachments,
 } from '@/lib/ai-agent/attachment-reader'
-import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
+import type { WorkerImageBlock } from '@/lib/ai-agent/worker-tools'
 import { loadRelevantTemplates, formatTemplatesForPrompt } from '@/lib/ai-agent/templates'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -178,36 +176,23 @@ export async function POST(request: NextRequest) {
       templatesBlock ? `\n${templatesBlock}` : "",
     ].join("")
 
-    // Whatever the client attached to their LAST message goes straight to the
-    // model (images it sees; scanned PDFs it reads natively; everything else is
-    // extracted to text). Older attachments stay as links — the worker can pull
-    // them on demand with read_portal_attachment (enableDocReads below).
-    let media: { imageBlocks: WorkerImageBlock[]; documentBlocks: WorkerDocumentBlock[] } = {
-      imageBlocks: [],
-      documentBlocks: [],
-    }
+    // Screenshots the client shared go straight to the model (it sees them);
+    // documents are listed in the transcript above and read on demand via
+    // read_portal_attachment (enableDocReads below). Shared with the Portal Chats
+    // Worker tab — one harvester, one scope filter, so they can't drift.
+    let media: { imageBlocks: WorkerImageBlock[] } = { imageBlocks: [] }
     let lastMessageFiles = ''
-    const lastClientRefs = lastClientRow ? attachmentRefsFromChatRow(lastClientRow) : []
-    if (lastClientRefs.length) {
-      try {
-        const read = await readAttachments(lastClientRefs, fetchTrustedStorageBytes)
-        // Keep the whole turn under the Anthropic request ceiling.
-        const capped = capMediaBudget(read.imageBlocks, read.documentBlocks)
-        media = { imageBlocks: capped.images, documentBlocks: capped.documents }
-        if (read.textBlocks.length) {
-          // The client wrote this file. Fence it: it is data for the draft, not
-          // instructions to the worker.
-          lastMessageFiles = `\n\n${fenceUntrustedContent(
-            "files the client attached to their last message",
-            read.textBlocks.join('\n\n'),
-          )}`
-        }
-        if (capped.dropped.length) {
-          lastMessageFiles += `\n\n[Too much was attached to show you everything. Not shown: ${capped.dropped.join(', ')}.]`
-        }
-      } catch (err) {
-        console.warn('[suggest] attachment read failed (drafting without files):', err)
+    try {
+      const { harvestPortalChatAttachments } = await import('@/lib/portal/chat-attachment-harvest')
+      const harvested = await harvestPortalChatAttachments({ accountId: account_id, contactId: contact_id })
+      const capped = capMediaBudget(harvested.imageBlocks, [])
+      media = { imageBlocks: capped.images }
+      if (harvested.note) {
+        // Client-chosen filenames/links — fence them.
+        lastMessageFiles = `\n\n${fenceUntrustedContent('files in this client chat', harvested.note.trim())}`
       }
+    } catch (err) {
+      console.warn('[suggest] attachment harvest failed (drafting without files):', err)
     }
 
     const userMessage = `CLIENT ACCOUNT CONTEXT:\n${clientContext}\n\nCONVERSATION:\n${conversationText}${lastMessageFiles}\n\nThe client just sent the last message. Write Antonio's reply:`
@@ -220,7 +205,6 @@ export async function POST(request: NextRequest) {
       // file was hitting the ceiling before it got to write anything.
       maxIterations: 6,
       ...(media.imageBlocks.length ? { images: media.imageBlocks } : {}),
-      ...(media.documentBlocks.length ? { documents: media.documentBlocks } : {}),
     })
 
     return NextResponse.json({ suggestion: reply, provider: 'anthropic' })

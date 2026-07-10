@@ -110,6 +110,9 @@ export async function POST(req: NextRequest) {
     // Client mode (portal-chats Worker tab) — per client
     clientKey?: string
     clientName?: string
+    // Both IDs, so the client's chat attachments are scoped like the panel.
+    accountId?: string | null
+    contactId?: string | null
     /**
      * Files the staff member pasted/dropped into the panel this turn. Already
      * uploaded to the PRIVATE worker-attachments bucket via /upload-url — we get
@@ -223,6 +226,25 @@ export async function POST(req: NextRequest) {
     scope = `chat-${clientKey}`
     userBody = buildClientWorkerUserBody(message, { name: body.clientName })
     surface = "portal-chats"
+
+    // Read the SCREENSHOTS/FILES the client sent in this chat. The worker tab used
+    // to see only files the staff member pasted here — a client's screenshot in
+    // the conversation had no path (read_portal_attachment refuses images). Images
+    // go straight to the model; documents are listed for on-demand reading.
+    try {
+      const { harvestPortalChatAttachments } = await import("@/lib/portal/chat-attachment-harvest")
+      const harvested = await harvestPortalChatAttachments({
+        accountId: body.accountId ?? null,
+        contactId: body.contactId ?? null,
+      })
+      imageBlocks.push(...harvested.imageBlocks)
+      if (harvested.note) {
+        // Filenames/links are client-chosen — fence them.
+        userBody += `\n\n${fenceUntrustedContent("files in this client chat", harvested.note.trim())}`
+      }
+    } catch (err) {
+      console.warn("[worker-chat] portal chat attachment harvest failed:", err)
+    }
   }
 
   // Files the staff member pasted/dropped into the panel THIS turn. They live in

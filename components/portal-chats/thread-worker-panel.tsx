@@ -87,6 +87,11 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         body: JSON.stringify({
           message: text,
           clientKey,
+          // Both IDs so the server scopes the client's chat attachments the SAME
+          // way the panel does — clientKey alone is one id and misses person-tagged
+          // (account_id NULL) messages, which is where a screenshot often lands.
+          accountId,
+          contactId,
           ...(attachments.length ? { attachments } : {}),
           clientName: sentContextRef.current ? undefined : clientName,
         }),
