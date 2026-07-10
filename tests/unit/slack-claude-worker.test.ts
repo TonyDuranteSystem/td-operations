@@ -128,9 +128,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/do NOT act/i)
   })
 
-  it("instructs to wait for approval before propose_action", () => {
-    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/propose_action/i)
+  it("instructs to send only on explicit approval, and never claim to queue actions", () => {
+    // propose_action was removed 2026-07-10 — the worker no longer queues.
+    expect(SLACK_WORKER_SYSTEM_PROMPT).not.toMatch(/propose_action/i)
     expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/approval/i)
+    expect(SLACK_WORKER_SYSTEM_PROMPT).toMatch(/go/i)
   })
 
   it("stays under the absolute bloat ceiling", () => {
@@ -171,7 +173,14 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // and ground the answer before replying, never improvise from memory or one CRM field;
     // added after the worker improvised billing answers for Gritti/Evolue until Antonio
     // forced it to "go see the SOP". Merged with the read_portal_attachment line above).
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11600)
+    // → 11700 (2026-07-10, prompt-injection defence: the worker now ingests text from
+    // files that STRANGERS send us (an emailed PDF, a client's upload) straight into the
+    // user turn, on surfaces that hold send tools. That text is fenced in
+    // <untrusted-file-content> and the ATTACHMENTS line was extended to say the fence's
+    // contents are DATA — never instructions, never approval to send. This is a security
+    // control, not copy: it was allowed to push the ceiling by 64 chars rather than be
+    // trimmed into ambiguity. Trim elsewhere before raising this again.)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11700)
   })
 
   it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {
@@ -440,8 +449,8 @@ describe("processSlackEvent", () => {
         slack_channel_id: "C0BAB08DSDN",
         slack_thread_ts: "1234567890.000100",
         slack_event_ts: "1234567890.000200",
-        // Antonio is the sender — code-task tools are restricted to him (see the
-        // "restricts code tasks to Antonio's messages only" test below).
+        // Antonio is the sender, but the code-task rail is now OFF for everyone
+        // (2026-07-10) — enableCodeTasks is always false.
         slack_user_id: "U0BAALR4Y4Q",
       },
     }
@@ -453,7 +462,7 @@ describe("processSlackEvent", () => {
       threadId: "thread-001",
       messageId: "row-id-001",
       systemPromptOverride: SLACK_WORKER_SYSTEM_PROMPT,
-      enableCodeTasks: true,
+      enableCodeTasks: false,
       enableSlackSend: true,
       enableTeamChatSend: true,
       enableDbRead: true,

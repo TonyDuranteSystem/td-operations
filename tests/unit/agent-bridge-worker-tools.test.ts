@@ -70,18 +70,18 @@ describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
     }
   })
 
-  it("WORKER_TOOLS is the read-only AGENT_TOOLS subset PLUS propose_action + codebase_read + codebase_search + memory_save", () => {
-    // propose_action only QUEUES (never executes); codebase_read/codebase_search
-    // are strictly read-only repo-source access; memory_save is a knowledge-only
-    // write (decision_memory) authorized for the worker in Phase 3 — it never
-    // touches client/business data. Everything else is the read-only research
-    // subset (which now includes the read-only memory_recall).
-    expect(WORKER_TOOLS.length).toBe(WORKER_READ_ONLY_TOOL_NAMES.size + 4)
+  it("WORKER_TOOLS is the read-only AGENT_TOOLS subset PLUS codebase_read + codebase_search + memory_save", () => {
+    // propose_action was REMOVED (2026-07-10, Antonio): no worker queues actions.
+    // codebase_read/codebase_search are strictly read-only repo-source access;
+    // memory_save is a knowledge-only write (decision_memory) — it never touches
+    // client/business data. Everything else is the read-only research subset
+    // (which now includes the read-only memory_recall).
+    expect(WORKER_TOOLS.length).toBe(WORKER_READ_ONLY_TOOL_NAMES.size + 3)
     const workerNames = new Set(WORKER_TOOLS.map((t) => t.name))
     for (const name of WORKER_READ_ONLY_TOOL_NAMES) {
       expect(workerNames.has(name)).toBe(true)
     }
-    expect(workerNames.has("propose_action")).toBe(true)
+    expect(workerNames.has("propose_action")).toBe(false)
     expect(workerNames.has("codebase_read")).toBe(true)
     expect(workerNames.has("codebase_search")).toBe(true)
     expect(workerNames.has("memory_save")).toBe(true)

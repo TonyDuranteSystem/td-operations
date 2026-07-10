@@ -20,6 +20,7 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
+import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 
 const THINKING_PLACEHOLDER = '…'
 
@@ -102,7 +103,7 @@ export async function processClaudeReply(params: {
   placeholderId: string
   senderIsAntonio: boolean
 }): Promise<{ ok: boolean; reason?: string }> {
-  const { threadId, promptMessageId, placeholderId, senderIsAntonio } = params
+  const { threadId, promptMessageId, placeholderId } = params
 
   // Load the placeholder + guard against double-processing and self-trigger.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,11 +116,12 @@ export async function processClaudeReply(params: {
   if (placeholder.sender_id !== CLAUDE_SENDER_UUID) return { ok: false, reason: 'not_claude_placeholder' }
   if (placeholder.message !== THINKING_PLACEHOLDER) return { ok: false, reason: 'already_answered' }
 
-  // The triggering human message.
+  // The triggering human message. `attachments` matters: staff drop screenshots
+  // and PDFs into team chat and expect @claude to look at them.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: prompt } = await (supabaseAdmin as any)
     .from('internal_messages')
-    .select('id, message, sender_id, sender_name')
+    .select('id, message, sender_id, sender_name, attachments')
     .eq('id', promptMessageId)
     .single()
   if (!prompt) return await failPlaceholder(placeholderId, 'The triggering message could not be found.')
@@ -160,7 +162,7 @@ export async function processClaudeReply(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: recent } = await (supabaseAdmin as any)
     .from('internal_messages')
-    .select('sender_name, message, created_at')
+    .select('id, sender_id, sender_name, message, attachments, created_at')
     .eq('thread_id', threadId)
     .is('deleted_at', null)
     .neq('id', placeholderId)
@@ -168,6 +170,7 @@ export async function processClaudeReply(params: {
     .limit(12)
 
   const history = (recent ?? [])
+    .slice()
     .reverse()
     .map((m: { sender_name: string; message: string }) => `${m.sender_name}: ${m.message}`)
     .join('\n')
@@ -176,11 +179,47 @@ export async function processClaudeReply(params: {
     ? `RECENT TEAM CHAT (for reference — you are "Claude", a teammate in this internal staff thread):\n${history}\n\n`
     : ''
 
-  const userBody = `${contextBlock}The latest message mentions you (@claude):\n${prompt.sender_name}: ${prompt.message}`
+  let userBody = `${contextBlock}The latest message mentions you (@claude):\n${prompt.sender_name}: ${prompt.message}`
+
+  // Attachments. Take them from the @mention itself, or — when it carries none —
+  // from the most recent earlier HUMAN message that does. Staff routinely post a
+  // screenshot and then @claude in the next message ("look at this"), exactly the
+  // way they do in Slack, where the worker harvests thread history for the same
+  // reason. `recent` is newest-first, so the first hit is the nearest one.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasFiles = (m: any) => Array.isArray(m?.attachments) && m.attachments.length > 0
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const carrier = hasFiles(prompt) ? prompt : (recent ?? []).find((m: any) => m.sender_id !== CLAUDE_SENDER_UUID && hasFiles(m))
+
+  const media = { imageBlocks: [] as WorkerImageBlock[], documentBlocks: [] as WorkerDocumentBlock[] }
+  if (carrier) {
+    try {
+      const { readAttachments, fetchTrustedStorageBytes, attachmentRefsFromChatRow, capMediaBudget, fenceUntrustedContent } = await import(
+        '@/lib/ai-agent/attachment-reader'
+      )
+      const read = await readAttachments(attachmentRefsFromChatRow(carrier), fetchTrustedStorageBytes)
+      // Keep the whole turn under the Anthropic request ceiling; name what's dropped.
+      const capped = capMediaBudget(read.imageBlocks, read.documentBlocks)
+      media.imageBlocks = capped.images
+      media.documentBlocks = capped.documents
+      if (read.textBlocks.length) {
+        const whose = carrier.id === prompt.id ? 'this message' : `an earlier message from ${carrier.sender_name}`
+        // Team Chat has email + portal send rails, so a shared file's text must
+        // never be able to read as an instruction or as an approval to send.
+        userBody += `\n\n${fenceUntrustedContent(`files shared in ${whose}`, read.textBlocks.join('\n\n'))}`
+      }
+      if (capped.dropped.length) {
+        userBody += `\n\n[Too much was attached to show you everything. Not shown: ${capped.dropped.join(', ')}.]`
+      }
+    } catch (err) {
+      // Never block the reply on attachment reading.
+      console.warn('[team-claude] attachment read failed (answering without files):', err)
+    }
+  }
 
   let reply: string
   try {
-    const { callWorker } = await import('@/lib/ai-agent/worker-tools')
+    const { callWorkerWithAttachments } = await import('@/lib/ai-agent/attachment-reader')
     // FULL SLACK PARITY (parity matrix 2026-07-08, after the "send it in the
     // thread" incident): the Team Chat worker runs with the SAME configuration
     // as the Slack worker — same persona/discipline prompt (SOURCES FIRST, TWO
@@ -201,11 +240,16 @@ export async function processClaudeReply(params: {
       if (block) systemPrompt += `\n${block}`
     } catch { /* best-effort, same as Slack */ }
 
-    const res = await callWorker(userBody, {
+    const res = await callWorkerWithAttachments(userBody, {
       threadId,
       systemPromptOverride: systemPrompt,
       apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
       maxIterations: 20,
+      // Files shared in the thread, handed to the model directly (vision for
+      // images, native blocks for scanned PDFs). Extracted text for everything
+      // else is already appended to userBody above.
+      ...(media.imageBlocks.length ? { images: media.imageBlocks } : {}),
+      ...(media.documentBlocks.length ? { documents: media.documentBlocks } : {}),
       // Read/research rails.
       enableDbRead: true,
       enableDocReads: true,
@@ -223,8 +267,10 @@ export async function processClaudeReply(params: {
       // explicit "send it" discipline. Answering @claude already runs in team
       // chat; this lets it post to OTHER team channels/threads on approval.
       enableTeamChatSend: true,
-      // Code-task rail Antonio-only (R111), keyed on the prompt author.
-      enableCodeTasks: senderIsAntonio,
+      // Code-task rail OFF (2026-07-10, Antonio): the team-chat worker never
+      // launches or ships a coding job — it investigates and reports; Antonio
+      // does code himself. (Reverses the earlier Antonio-only gate.)
+      enableCodeTasks: false,
       clientKey,
       clientName,
     })

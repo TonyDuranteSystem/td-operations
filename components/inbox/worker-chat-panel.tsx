@@ -13,9 +13,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, Send, X } from 'lucide-react'
+import { Bot, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
+import { WorkerComposer } from '@/components/chat/worker-composer'
+import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import type { InboxConversation } from '@/lib/types'
 
 interface ChatMsg {
@@ -36,6 +39,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   const [elapsed, setElapsed] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentContextRef = useRef(false)
+  const attachments = useWorkerAttachments()
 
   const gmailThreadId = conversation.id.replace('gmail:', '')
 
@@ -71,11 +75,12 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
     return () => clearInterval(t)
   }, [pending])
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (text: string, attachments: UploadedAttachment[]) => {
     if (!text || pending) return
-    setInput('')
-    setMessages(prev => [...prev, { role: 'user', text }])
+    const shown = attachments.length
+      ? `${text}\n\n📎 ${attachments.map(a => a.name).join(', ')}`
+      : text
+    setMessages(prev => [...prev, { role: 'user', text: shown }])
     setPending(true)
     try {
       const res = await fetch('/api/inbox/worker-chat', {
@@ -85,6 +90,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           message: text,
           gmailThreadId,
           mailbox,
+          ...(attachments.length ? { attachments } : {}),
           // Email context only on the panel's first message — the worker's
           // persistent thread memory carries it afterwards.
           context: sentContextRef.current
@@ -121,7 +127,11 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
   }
 
   return (
-    <div className="w-full sm:w-[420px] shrink-0 border-l bg-white flex flex-col min-h-0">
+    <WorkerDropZone
+      onFiles={files => void attachments.add(files)}
+      disabled={pending}
+      className="w-full sm:w-[420px] shrink-0 border-l bg-white flex flex-col min-h-0"
+    >
       <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-violet-50/60 shrink-0">
         <Bot className="h-4 w-4 text-violet-600 shrink-0" />
         <div className="min-w-0 flex-1">
@@ -164,28 +174,14 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         )}
       </div>
 
-      <div className="border-t px-3 py-2.5 shrink-0">
-        <div className="flex items-end gap-2">
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
-            }}
-            placeholder="Ask the worker about this email…"
-            rows={4}
-            className="flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 min-h-[96px] max-h-64"
-          />
-          <button
-            onClick={send}
-            disabled={!input.trim() || pending}
-            className="shrink-0 p-2 rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors"
-            title="Send"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-    </div>
+      <WorkerComposer
+        placeholder="Ask the worker about this email…"
+        pending={pending}
+        value={input}
+        onChange={setInput}
+        onSend={send}
+        attachments={attachments}
+      />
+    </WorkerDropZone>
   )
 }

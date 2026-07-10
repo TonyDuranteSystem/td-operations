@@ -34,17 +34,17 @@ describe("thread routing — getToolsForThreadType", () => {
     }
   })
 
-  it("investigation gets the FULL worker tool set (incl. codebase + propose)", () => {
+  it("investigation gets the FULL worker tool set (incl. codebase; propose removed 2026-07-10)", () => {
     const names = namesFor("investigation")
     expect(names.size).toBe(WORKER_TOOLS.length)
-    expect(names.has("propose_action")).toBe(true)
+    expect(names.has("propose_action")).toBe(false)
     expect(names.has("codebase_read")).toBe(true)
   })
 
-  it("action_request gets the full set and ALWAYS keeps propose_action", () => {
+  it("action_request gets the full research set (worker lays out steps, never queues)", () => {
     const names = namesFor("action_request")
     expect(names.size).toBe(WORKER_TOOLS.length)
-    expect(names.has("propose_action")).toBe(true)
+    expect(names.has("propose_action")).toBe(false)
   })
 
   it("bug_report = codebase tools + CRM read tools, no propose, no gmail/drive", () => {
@@ -94,7 +94,7 @@ describe("thread routing — normalizeThreadType", () => {
 describe("thread routing — prompt addenda", () => {
   it("investigation has no addendum; the others each carry type-specific guidance", () => {
     expect(getPromptAddendumForThreadType("investigation")).toBe("")
-    expect(getPromptAddendumForThreadType("action_request")).toContain("propose_action")
+    expect(getPromptAddendumForThreadType("action_request")).toContain("action_request")
     expect(getPromptAddendumForThreadType("bug_report").toLowerCase()).toContain("reproduction")
     expect(getPromptAddendumForThreadType("client_audit").toLowerCase()).toContain("client-facing")
     expect(getPromptAddendumForThreadType("internal_ops").toLowerCase()).toContain("do not pull client data")

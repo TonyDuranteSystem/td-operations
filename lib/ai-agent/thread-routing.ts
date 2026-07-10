@@ -99,8 +99,8 @@ export const MEMORY_TOOL_NAMES = ["memory_recall", "memory_save", "recall_memori
  * The allow-listed tool NAMES for each thread type. This is the source of truth
  * for routing — `getToolsForThreadType` just filters WORKER_TOOLS through it.
  *
- *  - investigation : full research surface incl. codebase + propose (the default)
- *  - action_request: full surface — MUST be able to propose at least one action
+ *  - investigation : full research surface incl. codebase (the default)
+ *  - action_request: full research surface — worker lays out steps, never acts
  *  - bug_report    : codebase tools + CRM read tools (trace + check client state)
  *  - client_audit  : CRM read tools ONLY — no code, no propose, client-facing
  *  - internal_ops  : codebase + KB/SOP ONLY — system channel, NO client data
@@ -147,7 +147,7 @@ const PROMPT_ADDENDUM_BY_THREAD_TYPE: Record<ThreadType, string> = {
   investigation: "",
   action_request: [
     "THREAD TYPE: action_request.",
-    "Antonio is asking for something to be DONE, not just researched. After investigating, you MUST call propose_action with at least one concrete proposal (it only queues — nothing runs until Antonio approves). If, after investigating, no action is genuinely warranted, say so explicitly and explain why instead of proposing.",
+    "Antonio is asking for something to be DONE, not just researched. You cannot change data or run actions yourself — after investigating, lay out exactly what needs to happen (the concrete steps) so Antonio can do it. If a message to a client/teammate is the right next step, draft it and offer to send it on his \"go\". Never claim you performed or queued an action.",
   ].join("\n"),
   bug_report: [
     "THREAD TYPE: bug_report.",

@@ -160,6 +160,9 @@ beforeEach(() => {
   delete process.env.CRON_SECRET // so fireExecutorTrigger skips the network call
   delete process.env.APPROVAL_ENV
   process.env.NODE_ENV = "production"
+  // The worker action rail is OFF by default (2026-07-10). This suite covers the
+  // dormant-but-intact queue machinery, so switch it on to exercise proposeAction.
+  process.env.WORKER_ACTIONS_ENABLED = "true"
 })
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

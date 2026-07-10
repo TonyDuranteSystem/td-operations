@@ -2,7 +2,13 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
-import { callWorker } from '@/lib/ai-agent/worker-tools'
+import {
+  attachmentRefsFromChatRow,
+  callWorkerWithAttachments,
+  capMediaBudget,
+  fenceUntrustedContent,
+} from '@/lib/ai-agent/attachment-reader'
+import type { WorkerImageBlock } from '@/lib/ai-agent/worker-tools'
 import { loadRelevantTemplates, formatTemplatesForPrompt } from '@/lib/ai-agent/templates'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -102,7 +108,7 @@ export async function POST(request: NextRequest) {
     // both IDs, union the two scopes so the AI sees the FULL thread, not half of it.
     let conversationQuery = supabaseAdmin
       .from('portal_messages')
-      .select('sender_type, message, created_at')
+      .select('sender_type, message, attachment_url, attachment_name, attachments, created_at')
       .order('created_at', { ascending: false })
       .limit(20)
 
@@ -137,17 +143,24 @@ export async function POST(request: NextRequest) {
       payments?.length ? `Recent Payments:\n${payments.map(p => `- ${p.description || 'Payment'}: $${p.amount} (${p.status})`).join('\n')}` : '',
     ].filter(Boolean).join('\n')
 
+    // Attachment links belong in the transcript. Without them the model can't
+    // even tell a file exists, let alone read it — and it would draft a reply to
+    // "here's my passport" having never seen a passport.
     const conversationText = conversationHistory
-      .map(m => `${m.sender_type === 'admin' ? 'Admin' : 'Client'}: ${m.message}`)
+      .map(m => {
+        const files = attachmentRefsFromChatRow(m)
+          .map(a => `\n   📎 ${a.name} — ${a.id}`)
+          .join('')
+        return `${m.sender_type === 'admin' ? 'Admin' : 'Client'}: ${m.message}${files}`
+      })
       .join('\n')
 
     // 7. Load relevant approved CRM templates for the client's latest message so
     // the draft is GROUNDED in approved copy instead of invented from scratch.
     // Keyword-matched against the templates / email_templates libraries; best-effort
     // (returns [] on no match). Language soft-boosts a same-language template.
-    const lastClientMessage = [...conversationHistory]
-      .reverse()
-      .find((m) => m.sender_type !== 'admin')?.message
+    const lastClientRow = [...conversationHistory].reverse().find((m) => m.sender_type !== 'admin')
+    const lastClientMessage = lastClientRow?.message
     const clientLanguage = contactInfo?.language ?? null
     const relevantTemplates = await loadRelevantTemplates(
       lastClientMessage || conversationText,
@@ -163,11 +176,35 @@ export async function POST(request: NextRequest) {
       templatesBlock ? `\n${templatesBlock}` : "",
     ].join("")
 
-    const userMessage = `CLIENT ACCOUNT CONTEXT:\n${clientContext}\n\nCONVERSATION:\n${conversationText}\n\nThe client just sent the last message. Write Antonio's reply:`
+    // Screenshots the client shared go straight to the model (it sees them);
+    // documents are listed in the transcript above and read on demand via
+    // read_portal_attachment (enableDocReads below). Shared with the Portal Chats
+    // Worker tab — one harvester, one scope filter, so they can't drift.
+    let media: { imageBlocks: WorkerImageBlock[] } = { imageBlocks: [] }
+    let lastMessageFiles = ''
+    try {
+      const { harvestPortalChatAttachments } = await import('@/lib/portal/chat-attachment-harvest')
+      const harvested = await harvestPortalChatAttachments({ accountId: account_id, contactId: contact_id })
+      const capped = capMediaBudget(harvested.imageBlocks, [])
+      media = { imageBlocks: capped.images }
+      if (harvested.note) {
+        // Client-chosen filenames/links — fence them.
+        lastMessageFiles = `\n\n${fenceUntrustedContent('files in this client chat', harvested.note.trim())}`
+      }
+    } catch (err) {
+      console.warn('[suggest] attachment harvest failed (drafting without files):', err)
+    }
 
-    const { reply } = await callWorker(userMessage, {
+    const userMessage = `CLIENT ACCOUNT CONTEXT:\n${clientContext}\n\nCONVERSATION:\n${conversationText}${lastMessageFiles}\n\nThe client just sent the last message. Write Antonio's reply:`
+
+    const { reply } = await callWorkerWithAttachments(userMessage, {
       systemPromptOverride,
-      maxIterations: 4,
+      // Lets the worker open an attachment from EARLIER in the thread by its link.
+      enableDocReads: true,
+      // Was 4. Reading an attachment costs a step; a draft that has to look at a
+      // file was hitting the ceiling before it got to write anything.
+      maxIterations: 6,
+      ...(media.imageBlocks.length ? { images: media.imageBlocks } : {}),
     })
 
     return NextResponse.json({ suggestion: reply, provider: 'anthropic' })
