@@ -11,6 +11,7 @@ import {
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
 } from 'lucide-react'
 import { TeamBoard } from './board'
+import { matchesConversationFilter } from '@/lib/team/conversation-filter'
 import EmojiPicker from 'emoji-picker-react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { cn } from '@/lib/utils'
@@ -73,6 +74,8 @@ export default function TeamWorkspacePage() {
   const [view, setView] = useState<'list' | 'board'>('list')
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set())
+  const [convTopicFilter, setConvTopicFilter] = useState<string>('')          // '' = all topics
+  const [convStateFilter, setConvStateFilter] = useState<'all' | 'open' | 'solved' | 'closed'>('all')
   const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; thread_id: string; thread_label: string; message: string; sender_name: string; created_at: string }[] | null>(null)
@@ -485,12 +488,21 @@ export default function TeamWorkspacePage() {
   const totalMentions = mentionThreads.reduce((n, t) => n + t.mention_count, 0)
   const unfiledDiscussions = discussions.filter(t => !t.parent_channel_id)
 
-  // Group the (unfiled) client conversations by client. Threads arrive
-  // newest-activity-first from the RPC, so preserving insertion order gives
-  // newest client first AND newest topic first within each group.
+  // Distinct topics present, for the topic filter dropdown.
+  const convTopics = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of unfiledDiscussions) if (t.topic) set.add(t.topic)
+    return Array.from(set).sort()
+  }, [unfiledDiscussions])
+
+  // Group the (unfiled) client conversations by client, after applying the topic
+  // + state filters. Threads arrive newest-activity-first from the RPC, so
+  // preserving insertion order gives newest client first AND newest topic first
+  // within each group.
   const clientGroups = useMemo(() => {
     const groups = new Map<string, { key: string; label: string; threads: TeamThread[] }>()
     for (const t of unfiledDiscussions) {
+      if (!matchesConversationFilter(t, { topic: convTopicFilter, state: convStateFilter })) continue
       const key = t.client_key ?? 'internal'
       const label = t.client_label ?? 'Internal / No client'
       const g = groups.get(key)
@@ -498,7 +510,7 @@ export default function TeamWorkspacePage() {
       else groups.set(key, { key, label, threads: [t] })
     }
     return Array.from(groups.values())
-  }, [unfiledDiscussions])
+  }, [unfiledDiscussions, convTopicFilter, convStateFilter])
   const threadsInChannel = (cid: string) => threads.filter(t => t.thread_type !== 'channel' && t.parent_channel_id === cid)
   const toggleExpand = (cid: string) => setExpandedChannels(prev => { const n = new Set(prev); if (n.has(cid)) n.delete(cid); else n.add(cid); return n })
 
@@ -644,9 +656,37 @@ export default function TeamWorkspacePage() {
               {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
               <SectionHeader label="Conversations" onAdd={() => setShowNewConversation(true)} />
+
+              {/* Topic + state filters */}
+              <div className="flex items-center gap-1.5 px-2 pb-1.5">
+                <select
+                  value={convTopicFilter}
+                  onChange={e => setConvTopicFilter(e.target.value)}
+                  className="flex-1 min-w-0 text-[11px] border rounded-md px-1.5 py-1 bg-white text-zinc-600 outline-none"
+                  title="Filter by topic"
+                >
+                  <option value="">All topics</option>
+                  {convTopics.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select
+                  value={convStateFilter}
+                  onChange={e => setConvStateFilter(e.target.value as typeof convStateFilter)}
+                  className="text-[11px] border rounded-md px-1.5 py-1 bg-white text-zinc-600 outline-none"
+                  title="Filter by state"
+                >
+                  <option value="all">All</option>
+                  <option value="open">Open</option>
+                  <option value="solved">Solved</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+
               {clientGroups.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
               {clientGroups.map(g => {
-                const open = expandedClients.has(g.key)
+                // A filter is active → expand every matching group so the narrowed
+                // results are visible without clicking each client open.
+                const filtering = convTopicFilter !== '' || convStateFilter !== 'all'
+                const open = filtering || expandedClients.has(g.key)
                 const groupUnread = g.threads.some(t => t.unread_count > 0)
                 return (
                   <div key={g.key}>
