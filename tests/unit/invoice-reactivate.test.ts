@@ -4,6 +4,7 @@ import {
   parsePreVoidState,
   resolveReactivateTarget,
   partitionFeedsForUnlink,
+  reactivateBlocker,
   type PreVoidState,
 } from "@/lib/billing/invoice-reactivate"
 import { projectedReminderCount, daysPastDue } from "@/lib/billing/dunning"
@@ -18,7 +19,14 @@ describe("capturePreVoidState", () => {
         amount_paid: 0,
         paid_date: null,
       }),
-    ).toEqual({ status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null })
+    ).toEqual({ status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null, credit_remaining: null })
+  })
+
+  it("captures credit_remaining on a credit note", () => {
+    const snap = capturePreVoidState({
+      status: "Paid", invoice_status: "Credit", amount_due: 0, amount_paid: -200, paid_date: null, credit_remaining: 150,
+    })
+    expect(snap.credit_remaining).toBe(150)
   })
 
   it("defaults a null status to Pending/Draft rather than writing null", () => {
@@ -40,7 +48,7 @@ describe("capturePreVoidState", () => {
 })
 
 describe("parsePreVoidState", () => {
-  const good = { status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null }
+  const good = { status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null, credit_remaining: null }
 
   it("reads a well-formed snapshot", () => {
     expect(parsePreVoidState({ pre_void_state: good })).toEqual(good)
@@ -72,6 +80,36 @@ describe("parsePreVoidState", () => {
     const withDate = { ...good, status: "Paid", invoice_status: "Paid", amount_due: 0, amount_paid: 600, paid_date: "2026-03-01" }
     expect(parsePreVoidState({ pre_void_state: withDate })?.paid_date).toBe("2026-03-01")
   })
+
+  it("reads credit_remaining, and treats an old snapshot without it as null", () => {
+    expect(parsePreVoidState({ pre_void_state: { ...good, credit_remaining: 150 } })?.credit_remaining).toBe(150)
+    const legacy = { status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null }
+    expect(parsePreVoidState({ pre_void_state: legacy })?.credit_remaining).toBeNull()
+  })
+})
+
+describe("reactivateBlocker", () => {
+  const prior: PreVoidState = {
+    status: "Paid", invoice_status: "Credit", amount_due: 0, amount_paid: -200, paid_date: null, credit_remaining: 150,
+  }
+
+  it("allows an ordinary cancelled invoice", () => {
+    expect(reactivateBlocker({ prior: null, total: 600, invoiceStatus: "Cancelled" })).toBeNull()
+  })
+
+  it("blocks a split parent", () => {
+    expect(reactivateBlocker({ prior: null, total: 600, invoiceStatus: "Split" })).toContain("split parent")
+  })
+
+  it("blocks a credit note with no snapshot — its remaining credit is unrecoverable", () => {
+    // Without this, a cancelled -$200 credit note came back as a $0 Draft
+    // INVOICE. Caught by the live QA harness.
+    expect(reactivateBlocker({ prior: null, total: -200, invoiceStatus: "Cancelled" })).toContain("credit note")
+  })
+
+  it("allows a credit note when the cancellation recorded its remaining credit", () => {
+    expect(reactivateBlocker({ prior, total: -200, invoiceStatus: "Cancelled" })).toBeNull()
+  })
 })
 
 describe("resolveReactivateTarget", () => {
@@ -79,7 +117,7 @@ describe("resolveReactivateTarget", () => {
 
   it("restores the recorded snapshot verbatim when the void captured one", () => {
     const prior: PreVoidState = {
-      status: "Pending", invoice_status: "Sent", amount_due: 600, amount_paid: 0, paid_date: null,
+      status: "Pending", invoice_status: "Sent", amount_due: 600, amount_paid: 0, paid_date: null, credit_remaining: null,
     }
     const target = resolveReactivateTarget({ prior, total: 600, amountPaid: 0, dueDate: "2026-06-01", today, wasSent: true })
     expect(target).toEqual({ ...prior, source: "recorded" })
@@ -88,7 +126,7 @@ describe("resolveReactivateTarget", () => {
   it("the recorded snapshot wins even when derivation would disagree", () => {
     // Past due, so derivation would say Overdue — but the void recorded Draft.
     const prior: PreVoidState = {
-      status: "Pending", invoice_status: "Draft", amount_due: 600, amount_paid: 0, paid_date: null,
+      status: "Pending", invoice_status: "Draft", amount_due: 600, amount_paid: 0, paid_date: null, credit_remaining: null,
     }
     const target = resolveReactivateTarget({ prior, total: 600, amountPaid: 0, dueDate: "2026-01-01", today, wasSent: false })
     expect(target.invoice_status).toBe("Draft")
@@ -104,7 +142,7 @@ describe("resolveReactivateTarget", () => {
       prior: null, total: 600, amountPaid: 0, dueDate: "2026-06-01", today, wasSent: false,
     })
     expect(target).toEqual({
-      status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null, source: "derived",
+      status: "Overdue", invoice_status: "Overdue", amount_due: 600, amount_paid: 0, paid_date: null, credit_remaining: null, source: "derived",
     })
   })
 
@@ -176,6 +214,20 @@ describe("resolveReactivateTarget", () => {
       prior: null, total: 600, amountPaid: 0, dueDate: "2026-06-01", today, wasSent: false,
     })
     expect(target.paid_date).toBeNull()
+  })
+
+  it("restores a credit note's remaining credit from the snapshot", () => {
+    const prior: PreVoidState = {
+      status: "Paid", invoice_status: "Credit", amount_due: 0, amount_paid: -200, paid_date: null, credit_remaining: 150,
+    }
+    const target = resolveReactivateTarget({ prior, total: -200, amountPaid: -200, dueDate: null, today, wasSent: false })
+    expect(target.invoice_status).toBe("Credit")
+    expect(target.credit_remaining).toBe(150)
+  })
+
+  it("a derived target never claims to know a credit balance", () => {
+    const target = resolveReactivateTarget({ prior: null, total: 600, amountPaid: 0, dueDate: null, today, wasSent: false })
+    expect(target.credit_remaining).toBeNull()
   })
 })
 

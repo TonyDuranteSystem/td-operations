@@ -41,6 +41,13 @@ export interface PreVoidState {
   amount_due: number
   amount_paid: number
   paid_date: string | null
+  /**
+   * Only meaningful on a credit note (`invoice_status='Credit'`): how much of
+   * the credit was still unspent. Captured because it is UNRECOVERABLE once the
+   * row is cancelled — see {@link reactivateBlocker}. `null` on ordinary
+   * invoices, and on snapshots written before this field existed.
+   */
+  credit_remaining: number | null
 }
 
 export interface ReactivateTarget extends PreVoidState {
@@ -67,6 +74,7 @@ export function capturePreVoidState(payment: {
   amount_due: number | null
   amount_paid: number | null
   paid_date: string | null
+  credit_remaining?: number | null
 }): PreVoidState {
   return {
     status: (payment.status ?? "Pending") as PaymentStatus,
@@ -74,6 +82,7 @@ export function capturePreVoidState(payment: {
     amount_due: money(Number(payment.amount_due ?? 0)),
     amount_paid: money(Number(payment.amount_paid ?? 0)),
     paid_date: payment.paid_date ?? null,
+    credit_remaining: payment.credit_remaining == null ? null : money(Number(payment.credit_remaining)),
   }
 }
 
@@ -104,13 +113,42 @@ export function parsePreVoidState(details: unknown): PreVoidState | null {
   const paidDate = d.paid_date
   if (paidDate !== null && typeof paidDate !== "string" && paidDate !== undefined) return null
 
+  const creditRemaining = Number(d.credit_remaining)
+
   return {
     status: status as PaymentStatus,
     invoice_status: invoiceStatus,
     amount_due: money(amountDue),
     amount_paid: money(amountPaid),
     paid_date: typeof paidDate === "string" ? paidDate : null,
+    // Absent on snapshots written before the field existed → null.
+    credit_remaining: d.credit_remaining == null || !Number.isFinite(creditRemaining) ? null : money(creditRemaining),
   }
+}
+
+/**
+ * Reasons a cancelled invoice must NOT be brought back. Returns the operator-
+ * facing message, or null when reactivation is safe.
+ *
+ * **Credit notes.** A credit note carries `credit_remaining` — how much of it
+ * is still unspent. Cancelling wipes nothing, but for a credit note cancelled
+ * BEFORE snapshots existed we have no record of that figure, and there is no
+ * way to recompute it (the credit may have been partly consumed by invoices
+ * that have since changed). Reviving it would either resurrect spent credit —
+ * money the client does not have — or silently destroy unspent credit. Both are
+ * wrong, so refuse. Found by the live QA harness: without this, a cancelled
+ * −$200 credit note came back as an ordinary $0 **Draft invoice**.
+ */
+export function reactivateBlocker(input: {
+  prior: PreVoidState | null
+  total: number
+  invoiceStatus: string | null
+}): string | null {
+  if (input.invoiceStatus === "Split") return "A split parent invoice cannot be reactivated."
+  if (Number(input.total) < 0 && !input.prior) {
+    return "This is a credit note that was cancelled before reactivation existed, so how much of its credit remained cannot be recovered. Issue a new credit note instead."
+  }
+  return null
 }
 
 /**
@@ -151,10 +189,10 @@ export function resolveReactivateTarget(input: {
   const due = money(Math.max(0, total - paid))
 
   if (total > 0 && paid >= total) {
-    return { status: "Paid", invoice_status: "Paid", amount_due: 0, amount_paid: paid, paid_date: null, source: "derived" }
+    return { status: "Paid", invoice_status: "Paid", amount_due: 0, amount_paid: paid, paid_date: null, credit_remaining: null, source: "derived" }
   }
 
-  const base = { amount_due: due, amount_paid: paid, paid_date: null, source: "derived" as const }
+  const base = { amount_due: due, amount_paid: paid, paid_date: null, credit_remaining: null, source: "derived" as const }
 
   if (input.dueDate && input.dueDate < input.today) {
     return { ...base, status: "Overdue", invoice_status: "Overdue" }

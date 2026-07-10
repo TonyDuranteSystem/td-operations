@@ -330,7 +330,7 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
   // describes the pre-void state rather than the post-void one.
   const { data: before } = await supabaseAdmin
     .from('payments')
-    .select('id, qb_invoice_id, status, invoice_status, amount_due, amount_paid, paid_date')
+    .select('id, qb_invoice_id, status, invoice_status, amount_due, amount_paid, paid_date, credit_remaining')
     .eq('id', paymentId)
     .maybeSingle()
   if (!before) return { success: false, error: 'Payment not found' }
@@ -349,9 +349,15 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     }).eq('id', paymentId)
     if (voidErr) throw new Error(`Failed to void payment: ${voidErr.message}`)
 
-    // Sync to client_expenses
+    // Sync to client_expenses. syncTDInvoiceStatus maps the STATUS only — it
+    // left the mirror's `amount_due` at the old balance, so the client's portal
+    // showed a cancelled invoice still demanding the full amount. Follow it with
+    // the authoritative projection, which zeroes a settled balance. (Caught by
+    // the live QA harness; the prod VictoriamRoas mirror had exactly this.)
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
     await syncTDInvoiceStatus(paymentId, 'Cancelled')
+    const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await syncTDInvoiceMirror(paymentId)
 
     // Void in QuickBooks (non-blocking)
     if (before.qb_invoice_id) {
@@ -410,7 +416,7 @@ export async function reactivateInvoicePreview(
 ): Promise<{ success: boolean; preview?: DryRunResult; error?: string }> {
   try {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const { parsePreVoidState, resolveReactivateTarget } = await import('@/lib/billing/invoice-reactivate')
+    const { parsePreVoidState, resolveReactivateTarget, reactivateBlocker } = await import('@/lib/billing/invoice-reactivate')
     const { projectedReminderCount, daysPastDue, isAutoSendEnabled } = await import('@/lib/billing/dunning')
     const { isAccountReminderPaused } = await import('@/lib/billing/reminder-snooze')
 
@@ -426,11 +432,15 @@ export async function reactivateInvoicePreview(
     if (payment.invoice_status !== 'Cancelled' && payment.status !== 'Cancelled') {
       return { success: true, preview: { affected: {}, items: [], blocker: 'This invoice is not cancelled.', record_label: label } }
     }
-    if (payment.invoice_status === 'Split') {
-      return { success: true, preview: { affected: {}, items: [], blocker: 'A split parent invoice cannot be reactivated.', record_label: label } }
-    }
 
-    const target = await resolveTargetFor(payment, supabaseAdmin, parsePreVoidState, resolveReactivateTarget)
+    const { prior, target } = await resolveTargetFor(payment, supabaseAdmin, parsePreVoidState, resolveReactivateTarget)
+
+    const blocker = reactivateBlocker({
+      prior,
+      total: Number(payment.total ?? payment.amount ?? 0),
+      invoiceStatus: payment.invoice_status,
+    })
+    if (blocker) return { success: true, preview: { affected: {}, items: [], blocker, record_label: label } }
 
     const currency = payment.amount_currency ?? ''
     const items: DryRunResult['items'] = [
@@ -524,7 +534,7 @@ async function resolveTargetFor(
     if (prior) break
   }
 
-  return resolveReactivateTarget({
+  const target = resolveReactivateTarget({
     prior,
     total: Number(payment.total ?? payment.amount ?? 0),
     amountPaid: Number(payment.amount_paid ?? 0),
@@ -532,6 +542,7 @@ async function resolveTargetFor(
     today: new Date().toISOString().split('T')[0],
     wasSent: !!payment.sent_at,
   })
+  return { prior, target }
 }
 
 /**
@@ -545,7 +556,7 @@ async function resolveTargetFor(
  */
 export async function reactivateInvoice(paymentId: string): Promise<ActionResult<{ invoice_status: string; source: string }>> {
   const { supabaseAdmin } = await import('@/lib/supabase-admin')
-  const { parsePreVoidState, resolveReactivateTarget } = await import('@/lib/billing/invoice-reactivate')
+  const { parsePreVoidState, resolveReactivateTarget, reactivateBlocker } = await import('@/lib/billing/invoice-reactivate')
 
   const { data: payment } = await supabaseAdmin
     .from('payments')
@@ -556,27 +567,36 @@ export async function reactivateInvoice(paymentId: string): Promise<ActionResult
   if (payment.invoice_status !== 'Cancelled' && payment.status !== 'Cancelled') {
     return { success: false, error: 'Only a cancelled invoice can be reactivated.' }
   }
-  if (payment.invoice_status === 'Split') {
-    return { success: false, error: 'A split parent invoice cannot be reactivated.' }
-  }
 
-  const target = await resolveTargetFor(payment, supabaseAdmin, parsePreVoidState, resolveReactivateTarget)
+  const { prior, target } = await resolveTargetFor(payment, supabaseAdmin, parsePreVoidState, resolveReactivateTarget)
+
+  const blocker = reactivateBlocker({
+    prior,
+    total: Number(payment.total ?? payment.amount ?? 0),
+    invoiceStatus: payment.invoice_status,
+  })
+  if (blocker) return { success: false, error: blocker }
 
   return safeAction(async () => {
     const now = new Date().toISOString()
+
+    const patch: Record<string, unknown> = {
+      status: target.status,
+      invoice_status: target.invoice_status,
+      amount_due: target.amount_due,
+      amount_paid: target.amount_paid,
+      paid_date: target.paid_date,
+      updated_at: now,
+    }
+    // Only a credit note carries this; never overwrite it with null on an
+    // ordinary invoice.
+    if (target.credit_remaining !== null) patch.credit_remaining = target.credit_remaining
 
     // TOCTOU guard: only reactivate if it is STILL cancelled.
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { data: updated, error } = await supabaseAdmin
       .from('payments')
-      .update({
-        status: target.status,
-        invoice_status: target.invoice_status,
-        amount_due: target.amount_due,
-        amount_paid: target.amount_paid,
-        paid_date: target.paid_date,
-        updated_at: now,
-      })
+      .update(patch)
       .eq('id', paymentId)
       .eq('invoice_status', 'Cancelled')
       .select('id')
