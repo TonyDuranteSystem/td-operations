@@ -28,6 +28,7 @@ import {
   Pencil,
   Trash2,
   Loader2,
+  Undo2,
   X,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -36,6 +37,8 @@ import {
   sendInvoiceReminder,
   voidInvoice,
   voidInvoicePreview,
+  reactivateInvoice,
+  reactivateInvoicePreview,
   deletePayment,
   deletePaymentPreview,
   updateInvoice,
@@ -69,6 +72,7 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
   const [isPending, startTransition] = useTransition()
   const [menuOpen, setMenuOpen] = useState(false)
   const [voidOpen, setVoidOpen] = useState(false)
+  const [reactivateOpen, setReactivateOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -149,6 +153,9 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
   const statusValue = (payment.invoice_status ?? payment.status ?? '').toString()
   const isPaid = statusValue === 'Paid'
   const isCancelled = statusValue === 'Cancelled' || statusValue === 'Waived' || statusValue === 'Voided'
+  // Only a true Cancelled invoice can be brought back. Waived/Voided are
+  // different lifecycle ends and have no reactivate path.
+  const canReactivate = statusValue === 'Cancelled'
   const isInvoiced = !!payment.invoice_number && payment.invoice_number !== '1.0' && payment.invoice_number !== '2.0'
 
   const label = isInvoiced ? `invoice ${payment.invoice_number}` : 'payment placeholder'
@@ -198,6 +205,21 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
 
   const loadVoidPreview = async () => {
     const r = await voidInvoicePreview(payment.id)
+    if (!r.success || !r.preview) throw new Error(r.error ?? 'Preview unavailable')
+    return r.preview
+  }
+
+  const handleReactivateConfirm = async () => {
+    const result = await reactivateInvoice(payment.id)
+    if (result.success) {
+      router.refresh()
+      return { success: true, message: `${label} reactivated as ${result.data?.invoice_status ?? 'open'}` }
+    }
+    return { success: false, error: result.error ?? 'Reactivate failed' }
+  }
+
+  const loadReactivatePreview = async () => {
+    const r = await reactivateInvoicePreview(payment.id)
     if (!r.success || !r.preview) throw new Error(r.error ?? 'Preview unavailable')
     return r.preview
   }
@@ -252,6 +274,15 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
               <Ban className="h-4 w-4" /> Void
             </button>
           )}
+          {isInvoiced && canReactivate && (
+            <button
+              type="button"
+              onClick={() => { setMenuOpen(false); setReactivateOpen(true) }}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 text-left"
+            >
+              <Undo2 className="h-4 w-4" /> Reactivate
+            </button>
+          )}
           <button
             type="button"
             onClick={() => { setMenuOpen(false); setEditOpen(true) }}
@@ -294,6 +325,17 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
         loadPreview={loadVoidPreview}
         confirmLabel="Void"
         onConfirm={handleVoidConfirm}
+      />
+
+      <ConfirmDestructiveDialog
+        open={reactivateOpen}
+        onClose={() => setReactivateOpen(false)}
+        title="Reactivate Invoice"
+        description={`Bring ${label} back as a live invoice?`}
+        severity="amber"
+        loadPreview={loadReactivatePreview}
+        confirmLabel="Reactivate"
+        onConfirm={handleReactivateConfirm}
       />
 
       <ConfirmDestructiveDialog

@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3, X, Plus,
-  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw, Bell,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw, Bell, Undo2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment, sendBulkReminders } from './actions'
+import { markInvoicePaid, voidInvoice, voidInvoicePreview, reactivateInvoice, reactivateInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft, unlinkPayment, sendBulkReminders } from './actions'
 import { regenerateInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
@@ -723,6 +723,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
   const [voidDialogOpen, setVoidDialogOpen] = useState(false)
+  const [reactivateDialogOpen, setReactivateDialogOpen] = useState(false)
   const router = useRouter()
   const { id: invoiceId, invoice_number: invoiceNumber, status } = invoice
 
@@ -792,6 +793,21 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
     return { success: false, error: result.error ?? 'Failed' }
   }
 
+  const handleReactivateConfirm = async () => {
+    const result = await reactivateInvoice(invoiceId)
+    if (result.success) {
+      router.refresh()
+      return { success: true, message: `${invoiceNumber} reactivated as ${result.data?.invoice_status ?? 'open'}` }
+    }
+    return { success: false, error: result.error ?? 'Failed' }
+  }
+
+  const loadReactivatePreview = async () => {
+    const r = await reactivateInvoicePreview(invoiceId)
+    if (!r.success || !r.preview) throw new Error(r.error ?? 'Preview unavailable')
+    return r.preview
+  }
+
   const loadVoidPreview = async () => {
     const r = await voidInvoicePreview(invoiceId)
     if (!r.success || !r.preview) {
@@ -821,6 +837,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         )}
         {status !== 'Paid' && status !== 'Cancelled' && (
           <ActionButton onClick={handleVoid} label="Void Invoice — cancel this invoice and reverse any applied credits" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
+        )}
+        {status === 'Cancelled' && (
+          <ActionButton onClick={() => setReactivateDialogOpen(true)} label="Reactivate — bring this cancelled invoice back to life" icon={Undo2} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
         )}
         {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
           <ActionButton onClick={handleRegenerate} label="Regenerate — recalculate and apply any available credit notes" icon={RefreshCw} color="text-indigo-600" hoverBg="hover:bg-indigo-100" />
@@ -855,6 +874,16 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         loadPreview={loadVoidPreview}
         confirmLabel="Void Invoice"
         onConfirm={handleVoidConfirm}
+      />
+      <ConfirmDestructiveDialog
+        open={reactivateDialogOpen}
+        onClose={() => setReactivateDialogOpen(false)}
+        title="Reactivate Invoice"
+        description={`Bring ${invoiceNumber} back as a live invoice?`}
+        severity="amber"
+        loadPreview={loadReactivatePreview}
+        confirmLabel="Reactivate Invoice"
+        onConfirm={handleReactivateConfirm}
       />
     </>
   )

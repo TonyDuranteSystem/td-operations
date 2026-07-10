@@ -314,18 +314,33 @@ export async function voidInvoicePreview(
   }
 }
 
+/**
+ * Cancel (void) an invoice.
+ *
+ * Records a {@link PreVoidState} snapshot into `action_log.details` so
+ * {@link reactivateInvoice} can restore the invoice EXACTLY. Before 2026-07-10
+ * this captured nothing, which is why un-cancelling was impossible and the
+ * VictoriamRoas INV-002218 repair had to be done by hand.
+ */
 export async function voidInvoice(paymentId: string): Promise<ActionResult> {
-  return safeAction(async () => {
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const now = new Date().toISOString()
+  const { supabaseAdmin } = await import('@/lib/supabase-admin')
+  const { capturePreVoidState, partitionFeedsForUnlink } = await import('@/lib/billing/invoice-reactivate')
 
-    // Get payment for QB void
-    const { data: payment } = await supabaseAdmin
-      .from('payments')
-      .select('id, qb_invoice_id')
-      .eq('id', paymentId)
-      .single()
-    if (!payment) throw new Error('Payment not found')
+  // Snapshot BEFORE the update, and outside safeAction, so the audit payload
+  // describes the pre-void state rather than the post-void one.
+  const { data: before } = await supabaseAdmin
+    .from('payments')
+    .select('id, qb_invoice_id, status, invoice_status, amount_due, amount_paid, paid_date')
+    .eq('id', paymentId)
+    .maybeSingle()
+  if (!before) return { success: false, error: 'Payment not found' }
+  if (before.invoice_status === 'Cancelled' || before.status === 'Cancelled') {
+    return { success: false, error: 'This invoice is already cancelled.' }
+  }
+  const preVoidState = capturePreVoidState(before)
+
+  return safeAction(async () => {
+    const now = new Date().toISOString()
 
     // Update payment
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
@@ -339,19 +354,38 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     await syncTDInvoiceStatus(paymentId, 'Cancelled')
 
     // Void in QuickBooks (non-blocking)
-    if (payment.qb_invoice_id) {
+    if (before.qb_invoice_id) {
       try {
         const { syncVoidToQB } = await import('@/lib/qb-sync')
         syncVoidToQB(paymentId).catch(() => {})
       } catch { /* QB not critical */ }
     }
 
-    // Unlink any matched bank feeds
-    const { error: bankFeedsErr } = await supabaseAdmin.from('td_bank_feeds').update({
-      matched_payment_id: null, match_confidence: null,
-      status: 'unmatched', updated_at: now,
-    }).eq('matched_payment_id', paymentId)
-    if (bankFeedsErr) throw new Error(`Failed to unlink bank feeds: ${bankFeedsErr.message}`)
+    // Unlink bank feeds. A CONFIRMED `matched` row returns to the review queue
+    // (the reconciliation it represented is undone). Every other linked row is
+    // only an unconfirmed suggestion — clear its stale pointer but PRESERVE its
+    // status, or rows the operator already dismissed (`ignored`) and outgoing
+    // transfers (`outgoing`) get resurrected into the queue. Found 2026-07-10.
+    const { data: linkedFeeds, error: feedReadErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id, status')
+      .eq('matched_payment_id', paymentId)
+    if (feedReadErr) throw new Error(`Failed to read bank feeds: ${feedReadErr.message}`)
+
+    const { resetIds, clearIds } = partitionFeedsForUnlink(linkedFeeds ?? [])
+
+    if (resetIds.length > 0) {
+      const { error } = await supabaseAdmin.from('td_bank_feeds').update({
+        matched_payment_id: null, match_confidence: null, status: 'unmatched', updated_at: now,
+      }).in('id', resetIds)
+      if (error) throw new Error(`Failed to unlink bank feeds: ${error.message}`)
+    }
+    if (clearIds.length > 0) {
+      const { error } = await supabaseAdmin.from('td_bank_feeds').update({
+        matched_payment_id: null, match_confidence: null, updated_at: now,
+      }).in('id', clearIds)
+      if (error) throw new Error(`Failed to clear bank feed suggestions: ${error.message}`)
+    }
 
     revalidatePath('/finance')
     revalidatePath('/payments')
@@ -359,7 +393,210 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     action_type: 'update',
     table_name: 'payments',
     record_id: paymentId,
-    summary: 'Invoice voided/cancelled + QB void + bank feeds unlinked',
+    summary: 'Invoice voided/cancelled + bank feeds unlinked',
+    // Read back by reactivateInvoice. Do not rename this key.
+    details: { pre_void_state: preVoidState },
+  })
+}
+
+/**
+ * Dry-run preview for {@link reactivateInvoice}. Its most important job is to
+ * warn how many AUTOMATIC chase emails the client will receive the moment this
+ * invoice is live again — a long-overdue invoice with no reminders on record
+ * satisfies both thresholds at once and fires two emails back-to-back.
+ */
+export async function reactivateInvoicePreview(
+  paymentId: string,
+): Promise<{ success: boolean; preview?: DryRunResult; error?: string }> {
+  try {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { parsePreVoidState, resolveReactivateTarget } = await import('@/lib/billing/invoice-reactivate')
+    const { projectedReminderCount, daysPastDue, isAutoSendEnabled } = await import('@/lib/billing/dunning')
+    const { isAccountReminderPaused } = await import('@/lib/billing/reminder-snooze')
+
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, status, invoice_status, total, amount, amount_due, amount_paid, amount_currency, due_date, sent_at, reminder_count, account_id')
+      .eq('id', paymentId)
+      .maybeSingle()
+    if (!payment) return { success: false, error: 'Invoice not found' }
+
+    const label = payment.invoice_number ?? paymentId
+
+    if (payment.invoice_status !== 'Cancelled' && payment.status !== 'Cancelled') {
+      return { success: true, preview: { affected: {}, items: [], blocker: 'This invoice is not cancelled.', record_label: label } }
+    }
+    if (payment.invoice_status === 'Split') {
+      return { success: true, preview: { affected: {}, items: [], blocker: 'A split parent invoice cannot be reactivated.', record_label: label } }
+    }
+
+    const target = await resolveTargetFor(payment, supabaseAdmin, parsePreVoidState, resolveReactivateTarget)
+
+    const currency = payment.amount_currency ?? ''
+    const items: DryRunResult['items'] = [
+      {
+        label: `Restore ${label} as ${target.invoice_status}`,
+        details: [
+          `${target.amount_due} ${currency}`.trim() + ' outstanding',
+          target.source === 'recorded' ? 'exactly as it was before cancelling' : 'state reconstructed from the invoice',
+        ],
+      },
+      { label: "Restore the client's copy in the portal" },
+    ]
+
+    const warnings: string[] = []
+
+    // Will the nightly dunning pass email this client?
+    let reminders = 0
+    if (payment.due_date && payment.account_id) {
+      const [autoSend, accountRes] = await Promise.all([
+        isAutoSendEnabled(),
+        supabaseAdmin
+          .from('accounts')
+          .select('dunning_reminder_1_days, dunning_reminder_2_days, dunning_pause, dunning_pause_until')
+          .eq('id', payment.account_id)
+          .maybeSingle(),
+      ])
+      // Cast: `dunning_pause_until` exists in the DB but is missing from the
+      // generated types (known schema-types drift). Same cast as dunning.ts.
+      const account = accountRes.data as unknown as {
+        dunning_reminder_1_days: number | null
+        dunning_reminder_2_days: number | null
+        dunning_pause: boolean | null
+        dunning_pause_until: string | null
+      } | null
+      reminders = projectedReminderCount({
+        autoSendEnabled: autoSend,
+        accountPaused: account ? isAccountReminderPaused(account) : false,
+        invoiceStatus: target.invoice_status,
+        daysOverdue: daysPastDue(payment.due_date, new Date().toISOString().split('T')[0]),
+        reminderCount: payment.reminder_count ?? 0,
+        r1: account?.dunning_reminder_1_days ?? 7,
+        r2: account?.dunning_reminder_2_days ?? 14,
+      })
+    }
+    if (reminders > 0) {
+      warnings.push(
+        `This invoice is already past due, so the client will automatically receive ${reminders} "Payment Overdue" email${reminders === 1 ? '' : 's'} over the next ${reminders === 1 ? 'night' : `${reminders} nights`}. Pause reminders for this client first if that is not what you want.`,
+      )
+      items.push({ label: `Client receives ${reminders} automatic reminder email${reminders === 1 ? '' : 's'}` })
+    }
+
+    if (!payment.sent_at) {
+      warnings.push('This invoice was never emailed to the client.')
+    }
+    warnings.push('Bank transactions unlinked when this invoice was cancelled are NOT relinked. Re-match them from the Bank Feed tab if needed.')
+
+    return {
+      success: true,
+      preview: { affected: { payment: 1, reminder_emails: reminders }, items, warnings, record_label: label },
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Preview failed' }
+  }
+}
+
+type AdminClient = typeof import('@/lib/supabase-admin')['supabaseAdmin']
+type ParsePreVoidState = typeof import('@/lib/billing/invoice-reactivate')['parsePreVoidState']
+type ResolveReactivateTarget = typeof import('@/lib/billing/invoice-reactivate')['resolveReactivateTarget']
+
+/** Shared by the preview and the commit so they can never disagree. */
+async function resolveTargetFor(
+  payment: { id: string; total: number | null; amount: number | null; amount_paid: number | null; due_date: string | null; sent_at: string | null },
+  supabaseAdmin: AdminClient,
+  parsePreVoidState: ParsePreVoidState,
+  resolveReactivateTarget: ResolveReactivateTarget,
+) {
+  // Most recent void of this invoice carries the snapshot (if it was cancelled
+  // after 2026-07-10; older cancellations recorded nothing and fall back to
+  // derivation).
+  const { data: voidLog } = await supabaseAdmin
+    .from('action_log')
+    .select('details')
+    .eq('table_name', 'payments')
+    .eq('record_id', payment.id)
+    .order('created_at', { ascending: false })
+    .limit(10)
+
+  let prior: ReturnType<ParsePreVoidState> = null
+  for (const row of voidLog ?? []) {
+    prior = parsePreVoidState((row as { details: unknown }).details)
+    if (prior) break
+  }
+
+  return resolveReactivateTarget({
+    prior,
+    total: Number(payment.total ?? payment.amount ?? 0),
+    amountPaid: Number(payment.amount_paid ?? 0),
+    dueDate: payment.due_date,
+    today: new Date().toISOString().split('T')[0],
+    wasSent: !!payment.sent_at,
+  })
+}
+
+/**
+ * Bring a cancelled invoice back to life — the inverse of {@link voidInvoice}.
+ *
+ * Restores the exact pre-void state when the cancellation recorded one,
+ * otherwise reconstructs the honest state from the invoice (see
+ * `resolveReactivateTarget`). Re-syncs the client's portal copy. Deliberately
+ * does NOT relink bank transactions: which suggestion was right is not
+ * recoverable, and guessing would silently mis-reconcile money.
+ */
+export async function reactivateInvoice(paymentId: string): Promise<ActionResult<{ invoice_status: string; source: string }>> {
+  const { supabaseAdmin } = await import('@/lib/supabase-admin')
+  const { parsePreVoidState, resolveReactivateTarget } = await import('@/lib/billing/invoice-reactivate')
+
+  const { data: payment } = await supabaseAdmin
+    .from('payments')
+    .select('id, invoice_number, status, invoice_status, total, amount, amount_paid, due_date, sent_at')
+    .eq('id', paymentId)
+    .maybeSingle()
+  if (!payment) return { success: false, error: 'Invoice not found' }
+  if (payment.invoice_status !== 'Cancelled' && payment.status !== 'Cancelled') {
+    return { success: false, error: 'Only a cancelled invoice can be reactivated.' }
+  }
+  if (payment.invoice_status === 'Split') {
+    return { success: false, error: 'A split parent invoice cannot be reactivated.' }
+  }
+
+  const target = await resolveTargetFor(payment, supabaseAdmin, parsePreVoidState, resolveReactivateTarget)
+
+  return safeAction(async () => {
+    const now = new Date().toISOString()
+
+    // TOCTOU guard: only reactivate if it is STILL cancelled.
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+    const { data: updated, error } = await supabaseAdmin
+      .from('payments')
+      .update({
+        status: target.status,
+        invoice_status: target.invoice_status,
+        amount_due: target.amount_due,
+        amount_paid: target.amount_paid,
+        paid_date: target.paid_date,
+        updated_at: now,
+      })
+      .eq('id', paymentId)
+      .eq('invoice_status', 'Cancelled')
+      .select('id')
+    if (error) throw new Error(`Failed to reactivate invoice: ${error.message}`)
+    if (!updated || updated.length === 0) throw new Error('Invoice is no longer cancelled — reload and try again.')
+
+    // Rebuild the client-facing copy from the payment (authoritative projection).
+    const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await syncTDInvoiceMirror(paymentId)
+
+    revalidatePath('/finance')
+    revalidatePath('/payments')
+
+    return { invoice_status: target.invoice_status, source: target.source }
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: `Invoice reactivated as ${target.invoice_status} (${target.source})`,
+    details: { reactivated_to: target },
   })
 }
 

@@ -56,6 +56,47 @@ export function shouldRemindNow(p: { daysOverdue: number; reminderCount: number;
   return false
 }
 
+/**
+ * How many automatic chase emails an invoice would receive if it were live
+ * RIGHT NOW, given the current settings. Pure — same rule as the real pass, so
+ * a caller can WARN before creating the condition rather than discover it from
+ * the client's inbox.
+ *
+ * Built for the reactivate flow: bringing back a long-overdue invoice with a
+ * zero reminder count silently satisfies BOTH thresholds at once, so the next
+ * two nightly passes fire back-to-back. That nearly happened to VictoriamRoas
+ * LLC on 2026-07-10 (39 days past due, 0 reminders → 2 emails).
+ */
+export function projectedReminderCount(p: {
+  autoSendEnabled: boolean
+  accountPaused: boolean
+  invoiceStatus: string
+  daysOverdue: number
+  reminderCount: number
+  r1: number
+  r2: number
+}): number {
+  if (!p.autoSendEnabled || p.accountPaused) return 0
+  if (p.invoiceStatus !== "Overdue") return 0
+
+  let reminderCount = p.reminderCount
+  let sends = 0
+  // shouldRemindNow caps at 2 reminders, so this always terminates.
+  while (shouldRemindNow({ daysOverdue: p.daysOverdue, reminderCount, r1: p.r1, r2: p.r2 })) {
+    sends++
+    reminderCount++
+  }
+  return sends
+}
+
+/** Whole days between an ISO `YYYY-MM-DD` due date and an ISO `today`. Negative
+ *  when the invoice is not yet due. Pure — `today` is passed, never read. */
+export function daysPastDue(dueDate: string, today: string): number {
+  const due = new Date(dueDate + "T00:00:00Z").getTime()
+  const now = new Date(today + "T00:00:00Z").getTime()
+  return Math.floor((now - due) / 86_400_000)
+}
+
 /** Max enqueue-per-pass allowed — clamps the configurable cap so a typo or a
  *  data bug can't queue an unbounded blast. Delivery is paced by the worker,
  *  so this can be generous. */

@@ -6,11 +6,20 @@ import {
   Search, FileText, Plus, Send, Bell, Download, CheckCircle,
   ChevronRight, Clock, CreditCard, Receipt, History,
   DollarSign, AlertTriangle, SplitSquareHorizontal, Users, RefreshCw, ScrollText,
+  Ban, Undo2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
-import { createUnifiedInvoiceDraft, sendNewInvoice } from './actions'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import {
+  createUnifiedInvoiceDraft,
+  sendNewInvoice,
+  voidInvoice,
+  voidInvoicePreview,
+  reactivateInvoice,
+  reactivateInvoicePreview,
+} from './actions'
 
 interface ClientSummary {
   id: string
@@ -138,30 +147,45 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
     router.push(`/finance?tab=clients&client=${id}`)
   }
 
+  // Void / Reactivate open a preview dialog rather than acting on click.
+  // One dialog for the whole table, pointed at the row the operator picked.
+  const [voidTarget, setVoidTarget] = useState<{ id: string; number: string } | null>(null)
+  const [reactivateTarget, setReactivateTarget] = useState<{ id: string; number: string } | null>(null)
+
+  /**
+   * Every row on this tab is a TD invoice (a `payments` row — see finance/page.tsx,
+   * which maps `invoice_status` → `status`). Until 2026-07-10 these actions called
+   * the CLIENT's own sales-invoice endpoints (`/api/portal/invoices/...`,
+   * `markInvoiceAsPaid`), which look up `client_invoices` by id. With a payments
+   * id they matched nothing: Download and Send errored, Remind silently re-sent
+   * the whole invoice, and Mark Paid updated ZERO rows while still toasting
+   * "Invoice marked as paid" — a false success. All four now use the same TD
+   * routines the All Invoices tab uses. Do not point this tab at portal routes.
+   */
   async function invoiceAction(action: string, invoiceId: string) {
     try {
       if (action === 'pdf') {
-        window.open(`/api/portal/invoices/${invoiceId}/pdf`, '_blank')
+        window.open(`/api/invoices/${invoiceId}/pdf`, '_blank')
         return
       }
       if (action === 'send') {
-        const res = await fetch(`/api/portal/invoices/${invoiceId}/send`, { method: 'POST' })
-        if (!res.ok) throw new Error(await res.text())
+        const result = await sendNewInvoice(invoiceId)
+        if (!result.success) throw new Error(result.error)
         toast.success('Invoice sent')
         router.refresh()
         return
       }
       if (action === 'remind') {
-        const res = await fetch(`/api/portal/invoices/${invoiceId}/send`, { method: 'POST' })
-        if (!res.ok) throw new Error(await res.text())
+        const { sendInvoiceReminder } = await import('./actions')
+        const result = await sendInvoiceReminder(invoiceId)
+        if (!result.success) throw new Error(result.error)
         toast.success('Reminder sent')
         router.refresh()
         return
       }
       if (action === 'markPaid') {
-        const { markInvoiceAsPaid } = await import('@/app/portal/invoices/actions')
-        const today = new Date().toISOString().split('T')[0]
-        const result = await markInvoiceAsPaid(invoiceId, today)
+        const { markInvoicePaid } = await import('./actions')
+        const result = await markInvoicePaid(invoiceId)
         if (!result.success) throw new Error(result.error)
         toast.success('Invoice marked as paid')
         router.refresh()
@@ -389,6 +413,16 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                               {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
                                 <button onClick={() => invoiceAction('regenerate', id)} title="Regenerate — show an applied credit as a line" className="p-1 rounded hover:bg-indigo-100 text-indigo-600">
                                   <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
+                                <button onClick={() => setVoidTarget({ id, number: inv.invoice_number as string })} title="Void — cancel this invoice" className="p-1 rounded hover:bg-red-100 text-red-500">
+                                  <Ban className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {status === 'Cancelled' && (
+                                <button onClick={() => setReactivateTarget({ id, number: inv.invoice_number as string })} title="Reactivate — bring this cancelled invoice back to life" className="p-1 rounded hover:bg-emerald-100 text-emerald-600">
+                                  <Undo2 className="w-3.5 h-3.5" />
                                 </button>
                               )}
                             </div>
@@ -625,6 +659,46 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
         }}
         onSendInvoice={async (paymentId) => {
           return await sendNewInvoice(paymentId)
+        }}
+      />
+
+      <ConfirmDestructiveDialog
+        open={!!voidTarget}
+        onClose={() => setVoidTarget(null)}
+        title="Void Invoice"
+        description={`Void invoice ${voidTarget?.number ?? ''}?`}
+        severity="red"
+        loadPreview={async () => {
+          const r = await voidInvoicePreview(voidTarget!.id)
+          if (!r.success || !r.preview) throw new Error(r.error ?? 'Preview unavailable')
+          return r.preview
+        }}
+        confirmLabel="Void Invoice"
+        onConfirm={async () => {
+          const result = await voidInvoice(voidTarget!.id)
+          if (!result.success) return { success: false, error: result.error ?? 'Failed' }
+          router.refresh()
+          return { success: true, message: `${voidTarget?.number} voided` }
+        }}
+      />
+
+      <ConfirmDestructiveDialog
+        open={!!reactivateTarget}
+        onClose={() => setReactivateTarget(null)}
+        title="Reactivate Invoice"
+        description={`Bring ${reactivateTarget?.number ?? ''} back as a live invoice?`}
+        severity="amber"
+        loadPreview={async () => {
+          const r = await reactivateInvoicePreview(reactivateTarget!.id)
+          if (!r.success || !r.preview) throw new Error(r.error ?? 'Preview unavailable')
+          return r.preview
+        }}
+        confirmLabel="Reactivate Invoice"
+        onConfirm={async () => {
+          const result = await reactivateInvoice(reactivateTarget!.id)
+          if (!result.success) return { success: false, error: result.error ?? 'Failed' }
+          router.refresh()
+          return { success: true, message: `${reactivateTarget?.number} reactivated as ${result.data?.invoice_status ?? 'open'}` }
         }}
       />
     </div>
