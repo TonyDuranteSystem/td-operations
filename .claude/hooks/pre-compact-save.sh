@@ -51,4 +51,5 @@ curl -s -X POST "${SUPABASE_URL}/rest/v1/session_checkpoints" \
 
 echo "🔴 COMPACTION IMMINENT — Auto-checkpoint saved with git state (${TOOL_COUNT} tool calls, commits: ${GIT_LOG_ESC})."
 echo "You MUST NOW save DETAILED progress to dev_tasks: specific files changed, decisions made, and PENDING next steps."
+echo "If this session is tied to a dev-tracker job (R112), UPDATE that job now: advance/confirm its milestone, refresh findings/plan/decisions, and keep the PLAIN-ENGLISH summary in sync — so the next session continues from the board cold."
 exit 0

@@ -160,7 +160,7 @@ OFFER PREPARATION CHECKLIST — MANDATORY before creating any offer:
 
 At the start of EVERY new conversation:
 1. Read sysdoc_read('session-context') — lean quick-ref with decisions, protocol, current state including what was LAST worked on.
-2. Check recent dev_tasks: query BOTH pending (in_progress/todo) AND recently completed (done, last 3) to understand what was just finished and what's next.
+2. Check recent dev_tasks: query BOTH pending (in_progress/todo) AND recently completed (done, last 3) to understand what was just finished and what's next. (R112 — dev-tracker board: dev work is tracked as ONE dev job per task on the /dev-board board; continue the matching open job via dev_task_list rather than duplicating, and keep it current — channel, plain-English summary, findings, plan, milestone, decisions, child bugs — as you work.)
 3. If you need milestone/tool details, also read sysdoc_read('project-state').
 4. Present a summary: "Last completed" + "Pending" + "Next steps" -- then ask "What should we work on?"
 5. Do NOT ask Antonio for information already in these documents. They contain confirmed decisions.

@@ -271,6 +271,14 @@ function DevTasksTab({ rows, activeStatus }: { rows: DevTaskRow[]; activeStatus:
 
   return (
     <>
+      <Link
+        href="/dev-board"
+        className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-sm text-blue-800 hover:bg-blue-100"
+      >
+        <span>📋 Manage jobs visually on the <strong>Dev Board</strong> — lanes, milestones, and full detail per job.</span>
+        <span aria-hidden>→</span>
+      </Link>
+      <p className="text-xs text-zinc-400 mb-3">The table below is the low-level row editor (same as SOPs / pipeline stages).</p>
       <div className="flex items-center gap-2 mb-3">
         {filters.map(f => (
           <Link

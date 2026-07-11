@@ -33,6 +33,7 @@ docs/systems/lease-oa.md|lib/mcp/tools/lease.ts,lib/mcp/tools/oa.ts,lib/types/oa
 docs/systems/mcp-tools.md|app/api/[transport]/route.ts,lib/mcp/instructions.ts,lib/mcp/safe-send.ts,lib/mcp/reminder.ts,lib/mcp/action-log.ts
 docs/systems/partners-team.md|lib/partners/,app/(dashboard)/partners/,app/portal/partner/
 docs/systems/team-workspace.md|lib/team/,app/api/team/,app/(dashboard)/team-chat/,app/api/internal/threads/,app/api/team-chat/
+docs/systems/dev-tracker.md|lib/dev-tracker/,components/dev-board/,app/(dashboard)/dev-board/,app/api/dev-board/,lib/mcp/tools/dev-tasks.ts
 docs/systems/ai-agent.md|lib/ai-agent/,app/api/ai-agent/
 docs/systems/agent-bridge.md|lib/mcp/tools/agent-messages.ts,lib/ai-agent/worker-tools.ts,app/api/cron/hermes-bridge/,lib/ai-agent/thread-summaries.ts,lib/ai-agent/thread-routing.ts,lib/ai-agent/thread-context.ts,lib/ai-agent/thread-recall.ts,lib/mcp/tools/agent-threads.ts,lib/ai-agent/approval-env.ts,lib/ai-agent/approval-executor.ts,lib/mcp/tools/agent-approvals.ts,lib/ai-agent/telegram-notify.ts
 docs/systems/slack-claude-worker.md|lib/ai-agent/slack-claude.ts,lib/ai-agent/slack-file-reader.ts,app/api/webhooks/slack-claude/,app/api/cron/slack-claude-worker/,app/(dashboard)/code-tasks/,app/api/code-tasks/,lib/code-tasks/,scripts/mac-mini/
