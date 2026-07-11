@@ -1,6 +1,14 @@
 {
   "crons": [
     {
+      "path": "/api/cron/refresh-issue-counts",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/payment-integrity-alarm",
+      "schedule": "0 9 * * *"
+    },
+    {
       "path": "/api/cron/gmail-watch-renew",
       "schedule": "0 5 * * *"
     },
@@ -121,18 +129,6 @@
       "schedule": "0 * * * *"
     },
     {
-      "path": "/api/cron/audit-health-check",
-      "schedule": "0 7 * * *"
-    },
-    {
-      "path": "/api/cron/raw-sql-weekly-report",
-      "schedule": "0 12 * * 1"
-    },
-    {
-      "path": "/api/cron/cron-coverage-audit",
-      "schedule": "30 9 * * *"
-    },
-    {
       "path": "/api/cron/tax-reactivation",
       "schedule": "30 10 * * *"
     },
@@ -159,10 +155,6 @@
     {
       "path": "/api/cron/irs-fx-rates",
       "schedule": "0 7 2 * *"
-    },
-    {
-      "path": "/api/cron/error-audit",
-      "schedule": "*/15 * * * *"
     }
   ],
   "rewrites": [
