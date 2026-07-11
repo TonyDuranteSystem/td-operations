@@ -1,6 +1,6 @@
 # Dev-Tracker Board
 
-_Last verified against code: 2026-07-11 — Claude (initial doc; feature built this session, SANDBOX-only, NOT yet on production)._
+_Last verified against code: 2026-07-11 — Claude (**SHIPPED TO PRODUCTION** 2026-07-11, main @ `e2490bb8`. Migrations run in the Supabase dashboard by Antonio; the `dev_stage_sets` catalog (default + bugfix) and the td-bug channel were seeded on prod; code deployed and verified live (creating a bugfix job returned the Bug lifecycle). The still-pending Slack #td-dev backlog (22 items) was loaded to prod; 608 stale `[AUTO]` audit/cron duplicate tasks were cleared off the board and a root-fix job opened.)_
 
 ## What it is
 A per-channel board for **development work** — the single place a Claude Code session records what it's doing so nothing is lost across compaction and any later session continues cold. It is a **view over `dev_tasks`** (the existing durable tracker), NOT a second store. Staff-only, internal — distinct from the "TO DO — FROM CHATS" action board (that's client-message actions; see `todo-board.md`) and from the Team Chat kanban of chat threads (see `team-workspace.md`).
@@ -37,7 +37,12 @@ Lives at **`/dev-board`** (level 1) and **`/dev-board/[id]`** (level 2, the per-
 - Board: open `/dev-board`, click a job → its stage board; open a `bugfix`-type child to see the different lifecycle.
 - Note (R096): use the **sandbox** MCP / `psql` for sandbox; `execute_sql` on the production MCP hits production.
 
+## Done since ship (2026-07-11)
+- **Slack backlog imported:** the still-pending Slack #td-dev requests (22) are on the prod board; 4 already-shipped ones were verified against main and left closed.
+- **Loose Team Chat threads cleaned:** 10 stale/dead unanchored discussions archived (dead Approval Rail, a test thread, April cruft); Carasso Consulting + MG International re-anchored to their accounts.
+- **Auto-task noise cleared:** 608 stale `[AUTO]` audit/cron duplicate dev_tasks (a new one per cron run since April) were cancelled off the board; job "Stop auto audit/cron checks from flooding the dev board" tracks the root fix (route to the System Health dashboard or make them idempotent).
+
 ## Not yet done
-- **Production:** the migrations + tool code + UI are SANDBOX-only. Production ship needs the two migrations run in the Supabase dashboard (prod DDL via `execute_sql` is blocked) + a prod deploy, on Antonio's explicit word. Until then R112's extra fields don't work on the production MCP.
-- **Seed the backlog (Phase 5):** import Luca's Slack td-dev requests + the loose internal Team Chat threads (BUGS / Issues with the CRM / …) as jobs; re-anchor loose client-named threads; archive the dead Approval Rail thread.
-- Custom per-type stage editing has no dedicated UI yet (edit the catalog rows directly).
+- **td-support → Team Chat reconciliation** (own job): the ~56 td-support client threads are already in the `client_threads` Conversations feature (114 slack-sourced) but not in the Team Chat workspace. Decide read-from vs absorb; depends on the client-grouped Conversations view (S1–S5) also shipping to prod.
+- **Custom per-type stage editing** has no dedicated UI yet (edit the `dev_stage_sets` catalog rows directly).
+- **~12 weekly `[AUTO]` SQL-report tasks** remain on the board (harmless, one/week) — clear if desired.
