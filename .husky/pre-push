@@ -114,7 +114,7 @@ if [ -f scripts/check-system-docs-freshness.sh ]; then
 fi
 
 echo "🔍 Running ESLint on changed files..."
-CHANGED_TS=$(git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
+CHANGED_TS=$(git diff --name-only --diff-filter=d origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
 if [ -n "$CHANGED_TS" ]; then
   # Capture eslint's real exit code BEFORE piping to tail (a pipe would make
   # $? reflect tail, which always succeeds — the gate would never block).
