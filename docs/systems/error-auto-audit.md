@@ -1,6 +1,8 @@
 # Error Auto-Audit
 
-Last verified against code: 2026-07-07 (initial build)
+Last verified against code: 2026-07-11 — Claude (**the 15-minute AI DIAGNOSIS loop is DISABLED** — unscheduled from vercel.json + `lib/cron-coverage.ts`, so it no longer runs (the route file is left dormant, pending a separate deletion). It ran an AI pass over captured errors every 15 minutes and wrote to a `/system-health` view no one opened — recurring token cost for nothing (Antonio, 2026-07-11). Error **capture** (`lib/system-errors.ts::reportSystemError`) and the `/system-health` view are UNCHANGED — errors are still recorded and visible; they just aren't auto-diagnosed anymore (the `diagnosis`/`suggested_fix` fields stay empty until someone diagnoses on demand). Monitoring moved to a point-of-work model instead: real client problems surface on the Portal Chats client (⚠️ + Issues tab, see `dev-tracker.md`/portal), and silent failures (a dead payment sync, orphaned records) fire ONE Team Chat alarm via `/api/cron/payment-integrity-alarm`. The daily audit / cron-coverage / weekly-report crons were also unscheduled (dormant). Original build note below.)
+
+Original: 2026-07-07 (initial build)
 
 ## What it is
 
@@ -29,12 +31,13 @@ zero trace anywhere.
      (requires a logged-in user; dead-session errors can't self-report — by
      design, the middleware's 401 SESSION_EXPIRED body already explains those
      to the user directly). Wired today: create-offer dialog.
-2. **Diagnosis → cron** `/api/cron/error-audit` (every 15 min, CRON_SECRET,
-   registered in vercel.json + `lib/cron-coverage.ts`). Picks up to 5 `open`
-   rows, calls the shared AI provider (`callAI`, sonnet, strict-JSON reply),
-   writes plain-English `diagnosis` + `suggested_fix`, status → `diagnosed`.
-   Unparseable replies leave the row open for the next pass. TOCTOU guard:
-   update only fires `WHERE status='open'`.
+2. **Diagnosis → cron** `/api/cron/error-audit` — **DISABLED 2026-07-11**
+   (unscheduled from vercel.json + `lib/cron-coverage.ts`; route left dormant).
+   It used to run
+   every 15 min, pick up to 5 `open` rows, call the AI provider and write a
+   `diagnosis` + `suggested_fix` (status → `diagnosed`). That auto-diagnosis is
+   gone — captured rows now stay `open` (no `diagnosis`) unless diagnosed on
+   demand. See the header note for the why + what replaced it.
 3. **Surface → `/system-health`** top widget
    (`components/system-health/system-errors-panel.tsx`): status badge,
    route, occurrence count, message, diagnosis + solution, Resolve / Ignore
