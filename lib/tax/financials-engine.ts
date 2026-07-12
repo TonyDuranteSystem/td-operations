@@ -43,6 +43,9 @@ export interface DraftTransaction {
    *  not yet backfilled — accountKeyOf falls back to the canonical bank name. */
   account_ref?: string | null
   balance_after: number | null
+  /** AI-assigned expense bucket slug (catalog_entries 'expense_categories') — the
+   *  grouping key for the operating-expense breakdown. Null/absent → "other". */
+  ai_bucket?: string | null
 }
 
 export interface MemberCapital {
@@ -84,11 +87,30 @@ export interface FinancialDraft {
   /** Where beginning_cash came from — drives the UI note + gate wording. */
   beginning_cash_source: "prior_return" | "statements" | "provided" | null
   beginning_capital_total: number
+  /** Operating-expense total broken down by AI bucket, on the SAME USD-converted,
+   *  refund-netted basis as pnl.totalExpenses — so the parts always sum to the
+   *  headline total (Phase 2 fix: the portal used to sum raw native amounts,
+   *  which drifted from the converted total for any multi-currency account). The
+   *  bucket key is the row's ai_bucket ("other" when absent); the caller maps it
+   *  to a catalog label. Grand total == pnl.totalExpenses (invariant-checked). */
+  operating_expense_breakdown: Array<{ bucket: string; total: number }>
   ending_cash: number
   /** v1: assets = cash. */
   total_assets: number
   total_liabilities: number
   ending_capital_total: number
+  /** Foreign-exchange TRANSLATION adjustment (Phase 3) — the net of the year's
+   *  currency-exchange / internal-transfer ("conversion") rows in USD. A true
+   *  same-currency transfer nets to zero; the leftover is the difference between
+   *  valuing cross-currency exchanges at the IRS yearly-average rate and the
+   *  amounts actually received. It is a DISCLOSED EQUITY line — assets =
+   *  liabilities + capital + this — and is NEVER income and NEVER allocated to a
+   *  member's capital account (CPA condition: it must not fabricate taxable
+   *  income). Zero for all-USD / no-conversion accounts. */
+  fx_translation_adjustment: number
+  /** Gross USD volume of the conversion rows (Σ|amount|) — context for the
+   *  translation adjustment and the "unexpectedly large" review alarm. */
+  conversion_gross: number
   /** Contribution/distribution amounts that matched no member by name — needs staff/client resolution. */
   unattributed: { contributions: number; distributions: number }
   notes: string[]
@@ -171,28 +193,94 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
 
   const pnl = computePnlTotals(transactions, { defaultUncategorizedBySign: input.defaultUncategorizedBySign })
 
+  // ── Operating-expense breakdown by AI bucket (Phase 2) ──
+  // Computed on the SAME USD-converted, signed, refund-netted rows as
+  // pnl.totalExpenses, so the parts ALWAYS sum to the headline total. Each row
+  // contributes (−amount): an expense/fee/uncategorized-outflow adds its
+  // magnitude; a refund (money received back) subtracts (contra-expense). The
+  // uncategorized-outflow term is included only under the by-sign policy — the
+  // exact condition computePnlTotals uses — so the two never disagree. Bucket
+  // key = the row's ai_bucket ("other" when absent); the caller maps it to a
+  // catalog label. Replaces the portal's old raw-native, refund-blind sum.
+  const foldUncatExpense = input.defaultUncategorizedBySign === true
+  const opexByBucket = new Map<string, number>()
+  for (const t of transactions) {
+    const amt = Number(t.amount)
+    const inOpex =
+      t.category === "expense" ||
+      t.category === "fee" ||
+      t.category === "refund" ||
+      (foldUncatExpense && t.category === "uncategorized" && amt < 0)
+    if (!inOpex) continue
+    const bucket = typeof t.ai_bucket === "string" && t.ai_bucket.length > 0 ? t.ai_bucket : "other"
+    opexByBucket.set(bucket, (opexByBucket.get(bucket) ?? 0) - amt)
+  }
+  const operating_expense_breakdown = Array.from(opexByBucket.entries())
+    .map(([bucket, total]) => ({ bucket, total }))
+    .sort((a, b) => b.total - a.total)
+  const opexBreakdownSum = operating_expense_breakdown.reduce((s, b) => s + b.total, 0)
+  if (Math.abs(opexBreakdownSum - pnl.totalExpenses) > 0.01) {
+    notes.push(`Internal check: the operating-expense breakdown (${opexBreakdownSum.toFixed(2)}) does not add up to the operating-expense total (${pnl.totalExpenses.toFixed(2)}) — please report this.`)
+  }
+
   // ── Per-bank cash positions (gate 1 inputs) ──
-  const bankKeys = Array.from(new Set(transactions.map(t => accountKeyOf(t))))
-  const banks: BankCashPosition[] = bankKeys.map(key => {
-    const rows = transactions
-      .filter(t => accountKeyOf(t) === key)
-      .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date))
-    const firstWithBalance = rows.find(r => r.balance_after !== null)
-    const lastWithBalance = [...rows].reverse().find(r => r.balance_after !== null)
+  // A statement's running-balance column is TRUSTED as the beginning/ending
+  // anchor ONLY when it is reliable for that account: it covers EVERY row and
+  // the chain self-reconciles in the account's own currency (opening + the
+  // year's movements = closing). A partial column (only some rows carry a
+  // balance) or an out-of-order/foreign-currency running total does NOT
+  // reconcile, so it is DISCARDED (derived_beginning/reported_ending stay null)
+  // and the merge falls back to the client/staff-provided balances — which the
+  // client attests. This is the Dynamiq fix: keeping "statement-derived
+  // outranks typed" TRUE while making "derived" mean "reliable derived only",
+  // so an unreliable column can no longer inflate cash or raise a false "off
+  // by" / "statement doesn't add up". Reliability is checked on the RAW native
+  // amounts (exact — no FX rounding); the trusted position values are then USD.
+  const NATIVE_RECONCILE_EPS = 0.01
+  const rawByKey = new Map<string, DraftTransaction[]>()
+  for (const t of rawTransactions) {
+    const k = accountKeyOf(t)
+    const arr = rawByKey.get(k) ?? []
+    arr.push(t)
+    rawByKey.set(k, arr)
+  }
+  const toUsdAmt = (v: number, ccy: string): number => fxRates ? toUsd(v, ccy, fxRates).usd : v
+  const discardedColumns: string[] = []
+  const banks: BankCashPosition[] = Array.from(rawByKey.entries()).map(([key, rawRows]) => {
+    const rows = [...rawRows].sort((a, b) => a.transaction_date.localeCompare(b.transaction_date))
     const curCounts = new Map<string, number>()
     for (const r of rows) {
       const c = (r.currency ?? "USD").trim().toUpperCase() || "USD"
       curCounts.set(c, (curCounts.get(c) ?? 0) + 1)
     }
     const currency = Array.from(curCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "USD"
-    return {
-      bank_key: key,
-      currency,
-      derived_beginning: firstWithBalance ? Number(firstWithBalance.balance_after) - Number(firstWithBalance.amount) : null,
-      reported_ending: lastWithBalance ? Number(lastWithBalance.balance_after) : null,
-      net_movement: rows.reduce((s, r) => s + Number(r.amount), 0),
+    const net_movement = rows.reduce((s, r) => s + toUsdAmt(Number(r.amount), r.currency ?? "USD"), 0)
+
+    const fullCoverage = rows.length > 0 && rows.every(r => r.balance_after !== null && r.balance_after !== undefined)
+    const hasAnyBalance = rows.some(r => r.balance_after !== null && r.balance_after !== undefined)
+    let derived_beginning: number | null = null
+    let reported_ending: number | null = null
+    if (fullCoverage) {
+      const first = rows[0]
+      const last = rows[rows.length - 1]
+      const nativeBeginning = Number(first.balance_after) - Number(first.amount)
+      const nativeEnding = Number(last.balance_after)
+      const nativeNet = rows.reduce((s, r) => s + Number(r.amount), 0)
+      const reconciles = Math.abs(nativeBeginning + nativeNet - nativeEnding) <= NATIVE_RECONCILE_EPS
+      if (reconciles) {
+        derived_beginning = toUsdAmt(nativeBeginning, currency)
+        reported_ending = toUsdAmt(nativeEnding, currency)
+      } else {
+        discardedColumns.push(key) // full column but doesn't reconcile (ordering / foreign running total)
+      }
+    } else if (hasAnyBalance) {
+      discardedColumns.push(key) // partial column — some rows carry no balance
     }
+    return { bank_key: key, currency, derived_beginning, reported_ending, net_movement }
   })
+  if (discardedColumns.length > 0) {
+    notes.push(`Statement running-balance column not used as the anchor for: ${discardedColumns.join(", ")} — it was incomplete or did not reconcile, so the opening/closing balances you provided were used instead.`)
+  }
 
   // ── Capital roll-forward per member ──
   const allocatable = members.filter(m => m.pct !== null) as Array<ResolvedMember & { pct: number }>
@@ -222,7 +310,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   const providedOpening = usingProvidedOpening ? balanceSummary.total_opening_usd : null
   if (balanceSummary.mismatched_banks.length > 0) {
     for (const m of balanceSummary.banks.filter(x => x.tie === "mismatch")) {
-      notes.push(`${m.bank_key}: opening + transactions differ from the closing balance by ${(m.delta_usd as number).toFixed(2)} USD — a transaction is likely missing or duplicated in that account's statements.`)
+      notes.push(`${m.bank_key}: the opening balance plus the year's transactions do not equal the closing balance (off by ${(m.delta_usd as number).toFixed(2)} USD) — re-check that account's opening and closing figures, or a transaction may be missing for that account.`)
     }
   }
   for (const m of balanceSummary.banks.filter(x => x.provided_conflicts_derived)) {
@@ -298,6 +386,28 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   const beginningCapitalTotal = memberCapital.reduce((s, m) => s + m.beginning_capital, 0)
   const endingCapitalTotal = memberCapital.reduce((s, m) => s + m.ending_capital, 0)
 
+  // ── Foreign-exchange translation adjustment (Phase 3) ──
+  // Cash (assets) carries every "conversion" row (currency exchanges + internal
+  // transfers); member capital does NOT (conversions are neither income nor
+  // owner movement). A matched same-currency transfer nets to zero; the leftover
+  // is the spot-vs-yearly-average difference on cross-currency exchanges (plus
+  // any unmatched leg). It equals assets − (liabilities + capital), so recording
+  // it as a disclosed EQUITY translation line makes the balance sheet tie
+  // HONESTLY — without inventing income or touching any member's capital account.
+  const conversionRows = transactions.filter(t => t.category === "conversion")
+  const fxTranslationAdjustment = conversionRows.reduce((s, t) => s + Number(t.amount), 0)
+  const conversionGross = conversionRows.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  if (Math.abs(fxTranslationAdjustment) > 0.01) {
+    notes.push(`Foreign-exchange translation adjustment of ${fxTranslationAdjustment.toFixed(2)} USD — the difference between valuing currency exchanges at the IRS yearly-average rate and the amounts actually received. It is shown as an equity translation adjustment so the balance sheet ties; it is not income and is not added to any member's capital account.`)
+    // Magnitude alarm (CPA/architect condition): genuine FX drift is small next
+    // to the exchange volume. A large share means a transfer leg or a whole
+    // account may be missing, or a row is mis-categorized as a transfer — never
+    // let the tie-out silently bury that.
+    if (conversionGross > 0 && Math.abs(fxTranslationAdjustment) / conversionGross > 0.10) {
+      notes.push(`This translation adjustment is large relative to the currency-exchange volume — a transfer leg or a bank account may be missing, or a transaction may be mis-categorized as an internal transfer. Staff should review before filing.`)
+    }
+  }
+
   return {
     tax_year: taxYear,
     pnl,
@@ -307,10 +417,13 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     beginning_cash: beginningCash,
     beginning_cash_source: beginningCashSource,
     beginning_capital_total: beginningCapitalTotal,
+    operating_expense_breakdown,
     ending_cash: endingCash,
     total_assets: endingCash,
     total_liabilities: 0,
     ending_capital_total: endingCapitalTotal,
+    fx_translation_adjustment: fxTranslationAdjustment,
+    conversion_gross: conversionGross,
     unattributed: { contributions: unattributedContrib, distributions: unattributedDist },
     notes,
   }

@@ -39,19 +39,28 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
   const { draft, ownership, priorReturn } = input
   const results: GateResult[] = []
 
-  // ── Gate 1: per-statement reconciliation (where balances exist) ──
+  // ── Gate 1: per-account reconciliation against the best opening/closing anchor ──
+  // Reconciliation is checked against each account's AUTHORITATIVE anchors — a
+  // reliable statement running-balance (kept by the engine only when it covers
+  // every row and self-reconciles) OR the client/staff-provided opening &
+  // closing balances. An unreliable running-balance column (partial or out of
+  // order) is discarded by the engine and never raises a false "off by": when
+  // the client's provided balances + the year's movements tie (Dynamiq), this
+  // gate passes. It fails only when a real anchor genuinely does not reconcile
+  // (a wrong opening/closing figure or a truly missing transaction).
   {
-    const checkable = draft.banks.filter(b => b.derived_beginning !== null && b.reported_ending !== null)
+    const merged = draft.bank_balances?.banks ?? []
+    const checkable = merged.filter(b => b.opening_usd !== null && b.closing_usd !== null)
     if (checkable.length === 0) {
       results.push({
         id: 1, title: "Statement reconciliation", status: "na", blocking: false,
-        detail: "The uploaded CSV files carry no running-balance column — verified instead through full-year coverage, the prior-year tie-out, and your confirmation.",
+        detail: "Verified through the opening and closing balances on file, full-year coverage, and your confirmation — the statements' running-balance column was not needed.",
       })
     } else {
-      const broken = checkable.filter(b => !close((b.derived_beginning as number) + b.net_movement, b.reported_ending as number))
+      const broken = checkable.filter(b => b.tie === "mismatch")
       results.push(broken.length === 0
         ? { id: 1, title: "Statement reconciliation", status: "pass", blocking: false, detail: `${checkable.length} account(s) reconcile: beginning + movements = ending.` }
-        : { id: 1, title: "Statement reconciliation", status: "fail", blocking: false, detail: `Does not reconcile for: ${broken.map(b => b.bank_key).join(", ")} — usually a partial export (missing months or filtered transactions). Re-export the entire year.` })
+        : { id: 1, title: "Statement reconciliation", status: "fail", blocking: false, detail: `The opening balance plus the year's transactions does not equal the closing balance for: ${broken.map(b => b.bank_key).join(", ")} — re-check that account's opening/closing figures, or a transaction may be missing.` })
     }
   }
 
@@ -77,17 +86,21 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
         const currentBeginning = derivable.reduce((s, b) => s + (b.derived_beginning as number), 0)
         results.push(close(currentBeginning, draft.beginning_cash)
           ? { id: 2, title: "Prior-year tie-out", status: "pass", blocking: false, detail: `Last year's ending cash (${draft.beginning_cash.toFixed(2)}) matches this year's beginning balances.` }
-          : { id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: `Last year's return shows ending cash ${draft.beginning_cash.toFixed(2)}, but this year's statements begin at ${currentBeginning.toFixed(2)} — usually a missing bank account or a missing January. Add the missing account or re-export the full year.` })
+          : { id: 2, title: "Prior-year tie-out", status: "fail", blocking: false, detail: `Last year's return shows ending cash ${draft.beginning_cash.toFixed(2)}, but this year's opening balances add up to ${currentBeginning.toFixed(2)} — usually a bank account that isn't included this year, or an opening balance to re-check.` })
       }
     }
   }
 
-  // ── Gate 3: A = L + C ──
+  // ── Gate 3: A = L + C + FX translation adjustment ──
+  // The foreign-exchange translation adjustment (Phase 3) is a disclosed equity
+  // line, so the identity is assets = liabilities + capital + translation
+  // adjustment. Currency exchanges no longer show as a bare "off by" — they are
+  // named and carried in equity, never in income or member capital.
   {
-    const rhs = draft.total_liabilities + draft.ending_capital_total
+    const rhs = draft.total_liabilities + draft.ending_capital_total + draft.fx_translation_adjustment
     results.push(close(draft.total_assets, rhs)
-      ? { id: 3, title: "Balance sheet balances", status: "pass", blocking: false, detail: `Assets ${draft.total_assets.toFixed(2)} = liabilities + capital.` }
-      : { id: 3, title: "Balance sheet balances", status: "fail", blocking: false, detail: `Assets ${draft.total_assets.toFixed(2)} ≠ liabilities ${draft.total_liabilities.toFixed(2)} + capital ${draft.ending_capital_total.toFixed(2)} (off by ${(draft.total_assets - rhs).toFixed(2)}) — usually uncategorized transactions or a beginning-balance gap.` })
+      ? { id: 3, title: "Balance sheet balances", status: "pass", blocking: false, detail: `Assets ${draft.total_assets.toFixed(2)} = liabilities + capital${Math.abs(draft.fx_translation_adjustment) > 0.01 ? " + foreign-exchange translation adjustment" : ""}.` }
+      : { id: 3, title: "Balance sheet balances", status: "fail", blocking: false, detail: `Assets ${draft.total_assets.toFixed(2)} ≠ liabilities ${draft.total_liabilities.toFixed(2)} + capital ${draft.ending_capital_total.toFixed(2)} + FX adjustment ${draft.fx_translation_adjustment.toFixed(2)} (off by ${(draft.total_assets - rhs).toFixed(2)}) — usually uncategorized transactions or a beginning-balance gap.` })
   }
 
   // ── Gate 4: M-2 ties (roll-forward arithmetic) ──

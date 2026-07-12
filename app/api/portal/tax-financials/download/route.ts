@@ -13,7 +13,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { isAccountOwner } from '@/lib/portal/owner-access'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -36,34 +35,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
-    // The SAME draft the screen renders — one engine, one set of numbers.
-    const { getFinancialsView } = await import('@/lib/tax/financials-orchestration')
-    const view = await getFinancialsView(accountId, taxYear)
-    if (view.transactionCount === 0) {
+    // The SAME workbook the accountant hand-off archives — one engine, one
+    // filing artifact (buildFinancialsWorkbookForAccount).
+    const { buildFinancialsWorkbookForAccount } = await import('@/lib/tax/financials-orchestration')
+    const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
+    if (!result) {
       return NextResponse.json({ error: 'No transactions yet — upload the statements first.' }, { status: 422 })
     }
-
-    // Detail-sheet rows + company name + IRS rates for the USD column.
-    const { fetchAllBankTransactionsByYear } = await import('@/lib/bank-transactions-fetch')
-    const txRows = await fetchAllBankTransactionsByYear<{
-      transaction_date: string; description: string | null; counterparty: string | null
-      amount: number; currency: string | null; category: string | null; subcategory: string | null
-      bank_name: string | null; account_type: string | null; is_related_party: boolean | null; transaction_ref: string | null
-    }>(
-      accountId, taxYear,
-      'transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, is_related_party, transaction_ref',
-      { column: 'transaction_date', ascending: true },
-    )
-
-    const { data: account } = await supabaseAdmin.from('accounts').select('company_name').eq('id', accountId).single()
-    const companyName = account?.company_name || 'Company'
-
-    const { getIrsRate } = await import('@/lib/pnl-generator')
-    const rates: Record<string, number> = {}
-    for (const c of Array.from(new Set(txRows.map(t => t.currency ?? 'USD')))) rates[c] = await getIrsRate(c, taxYear)
-
-    const { buildFinancialsWorkbook } = await import('@/lib/tax/financials-excel')
-    const result = await buildFinancialsWorkbook({ companyName, taxYear, draft: view.draft, transactions: txRows, rates })
 
     return new NextResponse(new Uint8Array(result.buffer), {
       headers: {

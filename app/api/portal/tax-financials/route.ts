@@ -144,25 +144,26 @@ export async function GET(request: NextRequest) {
 
     // Flexible expense buckets (#2) — the live catalog list the review groups by
     // and the "add a bucket" field offers.
-    const { getExpenseBuckets, isOperatingExpenseRow, bucketSlugForRow, OTHER_BUCKET_LABEL } = await import('@/lib/tax/expense-buckets')
+    const { getExpenseBuckets, OTHER_BUCKET_SLUG, OTHER_BUCKET_LABEL } = await import('@/lib/tax/expense-buckets')
     const buckets = await getExpenseBuckets(db)
 
     // Operating-expense breakdown by accountant bucket (Luca: "more detail in the
-    // P&L"). Matches the P&L's Operating-expenses composition: outflows booked
-    // expense/fee PLUS uncategorized outflows (which default to business expense).
-    // COGS + distributions are shown on their own lines, so excluded here.
+    // P&L"). Phase 2 fix: the breakdown now comes from the ENGINE draft
+    // (view.draft.operating_expense_breakdown), computed on the SAME USD-converted,
+    // refund-netted rows as the headline total — so the parts always sum to the
+    // total (the old inline sum used raw native amounts and drifted by the FX
+    // uplift + refunds for multi-currency accounts, e.g. Dynamiq's $23,245 gap).
+    // Here we only map the engine's ai_bucket keys to live catalog labels; an
+    // unknown/absent bucket folds into "other". The slug still travels with each
+    // line for the drill-down (Luca, dev_task 1bee0ffe).
     const bucketLabelMap = new Map(buckets.map(b => [b.slug, b.label]))
     const validSlugs = new Set(buckets.map(b => b.slug))
-    const breakdownMap = new Map<string, number>()
-    for (const r of uncatRows) {
-      const amt = Number(r.amount)
-      if (!isOperatingExpenseRow(r.category as string | null, amt)) continue
-      const slug = bucketSlugForRow(r.ai_bucket, validSlugs)
-      breakdownMap.set(slug, (breakdownMap.get(slug) ?? 0) + Math.abs(amt))
+    const labelledMap = new Map<string, number>()
+    for (const { bucket, total } of view.draft.operating_expense_breakdown) {
+      const slug = validSlugs.has(bucket) ? bucket : OTHER_BUCKET_SLUG
+      labelledMap.set(slug, (labelledMap.get(slug) ?? 0) + total)
     }
-    // slug travels with each line so the client can lazy-load that category's
-    // transactions on click (Luca's drill-down, dev_task 1bee0ffe).
-    const expense_breakdown = Array.from(breakdownMap.entries())
+    const expense_breakdown = Array.from(labelledMap.entries())
       .map(([slug, total]) => ({ slug, label: bucketLabelMap.get(slug) ?? OTHER_BUCKET_LABEL, total }))
       .sort((a, b) => b.total - a.total)
 

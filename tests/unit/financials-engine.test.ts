@@ -154,7 +154,7 @@ describe("gate failure modes", () => {
     const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: PRIOR })
     const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: PRIOR })
     expect(gates.find(g => g.id === 2)!.status).toBe("fail")
-    expect(gates.find(g => g.id === 2)!.detail).toContain("missing")
+    expect(gates.find(g => g.id === 2)!.detail).toContain("isn't included this year")
   })
 
   it("gate 2 is NA-with-reason for first year and for declared never-filed", () => {
@@ -185,16 +185,34 @@ describe("gate failure modes", () => {
     expect(gates.find(g => g.id === 1)!.status).toBe("na")
   })
 
-  it("gate 1 fails when beginning + movements ≠ ending (partial export)", () => {
+  it("discards a full-coverage running-balance column that does not reconcile (no provided balances) → gate 1 NA, no false alarm", () => {
     const transactions = [
       tx({ amount: -100, category: "expense", balance_after: 900, transaction_date: "2025-01-05" }),
-      // a later balance that implies missing transactions in between:
+      // a later balance that does not follow from the movements (ordering/format artifact or a real gap):
       tx({ amount: -50, category: "expense", balance_after: 500, transaction_date: "2025-11-30" }),
     ]
     const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null })
+    // The unreliable column is NOT used as an anchor (Dynamiq fix)…
+    expect(draft.banks[0].derived_beginning).toBeNull()
+    expect(draft.banks[0].reported_ending).toBeNull()
+    expect(draft.notes.join(" ")).toContain("did not reconcile")
+    // …and with no provided balances there is nothing to reconcile against → NA, not a false "re-export" alarm.
+    const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
+    expect(gates.find(g => g.id === 1)!.status).toBe("na")
+  })
+
+  it("gate 1 FAILS when the client's provided opening+closing do not tie to the movements", () => {
+    const transactions = [
+      tx({ amount: -100, category: "expense", balance_after: null, transaction_date: "2025-01-05" }),
+      tx({ amount: -50, category: "expense", balance_after: null, transaction_date: "2025-11-30" }),
+    ]
+    // Client says opened 1000, closed 500, but −150 of movements ⇒ closing should be 850.
+    const draft = buildFinancialDraft({
+      taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null,
+      providedBalances: [{ bank_key: "Mercury Checking", currency: "USD", opening_balance: 1000, closing_balance: 500, source: "client" }],
+    })
     const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
     expect(gates.find(g => g.id === 1)!.status).toBe("fail")
-    expect(gates.find(g => g.id === 1)!.detail).toContain("entire year")
   })
 
   it("gate 5 fails when ownership is unresolved; gate 4 NA without members", () => {
@@ -220,6 +238,148 @@ describe("unattributed owner movements", () => {
     expect(draft.notes.join(" ")).toContain("confirm with the client")
     const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
     expect(gates.find(g => g.id === 4)!.status).toBe("pass")
+  })
+})
+
+describe("Phase 1 — balance-anchor reliability (Dynamiq fix)", () => {
+  it("ignores a PARTIAL running-balance column and uses the client's provided balances; reconciles green", () => {
+    // Chase-like: several rows, only some carry a balance; provided opening/closing are correct.
+    const transactions = [
+      tx({ amount: -1000, category: "expense", bank_name: "Chase", account_type: "USD", balance_after: null, transaction_date: "2025-02-01" }),
+      tx({ amount: 3000, category: "income", bank_name: "Chase", account_type: "USD", balance_after: 12000, transaction_date: "2025-06-01" }),
+      tx({ amount: -500, category: "expense", bank_name: "Chase", account_type: "USD", balance_after: null, transaction_date: "2025-09-01" }),
+    ]
+    // net movement = -1000 + 3000 - 500 = 1500; client opened 10000, closed 11500.
+    const draft = buildFinancialDraft({
+      taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null,
+      providedBalances: [{ bank_key: "Chase USD", currency: "USD", opening_balance: 10000, closing_balance: 11500, source: "client" }],
+    })
+    expect(draft.banks[0].derived_beginning).toBeNull() // partial column discarded
+    expect(draft.beginning_cash).toBe(10000)            // from provided, not the column
+    expect(draft.beginning_cash_source).toBe("provided")
+    const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
+    expect(gates.find(g => g.id === 1)!.status).toBe("pass")
+  })
+
+  it("keeps a FULL, self-reconciling column as the anchor (statements source)", () => {
+    const transactions = [
+      tx({ amount: -100, category: "expense", bank_name: "Relay", account_type: "USD", balance_after: 900, transaction_date: "2025-03-01" }),
+      tx({ amount: 400, category: "income", bank_name: "Relay", account_type: "USD", balance_after: 1300, transaction_date: "2025-04-01" }),
+    ]
+    // opening = 900 − (−100) = 1000; movements +300; ending 1300 ✓ reconciles
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null })
+    expect(draft.banks[0].derived_beginning).toBe(1000)
+    expect(draft.banks[0].reported_ending).toBe(1300)
+    expect(draft.beginning_cash_source).toBe("statements")
+    expect(evaluateGates({ draft, ownership: MEMBERS, priorReturn: null }).find(g => g.id === 1)!.status).toBe("pass")
+  })
+
+  it("discards an out-of-order foreign-currency running total but stays green via provided balances (Wise EUR)", () => {
+    // Wise EUR: full coverage, but the running total does not walk in date order → not reliable.
+    const transactions = [
+      tx({ amount: 500, category: "income", currency: "EUR", bank_name: "Wise", account_type: "EUR", balance_after: 500, transaction_date: "2025-05-01" }),
+      tx({ amount: -500, category: "expense", currency: "EUR", bank_name: "Wise", account_type: "EUR", balance_after: 900, transaction_date: "2025-05-02" }),
+    ]
+    // Native chain does not reconcile (500-(-? )); client provided EUR opening 0 / closing 0.
+    const draft = buildFinancialDraft({
+      taxYear: 2025, transactions, members: MEMBERS.members, priorReturn: null, fxRates: { EUR: 0.9 },
+      providedBalances: [{ bank_key: "Wise EUR", currency: "EUR", opening_balance: 0, closing_balance: 0, source: "client" }],
+    })
+    expect(draft.banks[0].derived_beginning).toBeNull()
+    const g1 = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null }).find(g => g.id === 1)!
+    expect(g1.status).toBe("pass")
+  })
+})
+
+describe("Phase 2 — operating-expense breakdown (parts == total, USD basis)", () => {
+  it("sums to pnl.totalExpenses on the converted, refund-netted basis (multi-currency)", () => {
+    const txs = [
+      tx({ amount: -1000, category: "expense", currency: "USD", ai_bucket: "software" }),
+      tx({ amount: -92.4, category: "expense", currency: "EUR", bank_name: "Wise", account_type: "EUR", ai_bucket: "software" }), // €92.4 / 0.924 = $100
+      tx({ amount: -50, category: "fee", currency: "USD", ai_bucket: "bank_fee" }),
+      tx({ amount: 30, category: "refund", currency: "USD", ai_bucket: "software" }), // contra-expense
+      tx({ amount: 500, category: "income", currency: "USD" }), // not opex
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true, fxRates: { EUR: 0.924 } })
+    const sum = draft.operating_expense_breakdown.reduce((s, b) => s + b.total, 0)
+    expect(sum).toBeCloseTo(draft.pnl.totalExpenses, 2)
+    const bySlug = Object.fromEntries(draft.operating_expense_breakdown.map(b => [b.bucket, b.total]))
+    expect(bySlug["software"]).toBeCloseTo(1070, 2) // 1000 + 100 (from EUR) − 30 refund
+    expect(bySlug["bank_fee"]).toBeCloseTo(50, 2)
+    expect(draft.notes.some(n => n.includes("Internal check"))).toBe(false)
+  })
+
+  it("folds rows with no ai_bucket into 'other' and still ties", () => {
+    const txs = [
+      tx({ amount: -200, category: "expense", currency: "USD" }),        // no ai_bucket → other
+      tx({ amount: -800, category: "uncategorized", currency: "USD" }),  // folded outflow → other
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true })
+    const sum = draft.operating_expense_breakdown.reduce((s, b) => s + b.total, 0)
+    expect(sum).toBeCloseTo(draft.pnl.totalExpenses, 2)
+    expect(draft.operating_expense_breakdown.find(b => b.bucket === "other")!.total).toBeCloseTo(1000, 2)
+  })
+})
+
+describe("Phase 3 — foreign-exchange translation adjustment (balance sheet ties honestly)", () => {
+  it("records the conversion residual in equity; BS ties; net income & member capital untouched", () => {
+    const txs = [
+      tx({ amount: 10000, category: "income", currency: "USD", bank_name: "Relay", account_type: "USD" }),
+      // Cross-currency exchange with a spot-vs-average residual: send $5000, receive €4000 (=$4444.44 at 0.9).
+      tx({ amount: -5000, category: "conversion", currency: "USD", bank_name: "Wise", account_type: "USD" }),
+      tx({ amount: 4000, category: "conversion", currency: "EUR", bank_name: "Wise", account_type: "EUR" }),
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true, fxRates: { EUR: 0.9 } })
+    expect(draft.fx_translation_adjustment).toBeCloseTo(-555.56, 2) // −5000 + 4444.44
+    // Balance sheet ties WITH the adjustment (would have been "off by 555.56" before).
+    const g3 = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null }).find(g => g.id === 3)!
+    expect(g3.status).toBe("pass")
+    // Net income excludes conversions; member capital is NOT touched by the adjustment.
+    expect(draft.pnl.netIncome).toBeCloseTo(10000, 2)
+    expect(draft.members.find(m => m.name === "Sofia Marinoni")!.ending_capital).toBeCloseTo(6000, 2)
+    expect(draft.members.find(m => m.name === "Marco Bianchi")!.ending_capital).toBeCloseTo(4000, 2)
+    expect(draft.notes.some(n => n.includes("translation adjustment"))).toBe(true)
+    expect(draft.notes.some(n => n.includes("may be missing"))).toBe(false) // small vs volume → no alarm
+  })
+
+  it("raises the 'possible missing leg/account' alarm when the residual is large vs the exchange volume", () => {
+    const txs = [
+      tx({ amount: 5000, category: "income", currency: "USD", bank_name: "Relay", account_type: "USD" }),
+      tx({ amount: -1000, category: "conversion", currency: "USD", bank_name: "Wise", account_type: "USD" }), // unmatched leg
+    ]
+    const draft = buildFinancialDraft({ taxYear: 2025, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true })
+    expect(draft.fx_translation_adjustment).toBeCloseTo(-1000, 2)
+    expect(draft.notes.some(n => n.includes("may be missing"))).toBe(true)
+    expect(evaluateGates({ draft, ownership: MEMBERS, priorReturn: null }).find(g => g.id === 3)!.status).toBe("pass")
+  })
+})
+
+describe("Dynamiq 2024 reproduction — the real per-bank figures now reconcile", () => {
+  it("beginning 218,084.89 / ending 391,863.70 from the client's provided balances; gate 1 & 3 pass (issues 1,3,4,5)", () => {
+    // Real 2024 figures from Sofia's statements: opening → closing per account.
+    const banks = [
+      { key: "Chase USD", bank: "Chase", ccy: "USD", open: 196686.10, close: 269139.16 },
+      { key: "Mercury USD", bank: "Mercury", ccy: "USD", open: 1674.67, close: 103112.40 },
+      { key: "Relay USD", bank: "Relay", ccy: "USD", open: 0, close: 11144.73 },
+      { key: "Wise USD", bank: "Wise", ccy: "USD", open: 19724.12, close: 8467.41 },
+      { key: "Wise EUR", bank: "Wise", ccy: "EUR", open: 0, close: 0 }, // no net movement
+    ]
+    // One row per account carrying the real net movement, NO balance column
+    // (mirrors Mercury/Chase where the running-balance column is absent/partial,
+    // so the engine must fall back to the client's provided balances).
+    const txs: DraftTransaction[] = banks.flatMap(b => {
+      const net = Number((b.close - b.open).toFixed(2))
+      if (net === 0) return []
+      return [tx({ amount: net, category: net >= 0 ? "income" : "expense", currency: b.ccy, bank_name: b.bank, account_type: b.ccy, balance_after: null })]
+    })
+    const providedBalances = banks.map(b => ({ bank_key: b.key, currency: b.ccy, opening_balance: b.open, closing_balance: b.close, source: "client" as const }))
+    const draft = buildFinancialDraft({ taxYear: 2024, transactions: txs, members: MEMBERS.members, priorReturn: null, defaultUncategorizedBySign: true, fxRates: { EUR: 0.924 }, providedBalances })
+    expect(draft.beginning_cash).toBeCloseTo(218084.89, 2)   // was inflated to 229,513.89
+    expect(draft.ending_cash).toBeCloseTo(391863.70, 2)      // was inflated to 403,292.70
+    expect(draft.beginning_cash_source).toBe("provided")
+    const gates = evaluateGates({ draft, ownership: MEMBERS, priorReturn: null })
+    expect(gates.find(g => g.id === 1)!.status).toBe("pass") // no false "off by" / "doesn't add up"
+    expect(gates.find(g => g.id === 3)!.status).toBe("pass") // balance sheet ties
   })
 })
 

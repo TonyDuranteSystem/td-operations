@@ -592,11 +592,12 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
               // Generate P&L if we have transactions
               if (totalParsed > 0) {
                 try {
-                  // Trigger P&L generation via the MCP tool logic
-                  // For now, just log that it's ready — the MCP tool can be called to generate Excel
-                  // Auto-generate P&L Excel and upload to Drive
-                  const { generatePnlExcel } = await import("@/lib/pnl-generator")
-                  const pnl = await generatePnlExcel(sub.account_id!, sub.tax_year)
+                  // Auto-generate the P&L Excel from the SAME financials engine
+                  // as the client screen + accountant hand-off (one filing
+                  // artifact — never the legacy transaction-based generator).
+                  const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
+                  const pnl = await buildFinancialsWorkbookForAccount(sub.account_id!, sub.tax_year)
+                  if (!pnl) throw new Error("No transactions available to build the P&L")
 
                   // Upload to Drive Tax/{year}/ folder
                   const { data: accDrive } = await supabaseAdmin
@@ -631,7 +632,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
                   results.push({
                     step: "pnl_generated",
                     status: "ok",
-                    detail: `P&L Excel generated and uploaded to Drive. ${pnl.summary}`,
+                    detail: `P&L Excel generated from the financials engine and uploaded to Drive (${pnl.fileName}).`,
                   })
                 } catch (pnlErr) {
                   results.push({

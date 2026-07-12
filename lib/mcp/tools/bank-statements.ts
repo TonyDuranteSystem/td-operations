@@ -351,13 +351,16 @@ export function registerBankStatementTools(server: McpServer) {
         const distributions = transactions.filter(t => t.category === "distribution")
         const uncategorized = transactions.filter(t => t.category === "uncategorized")
 
-        // Totals come from the SHARED engine math (lib/pnl-generator) — F1
-        // (signed refunds) and F3 (contributions are equity, not revenue) are
-        // fixed there once instead of this file duplicating the formulas.
-        const { computePnlTotals } = await import("@/lib/pnl-generator")
+        // Totals + the workbook now BOTH come from the ONE financials engine
+        // (getFinancialsView), so this tool reports and files exactly the same
+        // numbers as the client's portal screen and the accountant hand-off —
+        // corrected beginning balances, refund-netted expenses, and the FX
+        // translation adjustment included.
+        const { getFinancialsView } = await import("@/lib/tax/financials-orchestration")
+        const engineView = await getFinancialsView(account_id, tax_year)
         const {
           totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions,
-        } = computePnlTotals(transactions)
+        } = engineView.draft.pnl
 
         // Get primary currency (most transactions)
         const currencyCounts = transactions.reduce((acc, t) => {
@@ -385,16 +388,16 @@ export function registerBankStatementTools(server: McpServer) {
           distByMember[name] = (distByMember[name] || 0) + Math.abs(Number(t.amount))
         }
 
-        // ── SINGLE ENGINE ── build the 5-sheet P&L / Balance Sheet workbook via
-        // generatePnlExcel, the SAME hardened engine the tax wizard uses
-        // (comparative Schedule M-2 balance sheet, signed contra-expense,
-        // multi-currency). This tool previously hand-rolled its own ExcelJS
-        // workbook — an older copy that had drifted to a single-year balance
-        // sheet with an FX-adjustment plug (flagged by Antonio as inaccurate).
-        // Delegating removes that duplicate so the manual and automatic P&L
-        // paths always produce the identical file.
-        const { generatePnlExcel } = await import("@/lib/pnl-generator")
-        const { buffer, fileName } = await generatePnlExcel(account_id, tax_year)
+        // ── SINGLE ENGINE ── build the 5-sheet P&L / Balance Sheet workbook from
+        // the financials engine draft (buildFinancialsWorkbookForAccount) — the
+        // SAME artifact the client downloads and the accountant hand-off archives.
+        // This tool previously used the legacy transaction-based generator, which
+        // had drifted from the engine (raw last balance for assets, no name-drift
+        // identity healing, single-rate multi-currency). One engine, one file.
+        const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
+        const built = await buildFinancialsWorkbookForAccount(account_id, tax_year)
+        if (!built) throw new Error("No transactions available to build the P&L for this account and year")
+        const { buffer, fileName } = built
 
         // Upload to Drive
         let driveLink = ""

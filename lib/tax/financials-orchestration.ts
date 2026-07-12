@@ -98,7 +98,7 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const txRows = await fetchAllBankTransactionsByYear<Record<string, unknown>>(
     accountId,
     taxYear,
-    "id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, account_ref, balance_after",
+    "id, transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, account_ref, balance_after, ai_bucket",
   )
   const transactions = txRows.map(r => ({ ...r, amount: Number(r.amount) })) as DraftTransaction[]
 
@@ -191,6 +191,45 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const completeness = buildCompletenessSummary({ gates, draft, missingFxCurrencies })
 
   return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, providedBalances }
+}
+
+/**
+ * Build the P&L + Balance Sheet Excel workbook for an account-year FROM THE
+ * ENGINE DRAFT — the single filing artifact. Every surface that hands a client
+ * or accountant an Excel (the portal download AND the post-attestation Drive
+ * archive the accountant files from) MUST go through here, so the accountant
+ * never receives numbers that differ from the client's screen (Phase 4 fix:
+ * the accountant hand-off used to build from the legacy transaction-based
+ * generator, which diverged from the corrected engine). Returns null when the
+ * account has no transactions yet. Pure rendering lives in buildFinancialsWorkbook.
+ */
+export async function buildFinancialsWorkbookForAccount(
+  accountId: string,
+  taxYear: number,
+): Promise<{ buffer: Buffer; fileName: string } | null> {
+  const view = await getFinancialsView(accountId, taxYear)
+  if (view.transactionCount === 0) return null
+
+  const { fetchAllBankTransactionsByYear } = await import("@/lib/bank-transactions-fetch")
+  const txRows = await fetchAllBankTransactionsByYear<{
+    transaction_date: string; description: string | null; counterparty: string | null
+    amount: number; currency: string | null; category: string | null; subcategory: string | null
+    bank_name: string | null; account_type: string | null; is_related_party: boolean | null; transaction_ref: string | null
+  }>(
+    accountId, taxYear,
+    "transaction_date, description, counterparty, amount, currency, category, subcategory, bank_name, account_type, is_related_party, transaction_ref",
+    { column: "transaction_date", ascending: true },
+  )
+
+  const { data: account } = await supabaseAdmin.from("accounts").select("company_name").eq("id", accountId).single()
+  const companyName = account?.company_name || "Company"
+
+  const { getIrsRate } = await import("@/lib/pnl-generator")
+  const rates: Record<string, number> = {}
+  for (const c of Array.from(new Set(txRows.map(t => t.currency ?? "USD")))) rates[c] = await getIrsRate(c, taxYear)
+
+  const { buildFinancialsWorkbook } = await import("@/lib/tax/financials-excel")
+  return buildFinancialsWorkbook({ companyName, taxYear, draft: view.draft, transactions: txRows, rates })
 }
 
 /** Write resolved percentages back to account_contacts where they differ. */

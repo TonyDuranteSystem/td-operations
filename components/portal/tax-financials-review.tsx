@@ -64,6 +64,7 @@ interface View {
     total_assets: number
     total_liabilities: number
     ending_capital_total: number
+    fx_translation_adjustment?: number
     notes: string[]
   }
   gates: Gate[]
@@ -1591,6 +1592,15 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                   </div>
                 )}
                 <div className="flex justify-between border-t border-zinc-100 pt-1.5"><dt className="font-semibold text-zinc-900">{it ? 'Capitale soci' : 'Members’ capital'}</dt><dd className="font-semibold">{fmt(view.draft.ending_capital_total)}</dd></div>
+                {Math.abs(view.draft.fx_translation_adjustment ?? 0) > 0.01 && (
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-500">
+                      {it ? 'Rettifica di conversione valutaria' : 'Foreign-exchange translation adjustment'}
+                      <span className="ml-1 text-[11px] text-zinc-400">{it ? '(non è reddito)' : '(not income)'}</span>
+                    </dt>
+                    <dd className="font-medium">{fmt(view.draft.fx_translation_adjustment ?? 0)}</dd>
+                  </div>
+                )}
               </dl>
             </section>
           </div>

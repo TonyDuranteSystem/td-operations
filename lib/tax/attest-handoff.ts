@@ -26,19 +26,26 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   const companyName = acct?.company_name ?? accountId
 
   // 1. Archive the confirmed Excel to Drive 3.Tax/{year}.
+  //    Built from the SAME engine draft the client attested on screen
+  //    (buildFinancialsWorkbookForAccount) — never the legacy transaction-based
+  //    generator — so the accountant files exactly the numbers the client saw.
   try {
     if (acct?.drive_folder_id) {
-      const { generatePnlExcel } = await import("@/lib/pnl-generator")
+      const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
       const { findTaxFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
-      const result = await generatePnlExcel(accountId, taxYear)
-      const taxFolderId = await findTaxFolder(acct.drive_folder_id)
-      const target = taxFolderId ?? acct.drive_folder_id
-      await uploadBinaryToDrive(
-        `${companyName} - PnL + Balance Sheet ${taxYear} (client-confirmed).xlsx`,
-        result.buffer,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        target,
-      )
+      const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
+      if (!result) {
+        console.warn(`[attest-handoff] no transactions for account ${accountId} ${taxYear} — Excel not archived`)
+      } else {
+        const taxFolderId = await findTaxFolder(acct.drive_folder_id)
+        const target = taxFolderId ?? acct.drive_folder_id
+        await uploadBinaryToDrive(
+          `${companyName} - PnL + Balance Sheet ${taxYear} (client-confirmed).xlsx`,
+          result.buffer,
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          target,
+        )
+      }
     } else {
       console.warn(`[attest-handoff] no Drive folder for account ${accountId} — Excel not archived`)
     }
