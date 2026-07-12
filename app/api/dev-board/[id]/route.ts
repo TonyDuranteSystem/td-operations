@@ -45,6 +45,8 @@ export async function PATCH(
     postponed?: boolean
     channel?: string
     priority?: string
+    knowledge_ref?: string
+    knowledge_status?: string
   }
   try {
     body = await request.json()
@@ -73,6 +75,17 @@ export async function PATCH(
   }
 
   if (body.priority) updates.priority = body.priority
+
+  // Knowledge-capture pointer (where the lasting knowledge was written down).
+  if (body.knowledge_status !== undefined) {
+    if (body.knowledge_status !== "" && !["captured", "chore"].includes(body.knowledge_status)) {
+      return NextResponse.json({ error: `Unknown knowledge_status "${body.knowledge_status}".` }, { status: 400 })
+    }
+    updates.knowledge_status = body.knowledge_status || null
+  }
+  if (body.knowledge_ref !== undefined) {
+    updates.knowledge_ref = body.knowledge_ref.trim() || null
+  }
 
   // Milestone advance / postpone → derive the lane from the job's stage set.
   let derivedStatus: string | undefined

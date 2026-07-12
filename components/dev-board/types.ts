@@ -17,6 +17,8 @@ export interface DevJob {
   created_at: string
   updated_at: string
   completed_at: string | null
+  knowledge_ref: string | null
+  knowledge_status: string | null
 }
 
 /** One work-log entry, optionally tagged to the stage it happened in. */

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest"
 import {
   BOARD_LANES,
+  ACTIVE_BOARD_LANES,
+  DONE_LANE,
   laneForStatus,
   groupJobsByLane,
   channelsInJobs,
@@ -17,6 +19,17 @@ describe("board lanes", () => {
       "done",
     ])
     expect(BOARD_LANE_LABEL.backlog).toBe("Postponed")
+  })
+
+  it("active lanes are the four working columns; done folds out separately", () => {
+    expect(ACTIVE_BOARD_LANES.map((l) => l.key)).toEqual([
+      "todo",
+      "in_progress",
+      "blocked",
+      "backlog",
+    ])
+    expect(ACTIVE_BOARD_LANES.some((l) => l.key === "done")).toBe(false)
+    expect(DONE_LANE.key).toBe("done")
   })
 
   it("maps statuses to lanes; cancelled is hidden", () => {

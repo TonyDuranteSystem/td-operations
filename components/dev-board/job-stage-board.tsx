@@ -31,6 +31,7 @@ export function JobStageBoard({
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
+  const [kref, setKref] = useState("")
 
   const ms = parseMilestones(job.milestones)
   const reached = new Map<string, string>()
@@ -176,6 +177,74 @@ export function JobStageBoard({
             </div>
           )
         })}
+      </div>
+
+      {/* Knowledge captured — where this job's lasting knowledge was written
+          down. The board points to the doc; it never duplicates it. */}
+      <div className="mt-5 max-w-3xl">
+        {job.knowledge_status === "captured" && job.knowledge_ref ? (
+          <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 mb-1">
+              Knowledge captured
+            </h4>
+            <p className="text-sm text-emerald-900 whitespace-pre-wrap break-words">→ {job.knowledge_ref}</p>
+            <button
+              disabled={busy}
+              onClick={() => patch({ knowledge_status: "", knowledge_ref: "" })}
+              className="mt-1 text-[11px] text-zinc-500 hover:underline disabled:opacity-50"
+            >
+              Clear
+            </button>
+          </div>
+        ) : job.knowledge_status === "chore" ? (
+          <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-2">
+            <p className="text-sm text-zinc-500">Marked a chore — nothing to document.</p>
+            <button
+              disabled={busy}
+              onClick={() => patch({ knowledge_status: "" })}
+              className="text-[11px] text-zinc-500 hover:underline disabled:opacity-50"
+            >
+              Undo
+            </button>
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "p-3 rounded-lg border",
+              job.status === "done" ? "bg-amber-50 border-amber-300" : "bg-zinc-50 border-zinc-200",
+            )}
+          >
+            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600 mb-1">
+              Where did the knowledge go?
+            </h4>
+            <p className="text-xs text-zinc-500 mb-2">
+              Point to the living doc / KB article / sysdoc that now holds what this job taught — so
+              closing it never loses the knowledge.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={kref}
+                onChange={(e) => setKref(e.target.value)}
+                placeholder="e.g. docs/systems/dev-tracker.md"
+                className="text-xs border border-zinc-300 rounded px-2 py-1 bg-white flex-1 min-w-[200px]"
+              />
+              <button
+                disabled={busy || !kref.trim()}
+                onClick={() => patch({ knowledge_ref: kref.trim(), knowledge_status: "captured" })}
+                className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+              >
+                Save pointer
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => patch({ knowledge_status: "chore" })}
+                className="text-[11px] px-2 py-1 rounded border border-zinc-300 text-zinc-600 hover:bg-white disabled:opacity-50"
+              >
+                Nothing to document
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Cross-cutting — not tied to one stage */}

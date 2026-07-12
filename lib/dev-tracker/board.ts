@@ -16,6 +16,17 @@ export const BOARD_LANES = [
 
 export type BoardLaneKey = (typeof BOARD_LANES)[number]["key"]
 
+/**
+ * Lanes shown as active columns on the board grid — everything except "done".
+ * Finished work does not belong in the working view; it folds into the
+ * collapsed "Recently shipped" drawer (still a drag target so drag-to-complete
+ * keeps working). See components/dev-board/dev-board.tsx.
+ */
+export const ACTIVE_BOARD_LANES = BOARD_LANES.filter((l) => l.key !== "done")
+
+/** The "done" lane meta, rendered as the folded shipped drawer, not a column. */
+export const DONE_LANE = BOARD_LANES.find((l) => l.key === "done")!
+
 /** Lane a status belongs to, or null when it should not appear (cancelled). */
 export function laneForStatus(status: string): BoardLaneKey | null {
   switch (status) {

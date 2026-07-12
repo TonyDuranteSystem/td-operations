@@ -201,12 +201,14 @@ export function registerDevTaskTools(server: McpServer) {
       description: z.string().optional().describe("Updated description (the original request)"),
       priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("New priority"),
       related_files: z.array(z.string()).optional().describe("Related file paths"),
+      knowledge_ref: z.string().optional().describe("WHERE this job's lasting knowledge was written down — a living system doc (e.g. 'docs/systems/dev-tracker.md'), a KB article id, or a sysdoc slug. The board points to the doc, it never copies it (docs/KB stay the single source of truth). Set this when finishing a job so closing the card never loses what it taught."),
+      knowledge_status: z.enum(["captured", "chore"]).optional().describe("'captured' = a pointer is recorded in knowledge_ref; 'chore' = pure mechanical work, nothing worth documenting. Set one when moving a job to done."),
     },
-    async ({ id, milestone, milestone_note, postponed, status, channel, summary_plain, findings, plan, blockers, decisions, progress_entry, title, description, priority, related_files }) => {
+    async ({ id, milestone, milestone_note, postponed, status, channel, summary_plain, findings, plan, blockers, decisions, progress_entry, title, description, priority, related_files, knowledge_ref, knowledge_status }) => {
       try {
         const now = new Date().toISOString()
 
-        const { data: job } = await db.from("dev_tasks").select("type, milestones, progress_log").eq("id", id).single()
+        const { data: job } = await db.from("dev_tasks").select("type, milestones, progress_log, knowledge_status").eq("id", id).single()
         if (!job) return { content: [{ type: "text" as const, text: `❌ Job ${id} not found.` }] }
         const set = await loadStageSetForType(db, job.type)
         const prevMs = parseMilestones(job.milestones)
@@ -227,6 +229,8 @@ export function registerDevTaskTools(server: McpServer) {
         if (description) updates.description = description
         if (priority) updates.priority = priority
         if (related_files) updates.related_files = related_files
+        if (knowledge_ref !== undefined) updates.knowledge_ref = knowledge_ref.trim() || null
+        if (knowledge_status !== undefined) updates.knowledge_status = knowledge_status
 
         // Milestone advance → derive the lane from the job's stage set.
         let derivedStatus: string | undefined
@@ -268,10 +272,18 @@ export function registerDevTaskTools(server: McpServer) {
         if (error) throw error
         const ms = parseMilestones(data.milestones)
         const stageLabel = ms ? labelForStage(set, ms.current) : "—"
+
+        // Soft nudge: a job closed without recording where its knowledge went.
+        const knownAfter = knowledge_status ?? job.knowledge_status
+        const nudge =
+          finalStatus === "done" && !knownAfter
+            ? "\n\n📎 Before this folds away: record where its lasting knowledge went — pass `knowledge_ref` (a living doc / KB id / sysdoc slug) or set `knowledge_status:\"chore\"` if there's nothing to document."
+            : ""
+
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Job updated: ${data.title}\n• Lane: ${data.status} | Milestone: ${stageLabel} | Channel: ${data.channel || "—"} | Priority: ${data.priority}\n• ID: ${data.id}`,
+            text: `✅ Job updated: ${data.title}\n• Lane: ${data.status} | Milestone: ${stageLabel} | Channel: ${data.channel || "—"} | Priority: ${data.priority}\n• ID: ${data.id}${nudge}`,
           }],
         }
       } catch (err: unknown) {

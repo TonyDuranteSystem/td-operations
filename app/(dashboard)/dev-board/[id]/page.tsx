@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic"
 const db = supabaseAdmin as any
 
 const JOB_FIELDS =
-  "id, title, type, status, priority, channel, milestones, summary_plain, description, findings, plan, decisions, blockers, progress_log, parent_task_id, created_at, updated_at, completed_at"
+  "id, title, type, status, priority, channel, milestones, summary_plain, description, findings, plan, decisions, blockers, progress_log, parent_task_id, created_at, updated_at, completed_at, knowledge_ref, knowledge_status"
 
 export default async function JobBoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
