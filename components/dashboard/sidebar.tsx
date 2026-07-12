@@ -80,7 +80,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; devBoard?: number }
   enabledFeatures?: string[]
 }
 
@@ -300,6 +300,7 @@ export function Sidebar({
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
+  const [liveDevBoard, setLiveDevBoard] = useState(badgeCounts?.devBoard ?? 0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
   const pathnameRef = useRef(pathname)
 
@@ -332,6 +333,9 @@ export function Sidebar({
           }
           if (typeof data.reconciliationReview === 'number') {
             setLiveReconReview(data.reconciliationReview)
+          }
+          if (typeof data.devBoard === 'number') {
+            setLiveDevBoard(data.devBoard)
           }
         })
         .catch(() => {})
@@ -371,6 +375,7 @@ export function Sidebar({
             if (typeof data.portalChats === 'number') setLivePortalChats(data.portalChats)
             if (typeof data.teamChat === 'number') setLiveTeamChat(data.teamChat)
             if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
+            if (typeof data.devBoard === 'number') setLiveDevBoard(data.devBoard)
           })
           .catch(() => {})
       }, 3000)
@@ -508,6 +513,7 @@ export function Sidebar({
       if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
       // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, dotBadge: true }
+      if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
       return item

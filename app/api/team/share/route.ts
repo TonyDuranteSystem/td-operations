@@ -7,6 +7,8 @@ import { buildShareCards, composeShareMessage, MAX_SHARE_ITEMS } from '@/lib/tea
 import { getSupportPersonUserId } from '@/lib/settings'
 import { findOrCreateConversation } from '@/lib/team/find-conversation'
 import { parseClientRef } from '@/lib/team/conversations'
+import { loadStageSetForType } from '@/lib/dev-tracker/load-stage-set'
+import { initialMilestones, deriveStatusForSet } from '@/lib/dev-tracker/milestones'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -50,6 +52,48 @@ export async function POST(request: NextRequest) {
 
   const now = new Date().toISOString()
   const displayName = getUserDisplayName(user)
+
+  // ── Dev Board target: turn a client message into a tracked bug / feature card ──
+  //   { dev_board: { channel: 'td-bug' | 'td-dev' } }
+  const devBoard =
+    body.target && typeof body.target === 'object' && body.target.dev_board
+      ? body.target.dev_board
+      : null
+  if (devBoard) {
+    const card = cards[0]
+    if (!card) return NextResponse.json({ error: 'Nothing to share.' }, { status: 400 })
+    const channel = devBoard.channel === 'td-bug' ? 'td-bug' : 'td-dev'
+    const type = channel === 'td-bug' ? 'bugfix' : 'feature'
+    const title = (note || card.title || 'Client message').slice(0, 140)
+    const description = [
+      note && `Note: ${note}`,
+      card.title && `Client: ${card.title}`,
+      card.subtitle && `Message: ${card.subtitle}`,
+      card.url && `Source (click to open the client/message): ${card.url}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any
+    const set = await loadStageSetForType(db, type)
+    const startStage = set.stages[0]?.key || 'requested'
+    const { data: job, error } = await db
+      .from('dev_tasks')
+      .insert({
+        title,
+        type,
+        priority: 'medium',
+        status: deriveStatusForSet(set, startStage),
+        channel,
+        description,
+        summary_plain: note || card.title || null,
+        milestones: initialMilestones(now, `${displayName} (shared)`, startStage),
+      })
+      .select('id')
+      .single()
+    if (error) return NextResponse.json({ error: error.message || 'Could not create the card.' }, { status: 500 })
+    return NextResponse.json({ ok: true, dev_task_id: job.id, url: `/dev-board/${job.id}` })
+  }
 
   // Resolve WHERE the share lands (threadId) and WHO gets pinged (pushIds).
   // Three targets:

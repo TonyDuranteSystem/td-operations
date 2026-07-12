@@ -4,6 +4,7 @@
  * dev-tasks table that lived under Settings. Staff-only via the dashboard layout.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { createClient } from "@/lib/supabase/server"
 import { DevBoard, type DevJob } from "@/components/dev-board/dev-board"
 
 export const dynamic = "force-dynamic"
@@ -18,6 +19,21 @@ export default async function DevBoardPage({
   searchParams: Promise<{ channel?: string }>
 }) {
   const sp = await searchParams
+
+  // Mark the board as "seen" for this user so the sidebar notification clears.
+  try {
+    const {
+      data: { user },
+    } = await createClient().auth.getUser()
+    if (user) {
+      await db
+        .from("dev_board_reads")
+        .upsert({ user_id: user.id, last_seen_at: new Date().toISOString() }, { onConflict: "user_id" })
+    }
+  } catch {
+    /* non-blocking */
+  }
+
   const { data } = await db
     .from("dev_tasks")
     .select(

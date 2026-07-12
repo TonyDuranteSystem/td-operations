@@ -17,7 +17,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { Loader2, Send, Users, LifeBuoy, MessagesSquare, Search, X } from 'lucide-react'
+import { Loader2, Send, Users, LifeBuoy, MessagesSquare, Search, X, LayoutGrid } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -51,7 +51,7 @@ interface ShareToTeamDialogProps {
   onShared?: () => void
 }
 
-type Mode = 'conversation' | 'support' | 'teammate'
+type Mode = 'conversation' | 'support' | 'teammate' | 'dev_board'
 
 interface ClientResult {
   value: string
@@ -71,6 +71,8 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
   const bulk = items.length > 1
   const [mode, setMode] = useState<Mode>(bulk ? 'support' : 'conversation')
   const [teammateId, setTeammateId] = useState<string>('')
+  // Dev Board target: bug (td-bug) or new-implementation request (td-dev).
+  const [devChannel, setDevChannel] = useState<'td-bug' | 'td-dev'>('td-bug')
   const [note, setNote] = useState('')
 
   // Conversation target state.
@@ -105,7 +107,9 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
           ? 'support'
           : mode === 'teammate'
             ? { user_id: teammateId }
-            : { conversation: { client: client!.value, topic: topic || undefined } }
+            : mode === 'dev_board'
+              ? { dev_board: { channel: devChannel } }
+              : { conversation: { client: client!.value, topic: topic || undefined } }
       const res = await fetch('/api/team/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -113,16 +117,27 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Share failed — please try again.')
-      return data as { thread_id: string; count: number }
+      return data as { thread_id?: string; count?: number; dev_task_id?: string; url?: string }
     },
     onSuccess: (data) => {
+      if (mode === 'dev_board') {
+        toast.success(`Added to Dev Board (${devChannel === 'td-bug' ? 'Bug' : 'New implementation'})`, {
+          action: {
+            label: 'Open',
+            onClick: () => { if (data.url) window.location.href = data.url },
+          },
+        })
+        onShared?.()
+        onClose()
+        return
+      }
       const where =
         mode === 'support'
           ? 'Support'
           : mode === 'teammate'
             ? members.find(m => m.id === teammateId)?.name || 'teammate'
             : `${client?.label}${topic ? ` · ${topic}` : ''}`
-      toast.success(`Shared ${data.count > 1 ? `${data.count} items` : 'item'} to ${where}`, {
+      toast.success(`Shared ${(data.count ?? 1) > 1 ? `${data.count} items` : 'item'} to ${where}`, {
         action: {
           label: 'Open',
           onClick: () => { window.location.href = `/team-chat?thread=${data.thread_id}` },
@@ -141,7 +156,8 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
     (
       (mode === 'support') ||
       (mode === 'teammate' && !!teammateId) ||
-      (mode === 'conversation' && !!client)
+      (mode === 'conversation' && !!client) ||
+      (mode === 'dev_board')
     )
 
   return (
@@ -163,7 +179,7 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
 
         <div className="p-4 space-y-3">
           {/* Target toggle */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <button
               onClick={() => !bulk && setMode('conversation')}
               disabled={bulk}
@@ -203,7 +219,48 @@ export function ShareToTeamDialog({ items, onClose, label, onShared }: ShareToTe
               <Users className="h-4 w-4 shrink-0" />
               <span>Teammate</span>
             </button>
+            <button
+              onClick={() => setMode('dev_board')}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs',
+                mode === 'dev_board'
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+              )}
+            >
+              <LayoutGrid className="h-4 w-4 shrink-0" />
+              <span>Dev Board</span>
+            </button>
           </div>
+
+          {/* Dev Board picker: bug vs new implementation */}
+          {mode === 'dev_board' && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setDevChannel('td-bug')}
+                  className={cn(
+                    'px-2.5 py-2 rounded-lg border text-xs text-left',
+                    devChannel === 'td-bug' ? 'border-red-400 bg-red-50 text-red-700' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+                  )}
+                >
+                  🐞 Bug
+                </button>
+                <button
+                  onClick={() => setDevChannel('td-dev')}
+                  className={cn(
+                    'px-2.5 py-2 rounded-lg border text-xs text-left',
+                    devChannel === 'td-dev' ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50',
+                  )}
+                >
+                  ✨ New implementation
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                Creates a card on the Dev Board ({devChannel === 'td-bug' ? 'td-bug' : 'td-dev'}) with this message, the client, and your note.
+              </p>
+            </div>
+          )}
 
           {/* Conversation picker: client + topic */}
           {mode === 'conversation' && (

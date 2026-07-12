@@ -113,7 +113,29 @@ export async function GET() {
       reconciliationReview = reconReviewResult.value.count ?? 0
     }
 
-    return NextResponse.json({ portalChats, teamChat, inbox, tasks, overdueInvoices, reconciliationReview, _debug: { supportUnread, antonioUnread } })
+    // Dev Board notification — brand-new cards created since this user last
+    // opened /dev-board. First-time users (no read row) see 0, not the backlog.
+    let devBoard = 0
+    if (userId) {
+      // dev_tasks / dev_board_reads aren't in the generated types.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = getDb() as any
+      const { data: readRow } = await db
+        .from('dev_board_reads')
+        .select('last_seen_at')
+        .eq('user_id', userId)
+        .maybeSingle()
+      const since: string = readRow?.last_seen_at ?? new Date().toISOString()
+      const { data: newCards } = await db
+        .from('dev_tasks')
+        .select('id')
+        .neq('status', 'cancelled')
+        .gt('created_at', since)
+        .limit(500)
+      devBoard = Array.isArray(newCards) ? newCards.length : 0
+    }
+
+    return NextResponse.json({ portalChats, teamChat, inbox, tasks, overdueInvoices, reconciliationReview, devBoard, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })
