@@ -83,6 +83,10 @@ export interface TeamThread {
   last_message_at: string | null
   last_sender_name: string | null
   label: string
+  /** Server-computed client bucket for the Conversations sidebar; null for non-discussions. */
+  client_bucket: 'active_client' | 'lead' | 'partner' | 'individual' | 'suspended' | 'cancelled' | 'offboarded' | 'internal' | null
+  /** Lead pipeline stage for lead-anchored conversations (e.g. "Offer Sent"), else null. */
+  lead_status: string | null
 }
 
 export interface TeamMember {

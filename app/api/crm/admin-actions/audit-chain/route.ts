@@ -21,6 +21,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { INTERNAL_BASE_URL } from "@/lib/config"
 import { classifyAccount } from "@/lib/account-classification"
@@ -1381,6 +1382,8 @@ export async function POST(req: NextRequest) {
         // Update lead if exists
         if (lead_id) {
           await supabaseAdmin.from("leads").update({ converted_to_account_id: newAccount.id }).eq("id", lead_id)
+          // Move any Team Chat conversations opened on this lead onto the new account.
+          await reanchorLeadConversations(lead_id, newAccount.id)
         }
 
         return NextResponse.json({

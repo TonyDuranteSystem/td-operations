@@ -35,6 +35,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { logAction } from "@/lib/mcp/action-log"
 import { ensureCompanyFolder, migrateContactToCompany } from "@/lib/drive-folder-utils"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
@@ -335,6 +336,18 @@ export async function materializeFormationCompany(
     }
     const accountId = newAccount.id
     steps.push({ step: "account_create", status: "ok", detail: `Account ${accountId} created (${chosenName}, ${entityType}, ${stateName})` })
+
+    // Record the lead→account conversion (this path previously logged neither
+    // converted_to_account_id nor a re-anchor) and move any Team Chat
+    // conversations opened on the lead onto the new account (dev_task be582c5e Phase 2).
+    if (wp?.lead_id) {
+      await supabaseAdmin
+        .from("leads")
+        .update({ converted_to_account_id: accountId, converted_at: new Date().toISOString() })
+        .eq("id", wp.lead_id)
+      await reanchorLeadConversations(wp.lead_id, accountId)
+      steps.push({ step: "lead_converted", status: "ok", detail: `Lead ${wp.lead_id} → account ${accountId}` })
+    }
 
     // 6. Link owner contact.
     await supabaseAdmin

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
+import { groupIntoSections, badgeTextFor, DEFAULT_OPEN_BUCKETS, type BucketKey } from '@/lib/team/conversation-buckets'
 import EmojiPicker from 'emoji-picker-react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { cn } from '@/lib/utils'
@@ -74,6 +75,7 @@ export default function TeamWorkspacePage() {
   const [view, setView] = useState<'list' | 'board'>('list')
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set())
+  const [expandedBuckets, setExpandedBuckets] = useState<Set<BucketKey>>(() => new Set(DEFAULT_OPEN_BUCKETS))
   const [convTopicFilter, setConvTopicFilter] = useState<string>('')          // '' = all topics
   const [convStateFilter, setConvStateFilter] = useState<'all' | 'open' | 'solved' | 'closed'>('all')
   const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
@@ -511,6 +513,11 @@ export default function TeamWorkspacePage() {
     }
     return Array.from(groups.values())
   }, [unfiledDiscussions, convTopicFilter, convStateFilter])
+
+  // Split the per-client groups into ordered top-level sections by client bucket
+  // (Active clients / Leads / Partners / Individuals / Suspended / Cancelled /
+  // Off-boarded / Internal). Bucket is server-computed on each thread.
+  const convSections = useMemo(() => groupIntoSections(clientGroups), [clientGroups])
   const threadsInChannel = (cid: string) => threads.filter(t => t.thread_type !== 'channel' && t.parent_channel_id === cid)
   const toggleExpand = (cid: string) => setExpandedChannels(prev => { const n = new Set(prev); if (n.has(cid)) n.delete(cid); else n.add(cid); return n })
 
@@ -682,40 +689,62 @@ export default function TeamWorkspacePage() {
               </div>
 
               {clientGroups.length === 0 && <p className="px-2 text-[11px] text-zinc-400">None.</p>}
-              {clientGroups.map(g => {
-                // A filter is active → expand every matching group so the narrowed
-                // results are visible without clicking each client open.
-                const filtering = convTopicFilter !== '' || convStateFilter !== 'all'
-                const open = filtering || expandedClients.has(g.key)
-                const groupUnread = g.threads.some(t => t.unread_count > 0)
+              {/* A topic/state filter is active → open every section + group so the
+                  narrowed results are visible without clicking each one open. */}
+              {(() => { const filtering = convTopicFilter !== '' || convStateFilter !== 'all'; return convSections.map(({ meta, groups }) => {
+                const sectionOpen = filtering || expandedBuckets.has(meta.key)
+                const sectionUnread = groups.some(g => g.threads.some(t => t.unread_count > 0))
+                const convCount = groups.reduce((n, g) => n + g.threads.length, 0)
                 return (
-                  <div key={g.key}>
+                  <div key={meta.key} className="mt-1">
                     <button
-                      onClick={() => setExpandedClients(prev => {
+                      onClick={() => setExpandedBuckets(prev => {
                         const next = new Set(prev)
-                        if (next.has(g.key)) next.delete(g.key); else next.add(g.key)
+                        if (next.has(meta.key)) next.delete(meta.key); else next.add(meta.key)
                         return next
                       })}
-                      className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-zinc-100 text-left"
+                      className="w-full flex items-center gap-1.5 px-2 py-1 text-left"
                     >
-                      {open ? <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-zinc-400 shrink-0" />}
-                      <Building2 className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-                      <span className={cn('flex-1 truncate text-sm', groupUnread ? 'font-semibold text-zinc-900' : 'text-zinc-600')}>{g.label}</span>
-                      {groupUnread && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="New activity" />}
-                      <span className="text-[10px] text-zinc-400 shrink-0">{g.threads.length}</span>
+                      {sectionOpen ? <ChevronDown className="h-3 w-3 text-zinc-400 shrink-0" /> : <ChevronRight className="h-3 w-3 text-zinc-400 shrink-0" />}
+                      <span className="flex-1 text-[11px] font-semibold text-zinc-500 uppercase tracking-wide truncate">{meta.section}</span>
+                      {sectionUnread && <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" title="New activity" />}
+                      <span className="text-[10px] text-zinc-400 shrink-0">{convCount}</span>
                     </button>
-                    {open && g.threads.map(t => (
-                      <div key={t.id} className="ml-4">
-                        <SidebarThread t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
-                          icon={<span className={cn('w-1.5 h-1.5 rounded-full shrink-0', t.unread_count > 0 ? 'bg-red-500' : 'bg-zinc-300')} />}
-                          label={t.topic || 'General'} resolved={!!t.resolved_at}
-                          channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
-                          menuOpen={menuThreadId === t.id} onMenuToggle={o => setMenuThreadId(o ? t.id : null)} />
-                      </div>
-                    ))}
+                    {sectionOpen && groups.map(g => {
+                      const open = filtering || expandedClients.has(g.key)
+                      const groupUnread = g.threads.some(t => t.unread_count > 0)
+                      return (
+                        <div key={g.key}>
+                          <button
+                            onClick={() => setExpandedClients(prev => {
+                              const next = new Set(prev)
+                              if (next.has(g.key)) next.delete(g.key); else next.add(g.key)
+                              return next
+                            })}
+                            className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-zinc-100 text-left"
+                          >
+                            {open ? <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-zinc-400 shrink-0" />}
+                            <Building2 className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                            <span className={cn('flex-1 truncate text-sm', groupUnread ? 'font-semibold text-zinc-900' : 'text-zinc-600')}>{g.label}</span>
+                            <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0', meta.badgeClass)}>{badgeTextFor(g)}</span>
+                            {groupUnread && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="New activity" />}
+                            <span className="text-[10px] text-zinc-400 shrink-0">{g.threads.length}</span>
+                          </button>
+                          {open && g.threads.map(t => (
+                            <div key={t.id} className="ml-4">
+                              <SidebarThread t={t} selected={selectedId === t.id} onClick={() => setSelectedId(t.id)}
+                                icon={<span className={cn('w-1.5 h-1.5 rounded-full shrink-0', t.unread_count > 0 ? 'bg-red-500' : 'bg-zinc-300')} />}
+                                label={t.topic || 'General'} resolved={!!t.resolved_at}
+                                channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
+                                menuOpen={menuThreadId === t.id} onMenuToggle={o => setMenuThreadId(o ? t.id : null)} />
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })}
                   </div>
                 )
-              })}
+              }) })()}
 
               {slackEnabled && (
                 <>

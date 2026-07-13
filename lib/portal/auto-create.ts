@@ -12,6 +12,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { reanchorLeadConversations } from '@/lib/team/reanchor-conversations'
 import { localeFromLanguage, isItalian } from '@/lib/locale'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { findContactIdByEmail } from '@/lib/operations/find-contact-by-email'
@@ -489,6 +490,8 @@ export async function ensureMinimalAccount(params: {
       .from('leads')
       .update({ converted_to_account_id: account.id })
       .eq('id', leadId)
+    // Move any Team Chat conversations opened on this lead onto the new account.
+    await reanchorLeadConversations(leadId, account.id)
   }
 
   return { accountId: account.id, created: true }

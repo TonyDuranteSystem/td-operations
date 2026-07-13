@@ -21,6 +21,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { uploadBinaryToDrive, uploadBinaryToDriveUpsert, folderFileNameMap } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
@@ -1252,6 +1253,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("lead_converted", "error", leadErr.message))
       } else {
         result.steps.push(step("lead_converted", "ok", "converted_to_account_id + converted_at written"))
+        // Move any Team Chat conversations opened on this lead onto the new account.
+        if (p.lead_id) await reanchorLeadConversations(p.lead_id, account_id)
       }
     }
   } catch (e) {

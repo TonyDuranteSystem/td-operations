@@ -23,6 +23,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
+import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 
@@ -205,6 +206,23 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
         ? `${companyName} (${p.entity_type}) → linked to contact`
         : `Already exists: ${accountId}`
     ))
+
+    // This standalone tax-return path carries no lead directly. If the contact
+    // originated from a lead, move any Team Chat conversations opened on that
+    // lead onto the new account (dev_task be582c5e Phase 2 — the one conversion
+    // path without a lead in hand). Non-critical: never block intake.
+    try {
+      const { data: originLeads } = await supabaseAdmin
+        .from("leads")
+        .select("id")
+        .eq("converted_to_contact_id", contact_id)
+      for (const lead of (originLeads ?? []) as { id: string }[]) {
+        await reanchorLeadConversations(lead.id, accountId)
+      }
+    } catch (e) {
+      result.steps.push(step("reanchor_conversations", "skipped",
+        `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
+    }
 
     if (acctResult.backfilled.invoices > 0 || acctResult.backfilled.payments > 0) {
       result.steps.push(step("payment_backfill", "ok",
