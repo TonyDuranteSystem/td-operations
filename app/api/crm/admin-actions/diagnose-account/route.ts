@@ -894,6 +894,7 @@ export async function POST(req: NextRequest) {
       }
 
       case "mark_payment_paid": {
+        // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
         const { error } = await supabaseAdmin
           .from("payments")
           .update({ status: "Paid", paid_date: new Date().toISOString().split("T")[0], updated_at: new Date().toISOString() })
@@ -905,6 +906,7 @@ export async function POST(req: NextRequest) {
       case "record_payment": {
         const paidDate = (params.paid_date as string) || new Date().toISOString().split("T")[0]
         const bankName = params.bank_name as string | undefined
+        // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
         const { data: newPayment, error } = await supabaseAdmin
           .from("payments")
           .insert({
@@ -928,31 +930,26 @@ export async function POST(req: NextRequest) {
           .select("id")
           .single()
 
-        // Link matched bank feeds to this new payment record
-        if (newPayment?.id && params.account_id) {
-          const { data: acct } = await supabaseAdmin
-            .from("accounts")
-            .select("company_name")
-            .eq("id", params.account_id as string)
-            .single()
-          if (acct?.company_name) {
-            const companyWords = acct.company_name.replace(/\s*(LLC|INC|CORP|LTD)\.?\s*/gi, "").trim()
-            if (companyWords.length >= 3) {
-              await supabaseAdmin
-                .from("td_bank_feeds")
-                .update({
-                  matched_payment_id: newPayment.id,
-                  match_confidence: "diagnostic",
-                  matched_at: new Date().toISOString(),
-                  matched_by: "staff",
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("status", "matched")
-                .is("matched_payment_id", null)
-                .ilike("sender_name", `%${companyWords}%`)
-            }
-          }
-        }
+        // ⛔ REMOVED 2026-07-14 — an unbounded bulk mis-attribution waiting to happen.
+        //
+        // This used to stamp `matched_payment_id` onto EVERY matched feed whose sender name
+        // merely CONTAINED the company's name — no amount check, no limit, no review. One
+        // diagnostic click could have attributed a dozen unrelated bank transactions to a
+        // single payment.
+        //
+        // It never did, and only by accident: it wrote `match_confidence: "diagnostic"`, a
+        // value the database's CHECK constraint rejects. The write failed every single time,
+        // the code discarded the error, and nobody noticed. Verified against production:
+        // ZERO rows have ever carried that value.
+        //
+        // So the constraint has been quietly shielding us from a mass mis-attribution for
+        // months. Deleting the write is a no-op in behaviour — it has never once executed —
+        // and it removes the landmine. Do NOT "fix" this by adding `diagnostic` to the
+        // allowed values: that would switch it on.
+        //
+        // A payment recorded here is linked to its bank transaction the same way as any
+        // other: through the Finance bank-feed screen, one transaction at a time, by a human
+        // who can see the amount.
 
         const amt = params.amount ? `${params.currency === "USD" ? "$" : "€"}${Number(params.amount).toLocaleString()}` : "unknown amount"
         result = { success: !error, detail: error ? error.message : `Payment recorded: ${amt} (${newPayment?.id?.slice(0, 8)})` }
@@ -961,8 +958,10 @@ export async function POST(req: NextRequest) {
 
       case "set_portal_tier": {
         const tier = params.tier as string
+        // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
         const { error: contactErr } = await supabaseAdmin
           .from("contacts")
+          // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
           .update({ portal_tier: tier, updated_at: new Date().toISOString() })
           .eq("id", params.contact_id)
         result = { success: !contactErr, detail: contactErr ? contactErr.message : `Portal tier set to ${tier}` }
@@ -971,10 +970,13 @@ export async function POST(req: NextRequest) {
 
       case "sync_portal_tier": {
         const tier = params.tier as string
+        // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
         await supabaseAdmin
           .from("contacts")
+          // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
           .update({ portal_tier: tier, updated_at: new Date().toISOString() })
           .eq("id", params.contact_id)
+        // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
         await supabaseAdmin
           .from("accounts")
           .update({ portal_tier: tier, updated_at: new Date().toISOString() })
@@ -1084,13 +1086,16 @@ export async function POST(req: NextRequest) {
         }
 
         // Update contact tier
+        // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
         await supabaseAdmin
           .from("contacts")
+          // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
           .update({ portal_tier: portalTier, updated_at: new Date().toISOString() })
           .eq("id", params.contact_id)
 
         // Set portal_account flag on all linked accounts
         if (accountIds.length > 0) {
+          // eslint-disable-next-line no-restricted-syntax -- PRE-EXISTING diagnostic-tool write, untouched by the 2026-07-14 bank-feed vocabulary fix (which only DELETED the unbounded feed bulk-update from this route). Routing these through lib/operations is a separate refactor — tracked in dev_task 8b6bcd31.
           await supabaseAdmin
             .from("accounts")
             .update({

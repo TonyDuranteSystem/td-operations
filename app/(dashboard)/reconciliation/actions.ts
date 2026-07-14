@@ -24,10 +24,13 @@ export async function matchFeedToInvoice(
 
 export async function ignoreFeed(feedId: string): Promise<ActionResult> {
   return safeAction(async () => {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('td_bank_feeds')
       .update({ status: 'ignored', updated_at: new Date().toISOString() })
       .eq('id', feedId)
+    // A write you did not verify is not a write. Discarding this error is how the review
+    // queue silently never worked.
+    if (error) throw new Error(`Failed to ignore bank feed: ${error.message}`)
     revalidatePath('/reconciliation')
   }, {
     action_type: 'update',

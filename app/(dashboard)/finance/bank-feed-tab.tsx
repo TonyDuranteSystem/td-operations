@@ -144,6 +144,27 @@ function isRefundedOrDisputed(feed: BankFeedRecord): boolean {
   return (meta as { refunded_or_disputed?: unknown }).refunded_or_disputed === true
 }
 
+/**
+ * Was this transaction linked to an invoice WITHOUT any money being applied?
+ *
+ * The invoice was already settled through another channel, so the link exists purely for
+ * the audit trail. The confidence badge alone cannot tell you this — a `retroactive` or
+ * `manual` link looks the same whether money moved or not — so the fact is recorded in
+ * review_metadata and shown explicitly.
+ */
+function isAuditLink(feed: BankFeedRecord): boolean {
+  const meta = feed.review_metadata
+  if (!meta || typeof meta !== 'object') return false
+  return (meta as { audit_link?: unknown }).audit_link === true
+}
+
+function auditLinkNote(feed: BankFeedRecord): string | null {
+  const meta = feed.review_metadata
+  if (!meta || typeof meta !== 'object') return null
+  const note = (meta as { note?: unknown }).note
+  return typeof note === 'string' ? note : null
+}
+
 function formatCurrency(amount: number | string | null, currency?: string | null): string {
   if (amount == null) return '—'
   const num = typeof amount === 'string' ? parseFloat(amount) : amount
@@ -1239,6 +1260,18 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
       )}>
         {feed.match_confidence ?? 'matched'}
       </span>
+      {/* An audit link is NOT a payment. The invoice was already settled through another
+          channel (its own Stripe webhook, or a human marking it paid), and this transaction
+          is attached purely for the record — no money was applied. Without this, a matched
+          row where nothing moved looks identical to one where it did. */}
+      {isAuditLink(feed) && (
+        <span
+          className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 bg-slate-100 text-slate-600 border border-slate-200"
+          title={auditLinkNote(feed) ?? 'Linked for the audit trail — no money applied.'}
+        >
+          audit link · no money applied
+        </span>
+      )}
       {canDeleteDuplicate && (
         <>
           <button

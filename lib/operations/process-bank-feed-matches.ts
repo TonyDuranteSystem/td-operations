@@ -30,6 +30,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
 import { runActivation } from "@/lib/operations/activate-service"
+import { updateFeed } from "@/lib/finance/feed-write"
 
 export interface ProcessBankFeedMatchesOpts {
   /** If provided, only these feed IDs are processed. If omitted, all
@@ -204,19 +205,19 @@ export async function processBankFeedMatches(
 
       if (activationError) {
         const now = new Date().toISOString()
-        // eslint-disable-next-line no-restricted-syntax -- targeted update on td_bank_feeds, no protected table
-        await supabaseAdmin
-          .from("td_bank_feeds")
-          .update({
-            status: "activation_crashed",
-            review_metadata: {
-              activation_error: activationError,
-              pending_activation_id: pa.id,
-              crashed_at: now,
-            },
-            updated_at: now,
-          })
-          .eq("id", feedId)
+        // Through the verified writer. `activation_crashed` was NOT in production's CHECK
+        // constraint until 2026-07-14 — so every one of these parks was silently rejected
+        // and the feed was left looking cleanly matched while the client's service had in
+        // fact failed to activate. The Retry button had nothing to act on because the queue
+        // it reads from could never be written to.
+        await updateFeed(feedId, {
+          status: "activation_crashed",
+          review_metadata: {
+            activation_error: activationError,
+            pending_activation_id: pa.id,
+            crashed_at: now,
+          },
+        }, "orchestrator:activation-crashed")
         result.activation_crashed++
         result.details.push({ ...base, outcome: "activation_crashed", error: activationError })
       } else {

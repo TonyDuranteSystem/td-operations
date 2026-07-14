@@ -26,6 +26,8 @@ import {
   extractInvoiceReference,
 } from "@/lib/finance/feed-signals"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
+import { updateFeed } from "@/lib/finance/feed-write"
+import { auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
 
 // Re-exported: the money math moved to lib/finance/invoice-money.ts so the single
 // money writer (lib/finance/apply-payment.ts) can use it without a circular import.
@@ -201,19 +203,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       if (check === "ok" || check === "unchecked") return null
 
       if (check === "refunded") {
-        await supabaseAdmin
-          .from("td_bank_feeds")
-          .update({
-            status: "needs_review",
-            matched_payment_id: candidatePaymentId,
-            review_metadata: {
-              refunded_or_disputed: true,
-              candidate_payment_id: candidatePaymentId,
-              checked_at: now,
-            },
-            updated_at: now,
-          })
-          .eq("id", feedId)
+        await updateFeed(feedId, {
+          status: "needs_review",
+          matched_payment_id: candidatePaymentId,
+          review_metadata: {
+            refunded_or_disputed: true,
+            candidate_payment_id: candidatePaymentId,
+            checked_at: now,
+          },
+        }, "matcher:refunded-or-disputed")
 
         return {
           matched: false,
@@ -264,19 +262,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           if (withNumber.length === 1) {
             target = withNumber[0]
           } else {
-            await supabaseAdmin
-              .from("td_bank_feeds")
-              .update({
-                status: "needs_review",
-                review_metadata: {
-                  ambiguous_payment_intent: paymentIntentId,
-                  candidate_payment_ids: piMatches.map(inv => inv.id),
-                  candidate_invoice_numbers: piMatches.map(inv => inv.invoice_number),
-                  checked_at: now,
-                },
-                updated_at: now,
-              })
-              .eq("id", feedId)
+            await updateFeed(feedId, {
+              status: "needs_review",
+              review_metadata: {
+                ambiguous_payment_intent: paymentIntentId,
+                candidate_payment_ids: piMatches.map(inv => inv.id),
+                candidate_invoice_numbers: piMatches.map(inv => inv.invoice_number),
+                checked_at: now,
+              },
+            }, "matcher:ambiguous-payment-intent")
 
             return {
               matched: false,
@@ -290,17 +284,22 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         // that previously had no home at all: the payment could never attach to its
         // own invoice, so it sat "unmatched" forever.
         if (isTerminalInvoice(target)) {
-          await supabaseAdmin
-            .from("td_bank_feeds")
-            .update({
-              matched_payment_id: target.id,
-              match_confidence: "certain_retroactive",
-              matched_at: now,
-              matched_by: "auto",
-              status: "matched",
-              updated_at: now,
-            })
-            .eq("id", feedId)
+          // 'retroactive', NOT a new value. That string is load-bearing: the retroactive
+          // pass builds its "this invoice is already audit-linked" set from it, and that
+          // set is what stops a SECOND feed claiming the same invoice. A new confidence
+          // value would be invisible to the guard. The certainty of THIS link (Stripe's
+          // own payment-intent id) is recorded in review_metadata instead.
+          await updateFeed(feedId, {
+            matched_payment_id: target.id,
+            match_confidence: "retroactive",
+            matched_at: now,
+            matched_by: "auto",
+            status: "matched",
+            review_metadata: auditLinkMetadata(
+              "payment_intent",
+              "Invoice was already paid through Stripe — linked for the audit trail; no money re-applied.",
+            ),
+          }, "matcher:tier0-audit-link")
 
           return {
             matched: true,
@@ -324,17 +323,13 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         })
 
         if (piSettle.applied) {
-          await supabaseAdmin
-            .from("td_bank_feeds")
-            .update({
-              matched_payment_id: target.id,
-              match_confidence: piSettle.newStatus === "Partial" ? "partial" : "exact",
-              matched_at: now,
-              matched_by: "auto",
-              status: "matched",
-              updated_at: now,
-            })
-            .eq("id", feedId)
+          await updateFeed(feedId, {
+            matched_payment_id: target.id,
+            match_confidence: piSettle.newStatus === "Partial" ? "partial" : "exact",
+            matched_at: now,
+            matched_by: "auto",
+            status: "matched",
+          }, "matcher:tier0-settled")
 
           return {
             matched: true,
@@ -601,12 +596,34 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
       if (paidFiltered.length > 0) {
 
-        // Get already-retroactively-matched payment IDs to avoid 1-invoice-many-feeds
-        const { data: alreadyMatched } = await supabaseAdmin
+        // ── The 1-invoice-many-feeds guard ───────────────────────────────────────
+        //
+        // "Is this invoice ALREADY claimed by some bank transaction?" — a membership test,
+        // NOT a trust ranking. So it must not filter on match_confidence.
+        //
+        // It used to require `match_confidence = 'retroactive'`, which left a live hole:
+        // an invoice SETTLED by a wire (confidence 'exact', money applied, invoice now
+        // Paid) was NOT in the set — so a later, similar-amount feed could still
+        // retroactively link itself to that same invoice. Two transactions, one invoice,
+        // no warning.
+        //
+        // Keying on "matched, with an invoice attached" closes that, and it permanently
+        // removes the failure class: no future confidence value can ever be invisible to
+        // this guard. (Tier 0 does not consult this set — it links by Stripe's own
+        // payment-intent id — so the broader guard only constrains the FUZZY pass, which
+        // is exactly where guessing a second feed onto a claimed invoice is dangerous.)
+        const { data: alreadyMatched, error: claimedErr } = await supabaseAdmin
           .from("td_bank_feeds")
           .select("matched_payment_id")
           .eq("status", "matched")
-          .eq("match_confidence", "retroactive")
+          .not("matched_payment_id", "is", null)
+
+        if (claimedErr) {
+          // Without this set we cannot tell whether an invoice is already claimed. Guessing
+          // is how one invoice ends up attributed to two payments — refuse instead.
+          console.error(`[bank-feed-matcher] Could not read claimed invoices; skipping the retroactive pass: ${claimedErr.message}`)
+          return { matched: false, error: "Could not verify which invoices are already claimed — retroactive matching skipped." }
+        }
 
         const retroMatchedIds = new Set((alreadyMatched ?? []).map(f => f.matched_payment_id))
 
@@ -672,17 +689,17 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
         if (bestRetro) {
           // Link feed to the Paid invoice for audit trail — do NOT change invoice status
-          await supabaseAdmin
-            .from("td_bank_feeds")
-            .update({
-              matched_payment_id: bestRetro.id,
-              match_confidence: "retroactive",
-              matched_at: new Date().toISOString(),
-              matched_by: "auto",
-              status: "matched",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", feedId)
+          await updateFeed(feedId, {
+            matched_payment_id: bestRetro.id,
+            match_confidence: "retroactive",
+            matched_at: new Date().toISOString(),
+            matched_by: "auto",
+            status: "matched",
+            review_metadata: auditLinkMetadata(
+              "fuzzy",
+              "Invoice was already paid — linked for the audit trail; no money applied.",
+            ),
+          }, "matcher:retroactive-audit-link")
 
           return {
             matched: true,
@@ -729,15 +746,11 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     if (needsReview) {
       // Store as potential match but don't auto-reconcile.
-      await supabaseAdmin
-        .from("td_bank_feeds")
-        .update({
-          matched_payment_id: best.id,
-          match_confidence: best.confidence,
-          status: "needs_review",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", feedId)
+      await updateFeed(feedId, {
+        matched_payment_id: best.id,
+        match_confidence: best.confidence,
+        status: "needs_review",
+      }, "matcher:below-auto-threshold")
 
       return { matched: false, paymentId: best.id, invoiceNumber: best.invoiceNumber ?? undefined, confidence: best.confidence }
     }
@@ -769,20 +782,16 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       // The writer refused (already closed, or this exact transaction was already
       // applied). Do NOT mark the feed matched — that would report money as
       // reconciled when nothing moved. Park it for a human with the reason.
-      await supabaseAdmin
-        .from("td_bank_feeds")
-        .update({
-          matched_payment_id: best.id,
-          match_confidence: best.confidence,
-          status: "needs_review",
-          review_metadata: {
-            not_applied_reason: settle.reason ?? "unknown",
-            not_applied_detail: settle.detail ?? null,
-            checked_at: now,
-          },
-          updated_at: now,
-        })
-        .eq("id", feedId)
+      await updateFeed(feedId, {
+        matched_payment_id: best.id,
+        match_confidence: best.confidence,
+        status: "needs_review",
+        review_metadata: {
+          not_applied_reason: settle.reason ?? "unknown",
+          not_applied_detail: settle.detail ?? null,
+          checked_at: now,
+        },
+      }, "matcher:money-not-applied")
 
       return {
         matched: false,
@@ -796,17 +805,13 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     const settledPartial = settle.newStatus === "Partial"
 
-    await supabaseAdmin
-      .from("td_bank_feeds")
-      .update({
-        matched_payment_id: best.id,
-        match_confidence: settledPartial ? "partial" : best.confidence,
-        matched_at: now,
-        matched_by: "auto",
-        status: "matched",
-        updated_at: now,
-      })
-      .eq("id", feedId)
+    await updateFeed(feedId, {
+      matched_payment_id: best.id,
+      match_confidence: settledPartial ? "partial" : best.confidence,
+      matched_at: now,
+      matched_by: "auto",
+      status: "matched",
+    }, "matcher:auto-settled")
 
     if (settledPartial) {
       // Part-payment: the invoice keeps its remaining balance as debt. No installment
@@ -1173,17 +1178,35 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       }
     }
 
-    await supabaseAdmin
-      .from("td_bank_feeds")
-      .update({
-        matched_payment_id: paymentId,
-        match_confidence: settle.applied ? "manual" : "manual_audit_link",
-        matched_at: now,
-        matched_by: "staff",
-        status: "matched",
-        updated_at: now,
-      })
-      .eq("id", feedId)
+    // Always 'manual' — the database permits no other value here, and a new one would be
+    // invisible to the retroactive-pass guard. Whether money actually moved is recorded in
+    // review_metadata (and, definitively, by the presence or absence of a confirmed row in
+    // payment_applications — a far stronger source of truth than any string).
+    const linkResult = await updateFeed(feedId, {
+      matched_payment_id: paymentId,
+      match_confidence: "manual",
+      matched_at: now,
+      matched_by: "staff",
+      status: "matched",
+      ...(settle.applied
+        ? {}
+        : {
+            review_metadata: auditLinkMetadata(
+              "manual",
+              settle.detail ?? "Invoice was already paid — linked for the audit trail; no money applied.",
+            ),
+          }),
+    }, "manual-match:link")
+
+    if (!linkResult.ok) {
+      // The money may already have been applied by the settler above — the ledger row
+      // records that, so it cannot be applied twice. But the feed did NOT get linked, and
+      // reporting success here would be a lie.
+      return {
+        matched: false,
+        error: `The payment was processed but the transaction could not be marked as matched: ${linkResult.error}`,
+      }
+    }
 
     return {
       matched: true,
@@ -1349,9 +1372,7 @@ export async function manualMatchMulti(
       feed?.review_metadata && typeof feed.review_metadata === "object"
         ? (feed.review_metadata as Record<string, unknown>)
         : {}
-    await supabaseAdmin
-      .from("td_bank_feeds")
-      .update({
+    await updateFeed(feedId, {
         matched_payment_id: applied[0],
         match_confidence: "manual",
         matched_at: now,
@@ -1370,9 +1391,7 @@ export async function manualMatchMulti(
           // allocation plan can never look like it funded more than it did.
           ...(notApplied.length ? { multi_match_not_applied: notApplied } : {}),
         },
-        updated_at: now,
-      })
-      .eq("id", feedId)
+    }, "manual-match-multi:link")
 
     return {
       matched: true,

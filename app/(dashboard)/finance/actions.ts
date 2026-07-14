@@ -214,10 +214,13 @@ export async function deletePayment(paymentId: string): Promise<ActionResult> {
 
     // Unlink any matched bank feeds
     // eslint-disable-next-line no-restricted-syntax -- bank_feeds is not a PROTECTED table
-    await supabaseAdmin
+    const { error: unlinkErr } = await supabaseAdmin
       .from('td_bank_feeds')
       .update({ matched_payment_id: null, match_confidence: null, status: 'unmatched', updated_at: new Date().toISOString() })
       .eq('matched_payment_id', paymentId)
+    // Checked, not assumed: an unlink that silently failed would leave the transaction
+    // pointing at an invoice that no longer exists as this payment.
+    if (unlinkErr) throw new Error(`Failed to unlink bank feeds: ${unlinkErr.message}`)
 
     // Remove client_expenses mirror if invoiced
     if (payment.invoice_number) {
@@ -1026,7 +1029,7 @@ export async function unlinkPayment(paymentId: string): Promise<ActionResult> {
 
     // Clear bank feed match if one exists
     // eslint-disable-next-line no-restricted-syntax -- unlink requires raw update on td_bank_feeds
-    await supabaseAdmin
+    const { error: feedUnlinkErr } = await supabaseAdmin
       .from('td_bank_feeds')
       .update({
         matched_payment_id: null,
@@ -1037,6 +1040,7 @@ export async function unlinkPayment(paymentId: string): Promise<ActionResult> {
         updated_at: now,
       })
       .eq('matched_payment_id', paymentId)
+    if (feedUnlinkErr) throw new Error(`Failed to unlink bank feeds: ${feedUnlinkErr.message}`)
 
     // Revert invoice to Draft
     // eslint-disable-next-line no-restricted-syntax -- revert invoice status after unlink
