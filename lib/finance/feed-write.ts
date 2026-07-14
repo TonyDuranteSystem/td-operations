@@ -101,3 +101,51 @@ export async function updateFeed(
 
   return { ok: true }
 }
+
+/**
+ * The same verified write, for a batch of feeds.
+ *
+ * Bulk updates were the last unchecked writes in the matcher. A bulk write that fails
+ * fails for EVERY row in it — silently, if nobody looks — so it is the shape of this bug
+ * with the largest blast radius, not the smallest.
+ */
+export async function updateFeeds(
+  feedIds: string[],
+  patch: Record<string, unknown>,
+  context: string,
+): Promise<FeedWriteResult> {
+  if (feedIds.length === 0) return { ok: true }
+
+  const status = patch.status
+  if (typeof status === "string" && !(FEED_STATUSES as readonly string[]).includes(status)) {
+    const message = `Refusing to bulk-write unknown feed status "${status}" (from ${context}). Allowed: ${FEED_STATUSES.join(", ")}.`
+    console.error(`[feed-write] ${message}`)
+    await reportSystemError({
+      source: "server",
+      route: "lib/finance/feed-write",
+      message,
+      context: { context, feedIds: feedIds.length, patch },
+    }).catch(() => {})
+    return { ok: false, error: message }
+  }
+
+  // eslint-disable-next-line no-restricted-syntax -- the verified bulk write path for td_bank_feeds
+  const { error } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .in("id", feedIds)
+
+  if (error) {
+    const message = `Bank-feed BULK write REJECTED by the database (${context}, ${feedIds.length} rows): ${error.message}`
+    console.error(`[feed-write] ${message}`)
+    await reportSystemError({
+      source: "server",
+      route: "lib/finance/feed-write",
+      message,
+      context: { context, feedIds: feedIds.length, patch, code: error.code },
+    }).catch(() => {})
+    return { ok: false, error: error.message }
+  }
+
+  return { ok: true }
+}

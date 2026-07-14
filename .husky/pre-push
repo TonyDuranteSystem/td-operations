@@ -189,6 +189,31 @@ if [ "$INTEGRATION_STATUS" -ne 0 ]; then
   exit 1
 fi
 
+# ── CODE ↔ DATABASE CONTRACT ────────────────────────────────────────────────────
+# The code must not write values the database will reject. This is the gate that would
+# have caught the 2026-07-14 incident, where the matcher wrote a feed status production's
+# CHECK constraint forbade — every write rejected, every error discarded, and the review
+# queue silently did not exist for months. Three reviewers and five rounds of code review
+# missed it, because we all compared code to code. This compares code to the database.
+#
+# Runs against the LOCAL/SANDBOX database. Sandbox now carries the same constraints as
+# production (they diverged before — sandbox had none, which is why a green test run
+# proved nothing). If they ever diverge again, this check is what tells you.
+echo "🔗 Checking code↔database constraint contract..."
+npm run check:db-constraints > /tmp/db-contract.log 2>&1
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ CODE↔DATABASE CONTRACT VIOLATION — push blocked."
+  cat /tmp/db-contract.log
+  echo ""
+  echo "   The code can write a value this database will not accept. Such a write fails"
+  echo "   SILENTLY unless every caller checks the error — that is how the review queue"
+  echo "   stayed empty for months. Fix the vocabulary or ship the migration."
+  echo ""
+  exit 1
+fi
+
 echo "🔨 Running build check before push (Node $(node -v))..."
 npm run build > /dev/null 2>&1
 

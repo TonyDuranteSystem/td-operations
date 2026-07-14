@@ -564,23 +564,43 @@ export async function POST(request: Request) {
           return haystack.includes(clientFirstWord)
         })
 
-        if (matches.length === 1) {
-          const feed = matches[0]
-          await supabaseAdmin
-            .from("td_bank_feeds")
-            .update({
-              status: "matched",
-              matched_payment_id: existingActivation.portal_invoice_id,
-              matched_by: "confirm_payment_auto",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", feed.id)
-            .eq("status", "unmatched")
-          feedLinkResult = { linked: true, feed_id: feed.id }
-        } else if (matches.length === 0) {
-          feedLinkResult = { linked: false, reason: "no candidate feed matched amount + name + date window" }
+        // ── The guess is gone. The engine decides. ──────────────────────────────────
+        //
+        // This used to attach the transaction outright whenever exactly ONE candidate
+        // matched "the first word of the client's name, within 5% of the amount, within
+        // 30 days" — and it wrote the link directly, bypassing the identity resolver, the
+        // refund check, the money writer and the double-credit ledger. A second matcher,
+        // hidden in an admin route, running the weakest logic in the codebase on the most
+        // dangerous decision in the system.
+        //
+        // It moved no money (this route has already settled the invoice), so the danger was
+        // never a double charge — it was MIS-ATTRIBUTION: attach the wrong client's wire to
+        // this invoice and that wire is marked "matched" forever, never finding its real
+        // invoice, quietly corrupting the reconciliation.
+        //
+        // Now the candidates are handed to the real matcher instead. It applies the full
+        // ladder — the invoice number carried on the payment, the payer's identity, the
+        // refund gate — and either links the transaction on strong evidence (the same
+        // outcome as before, when the guess was right) or parks it for a human. No feature
+        // lost; the guessing is what's gone.
+        if (matches.length > 0) {
+          const { processOneFeed } = await import("@/lib/operations/process-bank-feed-matches")
+          const linked: string[] = []
+
+          for (const candidate of matches) {
+            const outcome = await processOneFeed(candidate.id)
+            if (outcome.matched) linked.push(candidate.id)
+          }
+
+          feedLinkResult = linked.length
+            ? { linked: true, feed_id: linked[0] }
+            : {
+                linked: false,
+                reason:
+                  "candidate transactions found, but the evidence was not strong enough to link them automatically — they are in the review queue",
+              }
         } else {
-          feedLinkResult = { linked: false, reason: `${matches.length} candidate feeds matched — manual review required` }
+          feedLinkResult = { linked: false, reason: "no candidate feed matched amount + name + date window" }
         }
       } catch (linkerErr) {
         console.error("[confirm-payment] bank-feed linker failed:", linkerErr)

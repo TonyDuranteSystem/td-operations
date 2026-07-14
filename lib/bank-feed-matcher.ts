@@ -26,7 +26,7 @@ import {
   extractInvoiceReference,
 } from "@/lib/finance/feed-signals"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
-import { updateFeed } from "@/lib/finance/feed-write"
+import { updateFeed, updateFeeds } from "@/lib/finance/feed-write"
 import { auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
 
 // Re-exported: the money math moved to lib/finance/invoice-money.ts so the single
@@ -908,10 +908,8 @@ export async function markMercuryStripePayoutsOutgoing(): Promise<{ marked: numb
 
   if (ids.length === 0) return { marked: 0 }
 
-  await supabaseAdmin
-    .from("td_bank_feeds")
-    .update({ status: "outgoing", updated_at: new Date().toISOString() })
-    .in("id", ids)
+  const result = await updateFeeds(ids, { status: "outgoing" }, "matcher:mark-stripe-payouts-outgoing")
+  if (!result.ok) return { marked: 0 }
 
   return { marked: ids.length }
 }
@@ -1161,13 +1159,29 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // Recording a cheerful "linked" against a cancelled invoice, with no money applied,
     // is the same silent-success failure this whole change exists to kill: staff see a
     // green tick and the money is still sitting there unbooked.
-    if (!settle.applied) {
+    // `already_applied` is NOT an error here — it is the missing half of the operation.
+    //
+    // The lock is keyed on (this transaction, this invoice). A confirmed row can only mean
+    // THIS transaction has already paid THIS invoice — which happens when a previous
+    // attempt applied the money and then failed to record the link. Treating that as a
+    // failure would brick the pair permanently: the money sits on the invoice, every retry
+    // is told "already applied", and no screen can ever attach them. That is the
+    // bricked-behind-a-false-error trap we spent two rounds removing from the money writer,
+    // reappearing one layer up. So: finish the job — write the link and report success.
+    const moneyAlreadyThere = settle.reason === "already_applied"
+
+    if (!settle.applied && !moneyAlreadyThere) {
       const { data: target } = await supabaseAdmin
         .from("payments")
         .select("invoice_status, status")
         .eq("id", paymentId)
         .maybeSingle()
 
+      // An already-PAID invoice may be audit-linked: the legitimate case of a card charge
+      // tied to the invoice its own webhook already closed. Money moves nowhere, and we say
+      // so. Anything else terminal — Cancelled, Voided, Credit — is REJECTED LOUDLY.
+      // Recording a cheerful "linked" against a cancelled invoice is the silent-success
+      // failure this whole change exists to kill.
       const auditLinkable = settle.reason === "terminal" && target != null && isPaidInvoice(target)
 
       if (!auditLinkable) {
@@ -1177,6 +1191,10 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         }
       }
     }
+
+    // Money is on the invoice if the settler applied it now, OR if a confirmed ledger row
+    // says a previous attempt already did.
+    const moneyIsApplied = settle.applied || moneyAlreadyThere
 
     // Always 'manual' — the database permits no other value here, and a new one would be
     // invisible to the retroactive-pass guard. Whether money actually moved is recorded in
@@ -1188,7 +1206,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       matched_at: now,
       matched_by: "staff",
       status: "matched",
-      ...(settle.applied
+      ...(moneyIsApplied
         ? {}
         : {
             review_metadata: auditLinkMetadata(
@@ -1199,12 +1217,13 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     }, "manual-match:link")
 
     if (!linkResult.ok) {
-      // The money may already have been applied by the settler above — the ledger row
-      // records that, so it cannot be applied twice. But the feed did NOT get linked, and
-      // reporting success here would be a lie.
+      // The money may already be on the invoice (the ledger row records it, so it cannot be
+      // applied twice) but the transaction did NOT get linked. Reporting success would be a
+      // lie — and this is now RECOVERABLE: a retry re-enters via the `already_applied`
+      // branch above, which finishes the job instead of refusing forever.
       return {
         matched: false,
-        error: `The payment was processed but the transaction could not be marked as matched: ${linkResult.error}`,
+        error: `The payment was processed but the transaction could not be marked as matched: ${linkResult.error}. Try again — the money will not be applied twice.`,
       }
     }
 
@@ -1212,9 +1231,13 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       matched: true,
       paymentId,
       invoiceNumber: settle.invoiceNumber,
-      confidence: settle.applied ? "manual" : "manual_audit_link",
-      moneyApplied: settle.applied,
-      note: settle.applied ? undefined : settle.detail,
+      // ALWAYS 'manual'. The old code returned 'manual_audit_link' here — a value this
+      // codebase's own vocabulary forbids and the database rejects. Nothing persists it
+      // today, so it was not yet a live bug; it was a loaded gun of exactly the class this
+      // work exists to destroy. Whether money moved travels in `moneyApplied`.
+      confidence: "manual",
+      moneyApplied: moneyIsApplied,
+      note: moneyIsApplied ? undefined : settle.detail,
     }
   } catch (err) {
     return { matched: false, error: (err as Error).message }

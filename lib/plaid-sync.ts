@@ -4,6 +4,7 @@
  * Uses /transactions/sync endpoint (incremental updates).
  */
 
+import { toFeedSource } from "@/lib/finance/feed-vocabulary"
 import { plaidClient } from '@/lib/plaid'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { Json } from '@/lib/database.types'
@@ -35,7 +36,9 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
       const isIncoming = txn.amount < 0 // Plaid: negative = money coming IN
 
       const { error: upsertErr } = await supabaseAdmin.from('td_bank_feeds').upsert({
-        source: bankName.toLowerCase().replace(/\s+/g, '_'),
+        // Mapped, never derived: an unrecognised bank name would be rejected by the
+        // database CHECK, silently killing every transaction from that bank.
+        source: toFeedSource(bankName),
         external_id: txn.transaction_id,
         transaction_date: txn.date,
         amount: Math.abs(txn.amount),

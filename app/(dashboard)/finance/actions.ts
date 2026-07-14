@@ -985,7 +985,20 @@ export async function deleteDuplicateBankFeed(feedId: string): Promise<ActionRes
       .from('td_bank_feeds')
       .delete()
       .eq('id', feedId)
-    if (delErr) throw new Error(`Failed to delete duplicate: ${delErr.message}`)
+
+    if (delErr) {
+      // 23503 = foreign-key violation. The ledger's feed_id is ON DELETE RESTRICT, so a
+      // transaction that has applied money to an invoice CANNOT be deleted — deleting it
+      // would erase the record of that application while the money stayed on the invoice,
+      // freeing the same transaction to be credited again later. Say that in words a human
+      // can act on, not as a raw Postgres error (R099).
+      if (delErr.code === '23503') {
+        throw new Error(
+          'This transaction has applied money to an invoice, so it cannot be deleted. Unmatch it first if it really is a duplicate.',
+        )
+      }
+      throw new Error(`Failed to delete duplicate: ${delErr.message}`)
+    }
 
     revalidatePath('/finance')
     revalidatePath('/reconciliation')

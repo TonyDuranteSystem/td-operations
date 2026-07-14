@@ -8,6 +8,7 @@
  * failure, updates review_metadata with the new error.
  */
 
+import { updateFeed } from "@/lib/finance/feed-write"
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -65,36 +66,40 @@ export async function POST(req: NextRequest) {
   }
 
   if (actError) {
-    // eslint-disable-next-line no-restricted-syntax -- direct update on td_bank_feeds, no protected table
-    await supabaseAdmin
-      .from("td_bank_feeds")
-      .update({
-        review_metadata: {
-          ...prevMeta,
-          activation_error: actError,
-          last_retry_at: now,
-          last_retry_by: user.id,
-        },
-        updated_at: now,
-      })
-      .eq("id", feed_id)
+    // Verified write. This is the Retry button on the crashed queue — the feature the
+    // vocabulary fix exists to resurrect. An unchecked write here means staff click Retry,
+    // are told it worked, and the row silently never updates.
+    await updateFeed(feed_id, {
+      review_metadata: {
+        ...prevMeta,
+        activation_error: actError,
+        last_retry_at: now,
+        last_retry_by: user.id,
+      },
+    }, "retry-activation:still-failing")
     return NextResponse.json({ ok: false, error: actError, result: actResult })
   }
 
   // Success — revert the crash flag so the row drops out of the review queue.
-  // eslint-disable-next-line no-restricted-syntax -- direct update on td_bank_feeds, no protected table
-  await supabaseAdmin
-    .from("td_bank_feeds")
-    .update({
-      status: "matched",
-      review_metadata: {
-        ...prevMeta,
-        retry_succeeded_at: now,
-        last_retry_by: user.id,
-      },
-      updated_at: now,
+  const clearResult = await updateFeed(feed_id, {
+    status: "matched",
+    review_metadata: {
+      ...prevMeta,
+      retry_succeeded_at: now,
+      last_retry_by: user.id,
+    },
+  }, "retry-activation:cleared")
+
+  if (!clearResult.ok) {
+    // The activation SUCCEEDED but the row could not be taken out of the crashed queue.
+    // Saying "ok" here would leave staff staring at a row that keeps reappearing, with no
+    // idea why. Tell them the truth: the client is activated, the queue entry is stuck.
+    return NextResponse.json({
+      ok: false,
+      error: `The activation succeeded, but this transaction could not be cleared from the crashed queue: ${clearResult.error}`,
+      result: actResult,
     })
-    .eq("id", feed_id)
+  }
 
   return NextResponse.json({ ok: true, result: actResult })
 }

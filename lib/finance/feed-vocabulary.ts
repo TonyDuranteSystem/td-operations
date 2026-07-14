@@ -87,6 +87,37 @@ export const FEED_SOURCES = [
 export type FeedSource = (typeof FEED_SOURCES)[number]
 
 /**
+ * Turn a bank's display name into a permitted `source` value.
+ *
+ * ⚠️ A DERIVED VALUE IN A CONSTRAINED COLUMN IS INVISIBLE TO EVERY GUARD WE HAVE.
+ * The Plaid sync used to write `bankName.toLowerCase().replace(/\s+/g, '_')` straight into
+ * `source`. Because it is computed at runtime rather than written as a literal, TypeScript
+ * cannot type it and `scripts/check-db-constraints.ts` cannot see it. Link a Plaid
+ * institution whose display name is not one of the ten permitted values — "Bank of America"
+ * becomes `bank_of_america` — and the database rejects EVERY transaction from that bank.
+ * Same class of failure as the one that silently disabled the review queue, in a shape the
+ * contract check is structurally blind to.
+ *
+ * So: map it, and fall back to a value the database will definitely accept rather than
+ * inventing one it will definitely reject. An unrecognised bank is a data-quality problem;
+ * a rejected transaction is lost money.
+ */
+export function toFeedSource(bankName: string): FeedSource {
+  const normalized = bankName.toLowerCase().trim().replace(/\s+/g, "_")
+
+  if ((FEED_SOURCES as readonly string[]).includes(normalized)) {
+    return normalized as FeedSource
+  }
+
+  console.warn(
+    `[feed-vocabulary] Bank "${bankName}" is not a known feed source (normalized: "${normalized}"). ` +
+    `Falling back to "manual" so its transactions are still recorded. ` +
+    `To give this bank its own source, add it to FEED_SOURCES *and* to the database CHECK constraint — in that order.`,
+  )
+  return "manual"
+}
+
+/**
  * How a feed came to be linked to an invoice, when NO money moved.
  *
  * Recorded in `review_metadata`, not in `match_confidence` — see the warning above.
