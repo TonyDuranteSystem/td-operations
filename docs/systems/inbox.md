@@ -330,6 +330,14 @@ Function.
   back read and unstarred, forever. Do NOT "fix" this by leaving `UNREAD` on
   trashed threads: the sidebar badges Trash with `threadsUnread`, so Trash would
   start showing an unread count.
+  **KNOWN NARROW RACE (accepted, observed 2026-07-14):** `threads.get` is
+  read-after-write lagged, so if a label was applied *seconds* before the delete
+  (e.g. staff clicks Mark-unread and immediately deletes), the snapshot can miss
+  it and the Undo restores the email without that one label. Verified: with the
+  state settled the restore is exact (UNREAD + IMPORTANT both came back); with a
+  ~2s gap the just-applied UNREAD was missed while the pre-existing IMPORTANT was
+  restored. Impact is cosmetic (email returns read), never data loss — not worth
+  a client-supplied "hint" that would have to be trusted.
 - **The restore snapshot round-trips through the BROWSER, so it is untrusted on
   the way back in.** Always run it through `sanitizeRestorePayload` — it keeps
   only the `RESTORABLE_LABELS` allow-list, so an Undo can never be turned into
