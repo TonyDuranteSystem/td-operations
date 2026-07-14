@@ -52,6 +52,13 @@ export interface FeedOutcome {
     | "no_match"
     | "error"
   matched: boolean
+  /**
+   * WHICH invoice the transaction was linked to. Without this a caller can only know that
+   * the matcher linked the feed to *some* invoice — possibly a different client's — and any
+   * report of "attached to your invoice" is a guess. Reporting a state you did not verify is
+   * the most expensive bug shape in this system.
+   */
+  paymentId?: string
   invoiceNumber?: string
   confidence?: string
   /**
@@ -151,6 +158,7 @@ export async function processBankFeedMatches(
     const base = {
       feedId,
       matched: matchResult.matched,
+      paymentId: matchResult.paymentId,
       invoiceNumber: matchResult.invoiceNumber,
       confidence: matchResult.confidence,
       moneyApplied: matchResult.moneyApplied,

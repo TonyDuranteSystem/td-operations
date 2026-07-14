@@ -585,19 +585,41 @@ export async function POST(request: Request) {
         // lost; the guessing is what's gone.
         if (matches.length > 0) {
           const { processOneFeed } = await import("@/lib/operations/process-bank-feed-matches")
-          const linked: string[] = []
 
-          for (const candidate of matches) {
+          // Bounded, deliberately. Each pass is a full matcher run — an invoice scan, possibly
+          // a live Stripe refund check — inside a user-facing request. Note the inversion the
+          // old code had: it did NOTHING when several candidates matched; this would do the
+          // MOST work in exactly that case. A timeout here would kill the request AFTER the
+          // invoice was settled and the client activated, leaving it half-finished. Anything
+          // skipped is picked up by the matcher cron within 15 minutes.
+          const CANDIDATE_CAP = 3
+          const toProcess = matches.slice(0, CANDIDATE_CAP)
+
+          let linkedToThisInvoice: string | null = null
+          let matchedElsewhere = false
+
+          for (const candidate of toProcess) {
             const outcome = await processOneFeed(candidate.id)
-            if (outcome.matched) linked.push(candidate.id)
+            if (!outcome.matched) continue
+
+            // ⚠️ "The matcher linked it" is NOT "the matcher linked it to THIS invoice".
+            // The engine runs its own ladder and may legitimately attach the transaction to a
+            // different invoice — even a different client's. Claiming "linked" without checking
+            // which invoice would replace an honest matcher with a dishonest report.
+            if (outcome.paymentId === existingActivation.portal_invoice_id) {
+              linkedToThisInvoice = candidate.id
+              break
+            }
+            matchedElsewhere = true
           }
 
-          feedLinkResult = linked.length
-            ? { linked: true, feed_id: linked[0] }
+          feedLinkResult = linkedToThisInvoice
+            ? { linked: true, feed_id: linkedToThisInvoice }
             : {
                 linked: false,
-                reason:
-                  "candidate transactions found, but the evidence was not strong enough to link them automatically — they are in the review queue",
+                reason: matchedElsewhere
+                  ? "a candidate transaction was matched, but to a different invoice — this payment is not linked to a bank transaction"
+                  : "candidate transactions found, but the evidence was not strong enough to link them automatically — they are in the review queue",
               }
         } else {
           feedLinkResult = { linked: false, reason: "no candidate feed matched amount + name + date window" }

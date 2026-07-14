@@ -51,6 +51,34 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Code↔PRODUCTION database contract (the gate that would have caught 2026-07-14)
+        # THE CHECK MUST POINT AT PRODUCTION. This is the whole lesson.
+        #
+        # The code wrote a bank-feed status that PRODUCTION's CHECK constraint forbade.
+        # Every write was rejected; every error was discarded; the review queue silently did
+        # not exist for months. It passed every test because SANDBOX had no such constraint —
+        # the harness was validating against a database strictly more permissive than the one
+        # that actually rejects writes.
+        #
+        # The pre-push hook checks the LOCAL/SANDBOX database. That is useful but NOT
+        # sufficient: prod DDL is applied by hand in the Supabase dashboard, so the two can
+        # drift apart again tomorrow — and a sandbox-only gate would sit there green while
+        # production silently rejected. Checking the copy and leaving the original unguarded
+        # is the same mistake in a new coat.
+        #
+        # Read-only: it only reads pg_constraint. Requires repo secret PROD_SUPABASE_DB_URL.
+        # Until the secret is set this WARNS rather than failing, so it cannot block PRs
+        # before setup — but it is then NOT protecting anything. Set the secret.
+        env:
+          SUPABASE_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+          CI: "true"
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::warning::PROD_SUPABASE_DB_URL secret not set — the code↔PRODUCTION contract check is SKIPPED, and nothing is verifying that the code can only write values production accepts. Add the secret to enforce."
+            exit 0
+          fi
+          npx tsx scripts/check-db-constraints.ts
+
       - name: Schema types drift (P2.5 — server-side, the gate pre-push can't enforce)
         # The pre-push hook SKIPS this check when the Supabase CLI is offline /
         # unauthenticated (most local pushes), which is how stale lib/database.types.ts

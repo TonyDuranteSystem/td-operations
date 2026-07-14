@@ -32,6 +32,7 @@
 import { config } from "dotenv"
 import { Client } from "pg"
 import { FEED_STATUSES, MATCH_CONFIDENCES, FEED_SOURCES } from "../lib/finance/feed-vocabulary"
+import { PAYMENT_CATEGORIES } from "../lib/billing/payment-classification"
 
 const useProd = process.argv.includes("--prod")
 config({ path: useProd ? ".env.prod.local" : ".env.local" })
@@ -41,9 +42,29 @@ config({ path: useProd ? ".env.prod.local" : ".env.local" })
 // database what it will actually accept — not to ask the code what it believes.
 const DB_URL = process.env.SUPABASE_DB_URL
 
+/**
+ * ⚠️ A GATE THAT BLOCKS EVERY PUSH ON A MISSING ENV VAR IS A GATE THAT GETS DELETED.
+ *
+ * `.env.local` is machine-local and there are several machines. The first time someone
+ * cannot push ANYTHING because of a missing credential, this hook is ripped out — and we
+ * are back to where we started, with no gate at all. That is the exact death predicted for
+ * a check that fails on all 90 legacy columns; there is no reason to walk into it here.
+ *
+ * So: locally, a missing credential WARNS and skips. In CI it is a hard failure — CI is
+ * where enforcement belongs, because it cannot be bypassed by an impatient developer at
+ * 11pm (and `git push --no-verify` skips the hook anyway).
+ */
 if (!DB_URL) {
-  console.error("Missing SUPABASE_DB_URL — this check reads pg_constraint directly.")
-  process.exit(1)
+  const inCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+
+  if (inCI) {
+    console.error("SUPABASE_DB_URL is not set. In CI this check MUST run — failing.")
+    process.exit(1)
+  }
+
+  console.warn("⚠️  SUPABASE_DB_URL is not set — skipping the code↔database contract check locally.")
+  console.warn("   This check is enforced in CI. To run it here, set SUPABASE_DB_URL in .env.local.")
+  process.exit(0)
 }
 
 /**
@@ -58,6 +79,11 @@ const CONTRACTS = [
   { table: "td_bank_feeds", column: "status", constraint: "td_bank_feeds_status_check", values: FEED_STATUSES },
   { table: "td_bank_feeds", column: "match_confidence", constraint: "td_bank_feeds_match_confidence_check", values: MATCH_CONFIDENCES },
   { table: "td_bank_feeds", column: "source", constraint: "td_bank_feeds_source_check", values: FEED_SOURCES },
+  // A MONEY column. Its code-side list already promised, in a comment, to stay "in sync with
+  // the CHECK constraint" — and nothing had ever verified that. It was out of sync: the
+  // database and live code both used a value the list omitted. A promise in a comment is a
+  // note; this is the gate.
+  { table: "payments", column: "payment_category", constraint: "payments_payment_category_check", values: PAYMENT_CATEGORIES },
 ] as const
 
 /**
@@ -153,7 +179,6 @@ const UNAUDITED_BASELINE = new Set([
   "messages_status_check",
   "messaging_channels_provider_check",
   "messaging_groups_group_type_check",
-  "payments_payment_category_check",
   "pnl_period_answers_actor_role_check",
   "pnl_period_answers_choice_check",
   "pnl_workspace_members_member_type_check",

@@ -29,6 +29,12 @@ export const PAYMENT_CATEGORIES = [
   'custom',
   'credit',
   'other',
+  // Was MISSING from this list while both the database CHECK and live code used it —
+  // found 2026-07-14 by the code↔database contract check, the first time anything had
+  // compared this "single source of truth" against the constraint it claims to mirror.
+  // The comment above promised the sync; nothing enforced it. Now registered in
+  // scripts/check-db-constraints.ts, so the promise is a gate.
+  'td_communication',
 ] as const
 
 export type PaymentCategory = (typeof PAYMENT_CATEGORIES)[number]

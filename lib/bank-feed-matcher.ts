@@ -18,7 +18,7 @@ import { syncPaymentToQB } from "@/lib/qb-sync"
 import { runActivation } from "@/lib/operations/activate-service"
 import { getAppSetting } from "@/lib/settings"
 import { isMatchableInvoice, isTerminalInvoice, isPaidInvoice } from "@/lib/finance/invoice-matchability"
-import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
+import { applyMoneyToInvoice, hasConfirmedApplication } from "@/lib/finance/apply-payment"
 import { resolveInvoiceStatusAfterPayment } from "@/lib/finance/invoice-money"
 import {
   extractStripePaymentIntent,
@@ -1168,20 +1168,36 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // is told "already applied", and no screen can ever attach them. That is the
     // bricked-behind-a-false-error trap we spent two rounds removing from the money writer,
     // reappearing one layer up. So: finish the job — write the link and report success.
-    const moneyAlreadyThere = settle.reason === "already_applied"
+    // ── ASK THE LEDGER, NOT A REASON CODE ────────────────────────────────────────────
+    //
+    // "Is this transaction's money already on this invoice?" has exactly one reliable
+    // answer: a CONFIRMED row in payment_applications for this (transaction, invoice) pair.
+    //
+    // A reason code cannot answer it. `terminal` means the invoice is closed — but it cannot
+    // distinguish "someone else closed it" from "THIS transaction closed it, and we then
+    // failed to write the link". Those need opposite answers. Keying on the reason got the
+    // ORDINARY case wrong: a manual match normally settles the invoice IN FULL, so a retry
+    // after a failed link hits the terminal guard first, and the transaction would have been
+    // recorded and rendered as "audit link · no money applied" while its money sat on that
+    // very invoice. Staff would go looking for money that was already booked.
+    const alreadyOnThisInvoice = settle.applied
+      ? false
+      : await hasConfirmedApplication(feedId, paymentId)
 
-    if (!settle.applied && !moneyAlreadyThere) {
+    const moneyIsApplied = settle.applied || alreadyOnThisInvoice
+
+    if (!moneyIsApplied) {
       const { data: target } = await supabaseAdmin
         .from("payments")
         .select("invoice_status, status")
         .eq("id", paymentId)
         .maybeSingle()
 
-      // An already-PAID invoice may be audit-linked: the legitimate case of a card charge
-      // tied to the invoice its own webhook already closed. Money moves nowhere, and we say
-      // so. Anything else terminal — Cancelled, Voided, Credit — is REJECTED LOUDLY.
-      // Recording a cheerful "linked" against a cancelled invoice is the silent-success
-      // failure this whole change exists to kill.
+      // No money from THIS transaction is on the invoice. An already-PAID invoice may still
+      // be audit-linked — the legitimate case of a card charge tied to the invoice its own
+      // webhook already closed. Anything else terminal (Cancelled, Voided, Credit) is
+      // REJECTED LOUDLY: recording a cheerful "linked" against a cancelled invoice is the
+      // silent-success failure this whole change exists to kill.
       const auditLinkable = settle.reason === "terminal" && target != null && isPaidInvoice(target)
 
       if (!auditLinkable) {
@@ -1191,10 +1207,6 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         }
       }
     }
-
-    // Money is on the invoice if the settler applied it now, OR if a confirmed ledger row
-    // says a previous attempt already did.
-    const moneyIsApplied = settle.applied || moneyAlreadyThere
 
     // Always 'manual' — the database permits no other value here, and a new one would be
     // invisible to the retroactive-pass guard. Whether money actually moved is recorded in

@@ -75,6 +75,33 @@ export interface ApplyMoneyResult {
   newAmountDue?: number
 }
 
+/**
+ * Has THIS bank transaction already applied money to THIS invoice?
+ *
+ * The ledger is the only thing that knows for certain. A `reason` code cannot tell you:
+ * "terminal" means the invoice is closed, but it CANNOT distinguish "someone else closed
+ * it" from "this very transaction closed it and we then failed to record the link". Those
+ * two need opposite answers, and guessing gives staff the wrong one — telling them no money
+ * was applied while this transaction's money sits on that invoice, with a confirmed row
+ * proving it.
+ *
+ * Only a CONFIRMED row counts. An unconfirmed claim is an attempt that died mid-write; it
+ * is evidence that someone started, not that money moved.
+ */
+export async function hasConfirmedApplication(feedId: string, paymentId: string): Promise<boolean> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
+  const db = supabaseAdmin as any
+  const { data } = await db
+    .from("payment_applications")
+    .select("id")
+    .eq("feed_id", feedId)
+    .eq("payment_id", paymentId)
+    .not("confirmed_at", "is", null)
+    .maybeSingle()
+
+  return data != null
+}
+
 export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<ApplyMoneyResult> {
   const { paymentId, mode, paidDate, paymentMethod, actor, feedId } = params
 
