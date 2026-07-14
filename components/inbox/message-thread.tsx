@@ -1,13 +1,125 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { InboxMessage, InboxConversation } from '@/lib/types'
 import { sanitizeEmailHtml } from '@/lib/html-escape'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
+import { resolveAttachmentType } from '@/lib/inbox/attachment-open'
 import { EmailHtmlFrame } from './email-html-frame'
+
+type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
+
+/**
+ * One attachment chip.
+ *
+ * It is a BUTTON, not a link, on purpose: a top-level navigation to the download
+ * URL is rejected at the platform edge with a 503 because Gmail's attachmentId is
+ * a ~400-char token in the query string (verified in prod 2026-07-14, dev_task
+ * 62ca1b5a — see lib/inbox/attachment-open.ts). The same URL fetched same-origin
+ * returns 200, so we fetch the bytes and open them from a blob. An <a href> would
+ * also hand the user a broken "open in new tab" on right-click.
+ */
+function AttachmentChip({
+  att,
+  messageId,
+  mailbox,
+  className,
+}: {
+  att: ThreadAttachment
+  messageId: string
+  mailbox?: string
+  className: string
+}) {
+  const [busy, setBusy] = useState(false)
+
+  const open = async () => {
+    if (busy) return
+    setBusy(true)
+
+    const resolved = resolveAttachmentType(att.filename, att.mimeType)
+    // The tab must be opened SYNCHRONOUSLY inside the click handler — opening it
+    // after `await fetch` trips the popup blocker. Only needed when we'll render
+    // it; a download needs no tab.
+    const win = resolved.inline ? window.open('', '_blank') : null
+
+    const params = new URLSearchParams({
+      messageId,
+      attachmentId: att.attachmentId,
+      filename: att.filename,
+      mimeType: att.mimeType,
+    })
+    if (mailbox) params.set('mailbox', mailbox)
+
+    let objectUrl: string | null = null
+    try {
+      const res = await fetch(`/api/inbox/attachment?${params}`)
+      if (!res.ok) {
+        // R099 — surface the server's actual reason, never a blanket "failed".
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Could not open this attachment. Please try again.')
+      }
+
+      const raw = await res.blob()
+      // Re-type the blob when the sender lied (octet-stream for a PDF): the
+      // browser decides how to render from the blob's type, not the filename.
+      const blob = raw.type === resolved.type ? raw : new Blob([raw], { type: resolved.type })
+      objectUrl = URL.createObjectURL(blob)
+
+      if (resolved.inline && win) {
+        win.location.href = objectUrl
+      } else {
+        // Popup blocked, standalone PWA (where a new tab often never opens), or
+        // a format we must not render on our own origin -> download it instead.
+        win?.close()
+        const a = document.createElement('a')
+        a.href = objectUrl
+        a.download = att.filename || 'attachment'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      }
+      // Give the tab / download time to consume it before dropping the bytes.
+      const url = objectUrl
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (err) {
+      win?.close()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Could not open this attachment. Please try again.',
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={open}
+      disabled={busy}
+      title={att.filename}
+      className={cn(className, busy && 'opacity-60 cursor-wait')}
+    >
+      <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+      </svg>
+      <span className="truncate max-w-[200px]">{att.filename}</span>
+      <span className="text-[10px] opacity-60 shrink-0">
+        {busy
+          ? 'Opening…'
+          : att.size > 1024 * 1024
+            ? `${(att.size / 1024 / 1024).toFixed(1)}MB`
+            : `${Math.round(att.size / 1024)}KB`}
+      </span>
+    </button>
+  )
+}
 
 /**
  * Plain-text email body: line breaks preserved, quoted history ("On ...
@@ -232,23 +344,13 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
               {msg.attachments && msg.attachments.length > 0 && (
                 <div className="px-4 pb-3 pt-1 flex flex-wrap gap-1.5">
                   {msg.attachments.map((att, i) => (
-                    <a
+                    <AttachmentChip
                       key={i}
-                      href={`/api/inbox/attachment?messageId=${msg.id}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(att.filename)}&mimeType=${encodeURIComponent(att.mimeType)}${mailbox ? `&mailbox=${mailbox}` : ''}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      att={att}
+                      messageId={msg.id}
+                      mailbox={mailbox}
                       className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 transition-colors"
-                    >
-                      <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                      </svg>
-                      <span className="truncate max-w-[200px]">{att.filename}</span>
-                      <span className="text-[10px] opacity-60 shrink-0">
-                        {att.size > 1024 * 1024
-                          ? `${(att.size / 1024 / 1024).toFixed(1)}MB`
-                          : `${Math.round(att.size / 1024)}KB`}
-                      </span>
-                    </a>
+                    />
                   ))}
                 </div>
               )}
@@ -297,28 +399,18 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
               {msg.attachments && msg.attachments.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {msg.attachments.map((att, i) => (
-                    <a
+                    <AttachmentChip
                       key={i}
-                      href={`/api/inbox/attachment?messageId=${msg.id}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(att.filename)}&mimeType=${encodeURIComponent(att.mimeType)}${mailbox ? `&mailbox=${mailbox}` : ''}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      att={att}
+                      messageId={msg.id}
+                      mailbox={mailbox}
                       className={cn(
                         'flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg transition-colors',
                         isOutbound
                           ? 'bg-blue-400/30 hover:bg-blue-400/50 text-white'
                           : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
                       )}
-                    >
-                      <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                      </svg>
-                      <span className="truncate max-w-[200px]">{att.filename}</span>
-                      <span className="text-[10px] opacity-60 shrink-0">
-                        {att.size > 1024 * 1024
-                          ? `${(att.size / 1024 / 1024).toFixed(1)}MB`
-                          : `${Math.round(att.size / 1024)}KB`}
-                      </span>
-                    </a>
+                    />
                   ))}
                 </div>
               )}
