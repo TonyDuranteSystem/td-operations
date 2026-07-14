@@ -1,5 +1,40 @@
 import { describe, it, expect } from 'vitest'
-import { resolveAttachmentType } from '@/lib/inbox/attachment-open'
+import {
+  resolveAttachmentType,
+  shouldOpenInTab,
+  MAX_INLINE_BYTES,
+} from '@/lib/inbox/attachment-open'
+
+describe('shouldOpenInTab', () => {
+  const base = { inline: true, standalone: false, size: 1024 }
+
+  it('views a normal PDF in a tab on desktop', () => {
+    expect(shouldOpenInTab(base)).toBe(true)
+  })
+
+  // Antonio runs the whole CRM as an installed phone app, where a new tab very
+  // often never opens — so we never gamble on window.open there.
+  it('ALWAYS downloads in an installed app, even for a viewable type', () => {
+    expect(shouldOpenInTab({ ...base, standalone: true })).toBe(false)
+  })
+
+  it('downloads anything not safe to render on our origin', () => {
+    expect(shouldOpenInTab({ ...base, inline: false })).toBe(false)
+  })
+
+  it('downloads a file too large to render in a tab', () => {
+    expect(shouldOpenInTab({ ...base, size: MAX_INLINE_BYTES + 1 })).toBe(false)
+    expect(shouldOpenInTab({ ...base, size: MAX_INLINE_BYTES })).toBe(true)
+  })
+
+  it('treats an unknown size (Gmail reports 0) as fine — it must not block', () => {
+    expect(shouldOpenInTab({ ...base, size: 0 })).toBe(true)
+  })
+
+  it('download wins whenever ANY reason applies', () => {
+    expect(shouldOpenInTab({ inline: false, standalone: true, size: 9e9 })).toBe(false)
+  })
+})
 
 describe('resolveAttachmentType', () => {
   describe('generic sender types fall back to the filename', () => {

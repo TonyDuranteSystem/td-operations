@@ -457,6 +457,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
       const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : variables.action === 'mark_unread' ? 'marked as unread' : 'moved'
 
+      // The bulk route runs the threads through Promise.allSettled and reports
+      // `succeeded`/`failed` — a per-thread Gmail failure still returns HTTP 200.
+      // Reporting `count` regardless would tell the user every email was handled
+      // when some were not (Antonio 2026-07-14). Always report what the SERVER
+      // actually did; fall back to `count` only if the field is absent.
+      const summary = data as { succeeded?: number; failed?: number; restore?: unknown } | undefined
+      const okCount = typeof summary?.succeeded === 'number' ? summary.succeeded : count
+      const failCount = typeof summary?.failed === 'number' ? summary.failed : 0
+
       // Bulk Delete gets an Undo too (Antonio, 2026-07-14 — it previously had
       // none). `ids` is captured here because clearSelection() above has already
       // emptied selectedIds by the time the toast callback runs. Bulk delete
@@ -464,8 +473,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       // the Undo only needs the untrash + a refetch.
       if (variables.action === 'trash') {
         const ids = idsAtStart
-        const snapshot = (data as { restore?: unknown } | undefined)?.restore
-        toast(`${count} email${count > 1 ? 's' : ''} deleted`, {
+        const snapshot = summary?.restore
+        const deletedMsg = failCount > 0
+          ? `${okCount} of ${count} email${count > 1 ? 's' : ''} deleted — ${failCount} failed`
+          : `${okCount} email${okCount > 1 ? 's' : ''} deleted`
+        const showDeleted = failCount > 0 ? toast.warning : toast
+        showDeleted(deletedMsg, {
           action: {
             label: 'Undo',
             onClick: async () => {
@@ -485,11 +498,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   const err = await res.json().catch(() => ({}))
                   throw new Error(err.error || 'Failed to restore emails.')
                 }
+                // Same honesty rule on the way back: a partial restore must NOT
+                // be announced as a full one.
+                const out = await res.json().catch(() => ({})) as { succeeded?: number; failed?: number }
+                const rOk = typeof out.succeeded === 'number' ? out.succeeded : ids.length
+                const rFail = typeof out.failed === 'number' ? out.failed : 0
+
                 ids.forEach(id => handleEmailRestored(id))
-                toast.success(`${ids.length} email${ids.length > 1 ? 's' : ''} restored`)
                 queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                 queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
                 queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+
+                if (rFail > 0) {
+                  toast.warning(
+                    `Restored ${rOk} of ${ids.length} — ${rFail} could not be restored. Check Trash.`,
+                  )
+                } else {
+                  toast.success(`${rOk} email${rOk > 1 ? 's' : ''} restored`)
+                }
               } catch (err) {
                 toast.error(
                   err instanceof Error && err.message ? err.message : 'Failed to restore emails.',
@@ -502,7 +528,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         return
       }
 
-      toast.success(`${count} email${count > 1 ? 's' : ''} ${actionLabel}`)
+      if (failCount > 0) {
+        toast.warning(`${okCount} of ${count} email${count > 1 ? 's' : ''} ${actionLabel} — ${failCount} failed`)
+      } else {
+        toast.success(`${okCount} email${okCount > 1 ? 's' : ''} ${actionLabel}`)
+      }
     },
   })
 
