@@ -131,6 +131,19 @@ type FilterTab = 'all' | 'unmatched' | 'needs_review' | 'activation_crashed' | '
 
 // ── Helpers ──
 
+/**
+ * Did Stripe tell us this money went back to the client?
+ *
+ * The matcher records this on the feed when it re-checks a charge before settling. It
+ * must be surfaced, not buried: a refunded charge otherwise sits in the review queue
+ * looking exactly like a payment waiting to be confirmed.
+ */
+function isRefundedOrDisputed(feed: BankFeedRecord): boolean {
+  const meta = feed.review_metadata
+  if (!meta || typeof meta !== 'object') return false
+  return (meta as { refunded_or_disputed?: unknown }).refunded_or_disputed === true
+}
+
 function formatCurrency(amount: number | string | null, currency?: string | null): string {
   if (amount == null) return '—'
   const num = typeof amount === 'string' ? parseFloat(amount) : amount
@@ -736,6 +749,26 @@ function UnmatchedRow({
           )}
         </div>
       </div>
+
+      {/* REFUNDED / DISPUTED — the money is gone. This must be impossible to miss.
+          A refunded charge lands in the review queue looking like any other candidate;
+          without this, staff see the ordinary amber "confirm this match" banner and one
+          click books money the client already has back. The server also refuses it, but
+          the person deserves to know BEFORE they click, not after. */}
+      {isRefundedOrDisputed(feed) && (
+        <div className="px-4 pb-3">
+          <div className="border-2 border-red-400 bg-red-50 rounded-md p-3">
+            <div className="flex items-start gap-2 text-xs text-red-900">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <p>
+                <span className="font-bold">REFUNDED OR DISPUTED — do not match.</span>{' '}
+                Stripe says this payment went back to the client. It is not our money and
+                must not be applied to an invoice.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Auto-matched candidate banner — shown only when feed.status='needs_review' */}
       {candidateInfo && (

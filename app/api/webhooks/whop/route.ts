@@ -320,7 +320,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
             // The writer works out Paid vs Partial from the real balance, accumulating
             // rather than overwriting what was already paid.
             const { applyMoneyToInvoice } = await import("@/lib/finance/apply-payment")
-            await applyMoneyToInvoice({
+            const partialApplied = await applyMoneyToInvoice({
               paymentId: partialMatch.id,
               mode: "apply",
               appliedAmount: total,
@@ -328,6 +328,11 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
               paymentMethod: "Whop",
               actor: "whop-webhook",
             })
+            if (!partialApplied.applied) {
+              console.warn(
+                `[whop-webhook] No money applied to ${partialMatch.invoice_number}: ${partialApplied.reason} — ${partialApplied.detail}`,
+              )
+            }
           }
         }
 

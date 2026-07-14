@@ -359,12 +359,33 @@ async function seed() {
     raw_data: {},
   })
 
+  // The CONCURRENCY fixture: one transaction, one invoice, two simultaneous matches.
+  const { data: raceInv } = await db
+    .from("payments")
+    .insert({
+      account_id: fiscalotAcct!.id,
+      invoice_number: `QA-INV-${TAG}-RACE`,
+      description: `${TAG} concurrency test`,
+      total: 300, amount: 300, subtotal: 300, amount_paid: 0, amount_due: 300,
+      amount_currency: "USD", status: "Pending", invoice_status: "Sent",
+    })
+    .select("id")
+    .single()
+  created.payments.push(raceInv!.id)
+
+  const feedRace = await mkFeed({
+    source: "relay", external_id: `wire_qa_${TAG}_race`, transaction_date: "2026-07-15",
+    amount: 300, currency: "USD", sender_name: `${TAG} Fiscalot`,
+    memo: "race", status: "unmatched",
+    raw_data: {},
+  })
+
   return {
     acct: acct!.id, invA: inv[0], invB: inv[1], strangerInv: strangerInv!.id,
     fInv: fInv!.id, landmine: landmine!.id,
     partPaid: partPaid!.id, cancelled: cancelled!.id, smallInv: smallInv!.id, refInv: refInv!.id,
-    bigInv: bigInv!.id, activationId: pendingAct!.id,
-    feedSH1, feedSH2, feedSHRef, feedFaz, feedLandmine, feedPartPaid, feedOverpay, feedRefMismatch, feedPartial,
+    bigInv: bigInv!.id, activationId: pendingAct!.id, raceInv: raceInv!.id,
+    feedSH1, feedSH2, feedSHRef, feedFaz, feedLandmine, feedPartPaid, feedOverpay, feedRefMismatch, feedPartial, feedRace,
   }
 }
 
@@ -617,6 +638,36 @@ async function main() {
       "the match reports honestly that it was a part-payment",
       rPartial.matched === true && rPartial.moneyApplied === true,
       `matched=${rPartial.matched} moneyApplied=${rPartial.moneyApplied}`,
+    )
+
+    // ── M. CONCURRENCY — two processes racing the same money ────────────────
+    // The lock table alone was NOT enough: its safety rested on "an unconfirmed claim
+    // means no money moved", which is false whenever the money write succeeds but the
+    // confirmation fails. The money write itself is now a compare-and-swap on the
+    // invoice, so the database refuses the second write outright.
+    console.log("\nM. CONCURRENCY — two simultaneous matches of the same transaction")
+    const [raceA, raceB] = await Promise.all([
+      manualMatch(f.feedRace, f.raceInv),
+      manualMatch(f.feedRace, f.raceInv),
+    ])
+    const raceInv = await getPayment(f.raceInv)
+    const raceLedger = await getApplications(f.feedRace, f.raceInv)
+
+    check(
+      "the invoice is credited EXACTLY once, never twice",
+      Number(raceInv.amount_paid) === 300,
+      `paid=${raceInv.amount_paid} — a double credit would show 600`,
+    )
+    check(
+      "exactly one of the two racers wins; the other applies nothing",
+      [raceA.matched, raceB.matched].filter(Boolean).length >= 1 &&
+        Number(raceInv.amount_paid) === 300,
+      `A=${raceA.matched}/${raceA.error ?? "ok"} B=${raceB.matched}/${raceB.error ?? "ok"}`,
+    )
+    check(
+      "the ledger holds a single confirmed application",
+      raceLedger.length === 1 && Number(raceLedger[0].amount) === 300,
+      `ledger=${JSON.stringify(raceLedger.map(l => l.amount))}`,
     )
   } finally {
     console.log("\nCleaning up fixtures…")

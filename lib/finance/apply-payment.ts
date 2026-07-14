@@ -179,13 +179,21 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
           }
         }
 
-        // Reclaim the abandoned attempt: take ownership of the existing row rather
-        // than deleting and re-inserting (which would reopen the race we just closed).
-        const { error: retakeErr } = await db
+        // Reclaim the abandoned attempt — as a COMPARE-AND-SWAP, not a blind update.
+        //
+        // Matching on the exact `applied_at` we just read is what makes the takeover
+        // EXCLUSIVE. Without it, two processes that both spot the same stale claim (the
+        // 15-minute sync and the 6-hourly cron, or either plus a human clicking Match)
+        // would BOTH pass the `confirmed_at IS NULL` check, BOTH succeed at the update,
+        // and BOTH go on to credit the invoice. Zero rows back means someone else won
+        // the race — stand down.
+        const { data: retaken, error: retakeErr } = await db
           .from("payment_applications")
           .update({ amount: creditedAmount, applied_by: actor, applied_at: new Date().toISOString() })
           .eq("id", existing.id)
           .is("confirmed_at", null)
+          .eq("applied_at", existing.applied_at)
+          .select("id")
 
         if (retakeErr) {
           return {
@@ -195,6 +203,16 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
             invoiceNumber: payment.invoice_number ?? undefined,
           }
         }
+
+        if (!retaken || retaken.length === 0) {
+          return {
+            applied: false,
+            reason: "already_applied",
+            detail: "This transaction is already being applied by another process.",
+            invoiceNumber: payment.invoice_number ?? undefined,
+          }
+        }
+
         claimId = existing.id as string
         console.warn(`[apply-payment] Took over a stale, unconfirmed claim for feed=${feedId} payment=${paymentId}`)
       } else {
@@ -248,8 +266,32 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
     ...(paymentMethod ? { payment_method: paymentMethod } : {}),
   }
 
+  // ── THE REAL GUARD: compare-and-swap on the invoice itself ───────────────
+  //
+  // The write only lands if `amount_paid` is still EXACTLY what we read a moment ago.
+  // If anything else moved this invoice in between — a concurrent match, a retry, a
+  // second process that took over the same abandoned lock — the row count comes back
+  // zero and we apply nothing.
+  //
+  // This is what makes the no-double-credit rule a FACT rather than an assumption. The
+  // lock table alone was not enough: its safety rested on the heuristic "an unconfirmed
+  // claim means no money moved", and that heuristic is false whenever the money write
+  // succeeds but the confirmation fails — a case we log but cannot prevent. The database
+  // itself now refuses the second write. The ledger goes back to being what it should
+  // always have been: an audit record, not the only thing standing between a client and
+  // being charged twice.
+  //
+  // NULL and 0 are different values to Postgres, so the predicate has to match how the
+  // row actually reads today (every invoice touched by the old writer has a NULL balance).
   // eslint-disable-next-line no-restricted-syntax -- THIS is the choke-point the rule points at (dev_task 7ebb1e0c)
-  const { error: updErr } = await supabaseAdmin.from("payments").update(updates).eq("id", paymentId)
+  const casQuery = supabaseAdmin.from("payments").update(updates).eq("id", paymentId)
+
+  const guarded =
+    payment.amount_paid === null || payment.amount_paid === undefined
+      ? casQuery.is("amount_paid", null)
+      : casQuery.eq("amount_paid", payment.amount_paid)
+
+  const { data: updatedRows, error: updErr } = await guarded.select("id")
 
   if (updErr) {
     // The money did not land — give the lock back, or this (transaction, invoice)
@@ -259,6 +301,21 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
       applied: false,
       reason: "write_failed",
       detail: `${updErr.message}${releaseNote}`,
+      invoiceNumber: payment.invoice_number ?? undefined,
+    }
+  }
+
+  if (!updatedRows || updatedRows.length === 0) {
+    // Someone else moved this invoice between our read and our write. Applying now
+    // would credit the same money twice. Stand down and hand the lock back.
+    await releaseClaim()
+    console.warn(
+      `[apply-payment] Concurrent change detected on ${paymentId} — another process applied money first. Nothing written.`,
+    )
+    return {
+      applied: false,
+      reason: "already_applied",
+      detail: "This invoice was updated by another process at the same moment — nothing was applied twice.",
       invoiceNumber: payment.invoice_number ?? undefined,
     }
   }

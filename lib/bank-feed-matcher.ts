@@ -222,7 +222,17 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       // "defer" — a transient Stripe failure. Leave the feed unmatched and retry on the
       // next run rather than settling money we cannot vouch for. The cash is already in
       // the bank; waiting costs nothing, booking a refund costs a client.
-      return { matched: false, moneyApplied: false, note: "Could not verify the payment with Stripe — deferred, will retry." }
+      //
+      // The reason goes in `error`, not just a note: the orchestrator logs `error` on a
+      // no-match, so without this a Stripe outage would look identical to "no candidate
+      // found" in the cron log — a silent, indefinite halt of card reconciliation that
+      // nobody would notice. A revoked or rotated Stripe key lands here.
+      return {
+        matched: false,
+        moneyApplied: false,
+        error: "Could not verify the payment with Stripe (deferred — will retry next run).",
+        note: "Could not verify the payment with Stripe — deferred, will retry.",
+      }
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1083,7 +1093,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // Fetch feed amount — needed for partial-payment calculation
     const { data: feed } = await supabaseAdmin
       .from("td_bank_feeds")
-      .select("amount, status")
+      .select("amount, status, source, external_id")
       .eq("id", feedId)
       .single()
 
@@ -1094,6 +1104,29 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // would have credited the money twice.
     if (feed?.status === "matched") {
       return { matched: false, error: "This transaction is already matched." }
+    }
+
+    // The refund check must protect the HUMAN too, not just the robot.
+    //
+    // The automatic matcher refuses a refunded charge — but staff clicking "Confirm this
+    // match" had no such guard, and the screen gives them no way to know: a refunded
+    // charge parks in the review queue looking like any other candidate. One click and
+    // they book money the client already has back. The machine was protected and the
+    // person was not, which is exactly the wrong way round.
+    if (feed?.source === "stripe" && feed.external_id) {
+      const check = await isChargeRefundedNow(String(feed.external_id))
+      if (check === "refunded") {
+        return {
+          matched: false,
+          error: "This Stripe payment has been REFUNDED or disputed — the money is no longer ours. It cannot be applied to an invoice.",
+        }
+      }
+      if (check === "defer") {
+        return {
+          matched: false,
+          error: "Could not verify this payment with Stripe right now — please try again in a few minutes.",
+        }
+      }
     }
 
     const feedAmount = Number(feed?.amount ?? 0)

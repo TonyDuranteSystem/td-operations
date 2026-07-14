@@ -1065,17 +1065,25 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       // over it by inventing the money.
       const { data: invoiceNow } = await supabase
         .from("payments")
-        .select("amount_paid, amount_due")
+        .select("amount_paid, amount_due, total, amount")
         .eq("id", activation.portal_invoice_id)
         .maybeSingle()
 
-      const partPaid =
-        Number(invoiceNow?.amount_paid ?? 0) > 0 && Number(invoiceNow?.amount_due ?? 0) > 0
+      // Compute the balance from total − paid. Do NOT trust `amount_due`: it is NULL on
+      // every invoice ever touched by the old writer (the very bug that produced the
+      // half-closed rows), and `Number(null)` is 0 — so a guard reading that column
+      // would decide "nothing outstanding" and settle the invoice in full on exactly
+      // the rows most likely to be broken. Fails OPEN, on the worst possible set.
+      const paidSoFar = Number(invoiceNow?.amount_paid ?? 0)
+      const invoiceTotal = Number(invoiceNow?.total ?? invoiceNow?.amount ?? 0)
+      const outstanding = invoiceTotal - paidSoFar
+
+      const partPaid = paidSoFar > 0 && outstanding > 0
 
       if (partPaid) {
         console.error(
           `[activate-service] REFUSING to settle part-paid invoice ${activation.portal_invoice_id} ` +
-          `(paid=${invoiceNow?.amount_paid}, still owed=${invoiceNow?.amount_due}). ` +
+          `(paid=${paidSoFar}, still owed=${outstanding}). ` +
           `Activation reached a part-paid invoice — an upstream guard failed. No money written.`,
         )
       } else {
