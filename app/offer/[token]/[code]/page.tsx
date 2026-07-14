@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { openCheckoutTab, deliverCheckout, closeCheckoutTab } from '@/lib/payments/checkout-redirect'
 import type { Offer } from '@/lib/types/offer'
 
 // ─── Bilingual Labels ───────────────────────────────────────
@@ -166,6 +167,9 @@ export default function OfferPageWithCode() {
   const [selectedOptional, setSelectedOptional] = useState<Set<string>>(new Set())
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [showBankDetails, setShowBankDetails] = useState(false)
+  // Set only when the browser refused to open the payment page for us. A refused
+  // top-navigation is SILENT, so we must give the client something to click.
+  const [manualPayUrl, setManualPayUrl] = useState<string | null>(null)
 
   const L = LABELS[lang]
 
@@ -252,12 +256,29 @@ export default function OfferPageWithCode() {
       setLang(o.language || 'it')
       setLoading(false)
 
-      // Pre-select recommended optional services
-      const recommended = new Set<string>()
-      o.services?.forEach(sv => {
-        if ((sv as any).optional && (sv as any).recommended) recommended.add(sv.name)
-      })
-      if (recommended.size > 0) setSelectedOptional(recommended)
+      // Restore the client's OWN selection.
+      //
+      // FIXED 2026-07-14 (ba7bfd8d): this always re-ticked the RECOMMENDED optionals,
+      // even on an already-signed offer — while checkout bills `selected_services`,
+      // i.e. what the client actually signed for. So the page could show one price
+      // and Stripe take another. A stored selection IS the truth; "recommended" is
+      // only a starting point for an offer nobody has chosen on yet.
+      const stored = Array.isArray((o as unknown as { selected_services?: unknown }).selected_services)
+        ? (o as unknown as { selected_services: string[] }).selected_services
+        : null
+
+      if (stored) {
+        const optionalNames = new Set(
+          (o.services || []).filter(sv => (sv as any).optional).map(sv => sv.name),
+        )
+        setSelectedOptional(new Set(stored.filter(n => optionalNames.has(n))))
+      } else {
+        const recommended = new Set<string>()
+        o.services?.forEach(sv => {
+          if ((sv as any).optional && (sv as any).recommended) recommended.add(sv.name)
+        })
+        if (recommended.size > 0) setSelectedOptional(recommended)
+      }
 
       // Check if already verified via cookie, admin preview, or valid access code in URL
       const hasValidCode = !!(accessCode && o.access_code && accessCode === o.access_code)
@@ -518,9 +539,14 @@ export default function OfferPageWithCode() {
                 {o.services?.map((sv, i) => {
                   const isOpt = !!(sv as any).optional
                   const isSelected = !isOpt || selectedOptional.has(sv.name)
+                  // Once signed, the selection IS the contract — freeze it, or the
+                  // client could change the price on screen while the checkout bills
+                  // the signed set. (The server enforces this too; the UI must not be
+                  // the only guard — see the create-checkout route.)
+                  const canToggle = isOpt && !isSigned
                   return (
                   <div key={i} className={`offer-servizio-card${sv.recommended ? ' offer-recommended' : ''}${isOpt && !isSelected ? ' offer-optional-dimmed' : ''}${isOpt ? ' offer-optional' : ''}`}
-                    onClick={isOpt ? () => {
+                    onClick={canToggle ? () => {
                       setSelectedOptional(prev => {
                         const next = new Set(prev)
                         if (next.has(sv.name)) next.delete(sv.name)
@@ -528,11 +554,11 @@ export default function OfferPageWithCode() {
                         return next
                       })
                     } : undefined}
-                    style={isOpt ? { cursor: 'pointer' } : undefined}
+                    style={canToggle ? { cursor: 'pointer' } : undefined}
                   >
                     {isOpt && (
                       <div className="offer-optional-checkbox">
-                        <input type="checkbox" checked={isSelected} readOnly style={{ width: 18, height: 18, accentColor: '#1e40af', cursor: 'pointer' }} />
+                        <input type="checkbox" checked={isSelected} readOnly disabled={!canToggle} style={{ width: 18, height: 18, accentColor: '#1e40af', cursor: canToggle ? 'pointer' : 'default' }} />
                         <span className="offer-optional-label">{lang === 'it' ? 'OPZIONALE' : 'OPTIONAL'}</span>
                       </div>
                     )}
@@ -691,6 +717,13 @@ export default function OfferPageWithCode() {
                       className="offer-payment-btn"
                       disabled={checkoutLoading}
                       onClick={async () => {
+                        // Open the tab NOW, on the click, while user activation is
+                        // still live. Stripe refuses to render inside the portal's
+                        // frame, and a cross-origin frame loses the right to open
+                        // anything a few seconds after the click — i.e. right about
+                        // when the Stripe session finishes being created. Opening
+                        // first is what makes the Pay button work at all (ba7bfd8d).
+                        const tab = openCheckoutTab(window)
                         setCheckoutLoading(true)
                         try {
                           const res = await fetch('/api/offers/create-checkout', {
@@ -698,20 +731,20 @@ export default function OfferPageWithCode() {
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ token }),
                           })
-                          if (res.ok) {
-                            const data = await res.json()
-                            if (data.checkoutUrl) {
-                              window.location.href = data.checkoutUrl
-                              return
+                          const payUrl = res.ok ? (await res.json())?.checkoutUrl : null
+                          if (payUrl) {
+                            // If the popup was blocked we cannot detect a refused
+                            // top-navigation (browsers fail it SILENTLY) — so surface
+                            // a real link the client can click instead of pretending.
+                            if (deliverCheckout(payUrl, tab, window) === 'needs_manual') {
+                              setManualPayUrl(payUrl)
                             }
-                          }
-                          // Fallback: use existing payment_links
-                          if (o.payment_links?.[0]?.url) {
-                            window.location.href = o.payment_links[0].url
                             return
                           }
+                          closeCheckoutTab(tab)
                           alert(lang === 'it' ? 'Errore nella creazione del pagamento. Riprova.' : 'Error creating payment session. Please try again.')
                         } catch {
+                          closeCheckoutTab(tab)
                           alert(lang === 'it' ? 'Errore di connessione. Riprova.' : 'Connection error. Please try again.')
                         } finally {
                           setCheckoutLoading(false)
@@ -741,6 +774,24 @@ export default function OfferPageWithCode() {
                     </button>
                   )}
                 </div>
+
+                {/* The browser blocked our attempt to open the payment page (popup
+                    blocker, or an in-app browser). A refused navigation is silent,
+                    so give the client something to click — a fresh click carries
+                    fresh permission and always works. */}
+                {manualPayUrl && (
+                  <div style={{ marginTop: 16 }}>
+                    <a
+                      href={manualPayUrl}
+                      target="_top"
+                      rel="noopener"
+                      className="offer-payment-btn"
+                      style={{ textDecoration: 'none' }}
+                    >
+                      {lang === 'it' ? 'Continua al pagamento →' : 'Continue to payment →'}
+                    </a>
+                  </div>
+                )}
 
                 {/* Bank details panel — shown when bank transfer is selected */}
                 {showBankDetails && o.bank_details && (

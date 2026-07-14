@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { resolveBillableSelection } from "@/lib/payments/billable-selection"
 
 export const dynamic = "force-dynamic"
 
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     // Fetch offer
     const { data: offer, error: oErr } = await supabase
       .from("offers")
-      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type")
+      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status")
       .eq("token", token)
       .single()
 
@@ -38,9 +39,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Offer not found" }, { status: 404 })
     }
 
-    // Use selected_services from DB (saved at sign time) or from request body
-    const selectedServices: string[] = body.selected_services
-      || (Array.isArray(offer.selected_services) ? offer.selected_services : [])
+    // SECURITY (2026-07-14, dev_task ba7bfd8d): this route is PUBLIC — token-only,
+    // no session — and it used to let the REQUEST BODY override the stored
+    // selection. A client who had SIGNED for an optional add-on could POST
+    // `{ selected_services: [] }` and be billed for the required services only.
+    // Freezing the checkboxes in the UI closes nothing; the endpoint is callable
+    // directly. Once signed, the stored selection IS the contract.
+    // Rules + tests: lib/payments/billable-selection.ts
+    const selectedServices: string[] = resolveBillableSelection({
+      status: offer.status,
+      storedSelection: offer.selected_services,
+      requestedSelection: body.selected_services,
+    })
 
     // Calculate total from selected services
     const services = Array.isArray(offer.services) ? offer.services : []

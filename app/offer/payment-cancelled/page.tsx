@@ -1,25 +1,29 @@
 'use client'
 
 import { Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { PORTAL_BASE_URL } from '@/lib/config'
 
+/**
+ * Where a cancelled payment sends the client.
+ *
+ * FIXED 2026-07-14 (dev_task ba7bfd8d): this used to link back to
+ * `/offer/{token}` — the code-less proposal page, which has NO pay button at all
+ * and re-prompts for the client's email. A client who cancelled on Stripe could
+ * therefore never retry, from anywhere. Payment lives in the PORTAL and only in
+ * the portal (see R092), so that is where "try again" must land.
+ */
 function PaymentCancelledContent() {
-  const searchParams = useSearchParams()
-  const token = searchParams.get('token')
-
   return (
     <div className="pc-card">
       <div className="pc-icon">&#8617;&#65039;</div>
       <h1 className="pc-title">Payment Cancelled</h1>
       <p className="pc-message">
-        No worries — your payment was not processed. You can return to your offer to try again,
+        No worries — your payment was not processed. You can return to your portal to try again,
         or contact us if you need assistance.
       </p>
       <div className="pc-buttons">
-        {token && (
-          <a href={`/offer/${encodeURIComponent(token)}`} className="pc-btn">Return to Offer</a>
-        )}
-        <a href="https://portal.tonydurante.us/portal/chat" className="pc-btn pc-btn-secondary">Contact Us</a>
+        <a href={`${PORTAL_BASE_URL}/portal/offer`} className="pc-btn">Return to Portal</a>
+        <a href={`${PORTAL_BASE_URL}/portal/chat`} className="pc-btn pc-btn-secondary">Contact Us</a>
       </div>
       <div className="pc-footer">Tony Durante LLC — Your Way to Freedom</div>
     </div>
