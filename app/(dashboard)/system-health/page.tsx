@@ -1,9 +1,9 @@
 /**
  * P2.8 — Unified /system-health dashboard.
  *
- * Seven widgets per plan §4 lines 578-586:
+ * Widgets per plan §4 lines 578-586 (audit-findings widget removed 2026-07-15,
+ * see below):
  *   1. Last run of each registered cron with green/yellow/red status.
- *   2. Latest audit-health-check findings (P0/P1/P2 with drill-down).
  *   3. Last 10 Sentry errors from dbWrite. (API not wired — placeholder.)
  *   4. Current stuck-client counts by service type.
  *   5. Active work locks.
@@ -28,14 +28,12 @@ import {
 import {
   getActiveWorkLocks,
   getCronStatusList,
-  getLatestAuditFindings,
   getSentryStatus,
   getSmokeResults,
   getStuckClientsByServiceType,
   formatRelative,
   type TrafficLight,
 } from "@/lib/system-health/queries"
-import { AuditFindingsDrilldown } from "@/components/system-health/audit-findings-drilldown"
 import { SystemErrorsPanel } from "@/components/system-health/system-errors-panel"
 import { listSystemErrors } from "@/lib/system-errors"
 
@@ -82,9 +80,8 @@ function Card({
 export default async function SystemHealthPage() {
   const now = Date.now()
 
-  const [cronRows, audit, stuck, locks, smoke, systemErrors] = await Promise.all([
+  const [cronRows, stuck, locks, smoke, systemErrors] = await Promise.all([
     getCronStatusList(now),
-    getLatestAuditFindings(),
     getStuckClientsByServiceType(now),
     getActiveWorkLocks(now),
     getSmokeResults(10),
@@ -106,7 +103,7 @@ export default async function SystemHealthPage() {
           <h1 className="text-2xl font-semibold tracking-tight">System Health</h1>
         </div>
         <p className="mt-1 text-sm text-zinc-500">
-          Live operations visibility — crons, audit findings, deploys, work locks.
+          Live operations visibility — crons, deploys, work locks.
         </p>
       </div>
 
@@ -202,37 +199,11 @@ export default async function SystemHealthPage() {
           </Card>
         </div>
 
-        {/* Widget 2: Audit findings */}
-        <div className="lg:col-span-2 xl:col-span-1">
-          <Card
-            title="Audit Health Check"
-            icon={ShieldAlert}
-            testId="widget-audit-findings"
-            right={
-              audit.executedAt ? (
-                <span className="text-[11px] text-zinc-500" title={audit.executedAt}>
-                  {formatRelative(now - new Date(audit.executedAt).getTime(), now)}
-                </span>
-              ) : null
-            }
-          >
-            <div className="mb-3 flex gap-2 text-xs">
-              <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-1 font-semibold text-red-700 ring-1 ring-red-200">
-                P0 <span className="tabular-nums">{audit.p0}</span>
-              </span>
-              <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-1 font-semibold text-amber-700 ring-1 ring-amber-200">
-                P1 <span className="tabular-nums">{audit.p1}</span>
-              </span>
-              <span className="inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-1 font-semibold text-zinc-700 ring-1 ring-zinc-200">
-                P2 <span className="tabular-nums">{audit.p2}</span>
-              </span>
-              <span className="ml-auto inline-flex items-center text-[11px] text-zinc-500">
-                {audit.totalAffected} rows affected
-              </span>
-            </div>
-            <AuditFindingsDrilldown findings={audit.findings} />
-          </Card>
-        </div>
+        {/* Widget 2 (Audit Health Check) removed 2026-07-15 — its cron
+            /api/cron/audit-health-check was deleted 2026-07-12 (808e7100), so
+            the panel could only ever show stale rows or nothing. dev_task
+            0844f700. Live audit findings still surface on /exceptions via a
+            different query (getAuditFindings). */}
 
         {/* Widget 4: Stuck clients by service type */}
         <Card title="Stuck Clients" icon={AlertTriangle} testId="widget-stuck-clients">

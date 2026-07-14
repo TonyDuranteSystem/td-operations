@@ -125,75 +125,12 @@ export async function getCronStatusList(
   return rows
 }
 
-export interface AuditFinding {
-  severity: "P0" | "P1" | "P2"
-  check_name: string
-  table_name: string
-  records_affected: number
-  description: string
-  sample_ids: string | null
-}
-
-export interface AuditSnapshot {
-  executedAt: string | null
-  p0: number
-  p1: number
-  p2: number
-  totalFindings: number
-  totalAffected: number
-  findings: AuditFinding[]
-  cronStatus: "success" | "error" | null
-}
-
-/**
- * Plan §4 L581: "Latest audit-health-check findings (P0/P1/P2 with drill-down)".
- * Sources from cron_log (the audit cron writes its findings into details).
- */
-export async function getLatestAuditFindings(): Promise<AuditSnapshot> {
-  const { data, error } = await supabaseAdmin
-    .from("cron_log")
-    .select("status, executed_at, details")
-    .eq("endpoint", "/api/cron/audit-health-check")
-    .order("executed_at", { ascending: false })
-    .limit(1)
-
-  if (error) throw new Error(`audit cron_log query failed: ${error.message}`)
-
-  const row = data?.[0]
-  if (!row) {
-    return {
-      executedAt: null,
-      p0: 0,
-      p1: 0,
-      p2: 0,
-      totalFindings: 0,
-      totalAffected: 0,
-      findings: [],
-      cronStatus: null,
-    }
-  }
-
-  const details = (row.details ?? {}) as {
-    p0?: number
-    p1?: number
-    p2?: number
-    total_findings?: number
-    total_affected?: number
-    findings?: AuditFinding[]
-  }
-
-  return {
-    executedAt: row.executed_at,
-    p0: details.p0 ?? 0,
-    p1: details.p1 ?? 0,
-    p2: details.p2 ?? 0,
-    totalFindings: details.total_findings ?? 0,
-    totalAffected: details.total_affected ?? 0,
-    findings: Array.isArray(details.findings) ? details.findings : [],
-    cronStatus:
-      row.status === "success" || row.status === "error" ? row.status : null,
-  }
-}
+// The Audit Health Check widget (getLatestAuditFindings / AuditSnapshot /
+// AuditFinding) was removed 2026-07-15 — its cron
+// /api/cron/audit-health-check was deleted 2026-07-12 (808e7100), so the query
+// could only ever return the "no row" empty snapshot. Live audit findings still
+// surface on /exceptions via a separate query (lib/exceptions/queries.ts
+// ::getAuditFindings). dev_task 0844f700.
 
 export interface StuckClientsSnapshot {
   nullStageByType: { service_type: string; count: number }[]
