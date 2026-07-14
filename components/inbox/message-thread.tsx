@@ -8,7 +8,7 @@ import type { InboxMessage, InboxConversation } from '@/lib/types'
 import { sanitizeEmailHtml } from '@/lib/html-escape'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
-import { resolveAttachmentType } from '@/lib/inbox/attachment-open'
+import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
 import { EmailHtmlFrame } from './email-html-frame'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
@@ -41,10 +41,30 @@ function AttachmentChip({
     setBusy(true)
 
     const resolved = resolveAttachmentType(att.filename, att.mimeType)
+    // Installed-app (PWA) windows very often refuse to open a new tab at all, so
+    // we never gamble on window.open there — we download, which works everywhere.
+    const standalone =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(display-mode: standalone)').matches === true ||
+        (window.navigator as { standalone?: boolean }).standalone === true)
+
+    const viewInTab = shouldOpenInTab({
+      inline: resolved.inline,
+      standalone,
+      size: att.size ?? 0,
+    })
+
     // The tab must be opened SYNCHRONOUSLY inside the click handler — opening it
-    // after `await fetch` trips the popup blocker. Only needed when we'll render
-    // it; a download needs no tab.
-    const win = resolved.inline ? window.open('', '_blank') : null
+    // after `await fetch` trips the popup blocker. Only when we intend to render.
+    const win = viewInTab ? window.open('', '_blank') : null
+    if (win) {
+      // Something visible while the bytes are in flight, and — critically — a
+      // surface to report a failure ON. Closing this tab and toasting on the tab
+      // behind it meant a failed open could look like nothing happened at all.
+      win.document.body.style.cssText =
+        'font:14px system-ui,sans-serif;color:#3f3f46;padding:24px'
+      win.document.body.textContent = `Opening ${att.filename}…`
+    }
 
     const params = new URLSearchParams({
       messageId,
@@ -69,12 +89,11 @@ function AttachmentChip({
       const blob = raw.type === resolved.type ? raw : new Blob([raw], { type: resolved.type })
       objectUrl = URL.createObjectURL(blob)
 
-      if (resolved.inline && win) {
+      if (win) {
         win.location.href = objectUrl
       } else {
-        // Popup blocked, standalone PWA (where a new tab often never opens), or
-        // a format we must not render on our own origin -> download it instead.
-        win?.close()
+        // Not viewable on our origin, too big to render, an installed app, or the
+        // popup was blocked -> download it.
         const a = document.createElement('a')
         a.href = objectUrl
         a.download = att.filename || 'attachment'
@@ -86,13 +105,17 @@ function AttachmentChip({
       const url = objectUrl
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (err) {
-      win?.close()
       if (objectUrl) URL.revokeObjectURL(objectUrl)
-      toast.error(
+      const message =
         err instanceof Error && err.message
           ? err.message
-          : 'Could not open this attachment. Please try again.',
-      )
+          : 'Could not open this attachment. Please try again.'
+      // Report the failure where the user is actually looking. The pre-opened tab
+      // is fronted, so a toast on the tab behind it would go unseen.
+      if (win && !win.closed) {
+        win.document.body.textContent = `Could not open ${att.filename} — ${message}`
+      }
+      toast.error(message)
     } finally {
       setBusy(false)
     }

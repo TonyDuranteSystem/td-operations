@@ -102,3 +102,33 @@ export function resolveAttachmentType(
 
   return { type, inline: INLINE_SAFE.has(type) }
 }
+
+/**
+ * Above this, do not try to render the file in a tab — hand it to the browser as
+ * a download instead. Gmail caps attachments at ~25 MB, so this is a backstop
+ * against a pathological file eating the tab's memory, not a routine path.
+ */
+export const MAX_INLINE_BYTES = 40 * 1024 * 1024
+
+/**
+ * Decide whether to VIEW the attachment in a tab or DOWNLOAD it.
+ *
+ * `standalone` is the installed-PWA case (Antonio runs the whole CRM as a phone
+ * app). A standalone window very often refuses to open a new tab at all, so the
+ * old code's `window.open` could silently do nothing there. We do not gamble on
+ * it: in standalone we ALWAYS download, which works everywhere. That removes the
+ * one path this fix could not be tested on directly.
+ */
+export function shouldOpenInTab(opts: {
+  /** From resolveAttachmentType — false for anything that could script us. */
+  inline: boolean
+  /** Running as an installed app (display-mode: standalone). */
+  standalone: boolean
+  /** Byte size; Gmail sometimes reports 0 = unknown, which must not block. */
+  size: number
+}): boolean {
+  if (!opts.inline) return false
+  if (opts.standalone) return false
+  if (opts.size > MAX_INLINE_BYTES) return false
+  return true
+}
