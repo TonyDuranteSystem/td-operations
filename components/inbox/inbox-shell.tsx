@@ -444,18 +444,6 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         })
       }
       clearSelection()
-      // Read/unread already reflected by the optimistic badges above +
-      // the archive/trash rows already filtered optimistically — a heavy
-      // conversations refetch here is what blanked the list under Gmail load
-      // (Antonio 2026-07-08). Only refetch the list for label MOVES (which
-      // change membership and aren't optimistically handled).
-      if (variables.action === 'move_to_label') {
-        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-      }
-      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
-
-      const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : variables.action === 'mark_unread' ? 'marked as unread' : 'moved'
 
       // The bulk route runs the threads through Promise.allSettled and reports
       // `succeeded`/`failed` — a per-thread Gmail failure still returns HTTP 200.
@@ -465,6 +453,28 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       const summary = data as { succeeded?: number; failed?: number; restore?: unknown } | undefined
       const okCount = typeof summary?.succeeded === 'number' ? summary.succeeded : count
       const failCount = typeof summary?.failed === 'number' ? summary.failed : 0
+
+      // Read/unread already reflected by the optimistic badges above +
+      // the archive/trash rows already filtered optimistically — a heavy
+      // conversations refetch here is what blanked the list under Gmail load
+      // (Antonio 2026-07-08). Only refetch the list for label MOVES (which
+      // change membership and aren't optimistically handled).
+      //
+      // EXCEPT on a PARTIAL FAILURE. The optimistic filter above removed EVERY
+      // selected row, including the ones Gmail refused to delete/archive — so
+      // without this the toast says "1 failed" while that very email is hidden
+      // from the list, and the user hunts for an email the screen is denying
+      // exists. It reappears on the 30s poll, but a warning you cannot act on
+      // for 30s is barely better than no warning. Refetch immediately so the
+      // survivors come back. Failure-path only, so the 2026-07-08 "don't refetch
+      // on every bulk action" guard (a SUCCESS-path concern) is untouched.
+      if (variables.action === 'move_to_label' || failCount > 0) {
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+
+      const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : variables.action === 'mark_unread' ? 'marked as unread' : 'moved'
 
       // Bulk Delete gets an Undo too (Antonio, 2026-07-14 — it previously had
       // none). `ids` is captured here because clearSelection() above has already
