@@ -352,6 +352,14 @@ Function.
   bulk toast from the client's own selection size — report what the SERVER did,
   and warn when `failed > 0`. Telling staff "12 emails deleted" when 3 silently
   failed is worse than an error (2026-07-14 self-review).
+- **On a partial bulk failure the LIST must be refetched too, not just the toast
+  corrected.** The optimistic filter removes EVERY selected row, including the
+  ones Gmail refused — so a warning saying "3 failed" while those 3 emails are
+  hidden sends staff hunting for mail the screen denies exists. `failed > 0` is
+  therefore an explicit exception to the "don't refetch conversations on bulk
+  actions" rule (that rule guards the SUCCESS path — the 2026-07-08 blank-inbox
+  incident — and is untouched on it). An honest message plus a lying list is not
+  a fix.
 - **The attachment tab is opened BEFORE the fetch** (popup blockers) and is
   FRONTED, so it is the only surface the user is actually looking at. Any failure
   must be written into THAT tab — a toast on the tab behind it is invisible.
