@@ -1,5 +1,6 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
-_Last verified against code: 2026-07-14 — Claude (**Two bugs: Gmail attachments could not be opened, and Undo-after-delete never restored the row.**
+_Last verified against code: 2026-07-14b — Claude (**Undo on EVERY delete path + the restored email comes back exactly as it was.** Antonio's follow-up to the two fixes below. (a) **All three delete paths now have an Undo** — previously ONLY the per-row trash icon did; the open-email toolbar Delete and the bulk-bar Delete just deleted, with no way back. The toolbar Undo captures `selected?.id` at toast time (`handleEmailDeleted` clears `selected` first) and calls `handleEmailRestored`; the bulk Undo captures `Array.from(selectedIds)` BEFORE `clearSelection()` empties it, and posts a new **bulk `untrash`** branch. Bulk delete hides rows by filtering the react-query cache (NOT `deletedIds`), so its Undo only needs the untrash + a refetch. (b) **Trashing no longer silently destroys read/starred state.** `trash` strips UNREAD/STARRED/IMPORTANT alongside INBOX, and `untrash` only re-added INBOX — so an unread or starred email that was deleted and restored came back READ and UNSTARRED, permanently. Gmail cannot tell us what those labels were after the fact, so the server now **snapshots them BEFORE trashing** (`snapshotBeforeTrash` → `captureRestorableLabels`, `lib/inbox/trash-restore.ts`), returns the snapshot in the trash response, and the browser hands it back with the Undo; `untrashThread` re-applies it. Bulk carries the snapshot as a map keyed by threadId. **The snapshot round-trips through the browser, so it is UNTRUSTED on the way back** — `sanitizeRestorePayload` keeps only string ids and only labels in the `RESTORABLE_LABELS` allow-list, so an Undo can never be used to slap an arbitrary label (TRASH/SPAM/a user label) onto a message. **Deliberately NOT "fixed" by leaving UNREAD on trashed threads:** the sidebar badges Trash with `threadsUnread`, so that would start showing an unread count on Trash — a global change nobody asked for. Snapshotting is best-effort: a failed read never blocks the delete. Tests: `trash-restore.test.ts` (11 — capture per message, allow-list enforcement, malformed payloads, round-trip). 5652 unit tests + build green.)_
+_Prior 2026-07-14 — Claude (**Two bugs: Gmail attachments could not be opened, and Undo-after-delete never restored the row.**
 
 **(1) ATTACHMENTS — the download link may NOT be a top-level navigation.** Antonio: "when I try to open an attachment from inbox in the crm, I can't open it" (Alessio Casula, thread `gmail:19f37c4198bd7f47`, two `application/octet-stream` signed PDFs). Reproduced in PRODUCTION in Antonio's authed browser, 3x, deterministic: a **top-level (document) navigation** to `/api/inbox/attachment?…&attachmentId=<~400-char Gmail token>` returns **503**; the SAME url **fetched same-origin returns 200 with the bytes**, every time, regardless of Accept; a navigation carrying a **SHORT** attachmentId returns **500** (i.e. it DOES reach the route). The 503s are **absent from the Vercel function logs** (the request never reaches the function) and are **not firewall denials** (Firewall: 0 denied / 0 challenged, Bot Protection inactive, 0 custom rules). **Root cause: the over-long Gmail token in the QUERY STRING trips a platform/edge limit on DOCUMENT navigations, before our code runs.** The earlier "octet-stream + `Content-Disposition: inline`" theory was DISPROVED (the fetch of that same octet-stream url returns 200 fine). **Fix:** `components/inbox/message-thread.tsx` now renders a shared `AttachmentChip` **`<button>` (NOT an `<a href>`)** — an href would also hand the user a broken right-click "open in new tab". It opens a tab **synchronously** (popup blocker), fetches the url (the path that works), re-types the blob via `resolveAttachmentType` (`lib/inbox/attachment-open.ts` — pure, 28 tests) because mail clients routinely declare a PDF as `application/octet-stream`, then points the tab at the object URL; if the tab handle is null (popup blocked / iOS standalone PWA) it falls back to an `<a download>`. **SECURITY — `inline` is an ALLOW-LIST (`INLINE_SAFE`), never "whatever the browser can render":** a `blob:` URL inherits OUR origin and anyone can email support@, so rendering an SVG/HTML attachment in a tab would be same-origin XSS. Only `application/pdf` + RASTER images may render inline; svg/html/xml/office/zip download instead. NEVER add a scriptable type to that set. Short-path download links elsewhere (`/api/invoices/<id>/pdf`, `/api/documents/<id>/preview`, `/api/drive-preview/<id>`) carry no long token, are unaffected, and were deliberately NOT changed.
 
@@ -322,6 +323,29 @@ Function.
   thread (Undo/untrash) MUST clear the id from that set *and* from localStorage
   (`onRestored`), or the row is refetched from Gmail and then filtered straight
   back out — the 2026-07-13 "says restored but the email never comes back" bug.
+- **Trashing STRIPS `UNREAD` / `STARRED` / `IMPORTANT`, and Gmail cannot tell you
+  what they were afterwards.** Any new delete path MUST snapshot them *before*
+  the modify (`snapshotBeforeTrash`) and any Undo MUST hand that snapshot back so
+  `untrashThread` can re-apply it — otherwise a restored email silently comes
+  back read and unstarred, forever. Do NOT "fix" this by leaving `UNREAD` on
+  trashed threads: the sidebar badges Trash with `threadsUnread`, so Trash would
+  start showing an unread count.
+  **KNOWN NARROW RACE (accepted, observed 2026-07-14):** `threads.get` is
+  read-after-write lagged, so if a label was applied *seconds* before the delete
+  (e.g. staff clicks Mark-unread and immediately deletes), the snapshot can miss
+  it and the Undo restores the email without that one label. Verified: with the
+  state settled the restore is exact (UNREAD + IMPORTANT both came back); with a
+  ~2s gap the just-applied UNREAD was missed while the pre-existing IMPORTANT was
+  restored. Impact is cosmetic (email returns read), never data loss — not worth
+  a client-supplied "hint" that would have to be trusted.
+- **The restore snapshot round-trips through the BROWSER, so it is untrusted on
+  the way back in.** Always run it through `sanitizeRestorePayload` — it keeps
+  only the `RESTORABLE_LABELS` allow-list, so an Undo can never be turned into
+  "add an arbitrary label (TRASH / SPAM / any user label) to this message id".
+- **All three delete paths must keep their Undo** (per-row trash icon, open-email
+  toolbar Delete, bulk-bar Delete). Note they hide rows DIFFERENTLY: the first
+  two go through `deletedIds`, the bulk one filters the react-query cache — so a
+  bulk Undo does not need `onRestored`, but the other two do.
 - Notification-style senders (Stripe, ShipStation, banks…) can be threaded
   together **by Gmail itself** (same sender + subject) — that part is
   Gmail-side behaviour, not our code.

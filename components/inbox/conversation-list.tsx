@@ -92,13 +92,15 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: 'trash', mailbox }),
       })
       if (!res.ok) throw new Error('Failed to delete')
-      return conv.id
+      // The server snapshots UNREAD/STARRED/IMPORTANT before stripping them —
+      // hand it straight back on Undo so the email returns as it was.
+      return res.json().catch(() => ({}))
     },
     onMutate: async (conv) => {
       await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
       if (onDeleted) onDeleted(conv.id)
     },
-    onSuccess: (_data, conv) => {
+    onSuccess: (data, conv) => {
       toast('Email deleted', {
         action: {
           label: 'Undo',
@@ -107,13 +109,18 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
               const res = await fetch('/api/inbox/email-actions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: 'untrash', mailbox }),
+                body: JSON.stringify({
+                  threadId: conv.id.replace('gmail:', ''),
+                  action: 'untrash',
+                  mailbox,
+                  restore: (data as { restore?: unknown })?.restore,
+                }),
               })
               if (!res.ok) {
                 // R099 — a non-2xx used to fall through silently, so a failed
                 // restore looked identical to a successful one.
-                const data = await res.json().catch(() => ({}))
-                throw new Error(data.error || 'Failed to restore email.')
+                const err = await res.json().catch(() => ({}))
+                throw new Error(err.error || 'Failed to restore email.')
               }
               // MUST come before the refetch: the row is hidden by the parent's
               // `deletedIds` set, so untrashing in Gmail alone brings the thread
