@@ -38,6 +38,35 @@ interface SyncResult {
 }
 
 /**
+ * Is this Stripe charge refunded or disputed RIGHT NOW?
+ *
+ * The stored charge payload is a SNAPSHOT taken at sync time. A charge refunded
+ * afterwards keeps `refunded: false` frozen in our copy forever, and the sync never
+ * revisits it (rows are inserted once, by transaction id). So our record can say
+ * "money received" long after it went back to the client.
+ *
+ * That was survivable while matching needed an amount-and-name coincidence. It is not
+ * survivable now: the payment-intent tier settles an invoice from the charge alone,
+ * deterministically. Without this check, the first cron run after a refund would
+ * confidently mark an invoice paid with money the client already has back.
+ *
+ * Returns null when Stripe cannot be reached — the caller decides what to do with
+ * "unknown" rather than having a network blip silently mean "not refunded".
+ */
+export async function isChargeRefundedNow(chargeId: string): Promise<boolean | null> {
+  const stripe = getStripe()
+  if (!stripe) return null
+
+  try {
+    const charge = await stripe.charges.retrieve(chargeId)
+    return charge.refunded === true || charge.amount_refunded > 0 || charge.disputed === true
+  } catch (err) {
+    console.error(`[stripe-sync] Could not re-check charge ${chargeId}:`, err)
+    return null
+  }
+}
+
+/**
  * Sync historical Stripe charges into td_bank_feeds.
  * @param options.daysBack How many days of history to fetch (default 90)
  */

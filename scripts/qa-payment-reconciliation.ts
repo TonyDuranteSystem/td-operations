@@ -128,7 +128,11 @@ async function seed() {
   // ── Client 3: Fazekas — invoice ALREADY marked Paid by hand (no stripe id on it).
   const { data: fContact } = await db
     .from("contacts")
-    .insert({ full_name: `${TAG} Tamas Fazekas`, email: `fixture-buyer-two@example.com` })
+    // NOTE the CAPITALS. CRM emails are not reliably lowercase. The first version of the
+    // matcher compared them case-sensitively, so the identity engine silently resolved
+    // NOBODY — and this harness passed anyway, because the fixture happened to be
+    // lowercase. Storing it mixed-case here means the harness would now catch that.
+    .insert({ full_name: `${TAG} Tamas Fazekas`, email: `Fixture-Buyer-TWO@Example.com` })
     .select("id")
     .single()
   created.contacts.push(fContact!.id)
@@ -219,7 +223,104 @@ async function seed() {
     raw_data: {},
   })
 
-  return { acct: acct!.id, invA: inv[0], invB: inv[1], strangerInv: strangerInv!.id, fInv: fInv!.id, landmine: landmine!.id, feedSH1, feedSH2, feedSHRef, feedFaz, feedLandmine }
+  // ── The FISCALOT case: an invoice whose `status` says Cancelled but which is
+  // genuinely part-paid and STILL OWES money. Three of these exist in production. A
+  // rule that treated `status` as an absolute veto made the outstanding balance
+  // impossible to receive — matcher ignored it, staff couldn't select it, and a manual
+  // attempt reported success while moving nothing.
+  const { data: fiscalotAcct } = await db
+    .from("accounts")
+    .insert({ company_name: `${TAG} Fiscalot`, account_type: "Client" })
+    .select("id")
+    .single()
+  created.accounts.push(fiscalotAcct!.id)
+
+  const { data: partPaid } = await db
+    .from("payments")
+    .insert({
+      account_id: fiscalotAcct!.id,
+      invoice_number: `QA-INV-${TAG}-PARTPAID`,
+      description: `${TAG} part-paid, status Cancelled, still owes 500`,
+      total: 2200, amount: 2200, subtotal: 2200, amount_paid: 1700, amount_due: 500,
+      amount_currency: "USD", status: "Cancelled", invoice_status: "Partial",
+    })
+    .select("id")
+    .single()
+  created.payments.push(partPaid!.id)
+
+  const feedPartPaid = await mkFeed({
+    source: "relay", external_id: `wire_qa_${TAG}_partpaid`, transaction_date: "2026-07-15",
+    amount: 500, currency: "USD", sender_name: `${TAG} Fiscalot`,
+    memo: `QA-INV-${TAG}-PARTPAID final balance`, status: "unmatched",
+    raw_data: {},
+  })
+
+  // A CANCELLED invoice — a manual match onto it must be REJECTED, not silently
+  // recorded as a link with no money.
+  const { data: cancelled } = await db
+    .from("payments")
+    .insert({
+      account_id: fiscalotAcct!.id,
+      invoice_number: `QA-INV-${TAG}-CANCELLED`,
+      description: `${TAG} cancelled invoice`,
+      total: 900, amount: 900, subtotal: 900, amount_paid: 0, amount_due: 900,
+      amount_currency: "USD", status: "Cancelled", invoice_status: "Cancelled",
+    })
+    .select("id")
+    .single()
+  created.payments.push(cancelled!.id)
+
+  // An OVERPAYMENT: $650 against a $500 invoice. The invoice must record $500 (capped),
+  // and the ledger must record what was actually credited — not the raw wire amount.
+  const { data: smallInv } = await db
+    .from("payments")
+    .insert({
+      account_id: fiscalotAcct!.id,
+      invoice_number: `QA-INV-${TAG}-OVERPAY`,
+      description: `${TAG} 500 invoice paid with 650`,
+      total: 500, amount: 500, subtotal: 500, amount_paid: 0, amount_due: 500,
+      amount_currency: "USD", status: "Pending", invoice_status: "Sent",
+    })
+    .select("id")
+    .single()
+  created.payments.push(smallInv!.id)
+
+  const feedOverpay = await mkFeed({
+    source: "relay", external_id: `wire_qa_${TAG}_overpay`, transaction_date: "2026-07-15",
+    amount: 650, currency: "USD", sender_name: `${TAG} Fiscalot`,
+    memo: "overpayment", status: "unmatched",
+    raw_data: {},
+  })
+
+  // A payment that NAMES its invoice but pays the WRONG AMOUNT. The old code threw the
+  // invoice away on the amount check before it ever looked at the reference — making the
+  // whole "carry the invoice number" fix useless the moment the figures didn't line up.
+  const { data: refInv } = await db
+    .from("payments")
+    .insert({
+      account_id: fiscalotAcct!.id,
+      invoice_number: `QA-INV-${TAG}-REFMISMATCH`,
+      description: `${TAG} referenced but underpaid`,
+      total: 1000, amount: 1000, subtotal: 1000, amount_paid: 0, amount_due: 1000,
+      amount_currency: "USD", status: "Pending", invoice_status: "Sent",
+    })
+    .select("id")
+    .single()
+  created.payments.push(refInv!.id)
+
+  const feedRefMismatch = await mkFeed({
+    source: "relay", external_id: `wire_qa_${TAG}_refmismatch`, transaction_date: "2026-07-15",
+    amount: 400, currency: "USD", sender_name: "Unknown Payer",
+    memo: `payment for QA-INV-${TAG}-REFMISMATCH`, status: "unmatched",
+    raw_data: {},
+  })
+
+  return {
+    acct: acct!.id, invA: inv[0], invB: inv[1], strangerInv: strangerInv!.id,
+    fInv: fInv!.id, landmine: landmine!.id,
+    partPaid: partPaid!.id, cancelled: cancelled!.id, smallInv: smallInv!.id, refInv: refInv!.id,
+    feedSH1, feedSH2, feedSHRef, feedFaz, feedLandmine, feedPartPaid, feedOverpay, feedRefMismatch,
+  }
 }
 
 async function getPayment(id: string) {
@@ -229,6 +330,14 @@ async function getPayment(id: string) {
 async function getFeed(id: string) {
   const { data } = await db.from("td_bank_feeds").select("status, matched_payment_id, match_confidence, review_metadata").eq("id", id).single()
   return data!
+}
+async function getApplications(feedId: string, paymentId: string): Promise<Array<{ amount: number }>> {
+  const { data } = await anyDb
+    .from("payment_applications")
+    .select("amount")
+    .eq("feed_id", feedId)
+    .eq("payment_id", paymentId)
+  return (data ?? []) as Array<{ amount: number }>
 }
 
 async function cleanup() {
@@ -347,6 +456,82 @@ async function main() {
       "its invoice_status is left alone (still blank — we did not invent one)",
       landmine.invoice_status === null,
       `invoice_status=${landmine.invoice_status}`,
+    )
+
+    // ── G. The FISCALOT case — the receivable my first rule made unpayable ──
+    console.log("\nG. PART-PAID invoice whose status says Cancelled — still owes $500")
+    const rPart = await manualMatch(f.feedPartPaid, f.partPaid)
+    const partPaid = await getPayment(f.partPaid)
+
+    check(
+      "the outstanding $500 CAN still be received",
+      rPart.matched === true && rPart.moneyApplied === true,
+      `matched=${rPart.matched} moneyApplied=${rPart.moneyApplied} — treating the payment status as an absolute veto would make this money impossible to book`,
+    )
+    check(
+      "the invoice closes properly: fully paid, nothing owed",
+      Number(partPaid.amount_paid) === 2200 && Number(partPaid.amount_due) === 0 && partPaid.invoice_status === "Paid",
+      `paid=${partPaid.amount_paid} due=${partPaid.amount_due} status=${partPaid.invoice_status}`,
+    )
+
+    // ── H. A cancelled invoice must REJECT money, loudly ────────────────────
+    console.log("\nH. CANCELLED invoice — a manual match must be refused, not faked")
+    const rCancel = await manualMatch(f.feedOverpay, f.cancelled)
+    const cancelledInv = await getPayment(f.cancelled)
+
+    check(
+      "the match is REFUSED with a real reason (not a green tick and no money)",
+      rCancel.matched === false && !!rCancel.error,
+      `matched=${rCancel.matched} error=${rCancel.error ?? "(none)"}`,
+    )
+    check(
+      "nothing was credited to the cancelled invoice",
+      Number(cancelledInv.amount_paid) === 0,
+      `paid=${cancelledInv.amount_paid}`,
+    )
+
+    // ── J. Overpayment: cap the invoice, and record what was really credited ──
+    console.log("\nJ. OVERPAYMENT — $650 wire against a $500 invoice")
+    const rOver = await manualMatch(f.feedOverpay, f.smallInv)
+    const smallInv = await getPayment(f.smallInv)
+    const ledger = await getApplications(f.feedOverpay, f.smallInv)
+
+    check(
+      "the invoice records $500 — never more than it is worth",
+      Number(smallInv.amount_paid) === 500 && Number(smallInv.amount_due) === 0,
+      `paid=${smallInv.amount_paid} due=${smallInv.amount_due}`,
+    )
+    check(
+      "the ledger records the $500 actually credited, not the $650 that arrived",
+      ledger.length === 1 && Number(ledger[0].amount) === 500,
+      `ledger=${JSON.stringify(ledger.map(l => l.amount))} — recording 650 would make the ledger disagree with the invoice`,
+    )
+    check(
+      "matched=true and money was applied",
+      rOver.matched === true && rOver.moneyApplied === true,
+      `matched=${rOver.matched} moneyApplied=${rOver.moneyApplied}`,
+    )
+
+    // ── K. The invoice number must beat the amount ──────────────────────────
+    console.log("\nK. Payment NAMES its invoice but pays the wrong amount")
+    const rRefMis = await matchAndReconcile(f.feedRefMismatch)
+    const feedRefMis = await getFeed(f.feedRefMismatch)
+    const refInv = await getPayment(f.refInv)
+
+    check(
+      "the referenced invoice is NOT thrown away just because the figures differ",
+      feedRefMis.matched_payment_id === f.refInv,
+      `candidate=${feedRefMis.matched_payment_id} — the old code discarded it on the amount check before ever reading the reference`,
+    )
+    check(
+      "but it is NOT auto-settled — how much to apply is a human's call",
+      rRefMis.matched === false && feedRefMis.status === "needs_review",
+      `matched=${rRefMis.matched} status=${feedRefMis.status}`,
+    )
+    check(
+      "no money moved without a human",
+      Number(refInv.amount_paid) === 0,
+      `paid=${refInv.amount_paid}`,
     )
   } finally {
     console.log("\nCleaning up fixtures…")

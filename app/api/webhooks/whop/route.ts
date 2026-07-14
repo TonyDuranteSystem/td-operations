@@ -268,7 +268,6 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
       if (openInvoices?.length) {
         const today = new Date().toISOString().split("T")[0]
-        const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
 
         // Try exact match first (±$1 tolerance)
         // For Partial invoices, compare against amount_due (remaining balance)
@@ -281,7 +280,18 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
         if (match) {
           console.warn(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
-          await syncInvoiceStatus("payment", match.id, "Paid", today, total)
+          // Through the ONE money writer (2026-07-14). The old call overwrote
+          // amount_paid, never wrote amount_due, had no already-paid guard and left no
+          // audit row — the second writer that kept re-creating half-closed invoices.
+          const { applyMoneyToInvoice } = await import("@/lib/finance/apply-payment")
+          await applyMoneyToInvoice({
+            paymentId: match.id,
+            mode: "apply",
+            appliedAmount: total,
+            paidDate: today,
+            paymentMethod: "Whop",
+            actor: "whop-webhook",
+          })
           // Fire-and-forget receipt email for exact-match Paid transitions.
           import("@/lib/invoice-auto-send").then(({ sendPaidReceipt }) =>
             sendPaidReceipt(match!.id).catch((err) =>
@@ -300,7 +310,17 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
           if (partialMatch) {
             console.warn(`[whop-webhook] Partial-matched Whop payment to invoice ${partialMatch.invoice_number}`)
             match = partialMatch
-            await syncInvoiceStatus("payment", partialMatch.id, "Partial", today, total)
+            // The writer works out Paid vs Partial from the real balance, accumulating
+            // rather than overwriting what was already paid.
+            const { applyMoneyToInvoice } = await import("@/lib/finance/apply-payment")
+            await applyMoneyToInvoice({
+              paymentId: partialMatch.id,
+              mode: "apply",
+              appliedAmount: total,
+              paidDate: today,
+              paymentMethod: "Whop",
+              actor: "whop-webhook",
+            })
           }
         }
 

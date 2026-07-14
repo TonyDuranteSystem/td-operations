@@ -17,7 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { runActivation } from "@/lib/operations/activate-service"
 import { getAppSetting } from "@/lib/settings"
-import { isMatchableInvoice, isTerminalInvoice } from "@/lib/finance/invoice-matchability"
+import { isMatchableInvoice, isTerminalInvoice, isPaidInvoice } from "@/lib/finance/invoice-matchability"
 import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
 import { resolveInvoiceStatusAfterPayment } from "@/lib/finance/invoice-money"
 import {
@@ -25,6 +25,7 @@ import {
   extractFeedEmails,
   extractInvoiceReference,
 } from "@/lib/finance/feed-signals"
+import { isChargeRefundedNow } from "@/lib/stripe-sync"
 
 // Re-exported: the money math moved to lib/finance/invoice-money.ts so the single
 // money writer (lib/finance/apply-payment.ts) can use it without a circular import.
@@ -239,6 +240,39 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           }
         }
 
+        // Before settling from the charge ALONE, re-check Stripe: is this money still
+        // ours? Our stored copy of the charge is a snapshot — a refund issued after we
+        // synced it leaves our record saying "received" forever. Every other tier needs
+        // a corroborating signal (an amount, a name); this one does not, so it is the
+        // one that would confidently book refunded money.
+        const refundedNow = await isChargeRefundedNow(String(feed.external_id))
+        if (refundedNow === true) {
+          await supabaseAdmin
+            .from("td_bank_feeds")
+            .update({
+              status: "needs_review",
+              matched_payment_id: target.id,
+              review_metadata: {
+                refunded_or_disputed: true,
+                candidate_payment_id: target.id,
+                checked_at: now,
+              },
+              updated_at: now,
+            })
+            .eq("id", feedId)
+
+          return {
+            matched: false,
+            paymentId: target.id,
+            invoiceNumber: target.invoice_number ?? undefined,
+            moneyApplied: false,
+            note: "This Stripe payment has been refunded or disputed — it was NOT applied to the invoice.",
+          }
+        }
+        // refundedNow === null means Stripe was unreachable. Proceed (this is the same
+        // exposure every other tier already carries) rather than stalling reconciliation
+        // on a network blip.
+
         // Open invoice + certain identity → settle it.
         const piSettle = await settleInvoiceFromFeed(feedId, target.id, feedAmount, now, today, {
           paymentMethod,
@@ -286,12 +320,26 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const identityAccountIds = new Set<string>()
 
     if (feedEmails.length > 0) {
-      const { data: emailContacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .in("email", feedEmails)
+      // CASE-INSENSITIVE, deliberately. Email addresses are case-insensitive by
+      // standard, and CRM records are NOT reliably stored lowercase — the Stripe
+      // webhook already uses a case-insensitive lookup for exactly this reason.
+      // An exact-match lookup here would silently resolve NO identity for any client
+      // whose email carries a capital letter, and the failure is indistinguishable
+      // from "this payer isn't in the CRM" — the whole identity engine would quietly
+      // do nothing for a chunk of the client base.
+      const emailFilter = feedEmails
+        .filter(e => !e.includes(",")) // a comma would break PostgREST's or() syntax
+        .map(e => `email.ilike.${e}`)
+        .join(",")
 
-      for (const c of emailContacts ?? []) identityContactIds.add(c.id)
+      if (emailFilter) {
+        const { data: emailContacts } = await supabaseAdmin
+          .from("contacts")
+          .select("id")
+          .or(emailFilter)
+
+        for (const c of emailContacts ?? []) identityContactIds.add(c.id)
+      }
 
       if (identityContactIds.size > 0) {
         const { data: idLinks } = await supabaseAdmin
@@ -382,11 +430,21 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const amountDiff = Math.abs(feedAmount - invAmount)
       const tolerance = invAmount * 0.05
 
-      // Skip if amount is way off
-      if (amountDiff > tolerance && amountDiff > 1) continue
-
       const directCompanyName = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
       const invoiceNum = (inv.invoice_number || "").toLowerCase()
+
+      // The invoice REFERENCE beats the amount. Compute it BEFORE the amount filter.
+      //
+      // The amount check used to run first, so an invoice was thrown away for a price
+      // mismatch even when the payment literally carried its invoice number. That made
+      // the whole point of putting the number on the payment useless the moment the
+      // figures didn't line up — a part-payment, a card surcharge, a rounding
+      // difference. The reference is the strongest signal we have; it must not be
+      // discarded by the weakest one.
+      const invoiceRefMatch = invoiceRefInText(feedText, invoiceNum)
+
+      // Skip only when the amount is way off AND the payment doesn't name this invoice.
+      if (!invoiceRefMatch && amountDiff > tolerance && amountDiff > 1) continue
 
       // Build the full pool of company names to test against the feed:
       // the invoice's directly-linked account (if any) + every company the linked
@@ -412,9 +470,6 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
       })
 
-      // Check both exact invoice number AND flexible INV-NNNNNN pattern in feed text
-      const invoiceRefMatch = invoiceRefInText(feedText, invoiceNum)
-
       // Identity from the payer's email — the reliable signal on a card payment.
       // (The candidate pool is ALREADY scoped to the payer when identity resolved, so
       // this is true for every candidate here; it is kept explicit for scoring clarity
@@ -428,6 +483,14 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         // Invoice number found in memo/reference AND amount within 5% → strongest match
         confidence = "exact"
         score = 100
+      } else if (invoiceRefMatch) {
+        // The payment NAMES this invoice, but the figures don't line up — an
+        // under-payment, an over-payment, or a fee taken off the top. This is a real
+        // signal and must not be thrown away (the old code discarded it entirely), but
+        // it must not auto-settle either: how much to apply is a judgement call.
+        // "medium" routes it to a human with the right invoice already pinned.
+        confidence = "medium"
+        score = 60
       } else if (amountDiff < 1 && (nameMatch || contactMatch)) {
         // Exact amount (<$1 diff) AND company/contact name match → auto-match
         confidence = "exact"
@@ -974,12 +1037,29 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // applied) cannot leave the feed marked 'matched' against money that never moved.
     const settle = await settleInvoiceFromFeed(feedId, paymentId, feedAmount, now, today)
 
-    // A terminal invoice is not an error: linking a payment to an already-Paid
-    // invoice is the audit-trail case (a Stripe charge tied to the invoice its own
-    // webhook already closed). Record the link, but report honestly that NO money
-    // was applied — the old code returned success while writing nothing.
-    if (!settle.applied && settle.reason !== "terminal") {
-      return { matched: false, error: settle.detail || "Nothing was applied to this invoice." }
+    // An already-PAID invoice may be audit-linked: that is the legitimate case of a
+    // Stripe charge tied to the invoice its own webhook already closed. Money moves
+    // nowhere, and we say so.
+    //
+    // Anything else terminal — Cancelled, Voided, Credit — must be REJECTED LOUDLY.
+    // Recording a cheerful "linked" against a cancelled invoice, with no money applied,
+    // is the same silent-success failure this whole change exists to kill: staff see a
+    // green tick and the money is still sitting there unbooked.
+    if (!settle.applied) {
+      const { data: target } = await supabaseAdmin
+        .from("payments")
+        .select("invoice_status, status")
+        .eq("id", paymentId)
+        .maybeSingle()
+
+      const auditLinkable = settle.reason === "terminal" && target != null && isPaidInvoice(target)
+
+      if (!auditLinkable) {
+        return {
+          matched: false,
+          error: settle.detail || "Nothing was applied to this invoice.",
+        }
+      }
     }
 
     await supabaseAdmin

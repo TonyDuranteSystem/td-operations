@@ -145,8 +145,20 @@ export async function processBankFeedMatches(
 
     // Branch on outcome of matchAndReconcile.
     if (matchResult.matched && matchResult.paymentId) {
-      // Auto-matched (exact / partial / retroactive). Now run activation if
-      // a pending_activation is linked to this invoice.
+      // Do NOT activate on money that did not fully settle the invoice.
+      //  - moneyApplied === false → an AUDIT LINK (the invoice was already paid via
+      //    another channel). Nothing new was received; activating off it would fire
+      //    the chain on a payment that was already handled.
+      //  - confidence 'partial'  → the client part-paid. The obligation is not met, so
+      //    the service must not switch on. Activation follows the closing payment.
+      if (matchResult.moneyApplied === false || matchResult.confidence === "partial") {
+        result.auto_activated++
+        result.details.push({ ...base, outcome: "auto_activated" })
+        continue
+      }
+
+      // Auto-matched and fully settled. Now run activation if a pending_activation
+      // is linked to this invoice.
       const { data: pa } = await supabaseAdmin
         .from("pending_activations")
         .select("id, status")

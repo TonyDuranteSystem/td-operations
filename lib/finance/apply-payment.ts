@@ -112,20 +112,33 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
     }
   }
 
+  // Work out what will ACTUALLY be credited before claiming it. The cap matters:
+  // a $650 wire against a $500 balance credits $500, not $650. Claiming the raw
+  // amount would make the ledger disagree with the invoice, which defeats the
+  // point of having a ledger.
+  const { newStatus, newAmountPaid, newAmountDue } = resolveInvoiceStatusAfterPayment(
+    invoiceTotal,
+    currentPaid,
+    appliedAmount,
+  )
+  const creditedAmount = newAmountPaid - currentPaid
+
   // ── Guard 2: the double-credit lock ─────────────────────────────────────
   // Claim the (feed, invoice) pair BEFORE writing money. The UNIQUE constraint
   // makes this atomic — a concurrent double-click loses the race and applies
   // nothing. Only bank-feed settlement carries a feedId; other channels (Stripe
   // webhook, manual mark-paid) are guarded by confirmPayment's already-paid
   // short-circuit.
+  //
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
+  const db = supabaseAdmin as any
+
   if (feedId) {
     // `payment_applications` is not in the generated Supabase types (same escape as
     // `system_errors`); the table is created by 20260714-1500-payment-applications.sql.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
-    const db = supabaseAdmin as any
     const { error: claimErr } = await db
       .from("payment_applications")
-      .insert({ feed_id: feedId, payment_id: paymentId, amount: appliedAmount, applied_by: actor })
+      .insert({ feed_id: feedId, payment_id: paymentId, amount: creditedAmount, applied_by: actor })
 
     if (claimErr) {
       // 23505 = unique_violation → this exact money was already applied.
@@ -147,11 +160,30 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
     }
   }
 
-  const { newStatus, newAmountPaid, newAmountDue } = resolveInvoiceStatusAfterPayment(
-    invoiceTotal,
-    currentPaid,
-    appliedAmount,
-  )
+  /**
+   * Release the lock we just took. Called when the money write fails.
+   *
+   * Without this, a single transient database error is CATASTROPHIC and silent: the
+   * claim row survives, so every later retry — automatic or from a human clicking
+   * Match — hits the unique constraint and is told "this transaction has already been
+   * applied to this invoice." That message is FALSE (nothing was applied), the money
+   * is unbookable through every surface, and the only way out is direct database
+   * access. Best-effort: if the release itself fails we surface it in the error text
+   * rather than pretending it worked.
+   */
+  const releaseClaim = async (): Promise<string> => {
+    if (!feedId) return ""
+    const { error: delErr } = await db
+      .from("payment_applications")
+      .delete()
+      .eq("feed_id", feedId)
+      .eq("payment_id", paymentId)
+    if (delErr) {
+      console.error(`[apply-payment] FAILED TO RELEASE CLAIM for feed=${feedId} payment=${paymentId}:`, delErr.message)
+      return " The retry lock could not be released — this transaction may need to be unlocked manually before it can be matched again."
+    }
+    return ""
+  }
 
   const now = new Date().toISOString()
 
@@ -171,10 +203,13 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
   const { error: updErr } = await supabaseAdmin.from("payments").update(updates).eq("id", paymentId)
 
   if (updErr) {
+    // The money did not land — give the lock back, or this (transaction, invoice)
+    // pair is bricked forever behind a false "already applied".
+    const releaseNote = await releaseClaim()
     return {
       applied: false,
       reason: "write_failed",
-      detail: updErr.message,
+      detail: `${updErr.message}${releaseNote}`,
       invoiceNumber: payment.invoice_number ?? undefined,
     }
   }
@@ -189,20 +224,24 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
   }
 
   // Legacy client_invoices link (older portal records).
+  // supabase-js RETURNS errors, it does not throw them — a try/catch here would be
+  // dead code and a failed mirror would vanish silently. Check `error` explicitly.
   if (payment.portal_invoice_id) {
-    try {
-      await supabaseAdmin
-        .from("client_invoices")
-        .update({
-          status: newStatus,
-          amount_paid: newAmountPaid,
-          amount_due: newAmountDue,
-          updated_at: now,
-          ...(newStatus === "Paid" ? { paid_date: paidDate } : {}),
-        })
-        .eq("id", payment.portal_invoice_id)
-    } catch (err) {
-      console.error(`[apply-payment] client_invoices mirror failed for ${paymentId}:`, err)
+    const { error: mirrorErr } = await supabaseAdmin
+      .from("client_invoices")
+      .update({
+        status: newStatus,
+        amount_paid: newAmountPaid,
+        amount_due: newAmountDue,
+        updated_at: now,
+        ...(newStatus === "Paid" ? { paid_date: paidDate } : {}),
+      })
+      .eq("id", payment.portal_invoice_id)
+
+    if (mirrorErr) {
+      // The money IS applied — do not fail the operation. But this must be loud: the
+      // client's portal copy now disagrees with the invoice.
+      console.error(`[apply-payment] client_invoices mirror FAILED for ${paymentId}:`, mirrorErr.message)
     }
   }
 
@@ -215,11 +254,13 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
       record_id: paymentId,
       account_id: payment.account_id,
       contact_id: payment.contact_id,
-      summary: `${newStatus === "Paid" ? "Settled" : "Part-paid"} ${payment.invoice_number ?? "invoice"}: ${appliedAmount} applied${feedId ? " from bank transaction" : ""}`,
+      summary: `${newStatus === "Paid" ? "Settled" : "Part-paid"} ${payment.invoice_number ?? "invoice"}: ${creditedAmount} applied${feedId ? " from bank transaction" : ""}`,
       details: {
         payment_id: paymentId,
         feed_id: feedId ?? null,
-        applied_amount: appliedAmount,
+        // What was actually credited (capped at the balance) vs what arrived.
+        applied_amount: creditedAmount,
+        received_amount: appliedAmount,
         previous_amount_paid: currentPaid,
         new_amount_paid: newAmountPaid,
         new_amount_due: newAmountDue,

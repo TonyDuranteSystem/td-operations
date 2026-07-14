@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest"
 import {
-  feedText,
   extractFeedEmails,
   extractStripePaymentIntent,
   extractInvoiceReference,
@@ -125,18 +124,17 @@ describe("extractInvoiceReference — the number carried on the payment", () => 
   })
 })
 
-describe("feedText", () => {
-  it("includes the Stripe metadata name, not just the cardholder", () => {
-    const text = feedText({
-      source: "stripe",
-      sender_name: "Bilaal Rajan",
-      raw_data: { metadata: { Name: "Simple Holdings USA Inc" } },
-    })
-    expect(text).toContain("simple holdings usa inc")
-    expect(text).toContain("bilaal rajan")
-  })
-
-  it("is lowercased", () => {
-    expect(feedText({ source: "relay", sender_name: "ACME LLC" })).toBe("acme llc  ")
+describe("extractFeedEmails — case handling (the bug that would have silently killed this)", () => {
+  it("lowercases a MIXED-CASE billing email so it can match a CRM record", () => {
+    // CRM emails are not reliably stored lowercase. If either side is compared
+    // case-sensitively, the payer resolves to nobody and the failure is
+    // indistinguishable from "not our client" — the identity engine quietly does
+    // nothing. The matcher pairs this with a case-insensitive CRM lookup.
+    expect(
+      extractFeedEmails({
+        source: "stripe",
+        raw_data: { billing_details: { email: "Shamim@SimpleHoldingsUSA.com" } },
+      }),
+    ).toEqual(["shamim@simpleholdingsusa.com"])
   })
 })

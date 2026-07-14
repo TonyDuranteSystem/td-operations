@@ -257,7 +257,16 @@ export async function reconcilePaymentByInvoiceNumber(
     trigger_installment_handler: true,
   })
 
-  if (result.outcome !== "paid") {
+  // "partial" counts as RECONCILED (2026-07-14). The money was applied to this
+  // invoice — it simply did not cover the whole balance.
+  //
+  // This is load-bearing for the Stripe webhook: it inserts a fresh payments row
+  // whenever reconciliation reports failure. Before `partial` existed, this path
+  // always returned "paid", so the webhook never fired. Treating a part-payment as
+  // NOT reconciled would make the webhook record the same money a SECOND time — as a
+  // full standalone payment — on top of the partial credit just applied. A duplicate,
+  // in the exact table this work exists to make trustworthy.
+  if (result.outcome !== "paid" && result.outcome !== "partial") {
     return { reconciled: false, outcome: result.outcome, payment_id: existing.id }
   }
 
@@ -272,7 +281,7 @@ export async function reconcilePaymentByInvoiceNumber(
     )
   }
 
-  return { reconciled: true, outcome: "paid", payment_id: existing.id }
+  return { reconciled: true, outcome: result.outcome, payment_id: existing.id }
 }
 
 // ─── reconcileInvoiceMirror (task 918fe55e) ───────────

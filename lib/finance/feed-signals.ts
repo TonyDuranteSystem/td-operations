@@ -1,14 +1,15 @@
 /**
  * Feed signals — the shared primitives for "who sent this money, and what for?".
  *
- * These were duplicated across the codebase in FIVE divergent copies (the matcher's
- * scorer, the matcher's retroactive pass, the audit cascade, the Finance UI's
- * client-side scorer with its own shorter stop-word list, and the manual-match
- * suggestion ranking). Every copy drifted. This module is the single vocabulary;
- * `lib/audit/bank-feed-cascade.ts` and `lib/bank-feed-matcher.ts` both import from
- * here rather than rolling their own.
- *
  * Extracted 2026-07-14 (Simple Holdings / Fazekas incident).
+ *
+ * SCOPE — read this before trusting the module name. The NEW identity signals
+ * (payment-intent link, payer email, invoice reference) live here and ONLY here, so
+ * they cannot drift. The OLD name-fuzzing logic is NOT yet consolidated: the matcher
+ * (`lib/bank-feed-matcher.ts`), the audit cascade (`lib/audit/bank-feed-cascade.ts`)
+ * and the Finance UI's client-side scorer still each carry their own stop-word list
+ * and their own feed-text builder. Folding those three into this module is deliberately
+ * deferred work — do not assume it has happened.
  */
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
@@ -20,35 +21,6 @@ export interface FeedSignalSource {
   memo?: string | null
   sender_reference?: string | null
   raw_data?: unknown
-}
-
-function readMetadata(rawData: unknown): Record<string, unknown> | null {
-  if (!rawData || typeof rawData !== "object") return null
-  const md = (rawData as { metadata?: unknown }).metadata
-  if (!md || typeof md !== "object") return null
-  return md as Record<string, unknown>
-}
-
-/**
- * The searchable text of a feed, lowercased.
- *
- * Includes the Stripe metadata name: `sender_name` on a card payment is the
- * CARDHOLDER, who is frequently NOT the client (Bilaal Rajan pays for Simple
- * Holdings USA; the name arrived truncated as "Fazek" for Tamás Fazekas). Never
- * treat the cardholder name as the client's identity.
- */
-export function feedText(feed: FeedSignalSource): string {
-  const parts: string[] = [
-    feed.sender_name ?? "",
-    feed.memo ?? "",
-    feed.sender_reference ?? "",
-  ]
-  const meta = readMetadata(feed.raw_data)
-  if (meta) {
-    if (typeof meta.Name === "string") parts.push(meta.Name)
-    if (typeof meta.name === "string") parts.push(meta.name)
-  }
-  return parts.join(" ").toLowerCase()
 }
 
 /**

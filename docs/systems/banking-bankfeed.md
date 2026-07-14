@@ -44,6 +44,17 @@ Most of the complexity — and bugs — live in #2.
 
 **Why a known payer with an exact amount still does not auto-settle.** A client can hold two invoices of the same price (Simple Holdings holds exactly that: two $50 notary invoices). Identity + amount cannot tell them apart — only the invoice number can. That is what tier 1 is for; it needs no human at all.
 
+## The terminal rule — read BOTH columns, but they are not equal (2026-07-14, code review)
+
+`payments` carries two status columns and they disagree in production. The rule is **not** "terminal if either is terminal" — that was the first attempt and it broke a real receivable.
+
+1. `invoice_status` closed (Paid / Voided / Cancelled / Credit / Split) → **terminal**.
+2. `status` says the money is **already settled or returned** (Paid / Refunded) → **terminal, always**, even if `invoice_status` still reads Sent or Overdue. *This is the landmine*: 48 production invoices are Paid via `status` with a NULL `invoice_status`, and reading `invoice_status` alone left them creditable a second time.
+3. `invoice_status` is present and open → **MATCHABLE**, even when `status` says Cancelled or Waived. **Three live invoices are exactly this** — INV-002084 (Fiscalot) has been part-paid and still owes **$500**. Vetoing on `status` made that $500 impossible to receive: the matcher ignored it, staff could not select it, and a manual attempt reported success while moving no money. `invoice_status` is the operational column the Finance UI reads; it wins when present.
+4. No `invoice_status` at all → fall back to `status`; the administrative states (Cancelled / Waived / Not Invoiced) mean nothing is owed.
+
+**Audit-linking is only for an already-PAID invoice** (`isPaidInvoice`). A manual match onto a Cancelled or Voided invoice is **rejected loudly** — recording a cheerful "linked" with no money applied is the same silent-success failure this work exists to kill.
+
 ## The money-write invariants (do not "simplify" these away)
 
 Every write to the `payments` money columns goes through **`applyMoneyToInvoice`** (`lib/finance/apply-payment.ts`). It is the only writer. It guarantees:
@@ -54,7 +65,15 @@ Every write to the `payments` money columns goes through **`applyMoneyToInvoice`
 4. **Always write the full tuple** (`status`, `invoice_status`, `amount_paid`, `amount_due`, `paid_date`) so the two status columns can never drift apart again.
 5. **Always leave an `action_log` row.** Automatic settlement previously left no trace at all.
 
-**A `matched` feed does not always mean money moved.** `MatchResult.moneyApplied === false` marks the **audit-link** case — the invoice was already settled through another channel and the feed is linked for the trail only. Callers must not report that as a payment being reconciled.
+**A `matched` feed does not always mean money moved.** `MatchResult.moneyApplied === false` marks the **audit-link** case — the invoice was already settled through another channel and the feed is linked for the trail only. Callers must not report that as a payment being reconciled. **The orchestrator does not activate a client's service on `moneyApplied === false` or on a `partial` settlement** — a part-payment does not meet the obligation, and activation follows the closing payment.
+
+**The lock must be released if the money write fails.** `applyMoneyToInvoice` claims the (feed, invoice) pair *before* writing. If the write then fails and the claim is left behind, every later retry — automatic or a human clicking Match — is told *"already applied"*, which is **false**, and the money becomes unbookable through every surface with no way out but direct DB access. The write-failure path deletes the claim. Do not remove that.
+
+**The ledger records what was CREDITED, not what arrived.** A $650 wire against a $500 balance credits $500 (the cap). The claim row records $500. Recording the raw $650 would make the ledger permanently disagree with the invoice, which defeats its only purpose.
+
+**The invoice reference beats the amount.** An invoice named by the payment is never discarded on an amount mismatch — the amount filter runs *after* the reference check. A referenced-but-mismatched amount goes to review (how much to apply is a judgement call), it is not thrown away. Putting the number on the payment is pointless if the figures being off silently voids it.
+
+**A refunded Stripe charge must never be applied.** The stored charge is a snapshot: a refund issued after we synced it leaves our copy saying "received" forever. The payment-intent tier settles from the charge *alone*, so it re-checks Stripe live before settling and parks a refunded/disputed charge for review. Other tiers still carry this exposure — see Gotchas.
 
 ## Business rules
 - **R092** — clients pay TD via the portal; the portal Pay modal shows an **obligatory payment reference (the invoice number)**. The same required reference is now also on the **emailed invoice and the invoice PDF** — for wires, the typed reference is the ONLY identifying signal that exists. That reference is what makes auto-matching reliable — without it, only the amount can match (see the Patrick Covelli case below).
@@ -75,6 +94,8 @@ Every write to the `payments` money columns goes through **`applyMoneyToInvoice`
 `td_bank_feeds` (`status`: matched / ignored / needs_review / activation_crashed; `amount`, `amount_currency`, `sender_reference`, `matched_payment_id`), `payments`, `pending_activations`, plus banking-application records + `service_deliveries` (Banking Fintech).
 
 ## Gotchas, invariants & past bugs
+- **⚠️ EMAIL LOOKUPS MUST BE CASE-INSENSITIVE.** CRM emails are not reliably stored lowercase and Stripe reports whatever the client typed. An exact-match lookup resolves NO identity for any client with a capital letter in their address — and the failure is indistinguishable from "not our client", so the entire identity engine quietly does nothing for part of the client base. Caught in code review; the first sandbox harness passed only because its fixture happened to be lowercase. The harness now stores a mixed-case email deliberately.
+- **⚠️ `payment_applications` MUST EXIST IN PRODUCTION BEFORE THE CODE DEPLOYS.** The writer refuses to move money it cannot record, so if the table is missing, EVERY settlement — automatic and manual — fails closed and reconciliation stops dead. It fails safe (no wrong money) but it is a total outage. Prod DDL is Supabase-dashboard-only on this project: run `scripts/migrations/20260714-1500-payment-applications.sql` and verify it, THEN deploy.
 - **⚰️ NEVER dedup bank feeds on content (2026-07-14).** The `check-wire-payments` cron used to flag a feed as `duplicate` when it shared `source + amount + transaction_date + sender_name` with another unmatched row. `transaction_date` is a **DATE** — so a client legitimately paying two same-priced invoices on the same day with the same card produced two identical-looking rows, and **the second genuine payment was silently flagged a duplicate**. Every sync path already upserts on `external_id` (the provider's own transaction id) with a unique conflict target, so a true duplicate is impossible by construction. Content similarity is evidence of a client paying twice, NOT of a duplicate. The block is deleted. If a future source really does emit one deposit under two ids, dedup on the provider's transaction id — never on amount + name + day.
 - **`duplicate` must stay VISIBLE.** It had no filter tab, no colour and no count, so it fell through to the "ignored" renderer — which is *why* the wrongly-flagged $50 went unnoticed. It now has a purple tab, a count and a **Restore** button (`restoreBankFeed`, which only touches rows whose status is `duplicate`).
 - **Every ingest path MUST go through the orchestrator** (`processOneFeed` / `processBankFeedMatches`), never `matchAndReconcile` directly. `matchAndReconcile` marks the invoice Paid but knows nothing about `pending_activations`: a wire arriving via the Relay or Banking Circle webhook paid the client's invoice and **never activated their service** — and the cron could not rescue it, because by then the feed was no longer `unmatched`. Fixed 2026-07-14 for both webhooks + the run-matcher cron.

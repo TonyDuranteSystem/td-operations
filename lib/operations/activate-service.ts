@@ -17,7 +17,6 @@ import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
-import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
 import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission, shouldRecoverReferralCredit } from "@/lib/operations/referral"
@@ -1035,16 +1034,34 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // payment for traceability and FK integrity.
   let paymentIdForPayout: string | null = null
   if (activation.portal_invoice_id) {
-    // Invoice already created at signing — just mark it Paid now.
-    // pending_activations.portal_invoice_id references a payments.id (createTDInvoice
-    // writes TD invoices to payments + client_expenses, NOT client_invoices). Use
-    // syncInvoiceStatus('payment', ...) so the payments row + client_expenses mirror
-    // both flip to Paid. The 'invoice' source updates client_invoices, which has no
-    // matching row for TD invoices — silent no-op.
+    // Invoice already created at signing — mark it Paid now, THROUGH THE ONE MONEY
+    // WRITER (2026-07-14).
+    //
+    // This used to call syncInvoiceStatus('payment', …) — the old writer, which
+    // OVERWRITES amount_paid, never writes amount_due, has no terminal guard and
+    // leaves no audit row. It runs immediately after the bank-feed matcher settles the
+    // very same invoice (the orchestrator activates right after the match), so it
+    // could overwrite what the matcher had just correctly recorded. Worst case: the
+    // matcher records a PART-payment (balance still owed) and this then force-stamped
+    // the invoice Paid with the balance still outstanding — manufacturing exactly the
+    // half-closed invoices this work exists to eliminate.
+    //
+    // applyMoneyToInvoice refuses to touch an already-settled invoice, so when the
+    // matcher got there first this is now a safe no-op instead of a clobber.
     try {
       const today = new Date().toISOString().split("T")[0]
       paymentIdForPayout = activation.portal_invoice_id
-      await syncInvoiceStatus("payment", activation.portal_invoice_id, "Paid", today, Number(activation.amount) || undefined)
+      const { applyMoneyToInvoice } = await import("@/lib/finance/apply-payment")
+      // settle_full, never "apply": activation means the payment was CONFIRMED in
+      // full. Accumulating the activation amount on top of what a bank feed may have
+      // already credited would double-count it. If the invoice is already settled,
+      // the writer no-ops.
+      await applyMoneyToInvoice({
+        paymentId: activation.portal_invoice_id,
+        mode: "settle_full",
+        paidDate: today,
+        actor: "activate-service",
+      })
 
       // Backfill account_id on the existing invoice if we now have one
       if (autoAccountId) {

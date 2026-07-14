@@ -247,6 +247,26 @@ export async function syncInvoiceStatus(
   // For source='payment', this is a legacy call from CRM actions that still
   // reference old portal_invoice_id links. Handle gracefully.
   if (source === 'payment') {
+    // ⛔ MONEY IS NO LONGER WRITTEN HERE (2026-07-14).
+    //
+    // This branch OVERWRITES `amount_paid` (erasing an earlier part-payment) and never
+    // writes `amount_due`. It was the second of three money algorithms, and the source
+    // of the "half-closed" invoices that read as open, still counted as outstanding, and
+    // could be credited a second time.
+    //
+    // All money now goes through `applyMoneyToInvoice` (lib/finance/apply-payment.ts),
+    // which accumulates, caps, refuses closed invoices, records the application so the
+    // same transaction cannot be credited twice, and leaves an audit row.
+    //
+    // Status-only transitions with NO amount (the dunning pass marking an invoice
+    // Overdue) are still legitimate here. Anything carrying money is a bug — fail loudly
+    // rather than silently corrupting the invoice.
+    if (amountPaid !== undefined) {
+      throw new Error(
+        "syncInvoiceStatus('payment', …) must not be used to apply money — it overwrites amount_paid and never writes amount_due. Use applyMoneyToInvoice() from lib/finance/apply-payment.ts.",
+      )
+    }
+
     // Update the payment record
     const payUpdates: Record<string, unknown> = {
       status: newStatus === 'Paid' ? 'Paid' : newStatus === 'Overdue' ? 'Overdue' : newStatus,
