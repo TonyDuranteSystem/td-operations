@@ -1,316 +1,154 @@
 /* eslint-disable no-console -- CLI gate: reports its findings on stdout. */
 /**
- * CODE ↔ DATABASE CONTRACT CHECK.
+ * CODE ↔ DATABASE CONTRACT CHECK — the CLI gate.
  *
- * Asserts that every value the code can write into a CHECK-constrained column is a value
- * the database will actually accept.
+ * Asserts that every value the code can write into a CHECK-constrained column is a value the
+ * database will actually accept. The comparison itself lives in lib/db-contract.ts; this file
+ * is only the transport + the report.
  *
- * WHY THIS EXISTS — and why it is the only thing on the list that would have caught the
- * 2026-07-14 incident:
+ * WHY THE DEFAULT SOURCE IS A FILE, NOT A DATABASE:
  *
- * The code wrote feed statuses (`needs_review`, `activation_crashed`) that production's
- * CHECK constraint did not permit. Every one of those writes was rejected. The code
- * discarded the error. The review queue therefore never worked — for months — while the
- * UI cheerfully rendered an empty "Needs Review" tab and everyone read empty as "nothing
- * to review".
+ * The gate has to check the code against PRODUCTION's rules — production is the database that
+ * rejects writes, and sandbox has historically been more permissive (which is exactly how the
+ * review queue died: a 32/32 green harness against a database with no constraints at all).
  *
- * Three reviewers and five rounds of adversarial code review missed it, because all of us
- * were reading CODE against CODE. Nobody compared the code against the database it
- * actually writes to. A 32/32 green integration harness proved nothing, because the
- * harness's database (sandbox) had NO constraints at all — strictly more permissive than
- * production. A green run against a more permissive database is not evidence.
+ * But reading production live, at push time, means a production database password in CI. That
+ * is a new credential and a new exposure surface, created so a workflow can read a list of
+ * allowed strings. Bad trade — and a gate whose credential nobody ever sets is not a gate, it
+ * is a green checkmark that enforces nothing (we have one of those already; it is being
+ * deleted in this same change).
  *
- * "Review harder" does not fix that. This does.
+ * So production's rules are COMMITTED (db/constraints.prod.json, checksum-verified against the
+ * database that produced them), and this gate blocks against the file. No credential, runs on
+ * every machine, every push, offline.
+ *
+ * The obvious hole — "a snapshot rots" — is closed by the in-app monitor
+ * (lib/db-contract-monitor.ts), which re-reads LIVE production daily and raises a dev-board job
+ * the moment the file and reality disagree. The snapshot gates the code; the monitor keeps the
+ * snapshot honest.
  *
  * Usage:
- *   npx tsx scripts/check-db-constraints.ts            # checks the DB in .env.local (sandbox)
- *   npx tsx scripts/check-db-constraints.ts --prod     # checks production (needs .env.prod.local)
+ *   npx tsx scripts/check-db-constraints.ts                 # vs the committed prod snapshot (default)
+ *   npx tsx scripts/check-db-constraints.ts --source=db     # vs a live DB (SUPABASE_DB_URL, e.g. sandbox)
+ *   npx tsx scripts/check-db-constraints.ts --source=supabase   # vs a live DB via service-role RPC (CI)
  *
- * Exits non-zero on any divergence.
+ * With --source=db|supabase it ALSO reports drift against the committed snapshot, which is how
+ * CI notices that sandbox and production have diverged.
+ *
+ * Exits non-zero on any violation.
  */
 
 import { config } from "dotenv"
-import { Client } from "pg"
-import { FEED_STATUSES, MATCH_CONFIDENCES, FEED_SOURCES } from "../lib/finance/feed-vocabulary"
-import { PAYMENT_CATEGORIES } from "../lib/billing/payment-classification"
+import { createClient } from "@supabase/supabase-js"
+import {
+  checkDbContract,
+  diffAgainstSnapshot,
+  CONSTRAINT_QUERY,
+  rowsToDefs,
+  type ConstraintDefs,
+} from "../lib/db-contract"
+import { prodConstraints, prodSnapshotMeta, verifySnapshotIntegrity } from "../lib/db-contract-snapshot"
+import { readLiveConstraints } from "../lib/db-contract-read"
 
-const useProd = process.argv.includes("--prod")
-config({ path: useProd ? ".env.prod.local" : ".env.local" })
+config({ path: ".env.local" })
 
-// A direct connection, the same mechanism `scripts/apply-migration.js` uses. The Supabase
-// client cannot read pg_constraint, and the whole point of this check is to ask the
-// database what it will actually accept — not to ask the code what it believes.
-const DB_URL = process.env.SUPABASE_DB_URL
+type Source = "snapshot" | "db" | "supabase"
+const sourceArg = process.argv.find(a => a.startsWith("--source="))
+const SOURCE: Source = (sourceArg?.split("=")[1] as Source) || "snapshot"
 
-/**
- * ⚠️ A GATE THAT BLOCKS EVERY PUSH ON A MISSING ENV VAR IS A GATE THAT GETS DELETED.
- *
- * `.env.local` is machine-local and there are several machines. The first time someone
- * cannot push ANYTHING because of a missing credential, this hook is ripped out — and we
- * are back to where we started, with no gate at all. That is the exact death predicted for
- * a check that fails on all 90 legacy columns; there is no reason to walk into it here.
- *
- * So: locally, a missing credential WARNS and skips. In CI it is a hard failure — CI is
- * where enforcement belongs, because it cannot be bypassed by an impatient developer at
- * 11pm (and `git push --no-verify` skips the hook anyway).
- */
-if (!DB_URL) {
-  const inCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+async function readFromPostgres(): Promise<ConstraintDefs> {
+  const url = process.env.SUPABASE_DB_URL
+  if (!url) throw new Error("--source=db needs SUPABASE_DB_URL (a Postgres connection string).")
 
-  if (inCI) {
-    console.error("SUPABASE_DB_URL is not set. In CI this check MUST run — failing.")
-    process.exit(1)
-  }
-
-  console.warn("⚠️  SUPABASE_DB_URL is not set — skipping the code↔database contract check locally.")
-  console.warn("   This check is enforced in CI. To run it here, set SUPABASE_DB_URL in .env.local.")
-  process.exit(0)
+  // Imported lazily: `pg` is a devDependency and the default (snapshot) path must not need it.
+  const { Client } = await import("pg")
+  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
+  await client.connect()
+  const { rows } = await client.query<{ name: string; def: string }>(CONSTRAINT_QUERY)
+  await client.end()
+  console.log(`Live database: ${url.replace(/:[^:@]+@/, ":****@")}\n`)
+  return rowsToDefs(rows)
 }
 
-/**
- * Every code-side vocabulary that is backed by a database CHECK.
- *
- * Add a row here whenever you add a constrained column — and if you forget, this script
- * FAILS rather than quietly ignoring it (see UNREGISTERED, below). A registry that depends
- * on someone remembering to update it is a note, not a gate, and we have spent a whole day
- * learning what notes are worth.
- */
-const CONTRACTS = [
-  { table: "td_bank_feeds", column: "status", constraint: "td_bank_feeds_status_check", values: FEED_STATUSES },
-  { table: "td_bank_feeds", column: "match_confidence", constraint: "td_bank_feeds_match_confidence_check", values: MATCH_CONFIDENCES },
-  { table: "td_bank_feeds", column: "source", constraint: "td_bank_feeds_source_check", values: FEED_SOURCES },
-  // A MONEY column. Its code-side list already promised, in a comment, to stay "in sync with
-  // the CHECK constraint" — and nothing had ever verified that. It was out of sync: the
-  // database and live code both used a value the list omitted. A promise in a comment is a
-  // note; this is the gate.
-  { table: "payments", column: "payment_category", constraint: "payments_payment_category_check", values: PAYMENT_CATEGORIES },
-] as const
-
-/**
- * CHECK constraints that are deliberately NOT value-vocabularies — shape rules, not lists.
- * Anything else the database constrains and the code has not registered is reported.
- *
- * This list is the honest boundary of what the check covers. Everything outside it either
- * has a contract above or shows up as UNREGISTERED.
- */
-const NOT_A_VOCABULARY = new Set([
-  "payments_must_have_payer",
-  "invoice_has_owner",
-  "payments_bank_preference_check", // regex + enum hybrid
-  "client_invoices_recurring_frequency_check",
-])
-
-/**
- * KNOWN-UNAUDITED BASELINE — frozen 90 constraints, 2026-07-14.
- *
- * These CHECK-constrained columns exist in the database and NOTHING in the code has ever
- * been verified against them. This is the real size of the blind spot that let the review
- * queue die: 90 places where the code could be writing a value the database
- * rejects, and nobody would know unless a caller happened to check the error.
- *
- * They are frozen here rather than fixed today, deliberately: auditing 90 columns is
- * its own job, and failing the build on all of them would simply get this gate switched off
- * — which is precisely how the last gate died.
- *
- * ⚠️ THIS IS A RATCHET, NOT AN AMNESTY. Any NEW constrained column fails the check until it
- * is registered in CONTRACTS. The list may shrink; it must never grow. When you audit one,
- * delete it from here and add a real contract.
- */
-const UNAUDITED_BASELINE = new Set([
-  "_bp_new_check",
-  "account_bank_balances_source_check",
-  "account_location_policies_choice_check",
-  "account_location_policies_loc_code_check",
-  "accounts_member_structure_check",
-  "addresses_kind_check",
-  "annual_agreements_status_check",
-  "audit_flags_entity_type_check",
-  "audit_flags_flag_type_check",
-  "audit_flags_note_required_for_na",
-  "bank_categorization_rules_category_check",
-  "bank_categorization_rules_direction_check",
-  "bank_categorization_rules_match_type_check",
-  "bank_categorization_rules_source_check",
-  "bank_transactions_ai_lean_check",
-  "bank_transactions_category_check",
-  "bank_transactions_loc_confidence_check",
-  "bank_transactions_loc_source_check",
-  "catalog_decision_log_action_check",
-  "catalog_decision_log_actor_kind_check",
-  "catalog_entries_status_check",
-  "catalog_pending_review_source_check",
-  "catalog_pending_review_status_check",
-  "chart_of_accounts_normal_balance_check",
-  "chart_of_accounts_type_check",
-  "chk_account_portal_tier",
-  "chk_contact_portal_tier",
-  "chk_ptm_status",
-  "ck_payments_installment_transitional",
-  "client_decision_requests_request_type_check",
-  "client_decision_requests_status_check",
-  "client_threads_source_kind_check",
-  "coa_normal_balance_matches_type",
-  "comm_conversations_created_by_type_check",
-  "comm_conversations_status_check",
-  "comm_messages_pinned_by_type_check",
-  "comm_messages_sender_type_check",
-  "comm_participants_participant_type_check",
-  "contact_request_forms_form_type_check",
-  "contact_request_forms_status_check",
-  "dev_tasks_knowledge_status_check",
-  "esign_envelopes_origin_check",
-  "esign_envelopes_routing_check",
-  "esign_envelopes_status_check",
-  "esign_events_type_check",
-  "esign_fields_type_check",
-  "esign_signers_status_check",
-  "esign_template_fields_type_check",
-  "esign_templates_status_check",
-  "internal_threads_resolution_check",
-  "internal_threads_thread_type_chk",
-  "internal_threads_work_status_chk",
-  "invoice_reminder_log_source_check",
-  "journal_entries_status_check",
-  "member_info_requests_status_check",
-  "members_member_type_check",
-  "message_actions_priority_check",
-  "messages_content_type_check",
-  "messages_direction_check",
-  "messages_status_check",
-  "messaging_channels_provider_check",
-  "messaging_groups_group_type_check",
-  "pnl_period_answers_actor_role_check",
-  "pnl_period_answers_choice_check",
-  "pnl_workspace_members_member_type_check",
-  "pnl_workspaces_status_check",
-  "pnl_ws_tx_loc_code_check",
-  "pnl_ws_tx_loc_confidence_check",
-  "pnl_ws_tx_loc_source_check",
-  "portal_announcements_type_check",
-  "portal_messages_sender_context_check",
-  "portal_messages_sender_type_check",
-  "service_catalog_default_service_context_check",
-  "statement_format_mappings_status_check",
-  "system_errors_source_check",
-  "system_errors_status_check",
-  "task_action_log_status_check",
-  "td_comm_deliverables_type_check",
-  "td_comm_disclaimers_method_check",
-  "td_comm_enrollments_client_type_check",
-  "td_comm_enrollments_status_check",
-  "td_comm_packages_payment_timing_check",
-  "td_comm_portfolio_consent_source_check",
-  "td_comm_questions_audience_check",
-  "td_comm_questions_type_check",
-  "td_comm_showcase_consents_method_check",
-  "worker_prepared_sends_status_check",
-  "workflow_dispatch_log_outcome_check",
-  "workflow_dispatch_log_trigger_source_check",
-])
-
-/**
- * ⚠️ WHAT THIS CHECK CANNOT SEE.
- *
- * It compares the LITERALS the code declares against the values the database permits. A
- * value COMPUTED at runtime is invisible to it — e.g. the Plaid sync used to write
- * `bankName.toLowerCase()` straight into a constrained column, which no static list can
- * catch. Those must be mapped through a helper that returns a permitted value
- * (`toFeedSource`). Do not read a green run here as proof that every write is safe; read it
- * as proof that the declared vocabularies agree.
- */
-
-/** Pull the literals out of a `col = ANY (ARRAY['a'::text, 'b'::text])` definition. */
-function parseAllowed(def: string): string[] {
-  return Array.from(def.matchAll(/'([^']+)'::text/g)).map(m => m[1])
+async function readFromSupabase(): Promise<ConstraintDefs> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) {
+    throw new Error("--source=supabase needs NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
+  }
+  console.log(`Live database: ${url}\n`)
+  return readLiveConstraints(createClient(url, key))
 }
 
 async function main() {
-  const client = new Client({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } })
-  await client.connect()
-
-  const host = DB_URL!.replace(/:[^:@]+@/, ":****@")
-  console.log(`Checking code↔DB contract against: ${host}\n`)
-
-  const { rows } = await client.query<{ conname: string; def: string }>(
-    `SELECT c.conname, pg_get_constraintdef(c.oid) AS def
-     FROM pg_constraint c
-     JOIN pg_class t ON t.oid = c.conrelid
-     JOIN pg_namespace n ON n.oid = t.relnamespace
-     WHERE n.nspname = 'public' AND c.contype = 'c'`,
-  )
-  await client.end()
-
-  const byName = new Map(rows.map(r => [r.conname, r.def]))
-
-  let failures = 0
-
-  for (const contract of CONTRACTS) {
-    const def = byName.get(contract.constraint)
-
-    if (!def) {
-      console.log(`FAIL  ${contract.table}.${contract.column} — constraint "${contract.constraint}" DOES NOT EXIST in this database.`)
-      console.log(`      A missing constraint is not "safe": it means this environment accepts values production rejects,`)
-      console.log(`      so every test that passes here proves nothing about production. That is exactly what happened.`)
-      failures++
-      continue
-    }
-
-    const allowed = parseAllowed(def)
-    const missing = contract.values.filter(v => !allowed.includes(v))
-    const extra = allowed.filter(v => !(contract.values as readonly string[]).includes(v))
-
-    if (missing.length === 0 && extra.length === 0) {
-      console.log(`PASS  ${contract.table}.${contract.column} — code and database agree (${allowed.length} values).`)
-      continue
-    }
-
-    if (missing.length > 0) {
-      console.log(`FAIL  ${contract.table}.${contract.column} — the code can write values the DATABASE WILL REJECT: ${missing.join(", ")}`)
-      console.log(`      These writes will fail silently unless every caller checks the error. Add them to the CHECK via a migration.`)
-      failures++
-    }
-    if (extra.length > 0) {
-      console.log(`WARN  ${contract.table}.${contract.column} — the database allows values the code never writes: ${extra.join(", ")}`)
-      console.log(`      Harmless, but it usually means a value was retired in code and left behind in the schema.`)
-    }
+  // ── The snapshot must be honest before anything is compared to it ────────────────────
+  const integrity = verifySnapshotIntegrity()
+  if (!integrity.ok) {
+    console.log("FAIL  The committed production snapshot is not internally consistent.")
+    console.log(`      ${integrity.reason}`)
+    process.exit(1)
   }
 
-  // ── The registry must maintain itself ────────────────────────────────────────────
-  //
-  // Every CHECK constraint in the database that looks like a value list, but that no
-  // contract above covers, is reported. Without this, "remember to register new columns"
-  // is a note — and a note is exactly what failed: `needs_review` was added to the code
-  // with three UI surfaces and nobody remembered the database.
-  const registered = new Set<string>(CONTRACTS.map(c => c.constraint))
-  const unregistered = rows
-    .filter(r => !registered.has(r.conname))
-    .filter(r => !NOT_A_VOCABULARY.has(r.conname))
-    .filter(r => !UNAUDITED_BASELINE.has(r.conname))
-    .filter(r => parseAllowed(r.def).length > 0) // value lists only; ignore shape rules
+  const meta = prodSnapshotMeta()
+  let defs: ConstraintDefs
+  let label: string
 
-  if (unregistered.length > 0) {
-    console.log()
-    console.log(`FAIL  ${unregistered.length} NEW CHECK constraint(s) that the code has not registered:`)
-    for (const r of unregistered) {
-      console.log(`      - ${r.conname}: allows ${parseAllowed(r.def).join(", ")}`)
+  if (SOURCE === "snapshot") {
+    defs = prodConstraints()
+    label = `the committed PRODUCTION snapshot (${meta.count} constraints, taken ${meta.generatedAt})`
+  } else {
+    defs = SOURCE === "db" ? await readFromPostgres() : await readFromSupabase()
+    label = `a LIVE database (${Object.keys(defs).length} constraints)`
+  }
+
+  console.log(`Checking the code against ${label}.\n`)
+
+  const { violations, warnings, passed } = checkDbContract(defs)
+
+  for (const name of passed) console.log(`PASS  ${name} — code and database agree.`)
+  for (const w of warnings) console.log(`WARN  ${w.message}`)
+  for (const v of violations) console.log(`FAIL  ${v.message}`)
+
+  // ── Drift: does this live database still match the committed production snapshot? ────
+  //
+  // Only meaningful when we actually read a live database. This is what tells CI that sandbox
+  // has drifted from production — the divergence that made a green test suite worthless.
+  let driftFailures = 0
+  if (SOURCE !== "snapshot") {
+    const drift = diffAgainstSnapshot(defs, prodConstraints())
+    if (drift.length > 0) {
+      console.log()
+      console.log(`NOTE  This database differs from the committed production snapshot in ${drift.length} place(s).`)
+      console.log(`      Expected for sandbox (it carries dev-only tables); NOT expected for production.`)
+      for (const d of drift.slice(0, 15)) console.log(`      - ${d.message}`)
+      if (drift.length > 15) console.log(`      … and ${drift.length - 15} more.`)
+
+      // A drift in a REGISTERED contract is not informational — it is the trap itself: the
+      // environment we test against no longer enforces what production enforces.
+      const registeredDrift = drift.filter(d =>
+        ["td_bank_feeds_status_check", "td_bank_feeds_match_confidence_check", "td_bank_feeds_source_check", "payments_payment_category_check"].includes(d.constraint),
+      )
+      if (registeredDrift.length > 0) {
+        console.log()
+        for (const d of registeredDrift) {
+          console.log(`FAIL  ${d.constraint} — this database does NOT enforce what production enforces.`)
+          console.log(`      Every test that passes here proves nothing about production. That is the bug.`)
+        }
+        driftFailures += registeredDrift.length
+      }
     }
-    console.log(`      Register each one in CONTRACTS (with the code-side list it must match), or add it to`)
-    console.log(`      NOT_A_VOCABULARY if it is a shape rule rather than a value list. An unregistered`)
-    console.log(`      constrained column is a place where the code can write a value the database rejects —`)
-    console.log(`      silently, unless every caller checks the error. That is exactly how the review queue`)
-    console.log(`      stayed empty for months.`)
-    failures += unregistered.length
   }
 
   console.log()
-  if (failures > 0) {
-    console.log(`RESULT: ${failures} contract violation(s). The code and this database do not agree.`)
+  const total = violations.length + driftFailures
+  if (total > 0) {
+    console.log(`RESULT: ${total} violation(s). The code and the database do not agree.`)
     process.exit(1)
   }
   console.log("RESULT: code and database agree.")
 }
 
 main().catch(err => {
-  console.error("Contract check crashed:", err)
+  console.error("Contract check crashed:", err instanceof Error ? err.message : err)
   process.exit(1)
 })

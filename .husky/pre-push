@@ -196,11 +196,16 @@ fi
 # queue silently did not exist for months. Three reviewers and five rounds of code review
 # missed it, because we all compared code to code. This compares code to the database.
 #
-# Runs against the LOCAL/SANDBOX database. Sandbox now carries the same constraints as
-# production (they diverged before — sandbox had none, which is why a green test run
-# proved nothing). If they ever diverge again, this check is what tells you.
+# It checks the code against PRODUCTION's committed constraint snapshot (db/constraints.prod.json),
+# NOT against whatever database this machine happens to point at. That distinction is the whole
+# lesson: production is the database that rejects writes, and sandbox was more permissive — a
+# green run against sandbox proved nothing. The snapshot is checksum-verified against the database
+# that produced it, so it cannot be hand-edited to make a failing gate go green.
+#
+# No credential, no network: it is a file. Which is why it runs on every machine, every push —
+# unlike the version that needed a production password nobody was ever going to put in CI.
 echo "🔗 Checking code↔database constraint contract..."
-npm run check:db-constraints > /tmp/db-contract.log 2>&1
+npm run check:db-contract > /tmp/db-contract.log 2>&1
 
 if [ $? -ne 0 ]; then
   echo ""

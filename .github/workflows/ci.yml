@@ -51,33 +51,50 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Code↔PRODUCTION database contract (the gate that would have caught 2026-07-14)
-        # THE CHECK MUST POINT AT PRODUCTION. This is the whole lesson.
+      - name: Code↔PRODUCTION contract (the gate that would have caught 2026-07-14)
+        # THE CHECK MUST BE AGAINST PRODUCTION'S RULES. That is the whole lesson.
         #
-        # The code wrote a bank-feed status that PRODUCTION's CHECK constraint forbade.
-        # Every write was rejected; every error was discarded; the review queue silently did
-        # not exist for months. It passed every test because SANDBOX had no such constraint —
-        # the harness was validating against a database strictly more permissive than the one
-        # that actually rejects writes.
+        # The code wrote a bank-feed status PRODUCTION's CHECK constraint forbade. Every write
+        # was rejected; every error was discarded; the review queue silently did not exist for
+        # months. It passed every test because SANDBOX had no such constraint — the harness was
+        # validating against a database strictly more permissive than the one that rejects
+        # writes. A green run against a more permissive database is not evidence.
         #
-        # The pre-push hook checks the LOCAL/SANDBOX database. That is useful but NOT
-        # sufficient: prod DDL is applied by hand in the Supabase dashboard, so the two can
-        # drift apart again tomorrow — and a sandbox-only gate would sit there green while
-        # production silently rejected. Checking the copy and leaving the original unguarded
-        # is the same mistake in a new coat.
+        # This step previously read production LIVE, which required a production Postgres
+        # password as a repo secret. That secret was never set, so the step warned and exited 0
+        # — a green checkmark enforcing nothing, which is worse than no check at all because it
+        # manufactures the feeling of coverage. And the secret was a bad idea on its own terms:
+        # a new production credential, in a place any workflow that can read secrets could use,
+        # created so CI could read a list of allowed strings.
         #
-        # Read-only: it only reads pg_constraint. Requires repo secret PROD_SUPABASE_DB_URL.
-        # Until the secret is set this WARNS rather than failing, so it cannot block PRs
-        # before setup — but it is then NOT protecting anything. Set the secret.
+        # So production's rules are COMMITTED (db/constraints.prod.json) and checksum-verified
+        # against the database that produced them. This gate is a file comparison: no
+        # credential, no network, cannot be skipped, cannot be faked (editing the snapshot
+        # breaks its checksum).
+        #
+        # The stale-snapshot hole is closed at runtime, not here: lib/db-contract-monitor.ts
+        # re-reads LIVE production daily from inside the app (which already has legitimate
+        # access) and raises a dev-board job the moment the file and reality disagree.
+        run: npm run check:db-contract
+
+      - name: Sandbox still enforces what production enforces
+        # The pre-push hook, the integration harness and every local test run against SANDBOX.
+        # All of that is worthless if sandbox does not enforce production's rules — which is
+        # exactly what happened: sandbox had ZERO constraints on td_bank_feeds while production
+        # had three, so the harness went 32/32 green on writes production was rejecting.
+        #
+        # This asserts sandbox has not drifted from production's committed snapshot on any
+        # registered contract. It uses the SANDBOX secrets that ALREADY EXIST for the schema
+        # drift check below — no new credential, and deliberately never production's.
         env:
-          SUPABASE_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
-          CI: "true"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SANDBOX_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SANDBOX_SERVICE_ROLE_KEY }}
         run: |
-          if [ -z "$SUPABASE_DB_URL" ]; then
-            echo "::warning::PROD_SUPABASE_DB_URL secret not set — the code↔PRODUCTION contract check is SKIPPED, and nothing is verifying that the code can only write values production accepts. Add the secret to enforce."
+          if [ -z "$NEXT_PUBLIC_SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::warning::Sandbox secrets not set — sandbox/production parity NOT verified. The code↔production gate above still ran (it needs no credential)."
             exit 0
           fi
-          npx tsx scripts/check-db-constraints.ts
+          npm run check:db-contract:live
 
       - name: Schema types drift (P2.5 — server-side, the gate pre-push can't enforce)
         # The pre-push hook SKIPS this check when the Supabase CLI is offline /

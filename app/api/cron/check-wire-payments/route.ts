@@ -16,6 +16,10 @@
  * 5. Delegates to processBankFeedMatches() — the canonical match + activation
  *    chain. Same lib used by the Mercury / Airwallex crons and the admin
  *    "Sync All Banks Now" button. NO hand-rolled match loop here.
+ * 6. Runs the code↔production database contract monitor (see lib/db-contract-monitor.ts).
+ *    It lives in THIS cron, not one of its own, because a standalone cron can be
+ *    quietly unscheduled — and one in this repo already was. A guard that runs
+ *    inside reconciliation cannot be switched off without switching off payments.
  *
  * QB is downstream accounting only — not used for payment detection.
  */
@@ -29,6 +33,7 @@ import { markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
 import { processBankFeedMatches } from "@/lib/operations/process-bank-feed-matches"
+import { runContractMonitor } from "@/lib/db-contract-monitor"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -137,6 +142,29 @@ export async function GET(req: NextRequest) {
       matchResult = { error: msg }
     }
 
+    // ─── Step 6: Code ↔ PRODUCTION database contract ────────────────
+    //
+    // Asks the live database whether it still accepts every value this deployed code can write,
+    // and whether it still matches the snapshot the push-time gate checks against.
+    //
+    // WHY IT LIVES HERE, INSIDE RECONCILIATION, AND NOT IN A CRON OF ITS OWN:
+    // a standalone cron can be quietly unscheduled, and this repo has the precedent (the
+    // error-auto-audit loop is switched off). A check that runs inside the payments run cannot
+    // be switched off without switching off payments. The point of a guard is that it is still
+    // there on the day nobody remembers why it was added.
+    //
+    // Silent failure is what this exists to catch, so it must never fail silently itself:
+    // runContractMonitor raises a dev-board job AND a system_errors row, and its own crash is
+    // reported into the cron log rather than swallowed.
+    let contractResult: Awaited<ReturnType<typeof runContractMonitor>> | { error: string } | null = null
+    try {
+      contractResult = await runContractMonitor()
+    } catch (contractErr) {
+      const msg = contractErr instanceof Error ? contractErr.message : String(contractErr)
+      console.error("[check-wire] contract monitor failed:", msg)
+      contractResult = { error: msg }
+    }
+
     console.warn(`[check-wire] Done. Airwallex: ${airwallexFeedCount} new. Match:`, matchResult)
 
     logCron({
@@ -149,6 +177,7 @@ export async function GET(req: NextRequest) {
         airwallex_feeds: airwallexFeedCount,
         stripe_payouts_marked_outgoing: stripePayoutsMarked,
         match: matchResult,
+        db_contract: contractResult,
       },
     })
 
@@ -158,6 +187,7 @@ export async function GET(req: NextRequest) {
       new_airwallex_feeds: airwallexFeedCount,
       stripe_payouts_marked_outgoing: stripePayoutsMarked,
       match: matchResult,
+      db_contract: contractResult,
     })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
