@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server"
 import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { COLOR_MARKS, MARK_LABEL_PREFIX } from "@/lib/inbox/color-marks"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import {
+  captureRestorableLabels,
+  sanitizeRestorePayload,
+  type RestoreEntry,
+} from "@/lib/inbox/trash-restore"
 
 export const dynamic = "force-dynamic"
 
@@ -13,10 +18,50 @@ function resolveMailbox(mailbox?: string): string {
     : 'support@tonydurante.us'
 }
 
+type MinimalThread = { messages?: Array<{ id?: string; labelIds?: string[] }> }
+
+/**
+ * Snapshot UNREAD/STARRED/IMPORTANT before trashing, so an Undo can put them
+ * back — trashing strips them and Gmail cannot tell us what they were after the
+ * fact. Best-effort: a failed read must never block the delete itself.
+ */
+async function snapshotBeforeTrash(threadId: string, asUser: string): Promise<RestoreEntry[]> {
+  try {
+    const thread = (await gmailGet(`/threads/${threadId}`, { format: 'minimal' }, asUser)) as MinimalThread
+    return captureRestorableLabels(thread.messages)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Undo of a trash: untrash every message, put the thread back in INBOX, and
+ * re-apply the labels captured at trash time.
+ */
+async function untrashThread(threadId: string, asUser: string, restore: RestoreEntry[]) {
+  // Gmail doesn't allow removing TRASH via modify — must use /untrash per message
+  const trashThread = (await gmailGet(`/threads/${threadId}`, { format: 'minimal' }, asUser)) as {
+    messages: Array<{ id: string }>
+  }
+  await Promise.all(
+    trashThread.messages.map((m) => gmailPost(`/messages/${m.id}/untrash`, {}, asUser))
+  )
+  await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: ["INBOX"] }, asUser)
+
+  // Restore the read/starred/important state the trash stripped.
+  if (restore.length > 0) {
+    await Promise.all(
+      restore.map((e) =>
+        gmailPost(`/messages/${e.id}/modify`, { addLabelIds: e.labels }, asUser)
+      )
+    )
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color } = body as {
+    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color, restore } = body as {
       threadId?: string
       threadIds?: string[]
       action: EmailAction | 'mark_read'
@@ -26,6 +71,10 @@ export async function POST(req: NextRequest) {
       mailbox?: string
       /** set_color: mark key ('red' | …) or null to clear */
       color?: string | null
+      /** untrash: the read/starred/important state captured when the thread was
+       *  trashed, round-tripped by the browser. Single: RestoreEntry[]. Bulk: a
+       *  map keyed by threadId. Sanitized before use — never trusted. */
+      restore?: unknown
     }
 
     if (!(await checkMailboxAccess(mailbox))) {
@@ -35,13 +84,24 @@ export async function POST(req: NextRequest) {
 
     // Bulk operations
     if (bulk && threadIds?.length) {
+      // Bulk trash: snapshot each thread's restorable labels so the bulk Undo can
+      // put them back (keyed by threadId and handed to the browser).
+      const bulkRestore: Record<string, RestoreEntry[]> = {}
+      // Bulk untrash (the Undo of a bulk delete): the browser hands the snapshot back.
+      const bulkRestoreIn = (restore && typeof restore === 'object' && !Array.isArray(restore))
+        ? (restore as Record<string, unknown>)
+        : {}
+
       const results = await Promise.allSettled(
         threadIds.map(async (tid) => {
           if (action === 'trash') {
+            bulkRestore[tid] = await snapshotBeforeTrash(tid, asUser)
             await gmailPost(`/threads/${tid}/modify`, {
               addLabelIds: ["TRASH"],
               removeLabelIds: ["INBOX", "UNREAD", "STARRED", "IMPORTANT"]
             }, asUser)
+          } else if (action === 'untrash') {
+            await untrashThread(tid, asUser, sanitizeRestorePayload(bulkRestoreIn[tid]))
           } else if (action === 'archive') {
             await gmailPost(`/threads/${tid}/modify`, { removeLabelIds: ['INBOX'] }, asUser)
           } else if (action === 'mark_read') {
@@ -61,7 +121,14 @@ export async function POST(req: NextRequest) {
       )
       const succeeded = results.filter(r => r.status === 'fulfilled').length
       const failed = results.filter(r => r.status === 'rejected').length
-      return NextResponse.json({ success: true, action, succeeded, failed, total: threadIds.length })
+      return NextResponse.json({
+        success: true,
+        action,
+        succeeded,
+        failed,
+        total: threadIds.length,
+        ...(action === 'trash' ? { restore: bulkRestore } : {}),
+      })
     }
 
     if (!threadId || !action) {
@@ -98,6 +165,10 @@ export async function POST(req: NextRequest) {
       }
 
       case "trash": {
+        // Step 0: snapshot UNREAD/STARRED/IMPORTANT BEFORE we strip them, so the
+        // Undo can restore the email exactly as it was (2026-07-14).
+        const restoreSnapshot = await snapshotBeforeTrash(threadId, asUser)
+
         // Use modify instead of /trash endpoint — /trash is unreliable with Service Account DWD
         // Step 1: Remove from INBOX + add TRASH label via modify
         const modifyResult = await gmailPost(`/threads/${threadId}/modify`, {
@@ -120,23 +191,17 @@ export async function POST(req: NextRequest) {
           verified = true
         }
 
-        return NextResponse.json({ success: true, action: "trashed", threadId: modifyResult.id, verified })
+        return NextResponse.json({
+          success: true,
+          action: "trashed",
+          threadId: modifyResult.id,
+          verified,
+          restore: restoreSnapshot,
+        })
       }
 
       case "untrash": {
-        // Gmail doesn't allow removing TRASH via modify — must use /untrash endpoint per message
-        const trashThread = (await gmailGet(`/threads/${threadId}`, { format: 'minimal' }, asUser)) as {
-          messages: Array<{ id: string }>
-        }
-        await Promise.all(
-          trashThread.messages.map((m) =>
-            gmailPost(`/messages/${m.id}/untrash`, {}, asUser)
-          )
-        )
-        // Also add back to INBOX
-        await gmailPost(`/threads/${threadId}/modify`, {
-          addLabelIds: ["INBOX"]
-        }, asUser)
+        await untrashThread(threadId, asUser, sanitizeRestorePayload(restore))
         return NextResponse.json({ success: true, action: "untrashed" })
       }
 

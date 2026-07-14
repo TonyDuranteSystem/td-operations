@@ -305,7 +305,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       if (!res.ok) throw new Error('Action failed')
       return res.json()
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (data, variables) => {
       if (variables.action === 'set_color') {
         // Optimistically paint the list row + the open conversation
         const colorMark = variables.color ?? null
@@ -327,7 +327,48 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         }
       }
       if (variables.action === 'trash') {
-        toast.success('Email deleted')
+        // The open-email Delete gets the same Undo as the list-row Delete
+        // (Antonio, 2026-07-14 — it previously had none). Capture the id now:
+        // handleEmailDeleted above clears `selected`, and the toast callback runs
+        // later.
+        const deletedId = selected?.id
+        const snapshot = (data as { restore?: unknown } | undefined)?.restore
+        toast('Email deleted', {
+          action: {
+            label: 'Undo',
+            onClick: async () => {
+              if (!deletedId) return
+              try {
+                const res = await fetch('/api/inbox/email-actions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    threadId: deletedId.replace('gmail:', ''),
+                    action: 'untrash',
+                    mailbox: activeMailbox,
+                    restore: snapshot,
+                  }),
+                })
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}))
+                  throw new Error(err.error || 'Failed to restore email.')
+                }
+                // Clear the hidden-row id BEFORE refetching, or the restored
+                // thread is filtered straight back out (see handleEmailRestored).
+                handleEmailRestored(deletedId)
+                toast.success('Email restored')
+                queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+                queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+                queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+              } catch (err) {
+                toast.error(
+                  err instanceof Error && err.message ? err.message : 'Failed to restore email.',
+                )
+              }
+            },
+          },
+          duration: 8000,
+        })
       }
       if (variables.action === 'archive') {
         toast.success('Email archived')
@@ -372,8 +413,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       if (!res.ok) throw new Error('Bulk action failed')
       return res.json()
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (data, variables) => {
       const count = selectedIds.size
+      // Snapshot the ids before clearSelection() empties the set — the Undo toast
+      // callback runs long after this handler returns.
+      const idsAtStart = Array.from(selectedIds)
       if (variables.action === 'archive' || variables.action === 'trash') {
         queryClient.setQueriesData(
           { queryKey: ['inbox-conversations'] },
@@ -412,6 +456,52 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
 
       const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : variables.action === 'mark_unread' ? 'marked as unread' : 'moved'
+
+      // Bulk Delete gets an Undo too (Antonio, 2026-07-14 — it previously had
+      // none). `ids` is captured here because clearSelection() above has already
+      // emptied selectedIds by the time the toast callback runs. Bulk delete
+      // hides the rows by filtering the react-query cache (not `deletedIds`), so
+      // the Undo only needs the untrash + a refetch.
+      if (variables.action === 'trash') {
+        const ids = idsAtStart
+        const snapshot = (data as { restore?: unknown } | undefined)?.restore
+        toast(`${count} email${count > 1 ? 's' : ''} deleted`, {
+          action: {
+            label: 'Undo',
+            onClick: async () => {
+              try {
+                const res = await fetch('/api/inbox/email-actions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    threadIds: ids.map(id => id.replace('gmail:', '')),
+                    action: 'untrash',
+                    bulk: true,
+                    mailbox: activeMailbox,
+                    restore: snapshot,
+                  }),
+                })
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}))
+                  throw new Error(err.error || 'Failed to restore emails.')
+                }
+                ids.forEach(id => handleEmailRestored(id))
+                toast.success(`${ids.length} email${ids.length > 1 ? 's' : ''} restored`)
+                queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+                queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+                queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+              } catch (err) {
+                toast.error(
+                  err instanceof Error && err.message ? err.message : 'Failed to restore emails.',
+                )
+              }
+            },
+          },
+          duration: 8000,
+        })
+        return
+      }
+
       toast.success(`${count} email${count > 1 ? 's' : ''} ${actionLabel}`)
     },
   })
