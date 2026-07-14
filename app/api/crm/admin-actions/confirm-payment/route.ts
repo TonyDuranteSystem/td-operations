@@ -27,6 +27,12 @@
  *   e. Logs everything to action_log
  */
 
+// This route settles an invoice, runs the client's activation chain, and now hands up to
+// three candidate transactions to the matcher. A timeout would kill it AFTER the money was
+// applied and the client activated — a half-finished state in the one route that touches
+// money and activation together. Bound it explicitly, as its siblings do.
+export const maxDuration = 60
+
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"

@@ -87,6 +87,16 @@ export interface ApplyMoneyResult {
  *
  * Only a CONFIRMED row counts. An unconfirmed claim is an attempt that died mid-write; it
  * is evidence that someone started, not that money moved.
+ *
+ * ⚠️ KNOWN, BOUNDED GAP — deliberately left alone. If the money write lands but the
+ * CONFIRMATION write then fails (the path that already logs "MONEY APPLIED BUT CLAIM NOT
+ * CONFIRMED"), the row stays unconfirmed, so a later retry reads `false` here and records
+ * the transaction as an audit link saying "no money applied" — the same mislabel, in a far
+ * narrower hole. It CANNOT double-credit: the terminal guard and the compare-and-swap both
+ * block that, and it is loud in the logs. Closing it means teaching manualMatch about
+ * unconfirmed rows, i.e. more control-flow surgery on a path where money is not at risk —
+ * and this cycle has repeatedly shown that the marginal fix costs more than it prevents.
+ * Documented rather than coded, on purpose.
  */
 export async function hasConfirmedApplication(feedId: string, paymentId: string): Promise<boolean> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
