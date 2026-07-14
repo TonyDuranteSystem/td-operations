@@ -1120,8 +1120,10 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // charge parks in the review queue looking like any other candidate. One click and
     // they book money the client already has back. The machine was protected and the
     // person was not, which is exactly the wrong way round.
+    let manualRefundCheck: string | undefined
     if (feed?.source === "stripe" && feed.external_id) {
       const check = await isChargeRefundedNow(String(feed.external_id))
+      manualRefundCheck = check
       if (check === "refunded") {
         return {
           matched: false,
@@ -1140,7 +1142,11 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
 
     // Settle FIRST, then record the link — so a refusal (terminal invoice, already
     // applied) cannot leave the feed marked 'matched' against money that never moved.
-    const settle = await settleInvoiceFromFeed(feedId, paymentId, feedAmount, now, today)
+    const settle = await settleInvoiceFromFeed(feedId, paymentId, feedAmount, now, today, {
+      // Record that the refund gate ran for this staff-confirmed match too — the audit
+      // row must be able to prove the check happened, not just that it existed.
+      refundCheck: manualRefundCheck,
+    })
 
     // An already-PAID invoice may be audit-linked: that is the legitimate case of a
     // Stripe charge tied to the invoice its own webhook already closed. Money moves

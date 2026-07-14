@@ -318,11 +318,35 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
     // and the CAS cannot see it, because the retry reads the post-write value.
     //
     // So: go and look. The invoice itself is the source of truth.
-    const { data: after } = await supabaseAdmin
+    const { data: after, error: afterErr } = await supabaseAdmin
       .from("payments")
       .select("amount_paid")
       .eq("id", paymentId)
       .maybeSingle()
+
+    // ⚠️ A READ WE COULD NOT PERFORM IS NOT EVIDENCE OF ANYTHING.
+    //
+    // This re-read fails in exactly the circumstances that made the write fail — the same
+    // timeout, the same dropped connection, the same dying function. The failures are
+    // CORRELATED, not independent. Swallowing this error would make "could not check"
+    // indistinguishable from "read back an empty balance" — and on any invoice whose
+    // amount_paid is NULL (every invoice the old writer touched, and every brand-new one)
+    // that reads as "the write never happened", releases the lock, and lets the next pass
+    // credit the same money again. The unsafe branch would be the COMMON one.
+    //
+    // Cannot verify ⇒ cannot release. Keep the lock, make a human look.
+    if (afterErr) {
+      console.error(
+        `[apply-payment] Could not verify whether the write to ${paymentId} landed: ${afterErr.message}. Lock retained.`,
+      )
+      return {
+        applied: false,
+        reason: "guard_failed",
+        detail:
+          "The payment could not be confirmed and the invoice could not be re-read. It has been left locked for safety — please check this invoice before matching again.",
+        invoiceNumber: payment.invoice_number ?? undefined,
+      }
+    }
 
     const afterPaid = after?.amount_paid ?? null
     const landed = afterPaid !== null && Math.abs(Number(afterPaid) - newAmountPaid) < 0.005
@@ -393,7 +417,10 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
 
   // The money has landed. CONFIRM the claim — only a confirmed row is evidence that
   // money was actually applied, and only confirmed rows count toward the invariant
-  // sum(payment_applications.amount) == payments.amount_paid.
+  // sum(confirmed applications) == payments.amount_paid — for BANK-FEED-settled invoices.
+  // Money credited through the Stripe webhook, Whop, confirm-payment or activate-service
+  // carries no feedId and so writes no ledger row; in general the rule is
+  // sum(confirmed applications) <= amount_paid.
   if (claimId) {
     const { error: confirmErr } = await db
       .from("payment_applications")
