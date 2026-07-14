@@ -236,6 +236,33 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     setSelected(prev => prev?.id === id ? null : prev)
   }, [])
 
+  // Undo of a delete. The mirror of handleEmailDeleted, and it is REQUIRED for
+  // Undo to work at all: a deleted thread is hidden by `deletedIds` (persisted,
+  // 5-min TTL) to paper over Gmail's label-index lag, and the list filters on
+  // that set. Untrashing in Gmail and refetching is NOT enough — the restored
+  // row comes back from Gmail and is then filtered straight back out, so the
+  // toast said "Email restored" while the email stayed invisible for 5 minutes
+  // (Luca, 2026-07-13; dev_task 204f7685). Drop the id from the set AND from
+  // localStorage, or a remount re-reads the stale id and re-hides it.
+  const handleEmailRestored = useCallback((id: string) => {
+    setDeletedIds(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      try {
+        if (next.size === 0) {
+          localStorage.removeItem('inbox-deleted-ids')
+        } else {
+          localStorage.setItem('inbox-deleted-ids', JSON.stringify({
+            ids: Array.from(next),
+            ts: Date.now()
+          }))
+        }
+      } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+
   const bulkMode = selectedIds.size > 0
 
   const { data: labelsData } = useQuery<{ labels: GmailLabel[] }>({
@@ -684,6 +711,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             selectedId={selected?.id || null}
             onSelect={handleSelect}
             onDeleted={handleEmailDeleted}
+            onRestored={handleEmailRestored}
             deletedIds={deletedIds}
             unreadOverrides={unreadOverrides}
             onUnreadOverride={(id, v) => setUnreadOverrides(prev => new Map(prev).set(id, v))}

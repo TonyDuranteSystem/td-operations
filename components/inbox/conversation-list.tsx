@@ -12,6 +12,10 @@ interface ConversationListProps {
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
   onDeleted?: (id: string) => void
+  /** Undo of a delete — clears the id from the parent's hidden-row set so the
+   *  restored thread is visible again on the next refetch. Without this, Undo
+   *  untrashes in Gmail but the row stays filtered out (Luca, 2026-07-13). */
+  onRestored?: (id: string) => void
   deletedIds?: Set<string>
   unreadOverrides?: Map<string, number>
   /** Optimistically set a row's unread override in the parent (badge + bold). */
@@ -52,7 +56,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, unreadOverrides, onUnreadOverride, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, deletedIds, unreadOverrides, onUnreadOverride, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
@@ -105,12 +109,25 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: 'untrash', mailbox }),
               })
-              if (res.ok) {
-                toast.success('Email restored')
-                queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+              if (!res.ok) {
+                // R099 — a non-2xx used to fall through silently, so a failed
+                // restore looked identical to a successful one.
+                const data = await res.json().catch(() => ({}))
+                throw new Error(data.error || 'Failed to restore email.')
               }
-            } catch {
-              toast.error('Failed to restore email')
+              // MUST come before the refetch: the row is hidden by the parent's
+              // `deletedIds` set, so untrashing in Gmail alone brings the thread
+              // back from the API only for it to be filtered out again. Clearing
+              // the id is what actually makes it reappear (Luca, 2026-07-13).
+              onRestored?.(conv.id)
+              toast.success('Email restored')
+              queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+              queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+              queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+            } catch (err) {
+              toast.error(
+                err instanceof Error && err.message ? err.message : 'Failed to restore email.',
+              )
             }
           },
         },
