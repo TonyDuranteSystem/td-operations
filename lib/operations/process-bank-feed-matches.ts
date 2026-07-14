@@ -41,7 +41,15 @@ export interface ProcessBankFeedMatchesOpts {
 /** What happened to one feed — surfaced so callers can log it honestly. */
 export interface FeedOutcome {
   feedId: string
-  outcome: "auto_activated" | "needs_review" | "activation_crashed" | "no_match" | "error"
+  outcome:
+    | "auto_activated"
+    /** Matched, but nothing was activated: an audit link (no money moved) or a
+     *  part-payment (the obligation is not met, so the service does not switch on). */
+    | "matched_no_activation"
+    | "needs_review"
+    | "activation_crashed"
+    | "no_match"
+    | "error"
   matched: boolean
   invoiceNumber?: string
   confidence?: string
@@ -58,6 +66,9 @@ export interface FeedOutcome {
 export interface ProcessBankFeedMatchesResult {
   processed: number
   auto_activated: number
+  /** Matched but NOT activated — audit links and part-payments. Never fold these into
+   *  auto_activated: the cron log would claim activations that never happened. */
+  matched_no_activation: number
   needs_review: number
   activation_crashed: number
   no_match: number
@@ -98,6 +109,7 @@ export async function processBankFeedMatches(
   const result: ProcessBankFeedMatchesResult = {
     processed: 0,
     auto_activated: 0,
+    matched_no_activation: 0,
     needs_review: 0,
     activation_crashed: 0,
     no_match: 0,
@@ -152,8 +164,11 @@ export async function processBankFeedMatches(
       //  - confidence 'partial'  → the client part-paid. The obligation is not met, so
       //    the service must not switch on. Activation follows the closing payment.
       if (matchResult.moneyApplied === false || matchResult.confidence === "partial") {
-        result.auto_activated++
-        result.details.push({ ...base, outcome: "auto_activated" })
+        // Counted separately: reporting these as "activated" would be a lie in the cron
+        // log — nothing was activated, and for an audit link no money even moved. This
+        // is the number Antonio reads.
+        result.matched_no_activation++
+        result.details.push({ ...base, outcome: "matched_no_activation" })
         continue
       }
 

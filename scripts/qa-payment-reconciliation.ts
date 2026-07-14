@@ -54,7 +54,13 @@ const anyDb = db as any
 // inside the email in the memo and score a false "company name match", which is a
 // fixture artefact, not product behaviour. Keep the two vocabularies disjoint.
 const TAG = "QARECON"
-const created = { accounts: [] as string[], contacts: [] as string[], payments: [] as string[], feeds: [] as string[] }
+const created = {
+  accounts: [] as string[],
+  contacts: [] as string[],
+  payments: [] as string[],
+  feeds: [] as string[],
+  activations: [] as string[],
+}
 
 let passed = 0
 let failed = 0
@@ -315,11 +321,50 @@ async function seed() {
     raw_data: {},
   })
 
+  // ── The PHANTOM MONEY fixture: a big invoice with a linked activation, part-paid.
+  // The manual match must credit ONLY the $500 that arrived, must NOT activate the
+  // client's service, and must NOT invent the remaining $1,700.
+  const { data: bigInv } = await db
+    .from("payments")
+    .insert({
+      account_id: fiscalotAcct!.id,
+      invoice_number: `QA-INV-${TAG}-PHANTOM`,
+      description: `${TAG} 2200 invoice, part-paid with 500`,
+      total: 2200, amount: 2200, subtotal: 2200, amount_paid: 0, amount_due: 2200,
+      amount_currency: "USD", status: "Pending", invoice_status: "Sent",
+    })
+    .select("id")
+    .single()
+  created.payments.push(bigInv!.id)
+
+  const { data: pendingAct, error: paErr } = await db
+    .from("pending_activations")
+    .insert({
+      portal_invoice_id: bigInv!.id,
+      status: "awaiting_payment",
+      client_email: "fixture-buyer-one@example.com",
+      client_name: `${TAG} Fiscalot`,
+      offer_token: `qa-token-${TAG}-phantom`,
+      amount: 2200,
+    })
+    .select("id")
+    .single()
+  if (paErr) throw new Error(`pending_activations insert failed: ${paErr.message}`)
+  created.activations.push(pendingAct!.id)
+
+  const feedPartial = await mkFeed({
+    source: "relay", external_id: `wire_qa_${TAG}_partial`, transaction_date: "2026-07-15",
+    amount: 500, currency: "USD", sender_name: `${TAG} Fiscalot`,
+    memo: "part payment", status: "unmatched",
+    raw_data: {},
+  })
+
   return {
     acct: acct!.id, invA: inv[0], invB: inv[1], strangerInv: strangerInv!.id,
     fInv: fInv!.id, landmine: landmine!.id,
     partPaid: partPaid!.id, cancelled: cancelled!.id, smallInv: smallInv!.id, refInv: refInv!.id,
-    feedSH1, feedSH2, feedSHRef, feedFaz, feedLandmine, feedPartPaid, feedOverpay, feedRefMismatch,
+    bigInv: bigInv!.id, activationId: pendingAct!.id,
+    feedSH1, feedSH2, feedSHRef, feedFaz, feedLandmine, feedPartPaid, feedOverpay, feedRefMismatch, feedPartial,
   }
 }
 
@@ -340,8 +385,16 @@ async function getApplications(feedId: string, paymentId: string): Promise<Array
   return (data ?? []) as Array<{ amount: number }>
 }
 
+async function getActivation(id: string) {
+  const { data } = await db.from("pending_activations").select("status").eq("id", id).maybeSingle()
+  return data
+}
+
 async function cleanup() {
   await anyDb.from("payment_applications").delete().in("feed_id", created.feeds)
+  if (created.activations.length) {
+    await db.from("pending_activations").delete().in("id", created.activations)
+  }
   await db.from("td_bank_feeds").delete().in("id", created.feeds)
   await db.from("payments").delete().in("id", created.payments)
   await db.from("account_contacts").delete().in("account_id", created.accounts)
@@ -532,6 +585,38 @@ async function main() {
       "no money moved without a human",
       Number(refInv.amount_paid) === 0,
       `paid=${refInv.amount_paid}`,
+    )
+
+    // ── L. THE PHANTOM MONEY BUG — a part-payment must never settle the rest ──
+    // Introduced by my own earlier fix: routing activation through the money writer
+    // meant a manually-matched PART-payment triggered activation, which then credited
+    // the ENTIRE remaining balance that nobody paid — and wrote an audit row swearing
+    // the invoice was settled. The multi-invoice waterfall makes this the normal path,
+    // not an edge case.
+    console.log("\nL. PART-PAYMENT — must not activate, and must not invent the balance")
+    const rPartial = await manualMatch(f.feedPartial, f.bigInv)
+    const bigInv = await getPayment(f.bigInv)
+    const activation = await getActivation(f.activationId)
+
+    check(
+      "only the money that ARRIVED is credited",
+      Number(bigInv.amount_paid) === 500,
+      `paid=${bigInv.amount_paid} — crediting 2200 would be inventing 1700 nobody paid`,
+    )
+    check(
+      "the invoice still shows the real outstanding balance",
+      Number(bigInv.amount_due) === 1700 && bigInv.invoice_status === "Partial",
+      `due=${bigInv.amount_due} status=${bigInv.invoice_status}`,
+    )
+    check(
+      "the client's service is NOT activated on a part-payment",
+      activation?.status === "awaiting_payment",
+      `activation status=${activation?.status} — should still be awaiting_payment`,
+    )
+    check(
+      "the match reports honestly that it was a part-payment",
+      rPartial.matched === true && rPartial.moneyApplied === true,
+      `matched=${rPartial.matched} moneyApplied=${rPartial.moneyApplied}`,
     )
   } finally {
     console.log("\nCleaning up fixtures…")

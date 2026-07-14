@@ -1052,16 +1052,44 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       const today = new Date().toISOString().split("T")[0]
       paymentIdForPayout = activation.portal_invoice_id
       const { applyMoneyToInvoice } = await import("@/lib/finance/apply-payment")
-      // settle_full, never "apply": activation means the payment was CONFIRMED in
-      // full. Accumulating the activation amount on top of what a bank feed may have
-      // already credited would double-count it. If the invoice is already settled,
-      // the writer no-ops.
-      await applyMoneyToInvoice({
-        paymentId: activation.portal_invoice_id,
-        mode: "settle_full",
-        paidDate: today,
-        actor: "activate-service",
-      })
+
+      // ⛔ NEVER settle an invoice that is genuinely PART-paid.
+      //
+      // settle_full credits whatever is left owing. That is correct for an invoice
+      // activation confirms in full — and catastrophic for one the client only
+      // part-paid: it would fabricate the unpaid balance, mark the invoice Paid, and
+      // leave an audit row swearing it was settled.
+      //
+      // A part-paid invoice arriving here means an upstream guard failed (a
+      // part-payment must not trigger activation at all). Say so loudly; do not paper
+      // over it by inventing the money.
+      const { data: invoiceNow } = await supabase
+        .from("payments")
+        .select("amount_paid, amount_due")
+        .eq("id", activation.portal_invoice_id)
+        .maybeSingle()
+
+      const partPaid =
+        Number(invoiceNow?.amount_paid ?? 0) > 0 && Number(invoiceNow?.amount_due ?? 0) > 0
+
+      if (partPaid) {
+        console.error(
+          `[activate-service] REFUSING to settle part-paid invoice ${activation.portal_invoice_id} ` +
+          `(paid=${invoiceNow?.amount_paid}, still owed=${invoiceNow?.amount_due}). ` +
+          `Activation reached a part-paid invoice — an upstream guard failed. No money written.`,
+        )
+      } else {
+        // settle_full, never "apply": activation means the payment was CONFIRMED in
+        // full. Accumulating the activation amount on top of what a bank feed may have
+        // already credited would double-count it. If the invoice is already settled,
+        // the writer no-ops.
+        await applyMoneyToInvoice({
+          paymentId: activation.portal_invoice_id,
+          mode: "settle_full",
+          paidDate: today,
+          actor: "activate-service",
+        })
+      }
 
       // Backfill account_id on the existing invoice if we now have one
       if (autoAccountId) {

@@ -38,31 +38,55 @@ interface SyncResult {
 }
 
 /**
+ * The outcome of re-checking a charge with Stripe before settling money against it.
+ *
+ *  - "refunded"  — the money went back to the client (or is disputed). NEVER settle.
+ *  - "ok"        — Stripe confirms the money is still ours. Safe to settle.
+ *  - "defer"     — a TRANSIENT failure (network, Stripe down). Do not settle; try again
+ *                  later. The money is already in the bank; a few hours cost nothing,
+ *                  whereas booking a refunded charge costs a client relationship.
+ *  - "unchecked" — we cannot ever verify this one (Stripe isn't configured, or the
+ *                  charge id doesn't exist). Deferring forever would strand the feed
+ *                  and help nobody, so the caller proceeds — with the same exposure it
+ *                  had before this check existed, and a warning in the log.
+ */
+export type ChargeRefundCheck = "refunded" | "ok" | "defer" | "unchecked"
+
+/**
  * Is this Stripe charge refunded or disputed RIGHT NOW?
  *
  * The stored charge payload is a SNAPSHOT taken at sync time. A charge refunded
  * afterwards keeps `refunded: false` frozen in our copy forever, and the sync never
- * revisits it (rows are inserted once, by transaction id). So our record can say
- * "money received" long after it went back to the client.
+ * revisits it (rows are inserted once, by transaction id). So our record can insist the
+ * money is in the bank long after it went back to the client.
  *
  * That was survivable while matching needed an amount-and-name coincidence. It is not
- * survivable now: the payment-intent tier settles an invoice from the charge alone,
- * deterministically. Without this check, the first cron run after a refund would
- * confidently mark an invoice paid with money the client already has back.
- *
- * Returns null when Stripe cannot be reached — the caller decides what to do with
- * "unknown" rather than having a network blip silently mean "not refunded".
+ * survivable now: settlement can key off the charge alone (its payment intent, or the
+ * invoice number it carries), deterministically. Without this check, the first cron run
+ * after a refund would confidently mark an invoice paid with money the client has back.
  */
-export async function isChargeRefundedNow(chargeId: string): Promise<boolean | null> {
+export async function isChargeRefundedNow(chargeId: string): Promise<ChargeRefundCheck> {
   const stripe = getStripe()
-  if (!stripe) return null
+  if (!stripe) {
+    console.warn("[stripe-sync] STRIPE_SECRET_KEY not set — cannot verify refunds; proceeding unchecked.")
+    return "unchecked"
+  }
 
   try {
     const charge = await stripe.charges.retrieve(chargeId)
-    return charge.refunded === true || charge.amount_refunded > 0 || charge.disputed === true
+    const refunded = charge.refunded === true || charge.amount_refunded > 0 || charge.disputed === true
+    return refunded ? "refunded" : "ok"
   } catch (err) {
-    console.error(`[stripe-sync] Could not re-check charge ${chargeId}:`, err)
-    return null
+    // A charge Stripe has never heard of cannot be verified — and cannot be refunded
+    // either. Blocking it forever would strand the feed; proceed, but say so.
+    const code = (err as { code?: string })?.code
+    if (code === "resource_missing") {
+      console.warn(`[stripe-sync] Charge ${chargeId} not found in Stripe — proceeding unchecked.`)
+      return "unchecked"
+    }
+    // Anything else (network, 5xx, rate limit) is transient: do NOT settle on a guess.
+    console.error(`[stripe-sync] Could not re-check charge ${chargeId} — deferring:`, err)
+    return "defer"
   }
 }
 

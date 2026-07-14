@@ -133,53 +133,102 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table not in generated types
   const db = supabaseAdmin as any
 
+  // How long an UNCONFIRMED claim is honoured before we treat it as the debris of a
+  // crashed attempt. Long enough that a slow-but-alive write is never stolen from;
+  // short enough that a human retry isn't blocked for the rest of the day.
+  const STALE_CLAIM_MS = 5 * 60 * 1000
+
+  let claimId: string | null = null
+
   if (feedId) {
     // `payment_applications` is not in the generated Supabase types (same escape as
-    // `system_errors`); the table is created by 20260714-1500-payment-applications.sql.
-    const { error: claimErr } = await db
+    // `system_errors`); see 20260714-1500-payment-applications.sql (+ confirmed_at).
+    //
+    // The claim is taken with confirmed_at NULL and confirmed only once the money has
+    // actually landed. An unconfirmed claim is NOT proof that money moved — it is
+    // proof that someone STARTED. That distinction is what stops a crashed attempt
+    // from bricking the transaction forever behind a false "already applied".
+    const { data: claimRow, error: claimErr } = await db
       .from("payment_applications")
       .insert({ feed_id: feedId, payment_id: paymentId, amount: creditedAmount, applied_by: actor })
+      .select("id")
+      .single()
 
     if (claimErr) {
-      // 23505 = unique_violation → this exact money was already applied.
       if (claimErr.code === "23505") {
+        // Someone else holds the lock. Confirmed → the money really was applied.
+        // Unconfirmed and old → the previous attempt died before writing; take it over.
+        const { data: existing } = await db
+          .from("payment_applications")
+          .select("id, confirmed_at, applied_at")
+          .eq("feed_id", feedId)
+          .eq("payment_id", paymentId)
+          .maybeSingle()
+
+        const isStale =
+          existing != null &&
+          existing.confirmed_at == null &&
+          Date.now() - new Date(existing.applied_at).getTime() > STALE_CLAIM_MS
+
+        if (!isStale) {
+          return {
+            applied: false,
+            reason: "already_applied",
+            detail: "This transaction has already been applied to this invoice.",
+            invoiceNumber: payment.invoice_number ?? undefined,
+          }
+        }
+
+        // Reclaim the abandoned attempt: take ownership of the existing row rather
+        // than deleting and re-inserting (which would reopen the race we just closed).
+        const { error: retakeErr } = await db
+          .from("payment_applications")
+          .update({ amount: creditedAmount, applied_by: actor, applied_at: new Date().toISOString() })
+          .eq("id", existing.id)
+          .is("confirmed_at", null)
+
+        if (retakeErr) {
+          return {
+            applied: false,
+            reason: "guard_failed",
+            detail: `Could not take over the stale payment lock: ${retakeErr.message}`,
+            invoiceNumber: payment.invoice_number ?? undefined,
+          }
+        }
+        claimId = existing.id as string
+        console.warn(`[apply-payment] Took over a stale, unconfirmed claim for feed=${feedId} payment=${paymentId}`)
+      } else {
+        // Any other failure: refuse to write money we cannot record.
         return {
           applied: false,
-          reason: "already_applied",
-          detail: "This transaction has already been applied to this invoice.",
+          reason: "guard_failed",
+          detail: `Could not record the payment application: ${claimErr.message}`,
           invoiceNumber: payment.invoice_number ?? undefined,
         }
       }
-      // Any other failure: refuse to write money we cannot record.
-      return {
-        applied: false,
-        reason: "guard_failed",
-        detail: `Could not record the payment application: ${claimErr.message}`,
-        invoiceNumber: payment.invoice_number ?? undefined,
-      }
+    } else {
+      claimId = (claimRow?.id as string) ?? null
     }
   }
 
   /**
-   * Release the lock we just took. Called when the money write fails.
+   * Release the lock WE took — by its own id, never by (feed, payment).
    *
-   * Without this, a single transient database error is CATASTROPHIC and silent: the
-   * claim row survives, so every later retry — automatic or from a human clicking
-   * Match — hits the unique constraint and is told "this transaction has already been
-   * applied to this invoice." That message is FALSE (nothing was applied), the money
-   * is unbookable through every surface, and the only way out is direct database
-   * access. Best-effort: if the release itself fails we surface it in the error text
-   * rather than pretending it worked.
+   * Deleting by (feed_id, payment_id) is not safe: a delayed failing attempt could
+   * delete a DIFFERENT attempt's row — one that had meanwhile succeeded and credited
+   * the invoice. The lock would vanish while the money stayed applied, and the next
+   * pass would credit it a second time. That is the precise failure this table exists
+   * to prevent, so the release must be as precise as the claim.
    */
   const releaseClaim = async (): Promise<string> => {
-    if (!feedId) return ""
+    if (!claimId) return ""
     const { error: delErr } = await db
       .from("payment_applications")
       .delete()
-      .eq("feed_id", feedId)
-      .eq("payment_id", paymentId)
+      .eq("id", claimId)
+      .is("confirmed_at", null) // never delete a claim that already committed money
     if (delErr) {
-      console.error(`[apply-payment] FAILED TO RELEASE CLAIM for feed=${feedId} payment=${paymentId}:`, delErr.message)
+      console.error(`[apply-payment] FAILED TO RELEASE CLAIM ${claimId} (feed=${feedId} payment=${paymentId}):`, delErr.message)
       return " The retry lock could not be released — this transaction may need to be unlocked manually before it can be matched again."
     }
     return ""
@@ -211,6 +260,24 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
       reason: "write_failed",
       detail: `${updErr.message}${releaseNote}`,
       invoiceNumber: payment.invoice_number ?? undefined,
+    }
+  }
+
+  // The money has landed. CONFIRM the claim — only a confirmed row is evidence that
+  // money was actually applied, and only confirmed rows count toward the invariant
+  // sum(payment_applications.amount) == payments.amount_paid.
+  if (claimId) {
+    const { error: confirmErr } = await db
+      .from("payment_applications")
+      .update({ confirmed_at: now })
+      .eq("id", claimId)
+    if (confirmErr) {
+      // The money IS applied. A missing confirmation makes the claim look stale, which
+      // could later let the same money be applied a second time — so this must be loud.
+      console.error(
+        `[apply-payment] MONEY APPLIED BUT CLAIM ${claimId} NOT CONFIRMED (feed=${feedId} payment=${paymentId}):`,
+        confirmErr.message,
+      )
     }
   }
 

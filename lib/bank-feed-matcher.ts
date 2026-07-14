@@ -167,6 +167,64 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     const realInvoices = (allInvoices || []).filter(inv => inv.is_test !== true)
 
+    /**
+     * IS THIS STRIPE MONEY STILL OURS? Called before EVERY settlement of a Stripe feed.
+     *
+     * The stored charge is a SNAPSHOT. A refund issued after we synced it leaves our
+     * copy saying "received" forever, and the sync never revisits the row. So our record
+     * can insist money is in the bank long after it went back to the client.
+     *
+     * This must gate EVERY tier, not just the payment-intent one. Now that the invoice
+     * number travels with the payment, the dominant path is the invoice-reference tier,
+     * which auto-settles — guarding only the payment-intent tier would plug the hole
+     * that is about to become rare and leave open the one about to become common.
+     *
+     * When Stripe cannot be reached we DO NOT settle. This tier acts on the charge with
+     * no corroborating evidence, so when the corroboration is unavailable the honest move
+     * is to wait: the money is already in the bank, and a few hours' delay costs nothing.
+     * Booking a refunded charge against a live invoice costs a client.
+     *
+     * Returns null when it is safe to proceed; otherwise the MatchResult to return.
+     */
+    const stripeMoneyStillOurs = async (candidatePaymentId: string): Promise<MatchResult | null> => {
+      if (feed.source !== "stripe" || !feed.external_id) return null
+
+      const check = await isChargeRefundedNow(String(feed.external_id))
+
+      // Verified ours, or unverifiable-by-nature (no Stripe key / unknown charge id) —
+      // proceed. "unchecked" carries the same exposure we had before the check existed;
+      // stranding the feed forever would be worse.
+      if (check === "ok" || check === "unchecked") return null
+
+      if (check === "refunded") {
+        await supabaseAdmin
+          .from("td_bank_feeds")
+          .update({
+            status: "needs_review",
+            matched_payment_id: candidatePaymentId,
+            review_metadata: {
+              refunded_or_disputed: true,
+              candidate_payment_id: candidatePaymentId,
+              checked_at: now,
+            },
+            updated_at: now,
+          })
+          .eq("id", feedId)
+
+        return {
+          matched: false,
+          paymentId: candidatePaymentId,
+          moneyApplied: false,
+          note: "This Stripe payment has been refunded or disputed — it was NOT applied to the invoice.",
+        }
+      }
+
+      // "defer" — a transient Stripe failure. Leave the feed unmatched and retry on the
+      // next run rather than settling money we cannot vouch for. The cash is already in
+      // the bank; waiting costs nothing, booking a refund costs a client.
+      return { matched: false, moneyApplied: false, note: "Could not verify the payment with Stripe — deferred, will retry." }
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // TIER 0 — the CERTAIN link: Stripe PaymentIntent id.
     //
@@ -240,38 +298,8 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           }
         }
 
-        // Before settling from the charge ALONE, re-check Stripe: is this money still
-        // ours? Our stored copy of the charge is a snapshot — a refund issued after we
-        // synced it leaves our record saying "received" forever. Every other tier needs
-        // a corroborating signal (an amount, a name); this one does not, so it is the
-        // one that would confidently book refunded money.
-        const refundedNow = await isChargeRefundedNow(String(feed.external_id))
-        if (refundedNow === true) {
-          await supabaseAdmin
-            .from("td_bank_feeds")
-            .update({
-              status: "needs_review",
-              matched_payment_id: target.id,
-              review_metadata: {
-                refunded_or_disputed: true,
-                candidate_payment_id: target.id,
-                checked_at: now,
-              },
-              updated_at: now,
-            })
-            .eq("id", feedId)
-
-          return {
-            matched: false,
-            paymentId: target.id,
-            invoiceNumber: target.invoice_number ?? undefined,
-            moneyApplied: false,
-            note: "This Stripe payment has been refunded or disputed — it was NOT applied to the invoice.",
-          }
-        }
-        // refundedNow === null means Stripe was unreachable. Proceed (this is the same
-        // exposure every other tier already carries) rather than stalling reconciliation
-        // on a network blip.
+        const piRefundGate = await stripeMoneyStillOurs(target.id)
+        if (piRefundGate) return piRefundGate
 
         // Open invoice + certain identity → settle it.
         const piSettle = await settleInvoiceFromFeed(feedId, target.id, feedAmount, now, today, {
@@ -515,8 +543,20 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         score = 50
       }
 
-      // Boost for invoice number in reference
-      if (invoiceRefMatch) score += 20
+      // Boost for an invoice number in the reference — ONLY when the amount agrees.
+      //
+      // The reference match is generous by design: it will fire on any bare, zero-padded
+      // six-digit number appearing anywhere in the memo or sender text. That is the
+      // right trade-off when the amount corroborates it. It is the WRONG trade-off when
+      // the amount does not: an incidental number in a memo would otherwise outrank a
+      // properly corroborated candidate (identity + exact amount scores 75, name +
+      // amount scores 70) and get pinned as THE suggestion in the review banner — one
+      // click from settling a stranger's invoice. That is the exact shape this work
+      // exists to eliminate.
+      //
+      // An uncorroborated reference hit still becomes a candidate (60) — it is real
+      // evidence and must not be thrown away — it just does not outrank real proof.
+      if (invoiceRefMatch && amountDiff <= tolerance) score += 20
 
       candidates.push({
         id: inv.id,
@@ -686,6 +726,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
       return { matched: false, paymentId: best.id, invoiceNumber: best.invoiceNumber ?? undefined, confidence: best.confidence }
     }
+
+    // Same refund gate as the payment-intent tier. This is the path the invoice-
+    // reference tier lands on — the one that becomes DOMINANT now that the number
+    // travels with the payment — so it is the one that most needs the check.
+    const autoRefundGate = await stripeMoneyStillOurs(best.id)
+    if (autoRefundGate) return autoRefundGate
 
     // Apply the money through the ONE writer — same path the manual match uses.
     // It decides Paid vs Partial from the real balance (accumulating, capped), writes
@@ -920,6 +966,25 @@ async function settleInvoiceFromFeed(
   // returns. Running it here too would fire the client's activation TWICE.
   // Manual matches have no orchestrator above them, so they keep running it.
   if (opts.runActivationChain === false) {
+    return { invoiceNumber: result.invoiceNumber, applied: true, newStatus: result.newStatus }
+  }
+
+  // ⛔ A PART-PAYMENT NEVER ACTIVATES.
+  //
+  // The obligation is not met — the client still owes the balance — so the service
+  // does not switch on, and the activation chain does not run. Activation follows the
+  // payment that CLOSES the invoice.
+  //
+  // This guard is load-bearing, not hygiene. Without it: staff manually match a $500
+  // wire to a $2,200 invoice → correctly recorded as part-paid, $1,700 still owed →
+  // the activation chain runs anyway → activation settles the invoice IN FULL →
+  // $1,700 that nobody ever paid is credited, the invoice reads Paid, and an audit row
+  // is written swearing it was settled. The multi-invoice waterfall makes this the
+  // NORMAL path, not an edge case: its last funded invoice is a Partial by design.
+  //
+  // The orchestrator applies the same rule on the auto path. Both are needed — this
+  // one covers the manual paths, which have no orchestrator above them.
+  if (result.newStatus === "Partial") {
     return { invoiceNumber: result.invoiceNumber, applied: true, newStatus: result.newStatus }
   }
 

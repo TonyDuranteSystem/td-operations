@@ -284,7 +284,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
           // amount_paid, never wrote amount_due, had no already-paid guard and left no
           // audit row — the second writer that kept re-creating half-closed invoices.
           const { applyMoneyToInvoice } = await import("@/lib/finance/apply-payment")
-          await applyMoneyToInvoice({
+          const applied = await applyMoneyToInvoice({
             paymentId: match.id,
             mode: "apply",
             appliedAmount: total,
@@ -292,12 +292,19 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
             paymentMethod: "Whop",
             actor: "whop-webhook",
           })
-          // Fire-and-forget receipt email for exact-match Paid transitions.
-          import("@/lib/invoice-auto-send").then(({ sendPaidReceipt }) =>
-            sendPaidReceipt(match!.id).catch((err) =>
-              console.error("[whop-webhook] receipt send failed:", err),
-            ),
-          )
+
+          // Only send a PAID receipt if the invoice is actually settled. The writer can
+          // legitimately refuse (already closed) or record only a part-payment — telling
+          // the client "paid, thank you" in either case is a lie they will act on.
+          if (applied.applied && applied.newStatus === "Paid") {
+            import("@/lib/invoice-auto-send").then(({ sendPaidReceipt }) =>
+              sendPaidReceipt(match!.id).catch((err) =>
+                console.error("[whop-webhook] receipt send failed:", err),
+              ),
+            )
+          } else if (!applied.applied) {
+            console.warn(`[whop-webhook] No money applied to ${match.invoice_number}: ${applied.reason} — ${applied.detail}`)
+          }
         } else {
           // Fallback: partial match (Whop amount < invoice balance, at least 20% of total)
           const partialMatch = openInvoices.find(inv => {
