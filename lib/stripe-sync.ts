@@ -60,9 +60,16 @@ export async function syncStripeCharges(
   // Paginate through all charges
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    // Expand the PaymentIntent. Stripe does not copy Checkout Session metadata onto
+    // the Charge, so `charge.metadata` is empty for every payment we have ever taken —
+    // which is why the invoice number never reached reconciliation. Rather than betting
+    // on Stripe's inheritance rules (that bet IS the bug), read the PaymentIntent's own
+    // metadata directly. This also gives the matcher the PaymentIntent id, which is the
+    // certain link back to the invoice our webhook already marked paid.
     const charges = await stripe.charges.list({
       limit: 100,
       created: { gte: sinceTimestamp },
+      expand: ["data.payment_intent"],
       ...(startingAfter ? { starting_after: startingAfter } : {}),
     })
 
@@ -75,20 +82,34 @@ export async function syncStripeCharges(
         continue
       }
 
+      // The PaymentIntent carries the metadata we actually set (see stripe-checkout.ts).
+      // The charge's own metadata is empty on every Checkout-created payment.
+      const pi =
+        charge.payment_intent && typeof charge.payment_intent === "object"
+          ? charge.payment_intent
+          : null
+      const piMeta = (pi?.metadata ?? {}) as Record<string, string | undefined>
+
       const clientEmail =
         charge.billing_details?.email ||
         charge.metadata?.client_email ||
+        piMeta.client_email ||
         null
 
       const senderName =
         charge.billing_details?.name ||
         charge.metadata?.client_name ||
+        piMeta.client_name ||
         clientEmail ||
         charge.description ||
         "Unknown"
 
+      // The invoice number is the reference that makes reconciliation certain.
+      // Read it from the PaymentIntent first — that is where it now lives.
       const senderReference =
+        piMeta.invoice_number ||
         charge.metadata?.invoice_number ||
+        piMeta.offer_token ||
         charge.metadata?.offer_token ||
         null
 
@@ -100,12 +121,16 @@ export async function syncStripeCharges(
         return `${card.brand ?? "card"} ••••${card.last4 ?? ""}`
       })()
 
+      const invoiceNumber = piMeta.invoice_number || charge.metadata?.invoice_number || null
+      const offerToken = piMeta.offer_token || charge.metadata?.offer_token || null
+      const contractType = piMeta.contract_type || charge.metadata?.contract_type || null
+
       const memoParts = [
         charge.description,
         clientEmail ? `email: ${clientEmail}` : null,
-        charge.metadata?.contract_type ? `service: ${charge.metadata.contract_type}` : null,
-        charge.metadata?.invoice_number ? `inv: ${charge.metadata.invoice_number}` : null,
-        charge.metadata?.offer_token ? `offer: ${charge.metadata.offer_token}` : null,
+        contractType ? `service: ${contractType}` : null,
+        invoiceNumber ? `inv: ${invoiceNumber}` : null,
+        offerToken ? `offer: ${offerToken}` : null,
         cardInfo,
       ].filter(Boolean)
       const memo = memoParts.join(" | ") || null

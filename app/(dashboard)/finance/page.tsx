@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { isMatchableInvoice } from '@/lib/finance/invoice-matchability'
 import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
@@ -215,8 +216,7 @@ export default async function FinancePage({
       .select('id', { count: 'exact', head: true }),
     supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, account_id, accounts:account_id(company_name), contact_id, contacts:payments_contact_id_fkey(full_name)')
-      .not('invoice_status', 'in', '("Voided","Cancelled","Split")')
+      .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, status, is_test, account_id, accounts:account_id(company_name), contact_id, contacts:payments_contact_id_fkey(full_name)')
       .order('created_at', { ascending: false }),
   ])
 
@@ -225,7 +225,16 @@ export default async function FinancePage({
   // Cast: the contacts:payments_contact_id_fkey(full_name) embed is correct at
   // runtime but the generated Supabase types can't resolve the named FK
   // (payments has two FKs to contacts), so the field types as SelectQueryError.
-  const bankOpenInvoices = (bankOpenInvoicesRes.data ?? []) as unknown as OpenInvoice[]
+  //
+  // Matchability is filtered HERE, with the shared predicate, rather than in the
+  // query: the old query excluded only Voided/Cancelled/Split — so ALREADY-PAID
+  // invoices were offered as match targets in the bank-feed UI (staff saw a list of
+  // invoices with green "Paid" badges and could click one). It also read
+  // `invoice_status` alone, missing the 48 invoices that are Paid via `status` with
+  // a blank invoice_status. Test fixtures are excluded so a QA invoice can never
+  // absorb real client money.
+  const bankOpenInvoices = ((bankOpenInvoicesRes.data ?? []) as unknown as (OpenInvoice & { status?: string | null; is_test?: boolean | null })[])
+    .filter(inv => inv.is_test !== true && isMatchableInvoice(inv)) as OpenInvoice[]
 
   // ── Overview: aging, cash received, avg days, audit log ──
   const now = new Date()

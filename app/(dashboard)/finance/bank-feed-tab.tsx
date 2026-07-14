@@ -9,9 +9,9 @@ import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
   Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
-  Search, Building2, User, Trash2, Check, RotateCw,
+  Search, Building2, User, Trash2, Check, RotateCw, Copy, Undo2,
 } from 'lucide-react'
-import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed } from './actions'
+import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, restoreBankFeed } from './actions'
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
@@ -121,9 +121,13 @@ const STATUS_COLORS: Record<string, string> = {
   partial: 'bg-orange-100 text-orange-700',
   needs_review: 'bg-amber-100 text-amber-800',
   activation_crashed: 'bg-red-100 text-red-700',
+  // 'duplicate' had NO colour and NO tab — so a row flagged duplicate fell through to
+  // the "ignored" renderer and became invisible. That is how a genuine $50 client
+  // payment disappeared for days. It is now purple, filterable, and restorable.
+  duplicate: 'bg-purple-100 text-purple-700',
 }
 
-type FilterTab = 'all' | 'unmatched' | 'needs_review' | 'activation_crashed' | 'matched' | 'ignored'
+type FilterTab = 'all' | 'unmatched' | 'needs_review' | 'activation_crashed' | 'matched' | 'ignored' | 'duplicate'
 
 // ── Helpers ──
 
@@ -1305,6 +1309,55 @@ function CrashedRow({ feed }: { feed: BankFeedRecord }) {
   )
 }
 
+/**
+ * A transaction the system flagged as a duplicate.
+ *
+ * These used to be invisible — no tab, no colour, no count — so they rendered as
+ * "ignored" and nobody noticed when a REAL client payment was flagged by mistake
+ * (the old dedup rule treated two same-day, same-amount payments from one cardholder
+ * as one payment). The rule is gone, but the rows it created still exist, and any
+ * future flag must be visible and reversible. Restore puts the money back in the
+ * queue to be matched.
+ */
+function DuplicateRow({ feed }: { feed: BankFeedRecord }) {
+  const [isPending, startTransition] = useTransition()
+
+  const handleRestore = () => {
+    startTransition(async () => {
+      const result = await restoreBankFeed(feed.id)
+      if (!result.success) {
+        toast.error(result.error || 'Could not restore this transaction.')
+        return
+      }
+      toast.success('Restored — the transaction is back in the queue to be matched.')
+    })
+  }
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0">
+      <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
+        {SOURCE_LABELS[feed.source] ?? feed.source}
+      </span>
+      <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
+      <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
+      <span className="text-xs truncate flex-1">{feed.sender_name || '—'}</span>
+      <span className="text-xs text-muted-foreground truncate max-w-[200px]">{feed.memo || ''}</span>
+      <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.duplicate)}>
+        duplicate
+      </span>
+      <button
+        onClick={handleRestore}
+        disabled={isPending}
+        title="Not a duplicate — put this payment back in the queue"
+        className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 disabled:opacity-50 shrink-0"
+      >
+        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3" />}
+        Restore
+      </button>
+    </div>
+  )
+}
+
 function IgnoredRow({ feed }: { feed: BankFeedRecord }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0 opacity-60">
@@ -1422,6 +1475,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
     activation_crashed: bankFeeds.filter(f => f.status === 'activation_crashed').length,
     matched: bankFeeds.filter(f => f.status === 'matched').length,
     ignored: bankFeeds.filter(f => f.status === 'ignored').length,
+    duplicate: bankFeeds.filter(f => f.status === 'duplicate').length,
   }), [bankFeeds])
 
   // Build a lookup so needs_review rows can show the candidate invoice
@@ -1473,7 +1527,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
       {/* Filter bar + search */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex gap-1 flex-wrap">
-          {(['all', 'unmatched', 'needs_review', 'activation_crashed', 'matched', 'ignored'] as FilterTab[]).map(f => (
+          {(['all', 'unmatched', 'needs_review', 'activation_crashed', 'matched', 'ignored', 'duplicate'] as FilterTab[]).map(f => (
             <button
               key={f}
               onClick={() => { setFilter(f); setPage(0) }}
@@ -1485,6 +1539,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                     : f === 'activation_crashed' ? 'bg-red-100 text-red-700'
                     : f === 'matched' ? 'bg-emerald-100 text-emerald-700'
                     : f === 'ignored' ? 'bg-zinc-200 text-zinc-700'
+                    : f === 'duplicate' ? 'bg-purple-100 text-purple-700'
                     : 'bg-blue-100 text-blue-700'
                   : 'text-muted-foreground hover:bg-muted'
               )}
@@ -1493,6 +1548,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
               {f === 'needs_review' && <AlertTriangle className="h-3 w-3" />}
               {f === 'activation_crashed' && <AlertTriangle className="h-3 w-3" />}
               {f === 'matched' && <CheckCircle2 className="h-3 w-3" />}
+              {f === 'duplicate' && <Copy className="h-3 w-3" />}
               {f === 'needs_review' ? 'Needs Review' :
                f === 'activation_crashed' ? 'Crashed' :
                f.charAt(0).toUpperCase() + f.slice(1)} ({counts[f]})
@@ -1572,6 +1628,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
               <CrashedRow feed={feed} />
             ) : feed.status === 'matched' ? (
               <MatchedRow feed={feed} canDeleteDuplicate={eligibleForDeleteDuplicate.has(feed.id)} />
+            ) : feed.status === 'duplicate' ? (
+              <DuplicateRow feed={feed} />
             ) : (
               <IgnoredRow feed={feed} />
             )

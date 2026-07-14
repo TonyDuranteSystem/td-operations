@@ -90,6 +90,27 @@ export async function createStripeCheckoutSession(params: {
         invoice_number: invoiceNumber || "",
         source: "td-operations",
       },
+      // Stamp the SAME identity on the PaymentIntent, not just the Checkout Session.
+      //
+      // Stripe does NOT copy Session metadata onto the PaymentIntent or the Charge.
+      // We had always set it on the Session — and it never reached the money. Every
+      // charge arrived in our bank feed with empty metadata and no invoice number, so
+      // reconciliation had nothing to match on but the amount. That single gap is the
+      // root cause of the July 2026 reconciliation failures.
+      //
+      // With this, the invoice number travels WITH the payment and the matcher's
+      // strongest tier fires automatically — no client action, no staff click.
+      payment_intent_data: {
+        metadata: {
+          offer_token: offerToken || "",
+          lead_id: leadId || "",
+          client_name: clientName,
+          client_email: clientEmail || "",
+          contract_type: contractType,
+          invoice_number: invoiceNumber || "",
+          source: "td-operations",
+        },
+      },
       success_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-cancelled${offerToken ? `?token=${encodeURIComponent(offerToken)}` : ""}`,
     })

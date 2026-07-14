@@ -238,6 +238,25 @@ export async function generateInvoicePdf(input: InvoicePdfInput): Promise<Uint8A
         y -= 12
       }
     }
+
+    // The payment reference — the ONE thing that makes a wire identifiable.
+    //
+    // Without the invoice number in the transfer reference there is nothing to match a
+    // wire on but its amount, which is how payments end up unreconciled (or, worse, one
+    // click away from being credited to another client with a similar balance). The
+    // portal Pay screen already demands it; the PDF and the emailed invoice are where
+    // clients actually read their bank details, so it has to be here too.
+    if (input.invoiceNumber) {
+      y -= 6
+      page.drawText('Payment Reference (required):', { x: 50, y, size: 9, font: helveticaBold, color: black })
+      page.drawText(input.invoiceNumber, { x: 205, y, size: 10, font: helveticaBold, color: black })
+      y -= 12
+      page.drawText(
+        'Please include this number in your transfer reference — without it we cannot identify your payment.',
+        { x: 50, y, size: 8, font: helvetica, color: gray },
+      )
+      y -= 12
+    }
   }
 
   // Footer

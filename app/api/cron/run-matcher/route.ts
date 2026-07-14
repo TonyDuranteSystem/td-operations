@@ -1,6 +1,10 @@
 /**
- * One-time matcher run — processes ALL unmatched bank feeds through matchAndReconcile.
+ * One-time matcher run — processes ALL unmatched bank feeds.
  * Used for batch reconciliation after data cleanup or matcher enhancement.
+ *
+ * Goes through the ORCHESTRATOR, not matchAndReconcile directly: the matcher marks the
+ * invoice Paid but has no knowledge of pending_activations, so running it alone leaves
+ * the client's service un-activated with no way to notice.
  */
 
 export const dynamic = "force-dynamic"
@@ -8,7 +12,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { processOneFeed } from "@/lib/operations/process-bank-feed-matches"
 import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
@@ -38,7 +42,7 @@ export async function GET(req: NextRequest) {
   }
 
   for (const feed of feeds) {
-    const result = await matchAndReconcile(feed.id)
+    const result = await processOneFeed(feed.id)
     if (result.matched) {
       results.matched++
       results.matches.push({

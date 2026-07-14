@@ -18,7 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { processOneFeed } from "@/lib/operations/process-bank-feed-matches"
 import crypto from "crypto"
 import type { Json } from "@/lib/database.types"
 
@@ -80,8 +80,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: feedErr.message }, { status: 500 })
     }
 
-    // Auto-match
-    const matchResult = await matchAndReconcile(feed.id)
+    // Auto-match — THROUGH THE ORCHESTRATOR, so the client's service is actually
+    // activated. Calling matchAndReconcile directly (as this route used to) marks the
+    // invoice Paid but never runs the activation chain, and the cron then skips the feed
+    // because it is no longer 'unmatched': the client pays, the invoice closes, and
+    // nothing happens.
+    const matchResult = await processOneFeed(feed.id)
 
     await supabaseAdmin.from("action_log").insert({
       action_type: "banking_circle_webhook",

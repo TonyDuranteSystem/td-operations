@@ -20,13 +20,15 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite } from "@/lib/db"
 import {
   createTDInvoice,
-  syncTDInvoiceStatus,
   reconcileTDInvoiceMirror,
   type TDInvoiceInput,
   type TDInvoiceResult,
   type ReconcileTDMirrorResult,
 } from "@/lib/portal/td-invoice"
-import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
+// The client-visible mirrors (client_expenses + client_invoices) are now written
+// inside applyMoneyToInvoice — the one money writer — so this module no longer
+// calls syncTDInvoiceStatus / syncInvoiceStatus directly.
+import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
 import {
   onFirstInstallmentPaid,
   onSecondInstallmentPaid,
@@ -54,7 +56,12 @@ export interface ConfirmPaymentParams {
 export interface ConfirmPaymentResult {
   success: boolean
   payment_id: string
-  outcome: "paid" | "already_paid" | "error"
+  /**
+   * "partial" (2026-07-14): the caller passed an amount smaller than the balance.
+   * The money is recorded and the invoice keeps its remaining debt — but it is NOT
+   * settled, so no installment handler and no paid receipt fire.
+   */
+  outcome: "paid" | "partial" | "already_paid" | "error"
   installment_handler?: {
     triggered: boolean
     year?: number
@@ -121,44 +128,49 @@ export async function confirmPayment(
     }
   }
 
-  // Route through syncInvoiceStatus when linked to a portal invoice — it
-  // updates payments, client_invoices, and client_expenses coherently.
-  if (payment.portal_invoice_id) {
-    await syncInvoiceStatus(
-      "invoice",
-      payment.portal_invoice_id,
-      "Paid",
-      paid_date,
-      params.amount_paid,
-    )
-  } else {
-    // Direct update path for payments without a portal invoice link (wire,
-    // ad-hoc, or legacy installment payments).
-    const updates: Record<string, unknown> = {
-      status: "Paid",
-      paid_date,
-      updated_at: new Date().toISOString(),
-    }
-    if (params.amount_paid !== undefined) {
-      updates.amount_paid = params.amount_paid
-    }
-    await dbWrite(
-      supabaseAdmin.from("payments").update(updates).eq("id", payment.id),
-      "payments.update",
-    )
+  // ONE writer for both branches (2026-07-14). Previously this function had two,
+  // and BOTH were broken:
+  //   * the portal_invoice_id branch called syncInvoiceStatus('invoice', …), which
+  //     only touches client_invoices — it NEVER wrote the payments row at all, yet
+  //     this function still returned outcome:"paid". The idempotency guard above
+  //     reads payment.status, the very column that branch never wrote, so a
+  //     retried Stripe webhook re-fired the installment handler and the receipt.
+  //   * the direct branch wrote status + amount_paid but never invoice_status and
+  //     never amount_due — the source of the 64 "half-closed" invoices that still
+  //     read as open, still counted as outstanding, and stayed matchable.
+  //
+  // applyMoneyToInvoice writes the full coherent tuple, mirrors client_expenses and
+  // client_invoices, caps the amount, and logs to action_log.
+  //
+  // Mode: when the caller passes an explicit amount (the Stripe webhook passes the
+  // amount actually charged), APPLY that amount — defaulting to the invoice total
+  // would silently convert a part-payment into a full credit. With no amount, the
+  // caller is asserting full settlement.
+  const apply = await applyMoneyToInvoice({
+    paymentId: payment.id,
+    mode: params.amount_paid !== undefined ? "apply" : "settle_full",
+    appliedAmount: params.amount_paid,
+    paidDate: paid_date,
+    actor: "confirm-payment",
+  })
 
-    // Mirror the status transition to client_expenses (task 918fe55e —
-    // prior behavior silently left client_expenses on 'Overdue' when a
-    // wire/ad-hoc payment was confirmed via this path, causing 6
-    // client-visible invoices to stay "overdue" in the portal after
-    // payment. Backfilling + calling sync here so new confirmations
-    // don't recreate the drift.
-    await syncTDInvoiceStatus(
-      payment.id,
-      "Paid",
-      paid_date,
-      params.amount_paid,
-    )
+  if (!apply.applied) {
+    // Terminal / zero — nothing was written. Report honestly instead of claiming paid.
+    return {
+      success: apply.reason === "terminal",
+      payment_id: params.payment_id,
+      outcome: apply.reason === "terminal" ? "already_paid" : "error",
+      ...(apply.reason === "terminal" ? {} : { error: apply.detail || "Payment could not be applied." }),
+    }
+  }
+
+  // A part-payment is NOT a settlement: no installment handler, no paid receipt.
+  if (apply.newStatus === "Partial") {
+    return {
+      success: true,
+      payment_id: params.payment_id,
+      outcome: "partial",
+    }
   }
 
   let installment_handler: ConfirmPaymentResult["installment_handler"] | undefined

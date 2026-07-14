@@ -903,6 +903,50 @@ export async function ignoreBankFeed(feedId: string): Promise<ActionResult> {
   })
 }
 
+/**
+ * Restore a transaction that was wrongly flagged as a duplicate.
+ *
+ * The old dedup rule flagged any two unmatched rows sharing source + amount + day +
+ * sender name — which is what a client legitimately paying two invoices of the same
+ * price on the same day looks like. The rule is deleted, but the rows it produced
+ * are still sitting there, invisible. This puts the money back in the queue.
+ *
+ * Only touches rows currently flagged `duplicate`: it must never resurrect a row a
+ * human deliberately ignored, nor un-match reconciled money.
+ */
+export async function restoreBankFeed(feedId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+
+    const { data: feed, error: readErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id, status')
+      .eq('id', feedId)
+      .maybeSingle()
+    if (readErr) throw new Error(`Failed to read bank feed: ${readErr.message}`)
+    if (!feed) throw new Error('Transaction not found.')
+    if (feed.status !== 'duplicate') {
+      throw new Error(`Only duplicate-flagged transactions can be restored — this one is "${feed.status}".`)
+    }
+
+    // eslint-disable-next-line no-restricted-syntax -- targeted status reset on td_bank_feeds
+    const { error: restoreErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .update({ status: 'unmatched', updated_at: new Date().toISOString() })
+      .eq('id', feedId)
+      .eq('status', 'duplicate')
+    if (restoreErr) throw new Error(`Failed to restore bank feed: ${restoreErr.message}`)
+
+    revalidatePath('/finance')
+    revalidatePath('/reconciliation')
+  }, {
+    action_type: 'update',
+    table_name: 'td_bank_feeds',
+    record_id: feedId,
+    summary: 'Bank feed restored from duplicate — returned to the matching queue',
+  })
+}
+
 export async function deleteDuplicateBankFeed(feedId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')

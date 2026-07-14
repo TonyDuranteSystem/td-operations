@@ -82,41 +82,30 @@ export async function GET(req: NextRequest) {
       console.error("[check-wire] Airwallex API sync failed:", airwallexErr)
     }
 
-    // ─── Step 3: Content-based dedup safety net ─────────────────────
-    // Catch duplicates that slip past external_id (e.g. same deposit from different sources)
-
-    try {
-      const { data: recentFeeds } = await supabase
-        .from("td_bank_feeds")
-        .select("id, source, amount, transaction_date, sender_name, created_at")
-        .eq("status", "unmatched")
-        .order("created_at", { ascending: false })
-        .limit(200)
-
-      if (recentFeeds && recentFeeds.length > 1) {
-        const seen = new Set<string>()
-        const dupeIds: string[] = []
-
-        for (const feed of recentFeeds) {
-          const key = `${feed.source}|${Number(feed.amount).toFixed(2)}|${feed.transaction_date}|${(feed.sender_name || "").toLowerCase().trim()}`
-          if (seen.has(key)) {
-            dupeIds.push(feed.id)
-          } else {
-            seen.add(key)
-          }
-        }
-
-        if (dupeIds.length > 0) {
-          await supabase
-            .from("td_bank_feeds")
-            .update({ status: "duplicate", updated_at: new Date().toISOString() })
-            .in("id", dupeIds)
-          console.warn(`[check-wire] Marked ${dupeIds.length} content-duplicate feeds`)
-        }
-      }
-    } catch (dedupErr) {
-      console.error("[check-wire] Content dedup failed:", dedupErr)
-    }
+    // ─── Step 3: (REMOVED 2026-07-14) Content-based dedup safety net ──────
+    //
+    // This block used to flag a feed as `duplicate` when it shared
+    // source + amount + transaction_date + sender_name with another unmatched row.
+    // It was DELETING REAL MONEY from the review queue.
+    //
+    // `transaction_date` is a DATE, not a timestamp. So a client who legitimately
+    // pays two invoices of the same amount on the same day with the same card
+    // produces two rows that are identical on all four fields — and the second one
+    // was silently marked `duplicate`. That is exactly what happened to Simple
+    // Holdings USA on 2026-07-14: two genuine $50 Stripe charges (two different
+    // invoices, two different Stripe charge ids, two different payment intents) and
+    // the second payment vanished from the queue. `duplicate` has no filter tab in
+    // the UI, so it rendered as "ignored" and nobody could see it.
+    //
+    // Real duplicates are already impossible: every sync path upserts on
+    // `external_id` (the provider's own transaction id) with a unique conflict
+    // target, so the same transaction can never be inserted twice. Content
+    // similarity is NOT evidence of duplication — it is evidence of a client paying
+    // two invoices. There is no dedup step here any more, by design.
+    //
+    // If a future feed source is ever found to emit the SAME deposit twice under
+    // two different external_ids, dedup it on the provider's transaction id — never
+    // on amount + name + day.
 
     // ─── Step 4: Mark Mercury Stripe payouts as outgoing ────────────
     // These rows are already tracked by the Stripe sync; marking them outgoing

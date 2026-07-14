@@ -15,9 +15,20 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
-import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { runActivation } from "@/lib/operations/activate-service"
 import { getAppSetting } from "@/lib/settings"
+import { isMatchableInvoice, isTerminalInvoice } from "@/lib/finance/invoice-matchability"
+import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
+import { resolveInvoiceStatusAfterPayment } from "@/lib/finance/invoice-money"
+import {
+  extractStripePaymentIntent,
+  extractFeedEmails,
+  extractInvoiceReference,
+} from "@/lib/finance/feed-signals"
+
+// Re-exported: the money math moved to lib/finance/invoice-money.ts so the single
+// money writer (lib/finance/apply-payment.ts) can use it without a circular import.
+export { resolveInvoiceStatusAfterPayment }
 
 // Common business words excluded from name matching to prevent false positives
 const STOP_WORDS = new Set([
@@ -43,6 +54,16 @@ interface MatchResult {
   invoiceNumber?: string
   confidence?: string
   error?: string
+  /**
+   * Whether MONEY was actually applied. A feed can be legitimately `matched` to an
+   * invoice with `moneyApplied: false` — the audit-link case (the invoice was
+   * already Paid through another channel, e.g. the Stripe webhook closed it). The
+   * old code reported success in that case while writing nothing, which is how a
+   * genuine payment could look settled without ever crediting an invoice.
+   */
+  moneyApplied?: boolean
+  /** Human-readable explanation when the feed was linked but no money moved. */
+  note?: string
 }
 
 /**
@@ -104,7 +125,19 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const feedCurrency = feed.currency || "USD"
     const senderLower = (feed.sender_name || "").toLowerCase()
     const memoLower = (feed.memo || "").toLowerCase()
-    const refLower = (feed.sender_reference || "").toLowerCase()
+    // The invoice reference may live on the column OR inside the Stripe payload
+    // (charge metadata / expanded PaymentIntent metadata) — read both.
+    const feedInvoiceRef = feed.sender_reference || extractInvoiceReference(feed)
+    const refLower = (feedInvoiceRef || "").toLowerCase()
+
+    const now = new Date().toISOString()
+    const today = new Date().toISOString().split("T")[0]
+    const paymentMethod = feed.source === "relay" ? "Wire (Relay)"
+      : feed.source === "banking_circle" ? "Wire (Banking Circle)"
+      : feed.source === "mercury" ? "Wire (Mercury)"
+      : feed.source === "airwallex_api" || feed.source === "airwallex_email" ? "Wire (Airwallex)"
+      : feed.source === "stripe" ? "Stripe"
+      : "Wire"
 
     // Extract real sender from Wise transfers: "From <real_sender> Via WISE"
     let effectiveSender = senderLower
@@ -118,14 +151,163 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       effectiveSender = merchantMatch[1].toLowerCase().trim()
     }
 
-    // Get all invoices — filter status AND currency in JS (PostgREST .in() on custom enums is unreliable)
+    // Get all invoices — filter status AND currency in JS (PostgREST .in() on custom enums is unreliable).
+    // `status` is selected alongside `invoice_status`: matchability reads BOTH columns
+    // (see lib/finance/invoice-matchability.ts — reading invoice_status alone let 48
+    // already-paid invoices with a NULL invoice_status stay live auto-match targets).
+    // `is_test` is excluded so a QA fixture invoice can never absorb real client money.
     const { data: allInvoices, error: invQueryErr } = await supabaseAdmin
       .from("payments")
-      .select("id, account_id, contact_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name), contacts:contact_id(full_name)")
+      .select("id, account_id, contact_id, invoice_number, invoice_status, status, is_test, total, amount, amount_due, amount_currency, stripe_payment_id, description, accounts:account_id(company_name), contacts:contact_id(full_name)")
 
     if (invQueryErr) {
       return { matched: false, error: `Invoice query failed: ${invQueryErr.message}` }
     }
+
+    const realInvoices = (allInvoices || []).filter(inv => inv.is_test !== true)
+
+    // ──────────────────────────────────────────────────────────────────────
+    // TIER 0 — the CERTAIN link: Stripe PaymentIntent id.
+    //
+    // A Stripe charge carries the id of its PaymentIntent, and when our Stripe
+    // webhook marks an invoice paid it stamps that SAME id on the invoice. Comparing
+    // the two identifies the invoice with zero guessing — no amounts, no names, no
+    // fuzzy matching. Nothing compared them before, which is why every card-paid
+    // invoice left an orphaned, permanently-unmatched feed row behind (Tamás
+    // Fazekas's €3,000).
+    // ──────────────────────────────────────────────────────────────────────
+    const paymentIntentId = extractStripePaymentIntent(feed)
+    if (paymentIntentId) {
+      const piMatches = realInvoices.filter(inv => inv.stripe_payment_id === paymentIntentId)
+
+      if (piMatches.length > 0) {
+        let target = piMatches[0]
+
+        if (piMatches.length > 1) {
+          // One PaymentIntent already maps to TWO payment rows in production (a real
+          // invoice plus an orphan row created by an older webhook path). Prefer the
+          // row that is a real invoice; if still ambiguous, REFUSE to guess.
+          const withNumber = piMatches.filter(inv => !!inv.invoice_number)
+          if (withNumber.length === 1) {
+            target = withNumber[0]
+          } else {
+            await supabaseAdmin
+              .from("td_bank_feeds")
+              .update({
+                status: "needs_review",
+                review_metadata: {
+                  ambiguous_payment_intent: paymentIntentId,
+                  candidate_payment_ids: piMatches.map(inv => inv.id),
+                  candidate_invoice_numbers: piMatches.map(inv => inv.invoice_number),
+                  checked_at: now,
+                },
+                updated_at: now,
+              })
+              .eq("id", feedId)
+
+            return {
+              matched: false,
+              error: `This Stripe payment maps to ${piMatches.length} invoice records — a human must pick.`,
+            }
+          }
+        }
+
+        // Already closed (the webhook settled it, or a human marked it paid by hand).
+        // Link it for the audit trail — but do NOT touch the money. This is the case
+        // that previously had no home at all: the payment could never attach to its
+        // own invoice, so it sat "unmatched" forever.
+        if (isTerminalInvoice(target)) {
+          await supabaseAdmin
+            .from("td_bank_feeds")
+            .update({
+              matched_payment_id: target.id,
+              match_confidence: "certain_retroactive",
+              matched_at: now,
+              matched_by: "auto",
+              status: "matched",
+              updated_at: now,
+            })
+            .eq("id", feedId)
+
+          return {
+            matched: true,
+            paymentId: target.id,
+            invoiceNumber: target.invoice_number ?? undefined,
+            confidence: "certain_retroactive",
+            moneyApplied: false,
+            note: "Invoice was already paid through Stripe — linked for the audit trail; no money re-applied.",
+          }
+        }
+
+        // Open invoice + certain identity → settle it.
+        const piSettle = await settleInvoiceFromFeed(feedId, target.id, feedAmount, now, today, {
+          paymentMethod,
+          actor: "bank-feed:auto-payment-intent",
+          runActivationChain: false,
+        })
+
+        if (piSettle.applied) {
+          await supabaseAdmin
+            .from("td_bank_feeds")
+            .update({
+              matched_payment_id: target.id,
+              match_confidence: piSettle.newStatus === "Partial" ? "partial" : "exact",
+              matched_at: now,
+              matched_by: "auto",
+              status: "matched",
+              updated_at: now,
+            })
+            .eq("id", feedId)
+
+          return {
+            matched: true,
+            paymentId: target.id,
+            invoiceNumber: target.invoice_number ?? undefined,
+            confidence: piSettle.newStatus === "Partial" ? "partial" : "exact",
+            moneyApplied: true,
+          }
+        }
+        // Refused (already applied) → fall through to normal scoring rather than
+        // claiming a match.
+      }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // IDENTITY — who is this money from? Resolve by EMAIL, never by the name.
+    //
+    // On a card payment `sender_name` is the CARDHOLDER: "Bilaal Rajan" paying for
+    // Simple Holdings USA, or the truncated "Fazek" for Tamás Fazekas. Matching on it
+    // is worse than useless. The billing email, however, resolves cleanly to a CRM
+    // contact and — through account_contacts — to the companies that contact belongs
+    // to. When we know WHO paid, we only ever consider THEIR invoices.
+    // ──────────────────────────────────────────────────────────────────────
+    const feedEmails = extractFeedEmails(feed)
+    const identityContactIds = new Set<string>()
+    const identityAccountIds = new Set<string>()
+
+    if (feedEmails.length > 0) {
+      const { data: emailContacts } = await supabaseAdmin
+        .from("contacts")
+        .select("id")
+        .in("email", feedEmails)
+
+      for (const c of emailContacts ?? []) identityContactIds.add(c.id)
+
+      if (identityContactIds.size > 0) {
+        const { data: idLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id")
+          .in("contact_id", Array.from(identityContactIds))
+        for (const l of idLinks ?? []) {
+          if (l.account_id) identityAccountIds.add(l.account_id)
+        }
+      }
+    }
+
+    const identityResolved = identityContactIds.size > 0 || identityAccountIds.size > 0
+    const belongsToPayer = (inv: { account_id: string | null; contact_id: string | null }) =>
+      (inv.account_id != null && identityAccountIds.has(inv.account_id)) ||
+      (inv.contact_id != null && identityContactIds.has(inv.contact_id))
 
     // Build contact → linked-company-names map. Handles the cross-entity payment case:
     // an ITIN invoice is linked to a contact (not an account), but the wire arrives from
@@ -135,7 +317,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     // in the sender name. Also covers the inverse: company invoice paid by a member's
     // personal account (matched via contact_id → other companies they're a member of).
     const contactIdsInScope = Array.from(
-      new Set((allInvoices ?? []).map(i => i.contact_id).filter((id): id is string => !!id))
+      new Set(realInvoices.map(i => i.contact_id).filter((id): id is string => !!id))
     )
     const contactToLinkedCompanies: Record<string, string[]> = {}
     if (contactIdsInScope.length > 0) {
@@ -152,16 +334,33 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     }
 
     // Filter BOTH status and currency in code — PostgREST .eq()/.in() on custom enums returns wrong results.
-    // Use a blocklist of terminal statuses rather than an allowlist: any invoice that isn't
-    // already Paid, Voided, or Cancelled represents money still expected and should be matchable
-    // (includes Draft — created at contract signing, real obligation, payment can arrive before
-    // the invoice is formally sent).
-    const currencyFiltered = (allInvoices || []).filter(inv =>
-      isMatchableInvoiceStatus(String(inv.invoice_status)) && String(inv.amount_currency) === feedCurrency
+    // Matchability is the SHARED predicate (lib/finance/invoice-matchability.ts): terminal if
+    // EITHER status column says the invoice is closed, with a NULL invoice_status falling back to
+    // `status`. Draft + Partial stay matchable (a Draft is a real obligation created at contract
+    // signing; a Partial still owes its balance).
+    const openInCurrency = realInvoices.filter(inv =>
+      isMatchableInvoice(inv) && String(inv.amount_currency) === feedCurrency
     )
 
+    // When we KNOW who paid, only that payer's invoices are candidates.
+    //
+    // This is the guard against the worst failure mode in the old matcher: an
+    // amount-only ("medium") match would pin a stranger's invoice as the suggested
+    // candidate — a $50 card payment from Simple Holdings' cardholder was one click
+    // away from settling a $51 invoice belonging to an unrelated company. Scoping to
+    // the payer makes that impossible.
+    //
+    // Deliberately conservative: if the payer is identified but none of THEIR invoices
+    // fit, we do NOT fall back to everyone else's. The feed stays for a human. Losing
+    // an automatic match is cheap; crediting the wrong client's invoice is not.
+    const currencyFiltered = identityResolved
+      ? openInCurrency.filter(belongsToPayer)
+      : openInCurrency
+
     if (currencyFiltered.length === 0) {
-      return { matched: false }
+      // No open invoice for this payer (or none at all). The retroactive pass below
+      // may still link this to an already-paid invoice for the audit trail.
+      if (!identityResolved) return { matched: false }
     }
 
     // Score each invoice
@@ -216,6 +415,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       // Check both exact invoice number AND flexible INV-NNNNNN pattern in feed text
       const invoiceRefMatch = invoiceRefInText(feedText, invoiceNum)
 
+      // Identity from the payer's email — the reliable signal on a card payment.
+      // (The candidate pool is ALREADY scoped to the payer when identity resolved, so
+      // this is true for every candidate here; it is kept explicit for scoring clarity
+      // and so a future caller can't accidentally rely on the pool being scoped.)
+      const identityMatch = identityResolved && belongsToPayer(inv)
+
       let confidence: "exact" | "high" | "medium"
       let score: number
 
@@ -227,12 +432,22 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         // Exact amount (<$1 diff) AND company/contact name match → auto-match
         confidence = "exact"
         score = 95
+      } else if (identityMatch && amountDiff < 1) {
+        // Payer identified by email + exact amount, but no invoice reference.
+        // "high", NOT "exact": with the default threshold this lands in the review
+        // queue, correctly scoped to that client's invoices. It is deliberately not
+        // auto-settled — a client with two same-priced invoices (Simple Holdings has
+        // exactly that) is genuinely ambiguous, and only the invoice number can break
+        // the tie. Once the number is carried on the payment (see stripe-checkout),
+        // the "exact" tier above fires instead and no human is needed.
+        confidence = "high"
+        score = 75
       } else if ((nameMatch || contactMatch) && amountDiff <= tolerance) {
         // Company/contact name match + amount within 5% → high confidence
         confidence = "high"
         score = 70
       } else {
-        // Amount-only match (no name, no invoice ref) → manual review only
+        // Amount-only match (no identity, no name, no invoice ref) → manual review only
         confidence = "medium"
         score = 50
       }
@@ -254,10 +469,17 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const bestOpenMatch = candidates.sort((a, b) => b.score - a.score)[0]
     const shouldTryRetroactive = candidates.length === 0 || (bestOpenMatch && bestOpenMatch.confidence === "medium")
     if (shouldTryRetroactive) {
-      // Reuse allInvoices from above, filter for Paid + correct currency in JS
-      const paidFiltered = (allInvoices || []).filter(inv =>
-        String(inv.invoice_status) === "Paid" && String(inv.amount_currency) === feedCurrency
+      // Already-PAID invoices only (never Cancelled/Voided — audit-linking money to a
+      // cancelled invoice would be a lie). Read BOTH columns: 48 production invoices are
+      // status='Paid' with a NULL invoice_status, and checking invoice_status alone made
+      // them invisible here while leaving them matchable above — exactly backwards.
+      const paidAll = realInvoices.filter(inv =>
+        (String(inv.invoice_status) === "Paid" || String(inv.status) === "Paid") &&
+        String(inv.amount_currency) === feedCurrency
       )
+      // Same identity scoping as the open-invoice pass: never audit-link a payment to
+      // a stranger's paid invoice just because the amount happens to line up.
+      const paidFiltered = identityResolved ? paidAll.filter(belongsToPayer) : paidAll
 
       if (paidFiltered.length > 0) {
 
@@ -310,10 +532,21 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
           const paidInvRefMatch = invoiceRefInText(feedText, paidInvNum)
 
-          // Require strong signal: invoice ref OR (name/contact match + exact amount)
-          if (!paidInvRefMatch && !((paidNameMatch || paidContactMatch) && amountDiff < 1)) continue
+          // Identity (billing email → contact → their companies) is a STRONG signal —
+          // stronger than the name, which on a card payment is the cardholder's.
+          // Without this, Tamás Fazekas's €3,000 could never find its invoice: the
+          // invoice had been marked paid BY HAND (so it carries no Stripe id for
+          // Tier 0), and Stripe reported his name truncated to "Fazek", which matches
+          // nothing. His email matched his contact record on the first try.
+          const paidIdentityMatch = identityResolved && belongsToPayer(inv)
 
-          const score = paidInvRefMatch ? 100 : 80
+          // Require a strong signal: invoice reference, OR (identity/name + exact amount).
+          if (
+            !paidInvRefMatch &&
+            !((paidNameMatch || paidContactMatch || paidIdentityMatch) && amountDiff < 1)
+          ) continue
+
+          const score = paidInvRefMatch ? 100 : paidIdentityMatch ? 90 : 80
           if (!bestRetro || score > bestRetro.score) {
             bestRetro = { id: inv.id, invoiceNumber: inv.invoice_number, score }
           }
@@ -338,6 +571,11 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
             paymentId: bestRetro.id,
             invoiceNumber: bestRetro.invoiceNumber ?? undefined,
             confidence: "retroactive",
+            // The invoice was already paid through another channel. The feed is linked
+            // for the audit trail and NO money is applied — callers must not report this
+            // as a payment being reconciled.
+            moneyApplied: false,
+            note: "Invoice was already paid — linked for the audit trail; no money applied.",
           }
         }
       }
@@ -386,60 +624,58 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       return { matched: false, paymentId: best.id, invoiceNumber: best.invoiceNumber ?? undefined, confidence: best.confidence }
     }
 
-    // Auto-match: mark feed as matched
-    const now = new Date().toISOString()
-    const today = new Date().toISOString().split("T")[0]
-    const paymentMethod = feed.source === "relay" ? "Wire (Relay)"
-      : feed.source === "banking_circle" ? "Wire (Banking Circle)"
-      : feed.source === "mercury" ? "Wire (Mercury)"
-      : feed.source === "airwallex_api" || feed.source === "airwallex_email" ? "Wire (Airwallex)"
-      : feed.source === "stripe" ? "Stripe"
-      : "Wire"
+    // Apply the money through the ONE writer — same path the manual match uses.
+    // It decides Paid vs Partial from the real balance (accumulating, capped), writes
+    // the coherent tuple, mirrors to the client-visible tables, records the
+    // (feed, invoice) application so the same money can never be credited twice, and
+    // logs to action_log. The auto path previously used a SECOND algorithm
+    // (`syncInvoiceStatus('payment', …)`) that OVERWROTE amount_paid — silently
+    // erasing an earlier partial payment — and never wrote amount_due at all.
+    //
+    // Activation is left to `processBankFeedMatches`, which runs it after this
+    // returns; running it here as well would activate the client twice.
+    const settle = await settleInvoiceFromFeed(feedId, best.id, feedAmount, now, today, {
+      paymentMethod,
+      actor: "bank-feed:auto",
+      runActivationChain: false,
+    })
 
-    // Check if this is a partial payment (feed amount < invoice remaining balance)
-    const bestInvoice = currencyFiltered.find(inv => inv.id === best.id)
-    const bestInvoiceBalance = bestInvoice?.invoice_status === 'Partial'
-      ? Number(bestInvoice?.amount_due ?? bestInvoice?.total ?? 0)
-      : Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
-    const bestInvoiceTotal = Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
-    const isPartialPayment = feedAmount < bestInvoiceBalance && feedAmount >= bestInvoiceTotal * 0.2 && Math.abs(feedAmount - bestInvoiceBalance) >= 1
-
-    if (isPartialPayment) {
-      // Partial payment — mark as Partial, not Paid
+    if (!settle.applied) {
+      // The writer refused (already closed, or this exact transaction was already
+      // applied). Do NOT mark the feed matched — that would report money as
+      // reconciled when nothing moved. Park it for a human with the reason.
       await supabaseAdmin
         .from("td_bank_feeds")
         .update({
           matched_payment_id: best.id,
-          match_confidence: "partial",
-          matched_at: now,
-          matched_by: "auto",
-          status: "matched",
+          match_confidence: best.confidence,
+          status: "needs_review",
+          review_metadata: {
+            not_applied_reason: settle.reason ?? "unknown",
+            not_applied_detail: settle.detail ?? null,
+            checked_at: now,
+          },
           updated_at: now,
         })
         .eq("id", feedId)
 
-      await syncInvoiceStatus("payment", best.id, "Partial", today, feedAmount)
-
-      // eslint-disable-next-line no-restricted-syntax
-      await supabaseAdmin
-        .from("payments")
-        .update({ payment_method: paymentMethod })
-        .eq("id", best.id)
-
       return {
-        matched: true,
+        matched: false,
         paymentId: best.id,
         invoiceNumber: best.invoiceNumber ?? undefined,
-        confidence: "partial",
+        confidence: best.confidence,
+        moneyApplied: false,
+        note: settle.detail,
       }
     }
 
-    // Full payment — mark as Paid
+    const settledPartial = settle.newStatus === "Partial"
+
     await supabaseAdmin
       .from("td_bank_feeds")
       .update({
         matched_payment_id: best.id,
-        match_confidence: best.confidence,
+        match_confidence: settledPartial ? "partial" : best.confidence,
         matched_at: now,
         matched_by: "auto",
         status: "matched",
@@ -447,15 +683,17 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       })
       .eq("id", feedId)
 
-    // Mark invoice as Paid via unified system (updates BOTH payments + client_invoices)
-    await syncInvoiceStatus("payment", best.id, "Paid", today, feedAmount)
-
-    // Also set payment_method on the payments record
-    // eslint-disable-next-line no-restricted-syntax
-    await supabaseAdmin
-      .from("payments")
-      .update({ payment_method: paymentMethod })
-      .eq("id", best.id)
+    if (settledPartial) {
+      // Part-payment: the invoice keeps its remaining balance as debt. No installment
+      // handler — the obligation is not settled yet.
+      return {
+        matched: true,
+        paymentId: best.id,
+        invoiceNumber: best.invoiceNumber ?? undefined,
+        confidence: "partial",
+        moneyApplied: true,
+      }
+    }
 
     // Fire the installment handler for installment 1/2 payments so the bundle's
     // service-delivery stages advance on real, bank-confirmed money-in. The
@@ -494,11 +732,11 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       console.error(`[bank-feed-matcher] installment handler dispatch failed for payment ${best.id}:`, handlerErr)
     }
 
-    // QB sync (non-blocking)
-    syncPaymentToQB(best.id, { paymentDate: today }).catch(() => {})
+    // QB sync already fired inside the settler (QuickBooks is decommissioned — inert no-op).
 
     return {
       matched: true,
+      moneyApplied: true,
       paymentId: best.id,
       invoiceNumber: best.invoiceNumber ?? undefined,
       confidence: best.confidence,
@@ -548,47 +786,32 @@ export async function markMercuryStripePayoutsOutgoing(): Promise<{ marked: numb
   return { marked: ids.length }
 }
 
-/**
- * Returns true if an invoice with this status should be considered for payment matching.
- * Uses a blocklist of terminal statuses — anything not already Paid, Voided, or Cancelled
- * represents money still expected (including Draft invoices created at contract signing).
- * Exported for unit tests.
- */
-export function isMatchableInvoiceStatus(invoiceStatus: string): boolean {
-  return !new Set(["Paid", "Voided", "Cancelled"]).has(invoiceStatus)
+/** Outcome of settling one invoice from one bank transaction. */
+type SettleResult = {
+  invoiceNumber?: string
+  /** False when nothing was credited (terminal invoice, already applied, zero). */
+  applied: boolean
+  reason?: string
+  detail?: string
+  newStatus?: "Paid" | "Partial"
 }
 
 /**
- * Calculate the new invoice status and running totals after a payment is applied.
- * Exported for unit tests.
- */
-export function resolveInvoiceStatusAfterPayment(
-  invoiceTotal: number,
-  currentAmountPaid: number,
-  feedAmount: number,
-): { newStatus: "Paid" | "Partial"; newAmountPaid: number; newAmountDue: number } {
-  // Cap amount_paid at the invoice total — an invoice can never record MORE paid
-  // than it's worth. A wire larger than the balance (e.g. $650 matched to a $500
-  // invoice) marks it Paid for exactly $500; the surplus is NOT applied here. The
-  // true received amount still lives on the bank feed (feed.amount), so the
-  // overpayment stays visible as feed > invoice-paid — nothing is lost.
-  const newAmountPaid = Math.min(currentAmountPaid + feedAmount, invoiceTotal)
-  const newAmountDue = Math.max(invoiceTotal - newAmountPaid, 0)
-  const newStatus = newAmountDue <= 0 ? "Paid" : "Partial"
-  return { newStatus, newAmountPaid, newAmountDue }
-}
-
-/**
- * Settle ONE invoice from a bank feed: apply `appliedAmount` to it (Paid/Partial),
- * mirror the status to the client_expenses table, and run the activation chain
- * if the invoice is linked to a pending_activation.
+ * Settle ONE invoice from a bank feed: apply `appliedAmount` to it (Paid/Partial)
+ * via the single money writer, then run the activation chain if the invoice is
+ * linked to a pending_activation.
  *
- * Extracted VERBATIM from the original manualMatch body so single-match behaviour
- * is unchanged. Shared by `manualMatch` (applies the full feed amount to one
- * invoice) and `manualMatchMulti` (applies each invoice's own balance). Does NOT
- * touch the td_bank_feeds row — the caller owns the feed update.
+ * Shared by `manualMatch` (applies the full feed amount to one invoice),
+ * `manualMatchMulti` (applies each invoice's own waterfall allocation) AND — as of
+ * 2026-07-14 — the AUTO matcher, which previously used a second, unsafe money
+ * algorithm (`syncInvoiceStatus('payment', …)`) that overwrote `amount_paid`
+ * instead of accumulating it and never wrote `amount_due`. One writer now.
  *
- * @returns the invoice_number for the caller's MatchResult, or undefined.
+ * Does NOT touch the td_bank_feeds row — the caller owns the feed update.
+ *
+ * @returns whether money was actually applied, plus the invoice_number. A `false`
+ *          with reason 'terminal' means the invoice is already closed: the caller
+ *          may still LINK the feed for audit, but must not report a settlement.
  */
 async function settleInvoiceFromFeed(
   feedId: string,
@@ -596,48 +819,45 @@ async function settleInvoiceFromFeed(
   appliedAmount: number,
   now: string,
   today: string,
-): Promise<string | undefined> {
-  // Check if this is an invoice payment
-  const { data: payment } = await supabaseAdmin
-    .from("payments")
-    .select("invoice_status, invoice_number, total, amount_paid")
-    .eq("id", paymentId)
-    .single()
+  opts: { paymentMethod?: string; actor?: string; runActivationChain?: boolean } = {},
+): Promise<SettleResult> {
+  // ALL money now goes through the one writer. It owns: the terminal-invoice
+  // refusal, the (feed, invoice) double-credit lock, the cap, the coherent
+  // status/amount tuple, the client-visible mirrors, and the audit row.
+  const result = await applyMoneyToInvoice({
+    paymentId,
+    appliedAmount,
+    mode: "apply",
+    paidDate: today,
+    paymentMethod: opts.paymentMethod ?? "Wire (Manual Match)",
+    actor: opts.actor ?? "bank-feed:staff",
+    feedId,
+  })
 
-  // Update invoice status — partial if applied amount < remaining balance, paid otherwise
-  if (payment?.invoice_status && !["Paid", "Voided", "Credit"].includes(payment.invoice_status)) {
-    const { newStatus, newAmountPaid, newAmountDue } = resolveInvoiceStatusAfterPayment(
-      Number(payment.total ?? 0),
-      Number(payment.amount_paid ?? 0),
-      appliedAmount,
-    )
-
-    // eslint-disable-next-line no-restricted-syntax
-    await supabaseAdmin
-      .from("payments")
-      .update({
-        invoice_status: newStatus,
-        // status column has a stricter enum — only update to "Paid"; Partial keeps current status
-        ...(newStatus === "Paid" ? { status: "Paid", paid_date: today } : {}),
-        amount_paid: newAmountPaid,
-        amount_due: newAmountDue,
-        payment_method: "Wire (Manual Match)",
-        updated_at: now,
-      })
-      .eq("id", paymentId)
-
-    // Sync status to client_expenses mirror
-    const { syncTDInvoiceStatus } = await import("@/lib/portal/td-invoice")
-    await syncTDInvoiceStatus(
-      paymentId,
-      newStatus,
-      newStatus === "Paid" ? today : undefined,
-      newAmountPaid,
-    )
-
-    if (newStatus === "Paid") {
-      syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
+  if (!result.applied) {
+    // Nothing was credited. This is NOT a failure for a terminal invoice — linking
+    // a feed to an already-Paid invoice is the legitimate audit-trail case (it is
+    // how a Stripe payment gets tied to the invoice its own webhook already closed).
+    // The caller records the link and reports honestly; it must never claim money
+    // moved when it did not.
+    return {
+      invoiceNumber: result.invoiceNumber,
+      applied: false,
+      reason: result.reason,
+      detail: result.detail,
     }
+  }
+
+  if (result.newStatus === "Paid") {
+    syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
+  }
+
+  // The AUTO matcher passes runActivationChain: false — `processBankFeedMatches`
+  // owns the activation chain for that path and runs it after matchAndReconcile
+  // returns. Running it here too would fire the client's activation TWICE.
+  // Manual matches have no orchestrator above them, so they keep running it.
+  if (opts.runActivationChain === false) {
+    return { invoiceNumber: result.invoiceNumber, applied: true, newStatus: result.newStatus }
   }
 
   // Check if this invoice is linked to a pending_activation → trigger activation chain
@@ -719,7 +939,7 @@ async function settleInvoiceFromFeed(
     }
   }
 
-  return payment?.invoice_number ?? undefined
+  return { invoiceNumber: result.invoiceNumber, applied: true, newStatus: result.newStatus }
 }
 
 /**
@@ -735,17 +955,38 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // Fetch feed amount — needed for partial-payment calculation
     const { data: feed } = await supabaseAdmin
       .from("td_bank_feeds")
-      .select("amount")
+      .select("amount, status")
       .eq("id", feedId)
       .single()
+
+    // Guard: never re-apply an already-matched feed. `manualMatchMulti` had this
+    // guard; the single-invoice path did NOT. It was masked only because the old
+    // settler skipped invoices already flagged Paid — a guard that evaporates for
+    // a PARTIAL invoice. With amount_paid now accumulating, a double-click here
+    // would have credited the money twice.
+    if (feed?.status === "matched") {
+      return { matched: false, error: "This transaction is already matched." }
+    }
+
     const feedAmount = Number(feed?.amount ?? 0)
 
-    // Update bank feed
+    // Settle FIRST, then record the link — so a refusal (terminal invoice, already
+    // applied) cannot leave the feed marked 'matched' against money that never moved.
+    const settle = await settleInvoiceFromFeed(feedId, paymentId, feedAmount, now, today)
+
+    // A terminal invoice is not an error: linking a payment to an already-Paid
+    // invoice is the audit-trail case (a Stripe charge tied to the invoice its own
+    // webhook already closed). Record the link, but report honestly that NO money
+    // was applied — the old code returned success while writing nothing.
+    if (!settle.applied && settle.reason !== "terminal") {
+      return { matched: false, error: settle.detail || "Nothing was applied to this invoice." }
+    }
+
     await supabaseAdmin
       .from("td_bank_feeds")
       .update({
         matched_payment_id: paymentId,
-        match_confidence: "manual",
+        match_confidence: settle.applied ? "manual" : "manual_audit_link",
         matched_at: now,
         matched_by: "staff",
         status: "matched",
@@ -753,13 +994,13 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       })
       .eq("id", feedId)
 
-    const invoiceNumber = await settleInvoiceFromFeed(feedId, paymentId, feedAmount, now, today)
-
     return {
       matched: true,
       paymentId,
-      invoiceNumber,
-      confidence: "manual",
+      invoiceNumber: settle.invoiceNumber,
+      confidence: settle.applied ? "manual" : "manual_audit_link",
+      moneyApplied: settle.applied,
+      note: settle.applied ? undefined : settle.detail,
     }
   } catch (err) {
     return { matched: false, error: (err as Error).message }
@@ -771,14 +1012,16 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
  * Terminal statuses (already paid/closed) are skipped so a stale or duplicate
  * selection can never double-charge `amount_paid`. Pure — exported for tests.
  */
-export function partitionInvoicesForMultiMatch<T extends { id: string; invoice_status: string | null }>(
+export function partitionInvoicesForMultiMatch<T extends { id: string; invoice_status: string | null; status?: string | null }>(
   invoices: T[],
 ): { applicable: T[]; skippedIds: string[] } {
-  const terminal = new Set(["Paid", "Voided", "Cancelled", "Credit"])
   const applicable: T[] = []
   const skippedIds: string[] = []
   for (const inv of invoices) {
-    if (inv.invoice_status && terminal.has(inv.invoice_status)) skippedIds.push(inv.id)
+    // Shared predicate — reads BOTH status columns. The old local set read
+    // invoice_status only, so an invoice that was Paid via `status` but had a NULL
+    // invoice_status slipped through and got credited a second time.
+    if (isTerminalInvoice(inv)) skippedIds.push(inv.id)
     else applicable.push(inv)
   }
   return { applicable, skippedIds }
@@ -870,9 +1113,9 @@ export async function manualMatchMulti(
     // terminal (already paid/closed) so a stale/duplicate selection can't double-pay.
     const { data: payments } = await supabaseAdmin
       .from("payments")
-      .select("id, invoice_status, total, amount_paid")
+      .select("id, invoice_status, status, total, amount_paid")
       .in("id", ids)
-    const rows = (payments ?? []) as Array<{ id: string; invoice_status: string | null; total: number | null; amount_paid: number | null }>
+    const rows = (payments ?? []) as Array<{ id: string; invoice_status: string | null; status: string | null; total: number | null; amount_paid: number | null }>
     const foundIds = new Set(rows.map((r) => r.id))
     const missing = ids.filter((id) => !foundIds.has(id))
     const { applicable, skippedIds } = partitionInvoicesForMultiMatch(rows)
@@ -890,11 +1133,23 @@ export async function manualMatchMulti(
     }
 
     const applied: string[] = []
+    const notApplied: Array<{ payment_id: string; reason?: string }> = []
     let firstInvoiceNumber: string | undefined
     for (const alloc of allocations) {
-      const invNum = await settleInvoiceFromFeed(feedId, alloc.payment_id, alloc.applied, now, today)
-      if (!firstInvoiceNumber) firstInvoiceNumber = invNum
-      applied.push(alloc.payment_id)
+      const settle = await settleInvoiceFromFeed(feedId, alloc.payment_id, alloc.applied, now, today)
+      if (!firstInvoiceNumber) firstInvoiceNumber = settle.invoiceNumber
+      // Only count an invoice as funded if money actually moved. The double-credit
+      // lock or a terminal status can legitimately refuse one row of the waterfall;
+      // reporting it as applied would overstate what the client paid off.
+      if (settle.applied) applied.push(alloc.payment_id)
+      else notApplied.push({ payment_id: alloc.payment_id, reason: settle.reason })
+    }
+
+    if (applied.length === 0) {
+      return {
+        matched: false,
+        error: "Nothing was applied — the selected invoices are already paid, closed, or this transaction was already applied to them.",
+      }
     }
 
     // Link the feed: primary FK = first applied invoice (keeps existing single-read
@@ -920,6 +1175,9 @@ export async function manualMatchMulti(
           // 0 when the wire was fully consumed (typical underpayment/debt case).
           multi_match_leftover: leftover,
           ...(skipped.length ? { multi_match_skipped: skipped } : {}),
+          // Rows the settler REFUSED (terminal / already-applied). Recorded so the
+          // allocation plan can never look like it funded more than it did.
+          ...(notApplied.length ? { multi_match_not_applied: notApplied } : {}),
         },
         updated_at: now,
       })

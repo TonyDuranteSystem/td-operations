@@ -125,8 +125,26 @@ vi.mock("@/lib/portal/unified-invoice", () => ({
   ),
 }))
 
+const receiptCalls: string[] = []
 vi.mock("@/lib/invoice-auto-send", () => ({
-  sendPaidReceipt: vi.fn(() => Promise.resolve()),
+  sendPaidReceipt: vi.fn((id: string) => {
+    receiptCalls.push(id)
+    return Promise.resolve()
+  }),
+}))
+
+// The single money writer. confirmPayment no longer writes the payments row itself —
+// it delegates to applyMoneyToInvoice, which owns the terminal-invoice refusal, the
+// double-credit guard, the cap, the coherent status tuple, the mirrors, and the audit
+// row. These tests assert confirmPayment's ORCHESTRATION on top of it.
+const applyCalls: Array<Record<string, unknown>> = []
+let applyResultFixture: Record<string, unknown> = { applied: true, newStatus: "Paid" }
+
+vi.mock("@/lib/finance/apply-payment", () => ({
+  applyMoneyToInvoice: vi.fn((params: Record<string, unknown>) => {
+    applyCalls.push(params)
+    return Promise.resolve(applyResultFixture)
+  }),
 }))
 
 import { confirmPayment, reconcilePaymentByInvoiceNumber } from "@/lib/operations/payment"
@@ -138,6 +156,9 @@ beforeEach(() => {
   paymentUpdateLog.length = 0
   installmentCalls.length = 0
   syncCalls.length = 0
+  applyCalls.length = 0
+  receiptCalls.length = 0
+  applyResultFixture = { applied: true, newStatus: "Paid" }
 })
 
 describe("confirmPayment", () => {
@@ -162,7 +183,11 @@ describe("confirmPayment", () => {
     expect(installmentCalls).toHaveLength(0) // no side effects re-run
   })
 
-  it("routes through syncInvoiceStatus when portal_invoice_id is set", async () => {
+  // Previously this branch called syncInvoiceStatus('invoice', …), which only touches
+  // client_invoices — it NEVER wrote the payments row, yet confirmPayment still returned
+  // "paid". The idempotency guard reads payment.status, the very column that branch never
+  // wrote, so a retried Stripe webhook re-fired the installment handler and the receipt.
+  it("writes through the single money writer even when portal_invoice_id is set", async () => {
     paymentFixture = {
       id: "p1",
       account_id: "a1",
@@ -171,13 +196,19 @@ describe("confirmPayment", () => {
       portal_invoice_id: "inv-1",
     }
     await confirmPayment({ payment_id: "p1", paid_date: "2026-04-16", amount_paid: 250 })
-    expect(syncCalls).toEqual([
-      { source: "invoice", id: "inv-1", status: "Paid", paid_date: "2026-04-16", amount: 250 },
-    ])
-    expect(paymentUpdateLog).toHaveLength(0) // direct .update() path not taken
+    expect(applyCalls).toHaveLength(1)
+    expect(applyCalls[0]).toMatchObject({
+      paymentId: "p1",
+      mode: "apply",
+      appliedAmount: 250,
+      paidDate: "2026-04-16",
+    })
+    expect(syncCalls).toHaveLength(0) // the old, payments-skipping path is gone
   })
 
-  it("uses direct payments.update when no portal_invoice_id", async () => {
+  it("applies the caller's amount rather than assuming the invoice total", async () => {
+    // The Stripe webhook passes the amount actually charged. Defaulting to the total
+    // would silently turn a part-payment into a full credit.
     paymentFixture = {
       id: "p1",
       account_id: "a1",
@@ -187,13 +218,55 @@ describe("confirmPayment", () => {
     }
     accountFixture = { account_type: "One-Time" }
     await confirmPayment({ payment_id: "p1", paid_date: "2026-04-16", amount_paid: 250 })
-    expect(paymentUpdateLog).toHaveLength(1)
-    expect(paymentUpdateLog[0]).toMatchObject({
+    expect(applyCalls[0]).toMatchObject({ mode: "apply", appliedAmount: 250 })
+  })
+
+  it("settles in full when the caller passes no amount", async () => {
+    paymentFixture = {
       id: "p1",
-      status: "Paid",
-      paid_date: "2026-04-16",
-      amount_paid: 250,
-    })
+      account_id: "a1",
+      installment: null,
+      status: "Pending",
+      portal_invoice_id: null,
+    }
+    accountFixture = { account_type: "One-Time" }
+    await confirmPayment({ payment_id: "p1", paid_date: "2026-04-16" })
+    expect(applyCalls[0]).toMatchObject({ mode: "settle_full" })
+  })
+
+  it("a PART payment is not a settlement — no installment handler, no paid receipt", async () => {
+    paymentFixture = {
+      id: "p1",
+      account_id: "a1",
+      installment: "Installment 1 (Jan)",
+      status: "Pending",
+      portal_invoice_id: null,
+    }
+    accountFixture = { account_type: "Client" }
+    applyResultFixture = { applied: true, newStatus: "Partial" }
+
+    const result = await confirmPayment({ payment_id: "p1", paid_date: "2026-01-15", amount_paid: 100 })
+
+    expect(result.outcome).toBe("partial")
+    expect(installmentCalls).toHaveLength(0)
+    expect(receiptCalls).toHaveLength(0)
+  })
+
+  it("reports already_paid (not success-with-no-write) when the writer refuses a closed invoice", async () => {
+    paymentFixture = {
+      id: "p1",
+      account_id: "a1",
+      installment: null,
+      status: "Pending", // stale status column; the writer sees the real state
+      portal_invoice_id: null,
+    }
+    applyResultFixture = { applied: false, reason: "terminal", detail: "Invoice is already Paid" }
+
+    const result = await confirmPayment({ payment_id: "p1" })
+
+    expect(result.outcome).toBe("already_paid")
+    expect(installmentCalls).toHaveLength(0)
+    expect(receiptCalls).toHaveLength(0)
   })
 
   it("triggers onFirstInstallmentPaid for 'Installment 1 (Jan)' on Client accounts", async () => {

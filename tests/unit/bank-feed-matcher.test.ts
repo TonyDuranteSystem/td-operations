@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, isMatchableInvoiceStatus, partitionInvoicesForMultiMatch, planWaterfallAllocation } from "@/lib/bank-feed-matcher"
+import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment, partitionInvoicesForMultiMatch, planWaterfallAllocation } from "@/lib/bank-feed-matcher"
 
 describe("isStripePayoutFeed", () => {
   // mercury (Plaid) pattern: full text in memo and sender_name
@@ -52,35 +52,8 @@ describe("isStripePayoutFeed", () => {
   })
 })
 
-describe("isMatchableInvoiceStatus", () => {
-  it("matches Draft — created at contract signing, real obligation", () => {
-    expect(isMatchableInvoiceStatus("Draft")).toBe(true)
-  })
-
-  it("matches Sent", () => {
-    expect(isMatchableInvoiceStatus("Sent")).toBe(true)
-  })
-
-  it("matches Overdue", () => {
-    expect(isMatchableInvoiceStatus("Overdue")).toBe(true)
-  })
-
-  it("matches Partial", () => {
-    expect(isMatchableInvoiceStatus("Partial")).toBe(true)
-  })
-
-  it("excludes Paid", () => {
-    expect(isMatchableInvoiceStatus("Paid")).toBe(false)
-  })
-
-  it("excludes Voided", () => {
-    expect(isMatchableInvoiceStatus("Voided")).toBe(false)
-  })
-
-  it("excludes Cancelled", () => {
-    expect(isMatchableInvoiceStatus("Cancelled")).toBe(false)
-  })
-})
+// Matchability moved to lib/finance/invoice-matchability.ts and now reads BOTH status
+// columns — see tests/unit/invoice-matchability.test.ts.
 
 describe("resolveInvoiceStatusAfterPayment", () => {
   it("marks Paid when payment covers the full balance", () => {

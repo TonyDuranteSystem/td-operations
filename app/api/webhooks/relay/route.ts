@@ -18,7 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { processOneFeed } from "@/lib/operations/process-bank-feed-matches"
 import crypto from "crypto"
 import type { Json } from "@/lib/database.types"
 
@@ -83,8 +83,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: feedErr.message }, { status: 500 })
     }
 
-    // Auto-match against CRM invoices
-    const matchResult = await matchAndReconcile(feed.id)
+    // Auto-match against CRM invoices — THROUGH THE ORCHESTRATOR.
+    //
+    // This route used to call matchAndReconcile() directly. That function marks the
+    // invoice Paid but knows nothing about pending_activations, so a wire arriving here
+    // paid the client's invoice and NEVER ACTIVATED THEIR SERVICE. The 6-hourly cron
+    // could not rescue it either — by then the feed was no longer 'unmatched', so it was
+    // skipped. processOneFeed runs the activation chain after the match.
+    const matchResult = await processOneFeed(feed.id)
 
     // Log
     await supabaseAdmin.from("action_log").insert({

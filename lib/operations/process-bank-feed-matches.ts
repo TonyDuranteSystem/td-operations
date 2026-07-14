@@ -38,6 +38,23 @@ export interface ProcessBankFeedMatchesOpts {
   feedIds?: string[]
 }
 
+/** What happened to one feed — surfaced so callers can log it honestly. */
+export interface FeedOutcome {
+  feedId: string
+  outcome: "auto_activated" | "needs_review" | "activation_crashed" | "no_match" | "error"
+  matched: boolean
+  invoiceNumber?: string
+  confidence?: string
+  /**
+   * Whether MONEY was applied. A feed can be `matched` with moneyApplied=false —
+   * the audit-link case, where the invoice was already settled through another
+   * channel (e.g. the Stripe webhook closed it) and the feed is linked for the
+   * trail only. Callers must not report that as a payment being reconciled.
+   */
+  moneyApplied?: boolean
+  error?: string
+}
+
 export interface ProcessBankFeedMatchesResult {
   processed: number
   auto_activated: number
@@ -45,9 +62,35 @@ export interface ProcessBankFeedMatchesResult {
   activation_crashed: number
   no_match: number
   errors: Array<{ feedId: string; error: string }>
+  /** Per-feed outcomes, in processing order. */
+  details: FeedOutcome[]
 }
 
 const BATCH_LIMIT = 200
+
+/**
+ * Process ONE feed through the full chain — match, then activate.
+ *
+ * This exists so the ingest paths (the Relay and Banking Circle webhooks, and the
+ * run-matcher cron) can never again call `matchAndReconcile` directly. That function
+ * marks an invoice Paid but has no knowledge of `pending_activations`, so a wire that
+ * arrived through a webhook paid the client's invoice and NEVER ACTIVATED THEIR
+ * SERVICE — and the cron could not rescue it, because the feed was no longer
+ * 'unmatched' by the time the cron looked. Every path now goes through the
+ * orchestrator, which owns the activation chain.
+ *
+ * Returns the matcher's own result (for logging) alongside the batch outcome.
+ */
+export async function processOneFeed(feedId: string): Promise<FeedOutcome> {
+  const result = await processBankFeedMatches({ feedIds: [feedId] })
+  return (
+    result.details[0] ?? {
+      feedId,
+      outcome: "no_match",
+      matched: false,
+    }
+  )
+}
 
 export async function processBankFeedMatches(
   opts: ProcessBankFeedMatchesOpts = {},
@@ -59,6 +102,7 @@ export async function processBankFeedMatches(
     activation_crashed: 0,
     no_match: 0,
     errors: [],
+    details: [],
   }
 
   // Resolve the list of feed IDs to walk.
@@ -87,7 +131,16 @@ export async function processBankFeedMatches(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.errors.push({ feedId, error: msg })
+      result.details.push({ feedId, outcome: "error", matched: false, error: msg })
       continue
+    }
+
+    const base = {
+      feedId,
+      matched: matchResult.matched,
+      invoiceNumber: matchResult.invoiceNumber,
+      confidence: matchResult.confidence,
+      moneyApplied: matchResult.moneyApplied,
     }
 
     // Branch on outcome of matchAndReconcile.
@@ -106,6 +159,7 @@ export async function processBankFeedMatches(
         // receivable (manual invoice paid by wire). The matcher already
         // marked it Paid; nothing more to do. Count as a clean win.
         result.auto_activated++
+        result.details.push({ ...base, outcome: "auto_activated" })
         continue
       }
 
@@ -137,8 +191,10 @@ export async function processBankFeedMatches(
           })
           .eq("id", feedId)
         result.activation_crashed++
+        result.details.push({ ...base, outcome: "activation_crashed", error: activationError })
       } else {
         result.auto_activated++
+        result.details.push({ ...base, outcome: "auto_activated" })
       }
       continue
     }
@@ -147,8 +203,10 @@ export async function processBankFeedMatches(
     if (matchResult.paymentId) {
       // matchAndReconcile already wrote status='needs_review' for this row.
       result.needs_review++
+      result.details.push({ ...base, outcome: "needs_review" })
     } else {
       result.no_match++
+      result.details.push({ ...base, outcome: "no_match", error: matchResult.error })
     }
   }
 
