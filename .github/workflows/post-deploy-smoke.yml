@@ -1,13 +1,16 @@
 # P2.6 — Post-deploy smoke checks (extended P2.7/I2/I3/I4)
 #
 # Vercel auto-deploys on every push to main. This workflow waits for the
-# deploy to be live, then verifies 5 critical surfaces (plan §4 P2.6 line
+# deploy to be live, then verifies 4 critical surfaces (plan §4 P2.6 line
 # 567-572 + P2.7 health endpoint):
-#   1. https://app.tonydurante.us/                                  (2xx/3xx)
-#   2. https://td-operations.vercel.app/api/cron/audit-health-check (HTTP 200 + JSON findings array)
-#   3. https://portal.tonydurante.us/portal/login                   (2xx/3xx)
-#   4. https://td-operations.vercel.app/api/health                  (HTTP 200 + .ok=true)  [I2 + P2.7]
-#   5. https://td-operations.vercel.app/                            (2xx/3xx)              [I4 CRM root]
+#   1. https://app.tonydurante.us/                (2xx/3xx)
+#   2. https://portal.tonydurante.us/portal/login (2xx/3xx)
+#   3. https://td-operations.vercel.app/api/health (HTTP 200 + .ok=true)  [I2 + P2.7]
+#   4. https://td-operations.vercel.app/          (2xx/3xx)              [I4 CRM root]
+#
+# A 5th check (audit_health_check_json) was REMOVED 2026-07-14 — it probed a
+# cron route deleted on 2026-07-12, so it 404'd on every deploy and emailed a
+# false "smoke FAILED" alert every time. See the note at its old position.
 #
 # After checks run, the workflow ALWAYS POSTs the per-check results to
 # /api/webhooks/smoke-result so every deploy has a row in
@@ -94,30 +97,20 @@ jobs:
             *)     echo "result=fail" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Smoke check 2 — audit-health-check cron
-        id: check_audit
-        env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          set +e
-          # Cron lives on the internal td-operations.vercel.app domain.
-          STATUS=$(curl -s -o /tmp/audit_body -w "%{http_code}" --max-time 60 \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            https://td-operations.vercel.app/api/cron/audit-health-check)
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          if [ "$STATUS" != "200" ]; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=http_$STATUS" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if jq -e 'has("findings") and (.findings | type == "array")' /tmp/audit_body >/dev/null 2>&1; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=missing_findings_array" >> "$GITHUB_OUTPUT"
-          fi
+      # REMOVED 2026-07-14 — the audit_health_check_json check.
+      # It probed /api/cron/audit-health-check, which Antonio DELETED on
+      # 2026-07-12 (commit 808e7100, "delete the switched-off checker crons"):
+      # the 4 monitoring crons were unscheduled and their routes removed, with
+      # no replacement. The check was never dropped from this list, so it 404'd
+      # on EVERY deploy and emailed a red "🚨 Post-deploy smoke FAILED" every
+      # single time (confirmed failing on d113d8b and c569fce, i.e. before the
+      # inbox work that surfaced it). A smoke alert that fires on 100% of
+      # deploys is worse than none — it trains everyone to ignore the email, so
+      # a REAL post-deploy failure would go unnoticed. Do not re-add a check for
+      # a route that does not exist; if the health cron is ever restored, add
+      # the check back with it. dev_task 0fe61fce.
 
-      - name: Smoke check 3 — portal login
+      - name: Smoke check 2 — portal login
         id: check_portal
         # Portal login is a public path but can 3xx under various Vercel
         # edge configurations. Accept 200 or 3xx as "server alive".
@@ -131,7 +124,7 @@ jobs:
             *)     echo "result=fail" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Smoke check 4 — /api/health (P2.7)
+      - name: Smoke check 3 — /api/health (P2.7)
         id: check_health
         # Liveness probe. /api/health is public (middleware.ts
         # PUBLIC_PREFIXES) and returns 200 + {ok:true,...} when the deploy
@@ -154,7 +147,7 @@ jobs:
             echo "reason=ok_false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Smoke check 5 — CRM root (td-operations.vercel.app)
+      - name: Smoke check 4 — CRM root (td-operations.vercel.app)
         id: check_crm
         # Plan §4 line 572: "CRM root — unhealthy if 500." The CRM
         # dashboard lives at td-operations.vercel.app (internal domain
@@ -183,24 +176,20 @@ jobs:
             --arg c1_check "app_root" --arg c1_url "https://app.tonydurante.us/" \
             --arg c1_status "${{ steps.check_app.outputs.status }}" --arg c1_result "${{ steps.check_app.outputs.result }}" \
             --arg c1_expected "HTTP 2xx/3xx" \
-            --arg c2_check "audit_health_check_json" --arg c2_url "https://td-operations.vercel.app/api/cron/audit-health-check" \
-            --arg c2_status "${{ steps.check_audit.outputs.status }}" --arg c2_result "${{ steps.check_audit.outputs.result }}" \
-            --arg c2_expected "HTTP 200 + JSON.findings array" --arg c2_reason "${{ steps.check_audit.outputs.reason }}" \
-            --arg c3_check "portal_login" --arg c3_url "https://portal.tonydurante.us/portal/login" \
-            --arg c3_status "${{ steps.check_portal.outputs.status }}" --arg c3_result "${{ steps.check_portal.outputs.result }}" \
-            --arg c3_expected "HTTP 2xx/3xx" \
-            --arg c4_check "api_health" --arg c4_url "https://td-operations.vercel.app/api/health" \
-            --arg c4_status "${{ steps.check_health.outputs.status }}" --arg c4_result "${{ steps.check_health.outputs.result }}" \
-            --arg c4_expected "HTTP 200 + .ok=true" --arg c4_reason "${{ steps.check_health.outputs.reason }}" \
-            --arg c5_check "crm_root" --arg c5_url "https://td-operations.vercel.app/" \
-            --arg c5_status "${{ steps.check_crm.outputs.status }}" --arg c5_result "${{ steps.check_crm.outputs.result }}" \
-            --arg c5_expected "HTTP 2xx/3xx" \
+            --arg c2_check "portal_login" --arg c2_url "https://portal.tonydurante.us/portal/login" \
+            --arg c2_status "${{ steps.check_portal.outputs.status }}" --arg c2_result "${{ steps.check_portal.outputs.result }}" \
+            --arg c2_expected "HTTP 2xx/3xx" \
+            --arg c3_check "api_health" --arg c3_url "https://td-operations.vercel.app/api/health" \
+            --arg c3_status "${{ steps.check_health.outputs.status }}" --arg c3_result "${{ steps.check_health.outputs.result }}" \
+            --arg c3_expected "HTTP 200 + .ok=true" --arg c3_reason "${{ steps.check_health.outputs.reason }}" \
+            --arg c4_check "crm_root" --arg c4_url "https://td-operations.vercel.app/" \
+            --arg c4_status "${{ steps.check_crm.outputs.status }}" --arg c4_result "${{ steps.check_crm.outputs.result }}" \
+            --arg c4_expected "HTTP 2xx/3xx" \
             '[
                {check:$c1_check,url:$c1_url,status:$c1_status,result:$c1_result,expected:$c1_expected},
-               {check:$c2_check,url:$c2_url,status:$c2_status,result:$c2_result,expected:$c2_expected,reason:$c2_reason},
-               {check:$c3_check,url:$c3_url,status:$c3_status,result:$c3_result,expected:$c3_expected},
-               {check:$c4_check,url:$c4_url,status:$c4_status,result:$c4_result,expected:$c4_expected,reason:$c4_reason},
-               {check:$c5_check,url:$c5_url,status:$c5_status,result:$c5_result,expected:$c5_expected}
+               {check:$c2_check,url:$c2_url,status:$c2_status,result:$c2_result,expected:$c2_expected},
+               {check:$c3_check,url:$c3_url,status:$c3_status,result:$c3_result,expected:$c3_expected,reason:$c3_reason},
+               {check:$c4_check,url:$c4_url,status:$c4_status,result:$c4_result,expected:$c4_expected}
              ]')
 
           RESULT_PAYLOAD=$(jq -nc \
