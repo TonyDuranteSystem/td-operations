@@ -25,8 +25,15 @@ export function resolveInvoiceStatusAfterPayment(
   currentAmountPaid: number,
   feedAmount: number,
 ): { newStatus: "Paid" | "Partial"; newAmountPaid: number; newAmountDue: number } {
-  const newAmountPaid = Math.min(currentAmountPaid + feedAmount, invoiceTotal)
-  const newAmountDue = Math.max(invoiceTotal - newAmountPaid, 0)
+  // Round to cents. These are money columns with 2 decimal places, but the arithmetic is
+  // float: 0.1 + 0.2 is 0.30000000000000004, and without rounding that dust gets written
+  // into the invoice. It survives a round-trip (so it is not a correctness bug today),
+  // but it poisons the scale-2 property every hand-written SQL comparison relies on.
+  // `planWaterfallAllocation` already rounds; the writer must too.
+  const round2 = (n: number) => Math.round(n * 100) / 100
+
+  const newAmountPaid = round2(Math.min(currentAmountPaid + feedAmount, invoiceTotal))
+  const newAmountDue = round2(Math.max(invoiceTotal - newAmountPaid, 0))
   const newStatus = newAmountDue <= 0 ? "Paid" : "Partial"
   return { newStatus, newAmountPaid, newAmountDue }
 }

@@ -186,10 +186,14 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
      *
      * Returns null when it is safe to proceed; otherwise the MatchResult to return.
      */
+    // Records what the refund gate concluded, so the audit row can prove it ran.
+    let lastRefundCheck: string | undefined
+
     const stripeMoneyStillOurs = async (candidatePaymentId: string): Promise<MatchResult | null> => {
       if (feed.source !== "stripe" || !feed.external_id) return null
 
       const check = await isChargeRefundedNow(String(feed.external_id))
+      lastRefundCheck = check
 
       // Verified ours, or unverifiable-by-nature (no Stripe key / unknown charge id) —
       // proceed. "unchecked" carries the same exposure we had before the check existed;
@@ -316,6 +320,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           paymentMethod,
           actor: "bank-feed:auto-payment-intent",
           runActivationChain: false,
+          refundCheck: lastRefundCheck,
         })
 
         if (piSettle.applied) {
@@ -757,6 +762,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       paymentMethod,
       actor: "bank-feed:auto",
       runActivationChain: false,
+      refundCheck: lastRefundCheck,
     })
 
     if (!settle.applied) {
@@ -938,7 +944,7 @@ async function settleInvoiceFromFeed(
   appliedAmount: number,
   now: string,
   today: string,
-  opts: { paymentMethod?: string; actor?: string; runActivationChain?: boolean } = {},
+  opts: { paymentMethod?: string; actor?: string; runActivationChain?: boolean; refundCheck?: string } = {},
 ): Promise<SettleResult> {
   // ALL money now goes through the one writer. It owns: the terminal-invoice
   // refusal, the (feed, invoice) double-credit lock, the cap, the coherent
@@ -951,6 +957,7 @@ async function settleInvoiceFromFeed(
     paymentMethod: opts.paymentMethod ?? "Wire (Manual Match)",
     actor: opts.actor ?? "bank-feed:staff",
     feedId,
+    refundCheck: opts.refundCheck,
   })
 
   if (!result.applied) {

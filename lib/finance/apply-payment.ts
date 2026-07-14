@@ -56,6 +56,12 @@ export interface ApplyMoneyParams {
   actor: string
   /** Set for bank-feed settlement. Enables the double-credit guard. */
   feedId?: string
+  /**
+   * The result of the Stripe refund re-check, when one applies ("ok" | "unchecked").
+   * Recorded in the audit row: a safety gate you cannot prove ran is a safety gate you
+   * will eventually stop trusting.
+   */
+  refundCheck?: string
 }
 
 export interface ApplyMoneyResult {
@@ -273,13 +279,21 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
   // second process that took over the same abandoned lock — the row count comes back
   // zero and we apply nothing.
   //
-  // This is what makes the no-double-credit rule a FACT rather than an assumption. The
-  // lock table alone was not enough: its safety rested on the heuristic "an unconfirmed
-  // claim means no money moved", and that heuristic is false whenever the money write
-  // succeeds but the confirmation fails — a case we log but cannot prevent. The database
-  // itself now refuses the second write. The ledger goes back to being what it should
-  // always have been: an audit record, not the only thing standing between a client and
-  // being charged twice.
+  // It guards CONCURRENCY: a write computed from a stale read cannot land.
+  //
+  // It does NOT replace the ledger, which guards IDEMPOTENCY OVER TIME. Run the same
+  // transaction through the matcher again an hour later and the CAS is perfectly happy —
+  // it re-reads the new amount_paid and swaps cleanly. The only thing that says "this
+  // transaction has already paid this invoice" is the UNIQUE (feed_id, payment_id) row.
+  // Two different jobs, both load-bearing. DO NOT delete the ledger believing the CAS
+  // has made it redundant.
+  //
+  // Why guarding `amount_paid` alone is sufficient: every money writer now goes through
+  // this function, and this function always writes `amount_paid`. So any concurrent MONEY
+  // write necessarily moves the guarded column and is caught. A concurrent status-only
+  // flip (dunning marking an invoice Overdue) does not move it and slips past — but it
+  // credits nothing, so it cannot double-credit. ⚠️ If a future writer ever touches money
+  // WITHOUT touching `amount_paid`, this guard silently stops working.
   //
   // NULL and 0 are different values to Postgres, so the predicate has to match how the
   // row actually reads today (every invoice touched by the old writer has a NULL balance).
@@ -294,13 +308,70 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
   const { data: updatedRows, error: updErr } = await guarded.select("id")
 
   if (updErr) {
-    // The money did not land — give the lock back, or this (transaction, invoice)
-    // pair is bricked forever behind a false "already applied".
-    const releaseNote = await releaseClaim()
+    // ⚠️ AN ERROR HERE DOES NOT MEAN THE WRITE FAILED.
+    //
+    // supabase-js reports an error whenever it fails to get a RESPONSE — including when
+    // the UPDATE committed and the reply was lost (a timeout, a reset connection, the
+    // function killed mid-flight). Assuming failure and releasing the lock is the exact
+    // class of assumption this whole change exists to destroy: the next pass would find
+    // no lock, re-read the (already credited) amount, and credit the SAME money again —
+    // and the CAS cannot see it, because the retry reads the post-write value.
+    //
+    // So: go and look. The invoice itself is the source of truth.
+    const { data: after } = await supabaseAdmin
+      .from("payments")
+      .select("amount_paid")
+      .eq("id", paymentId)
+      .maybeSingle()
+
+    const afterPaid = after?.amount_paid ?? null
+    const landed = afterPaid !== null && Math.abs(Number(afterPaid) - newAmountPaid) < 0.005
+    const unchanged =
+      (payment.amount_paid === null || payment.amount_paid === undefined)
+        ? afterPaid === null
+        : afterPaid !== null && Math.abs(Number(afterPaid) - Number(payment.amount_paid)) < 0.005
+
+    if (landed) {
+      // The money DID land; only the acknowledgement was lost. Confirm the claim and
+      // report success — releasing here would set up a double credit on the next pass.
+      if (claimId) {
+        await db.from("payment_applications").update({ confirmed_at: now }).eq("id", claimId)
+      }
+      console.warn(
+        `[apply-payment] Write to ${paymentId} reported an error but LANDED (${newAmountPaid}). Claim confirmed; treating as applied.`,
+      )
+      return {
+        applied: true,
+        invoiceNumber: payment.invoice_number ?? undefined,
+        newStatus,
+        newAmountPaid,
+        newAmountDue,
+      }
+    }
+
+    if (unchanged) {
+      // The write genuinely did not happen. Safe to hand the lock back so this money can
+      // be booked on a later attempt instead of being bricked behind a false
+      // "already applied".
+      const releaseNote = await releaseClaim()
+      return {
+        applied: false,
+        reason: "write_failed",
+        detail: `${updErr.message}${releaseNote}`,
+        invoiceNumber: payment.invoice_number ?? undefined,
+      }
+    }
+
+    // The invoice is in neither state we can reason about — something else moved it.
+    // KEEP the lock (releasing it could permit a double credit) and make a human look.
+    console.error(
+      `[apply-payment] INDETERMINATE write on ${paymentId}: expected ${payment.amount_paid} -> ${newAmountPaid}, found ${afterPaid}. Lock retained; needs a human.`,
+    )
     return {
       applied: false,
-      reason: "write_failed",
-      detail: `${updErr.message}${releaseNote}`,
+      reason: "guard_failed",
+      detail:
+        "The payment could not be confirmed as applied and the invoice is in an unexpected state. It has been left locked for safety — please check this invoice before matching again.",
       invoiceNumber: payment.invoice_number ?? undefined,
     }
   }
@@ -391,6 +462,9 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
         new_status: newStatus,
         mode,
         payment_method: paymentMethod ?? null,
+        // Did the Stripe refund gate actually run for this money? "unchecked" means we
+        // could not verify (no key / unknown charge) and proceeded anyway.
+        refund_check: params.refundCheck ?? null,
       },
     })
   } catch (err) {
