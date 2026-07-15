@@ -112,6 +112,20 @@ describe('pinnedRateForInheritance — offer pin → invoice pass-through', () =
   })
 })
 
+describe('setters bust their own cache (no manual reset)', () => {
+  // Bug-hunter finding: every other test resets the cache manually, which would
+  // mask a deleted invalidation line. This one proves the setters do it themselves.
+  it('a flip is visible to the next read WITHOUT __resetCardFeeConfigCache', async () => {
+    expect(await isCardFeeEnabled()).toBe(true) // primes the cache (default ON)
+    await setCardFeeEnabled(false, 'qa')
+    expect(await isCardFeeEnabled()).toBe(false) // must NOT serve the cached true
+
+    expect(await getConfiguredCardFeeRate()).toBe(0.05) // primes rate cache (default)
+    await setConfiguredCardFeeRate(0.02, 'qa')
+    expect(await getConfiguredCardFeeRate()).toBe(0.02) // must NOT serve cached 0.05
+  })
+})
+
 describe('setCardFeeEnabled — audit trail', () => {
   it('writes an action_log row with the actor', async () => {
     await setCardFeeEnabled(false, 'finance-ui:antonio@test')

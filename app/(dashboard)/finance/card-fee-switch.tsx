@@ -30,12 +30,18 @@ export function CardFeeSwitch({ initialEnabled, ratePercent }: Props) {
     const next = !enabled
     setError(null)
     startTransition(async () => {
-      const res = await toggleCardFee(next)
-      if (res.success) {
-        setEnabled(next)
-        setConfirming(false)
-      } else {
-        setError(res.error || 'Could not change the switch — try again.')
+      try {
+        const res = await toggleCardFee(next)
+        if (res.success) {
+          setEnabled(next)
+          setConfirming(false)
+        } else {
+          setError(res.error || 'Could not change the switch — try again.')
+        }
+      } catch {
+        // Transport failure (network drop, naked 500) THROWS instead of
+        // returning {success:false} — keep it inline, don't blow the page (R099).
+        setError('Connection problem — the switch was NOT changed. Try again.')
       }
     })
   }
