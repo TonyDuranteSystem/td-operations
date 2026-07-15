@@ -5,9 +5,9 @@
 ## Tiers (control the cost)
 | Command | Who reviews | When to use |
 |---|---|---|
-| `/council light` | 2 reviewers | quick sanity check, small/low-risk changes |
-| `/council` | 3 core | a real plan or decision |
-| `/council full` | 3 core + the right specialists | money, tax, client data, compliance, contracts, bank prep |
+| `/council light` | 3 reviewers | quick sanity check, small/low-risk changes |
+| `/council` | 4 core | a real plan or decision |
+| `/council full` | 4 core + the right specialists | money, tax, client data, compliance, contracts, bank prep |
 | `/council deep` | full + extra refute pass | the highest-stakes / hardest calls |
 
 If you don't pick a tier, it picks by stakes — small work gets light, money/tax/client-facing gets full (never quietly downgraded). A full pass costs real tokens (~380K); light is about a third.
@@ -23,18 +23,18 @@ If you don't pick a tier, it picks by stakes — small work gets light, money/ta
 - **Client bank-application prep** (their website's credibility) → `/council with Ecommerce-Bank-Auditor` (checks legitimacy, professionalism, policy pages, security signals a bank looks for).
 - **Contract / offer / lease wording** → `/council full` (Legal Reviewer flags exposure).
 - **Database migration / schema change / backfill** → `/council full` (Data & Migration Reviewer + Security).
-- **"Find bugs before this breaks in production"** → `/council with Bug-Hunter` (or `/council deep` for the hardest cases).
+- **"Find bugs before this breaks in production"** → the Bug Hunter is already core (on every call); use `/council deep` for the hardest cases.
 - **Just shipped something small** → `/council light`.
 
 ## When you report a bug or ask for an investigation
 You don't need to name experts — the council picks them from the task, and the **Bug Hunter is always included** for a bug/issue/investigation. It runs in two steps automatically:
 1. **Investigate** — the Bug Hunter + the right specialists find the root cause with exact code references.
-2. **Internal approval** — a fix plan is written, then your three core reviewers approve or improve it **before** it reaches you.
+2. **Internal approval** — a fix plan is written, then your four core reviewers approve or improve it **before** it reaches you.
 You only see the final, already-stress-tested recommendation — and nothing changes until you say go.
 
 ## The team
-**Core (always):** Senior Engineer · AI Architect · Project Director
-**Specialists (auto-pulled by topic):** CPA-IRS · Finance-Auditor · Compliance-Deadlines-Auditor · Business-Analyst · Web-Auditor · Ecommerce-Bank-Auditor · Security · Legal-Reviewer · Performance-Optimizer · QA-Tester · Data-Migration-Reviewer · Bug-Hunter
+**Core reviewers:** Senior Engineer · AI Architect · Project Director · Bug Hunter. (Senior Engineer, Project Director, and Bug Hunter are on *every* call including light; the AI Architect joins at standard/full/deep — so light tier runs those 3.)
+**Specialists (auto-pulled by topic):** CPA-IRS · Finance-Auditor · Compliance-Deadlines-Auditor · Business-Analyst · Web-Auditor · Ecommerce-Bank-Auditor · Security · Legal-Reviewer · Performance-Optimizer · QA-Tester · Data-Migration-Reviewer
 
 ## The rules that protect you
 - Any one reviewer finding a real, pinpointed problem = **"fix first"** (no rubber-stamp voting).
