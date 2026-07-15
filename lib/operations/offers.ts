@@ -18,6 +18,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
+import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import type { Json } from "@/lib/database.types"
@@ -491,6 +492,11 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const bank_details = params.bank_details
       || getBankDetailsByPreference((params.bank_preference || "auto") as BankPreference, currency)
 
+    // PIN the card fee rate onto the offer (dev_task 6ec6872a). Drives the contract
+    // wording and is inherited by the invoice at creation, so editing the configured
+    // rate later never re-prices a deal already signed at the old rate.
+    const pinnedCardFeeRate = await getConfiguredCardFeeRate()
+
     // 8. Insert offer
     const { data: offer, error: offerErr } = await supabaseAdmin
       .from("offers")
@@ -501,6 +507,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         language: params.language,
         offer_date: params.offer_date || new Date().toISOString().split("T")[0],
         status: "draft",
+        card_fee_rate: pinnedCardFeeRate,
         payment_type: params.payment_type,
         contract_type: params.contract_type || "formation",
         services: params.services as Json,

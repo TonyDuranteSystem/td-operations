@@ -16,6 +16,7 @@ import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel } from '@/lib/billing/payment-classification'
+import { getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 
 // ─── Types ──────────────────────────────────────────
 
@@ -39,6 +40,14 @@ export interface TDInvoiceInput {
   /** Bank account to use for this invoice. Honored by sendTDInvoice when rendering
    *  PDF + email bank block. Null falls back to 'auto' (EUR→Airwallex, USD→Relay). */
   bank_preference?: string
+  /**
+   * Card processing fee rate to PIN onto this invoice (dev_task 6ec6872a). When the
+   * invoice is created from an offer, pass the OFFER's pinned rate so a later config
+   * change never re-prices this deal. Omit for offer-less invoices (renewals/manual)
+   * and createTDInvoice stamps the current configured rate. This is the AUTHORITATIVE
+   * rate at charge time.
+   */
+  card_fee_rate?: number
   /**
    * Optional content-level idempotency key. If provided and a payments row
    * with this key already exists, returns the existing row (no new invoice
@@ -105,7 +114,15 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     payment_category,
     year,
     skip_credit_netting = false,
+    card_fee_rate,
   } = input
+
+  // Pin the card fee rate onto this invoice — the source offer's pin when created
+  // from an offer, else the current configured rate. Never re-read at charge; this
+  // pin IS the authority. (dev_task 6ec6872a)
+  const pinnedCardFeeRate = typeof card_fee_rate === 'number'
+    ? card_fee_rate
+    : await getConfiguredCardFeeRate()
 
   // Structured category: explicit param wins, else derive from the installment
   // label. The free-text description is never consulted.
@@ -229,6 +246,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         notes: notes || null,
         message: message || null,
         bank_preference: bank_preference || null,
+        card_fee_rate: pinnedCardFeeRate,
         qb_sync_status: 'pending',
       })
       .select('id')

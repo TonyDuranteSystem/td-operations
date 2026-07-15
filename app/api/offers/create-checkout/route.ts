@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolveBillableSelection } from "@/lib/payments/billable-selection"
+import { computeCardTotal } from "@/lib/payments/card-fee"
+import { resolvePinnedRate } from "@/lib/payments/card-fee-config"
 
 export const dynamic = "force-dynamic"
 
@@ -31,7 +33,7 @@ export async function POST(req: NextRequest) {
     // Fetch offer
     const { data: offer, error: oErr } = await supabase
       .from("offers")
-      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status")
+      .select("token, client_name, client_email, services, cost_summary, contract_type, selected_services, language, lead_id, payment_type, status, card_fee_rate")
       .eq("token", token)
       .single()
 
@@ -116,7 +118,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Could not determine payment amount" }, { status: 400 })
     }
 
-    const cardAmount = Math.round(total * 1.05) // 5% card surcharge
+    // Charge base + the card fee (dev_task 6ec6872a). The rate is the one PINNED on
+    // the offer — never a live/hardcoded value — so what's charged matches the signed
+    // contract. The webhook books the fee onto the invoice from the ACTUAL charge.
+    const cardFeeRate = await resolvePinnedRate(
+      (offer as { card_fee_rate?: number | string | null }).card_fee_rate,
+    )
+    const { cardTotal: cardAmount } = computeCardTotal(total, cardFeeRate)
     const currencySymbol = currency === "eur" ? "EUR" : "$"
 
     // Fetch invoice number from pending_activation (created at signing)
@@ -140,7 +148,10 @@ export async function POST(req: NextRequest) {
     const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
     const stripeResult = await createStripeCheckoutSession({
       clientName: offer.client_name || "Client",
-      amount: total,
+      // THE MONEY FIX: charge base + card fee (was `total` = base only, which silently
+      // dropped the fee on every Stripe card payment). The webhook books the fee onto
+      // the invoice from session.amount_total. (dev_task 6ec6872a)
+      amount: cardAmount,
       currency,
       contractType: offer.contract_type || "formation",
       serviceName: selectedNames.join(" + ") || undefined,
@@ -173,6 +184,8 @@ export async function POST(req: NextRequest) {
       checkoutUrl: stripeResult.checkoutUrl,
       sessionId: stripeResult.sessionId,
       amount: total,
+      fee: cardAmount - total,
+      cardFeeRate,
       cardAmount,
       currency,
       label: `${currencySymbol}${cardAmount.toLocaleString()}`,
