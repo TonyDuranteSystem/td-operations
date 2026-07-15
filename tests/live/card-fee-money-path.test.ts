@@ -156,6 +156,24 @@ describe('card fee — per-payment-route safety', () => {
     await expect(bookCardFee('00000000-0000-0000-0000-000000000000', 1050)).rejects.toThrow()
   })
 
+  // Per-deal rate STAMPING (director's QA target): an invoice created WITHOUT an
+  // explicit rate must be stamped with the CONFIGURED rate at creation — the single
+  // stamping point inside createTDInvoice, so renewals/manual invoices are pinned too.
+  it('stamps the configured rate on a new invoice when none is passed', async () => {
+    const res = await createTDInvoice({
+      contact_id: TEST_CONTACT_ID,
+      currency: 'USD',
+      // no card_fee_rate → must read the configured value (0.05) and pin it
+      line_items: [{ description: 'QA Stamp', unit_price: 500 }],
+      idempotency_key: `cardfee-qa-stamp:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    })
+    createdPaymentIds.push(res.paymentId)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabaseAdmin as any)
+      .from('payments').select('card_fee_rate').eq('id', res.paymentId).single()
+    expect(Number(data.card_fee_rate)).toBe(0.05)
+  })
+
   // Exact-base charge (fee 0, e.g. a rate of 0): no fee line, settles at base cleanly.
   it('no_fee when the charge equals the base (no fee line, clean settle)', async () => {
     const { id } = await makeInvoice(1000, 0) // 0% rate → no fee
