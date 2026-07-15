@@ -53,6 +53,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_items_one_fee_per_payment
 -- ── 6. Configurable rate lives in app_settings (not the catalog) ───────────────
 -- Read ONLY at offer creation / offer-less invoice creation; never at charge; never
 -- for display of a pinned entity. Editable from the CRM settings surface.
+-- `enabled` is the GLOBAL KILL SWITCH the charge path checks (overrides every per-deal
+-- pin when false → charges base, no redeploy). Defaults ON. See docs/runbooks/card-fee-go-live.md.
 INSERT INTO app_settings (key, value)
-VALUES ('payment_fee_config', jsonb_build_object('card_rate', 0.05))
+VALUES ('payment_fee_config', jsonb_build_object('card_rate', 0.05, 'enabled', true))
 ON CONFLICT (key) DO NOTHING;

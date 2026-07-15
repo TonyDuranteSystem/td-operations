@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { computeCardTotal } from "@/lib/payments/card-fee"
-import { resolvePinnedRate } from "@/lib/payments/card-fee-config"
+import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
 export const dynamic = "force-dynamic"
 
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
     // Charge base + card fee (dev_task 6ec6872a). Card fee uses the rate PINNED on
     // this invoice (authoritative) — the portal Pay modal shows the same number. The
     // webhook books the fee onto the invoice from the actual charge.
-    const cardFeeRate = await resolvePinnedRate(
+    const cardFeeRate = await resolveChargeRate(
       (payment as { card_fee_rate?: number | string | null }).card_fee_rate,
     )
     const { cardTotal, fee: cardFee } = computeCardTotal(amount, cardFeeRate)

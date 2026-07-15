@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolveBillableSelection } from "@/lib/payments/billable-selection"
 import { computeCardTotal } from "@/lib/payments/card-fee"
-import { resolvePinnedRate } from "@/lib/payments/card-fee-config"
+import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
 export const dynamic = "force-dynamic"
 
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
     // Charge base + the card fee (dev_task 6ec6872a). The rate is the one PINNED on
     // the offer — never a live/hardcoded value — so what's charged matches the signed
     // contract. The webhook books the fee onto the invoice from the ACTUAL charge.
-    const cardFeeRate = await resolvePinnedRate(
+    const cardFeeRate = await resolveChargeRate(
       (offer as { card_fee_rate?: number | string | null }).card_fee_rate,
     )
     const { cardTotal: cardAmount } = computeCardTotal(total, cardFeeRate)

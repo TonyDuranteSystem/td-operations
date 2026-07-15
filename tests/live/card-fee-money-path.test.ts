@@ -20,6 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { applyMoneyToInvoice } from '@/lib/finance/apply-payment'
 import { bookCardFee } from '@/lib/finance/card-fee-booking'
+import { resolveChargeRate, setCardFeeEnabled, __resetCardFeeConfigCache } from '@/lib/payments/card-fee-config'
 
 // A disposable sandbox contact to hang test invoices off.
 const TEST_CONTACT_ID = '374197ce-d670-40bb-a6f6-6cb64b41699f' // Stefano Pretto (sandbox test)
@@ -126,6 +127,28 @@ describe('card fee — book → settle (the money path)', () => {
     // order avoids. (In production the throw-before-settle gate prevents ever reaching
     // this state; here we assert the cap behavior that makes the ordering load-bearing.)
     expect(afterSettle.status).toBe('Paid')
+  })
+})
+
+// GO-LIVE KILL SWITCH (director runbook): the fee can be turned OFF in one action, no
+// redeploy, and it OVERRIDES every per-deal pin (which are all 5%). Proven live.
+describe('card fee — global kill switch', () => {
+  afterAll(async () => {
+    await setCardFeeEnabled(true, 'qa:card-fee') // restore ON
+    __resetCardFeeConfigCache()
+  })
+
+  it('OFF → charge rate becomes 0 even for a 5%-pinned deal; ON → back to the pin', async () => {
+    __resetCardFeeConfigCache()
+    expect(await resolveChargeRate(0.05)).toBe(0.05) // default ON honours the pin
+
+    await setCardFeeEnabled(false, 'qa:card-fee')
+    __resetCardFeeConfigCache()
+    expect(await resolveChargeRate(0.05)).toBe(0)     // OFF overrides the pin → base only
+
+    await setCardFeeEnabled(true, 'qa:card-fee')
+    __resetCardFeeConfigCache()
+    expect(await resolveChargeRate(0.05)).toBe(0.05)  // ON → pin restored
   })
 })
 
