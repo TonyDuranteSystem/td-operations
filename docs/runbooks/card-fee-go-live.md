@@ -22,16 +22,27 @@ Branch: `claude/card-fee-charge-6ec6872a`. Migration: `scripts/migrations/202607
 - Proposals change daily, so this only counts if run immediately before shipping.
 - PASS = no real client's price moves unexpectedly. If any moves → STOP, investigate.
 
-## Step 2 — deploy the code, then verify the kill switch is reachable
-- After deploy, confirm you can flip the fee OFF in ONE action, no redeploy:
-  set `app_settings.payment_fee_config.enabled = false`. This OVERRIDES every per-deal
-  5% pin → checkout charges the BASE. Set it back to `true` to re-arm.
-  (Proven in sandbox: `resolveChargeRate` returns 0 when off, the pin when on.)
+## Step 2 — deploy the code with the fee turned OFF
+- **Turn the fee OFF before the code deploy** — set
+  `app_settings.payment_fee_config.enabled = false`. This is critical: the moment the
+  code is live with the flag ON, the VERY NEXT card payment from ANY client gets the
+  fee, watched or not. Deploying OFF means organic traffic can't become your first
+  involuntary test subject.
+- Confirm the flag is reachable and flips in ONE action, no redeploy (set it back to
+  `true` to arm). It OVERRIDES every per-deal 5% pin → OFF charges the BASE. (Proven
+  in sandbox: `resolveChargeRate` returns 0 when off, the pin when on.)
+- **Confirm the NAMED watcher has DIRECT access to the flag NOW** — not "ask a
+  developer during the incident." The abort is only real if the watcher can flip it in
+  seconds. Verify this before Step 3, not during it.
 
-## Step 3 — the FIRST real card charge is chosen, not random
+## Step 3 — arm, then drive the FIRST real card charge (chosen, not random)
 - Pick a SMALL, KNOWN, friendly client for the first live card payment. Low-stakes by
   design. Do not let the first live fire be a large or unknown transaction.
 - One NAMED person watches it (write the name here before go-live): __________.
+- **Sequence so the chosen client is provably first:** with the watcher live and ready,
+  flip the flag ON, then immediately drive the chosen friendly charge — OR deploy in a
+  low-traffic window and run it at once. The first fee-bearing charge must be the one
+  you're watching, not the first organic payment to arrive.
 
 ## Step 4 — the first-charge PASS/FAIL is ONE number, decided up front
 PASS only if all three reconcile:
