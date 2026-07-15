@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
+import { computeCardTotal } from "@/lib/payments/card-fee"
+import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
 export const dynamic = "force-dynamic"
 
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
     // Fetch the payment row
     const { data: payment, error: pErr } = await supabase
       .from("payments")
-      .select("id, account_id, contact_id, amount, amount_currency, status, description, invoice_number")
+      .select("id, account_id, contact_id, amount, amount_currency, status, description, invoice_number, card_fee_rate")
       .eq("id", payment_id)
       .single()
 
@@ -78,11 +80,19 @@ export async function POST(req: NextRequest) {
     }
     const { email: clientEmail, name: clientName } = recipient
 
+    // Charge base + card fee (dev_task 6ec6872a). Card fee uses the rate PINNED on
+    // this invoice (authoritative) — the portal Pay modal shows the same number. The
+    // webhook books the fee onto the invoice from the actual charge.
+    const cardFeeRate = await resolveChargeRate(
+      (payment as { card_fee_rate?: number | string | null }).card_fee_rate,
+    )
+    const { cardTotal, fee: cardFee } = computeCardTotal(amount, cardFeeRate)
+
     // Create Stripe Checkout session via shared helper
     const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
     const result = await createStripeCheckoutSession({
       clientName,
-      amount,
+      amount: cardTotal,
       currency,
       contractType: "annual_renewal",
       serviceName: payment.description || "Invoice Payment",
@@ -101,6 +111,9 @@ export async function POST(req: NextRequest) {
       checkoutUrl: result.checkoutUrl,
       sessionId: result.sessionId,
       amount,
+      fee: cardFee,
+      cardFeeRate,
+      cardAmount: cardTotal,
       currency,
       invoiceNumber: payment.invoice_number || null,
     })

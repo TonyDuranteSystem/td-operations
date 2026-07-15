@@ -250,7 +250,7 @@ export async function applyAvailableCreditToInvoice(
 
   const { data: itemRows } = await supabase
     .from("payment_items")
-    .select("description, quantity, unit_price, amount, sort_order")
+    .select("description, quantity, unit_price, amount, sort_order, item_type")
     .eq("payment_id", paymentId)
     .order("sort_order", { ascending: true })
   const items = (itemRows ?? []).map((i) => ({
@@ -258,6 +258,9 @@ export async function applyAvailableCreditToInvoice(
     quantity: Number((i as { quantity: number | null }).quantity) || 1,
     unit_price: Number((i as { unit_price: number | null }).unit_price) || 0,
     amount: Number((i as { amount: number | null }).amount) || 0,
+    // Carry the card-fee marker through so a credit-apply never wipes it and the
+    // invoice's card_fee_amount stays valid (dev_task 6ec6872a).
+    item_type: (i as { item_type?: string | null }).item_type === "fee" ? "fee" : "service",
   }))
 
   const gross = sumLineAmounts(items.filter((i) => !isCreditLine(i)))
@@ -288,6 +291,9 @@ export async function applyAvailableCreditToInvoice(
       unit_price: it.unit_price,
       amount: it.amount,
       sort_order: i,
+      // Preserve the fee marker on reinsert so `base = sum(item_type<>'fee')` and the
+      // invoice's card_fee_amount stay correct after a credit-apply (dev_task 6ec6872a).
+      item_type: it.item_type === "fee" ? "fee" : "service",
     })),
   )
 

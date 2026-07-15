@@ -18,6 +18,10 @@ export interface RebuildLineItem {
   quantity: number
   unit_price: number
   amount: number
+  /** 'service' (default) or 'fee' — the card processing fee line. Carried through
+   *  every rebuild so an edit/credit-apply never wipes the fee marker (dev_task
+   *  6ec6872a). Callers persist this so `base = sum(item_type<>'fee')` stays correct. */
+  item_type?: string
 }
 
 /** Label used for the credit line a regenerate adds. */
@@ -105,18 +109,24 @@ export function buildRegeneratedLineItems(
 ): RebuildLineItem[] {
   const service = (items ?? []).filter((i) => !isCreditLine(i))
   const credit = Math.round((Number(appliedCredit) || 0) * 100) / 100
-  const out = service.map((i) => ({
+  // Preserve item_type on every kept line — a 'fee' line MUST survive an edit or a
+  // credit-apply as a 'fee' line, or the base (=sum of non-fee) and the invoice's
+  // card_fee_amount go stale. (dev_task 6ec6872a)
+  const out: RebuildLineItem[] = service.map((i) => ({
     description: i.description,
     quantity: Number(i.quantity) || 1,
     unit_price: i.unit_price,
     amount: i.amount,
+    item_type: i.item_type === 'fee' ? 'fee' : 'service',
   }))
   if (credit > 0) {
+    // The credit reduces the SERVICE base only, never the pass-through card fee.
     out.push({
       description: creditLabel,
       quantity: 1,
       unit_price: -credit,
       amount: -credit,
+      item_type: 'service',
     })
   }
   return out

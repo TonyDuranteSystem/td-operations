@@ -229,6 +229,21 @@ async function handleCheckoutCompleted(session: StripeSession) {
   const metaInvoiceNumber = session.metadata?.invoice_number || null
   let reconciledExistingInvoice = false
   if (!activationPortalInvoiceId && metaInvoiceNumber) {
+    // CARD FEE (dev_task 6ec6872a): before settling, book the fee ONTO this invoice
+    // from the ACTUAL charge, so the settle credits base+fee (it caps at the invoice
+    // total). bookCardFee is all-or-throw → a failure propagates to a non-200 and
+    // Stripe retries from a non-terminal invoice. On base-mismatch it returns
+    // 'overage' (settle at base, raise a review).
+    const { data: feeInv } = await getSupabase()
+      .from("payments").select("id").eq("invoice_number", metaInvoiceNumber).maybeSingle()
+    if (feeInv?.id) {
+      const { bookCardFee } = await import("@/lib/finance/card-fee-booking")
+      const feeResult = await bookCardFee(feeInv.id as string, total)
+      if (feeResult.outcome === "overage") {
+        const { raiseCardFeeOverageIssue } = await import("@/lib/finance/card-fee-issues")
+        await raiseCardFeeOverageIssue({ paymentId: feeInv.id as string, base: feeResult.base, charged: total, gatewayPaymentId: paymentIntentId || sessionId })
+      }
+    }
     const { reconcilePaymentByInvoiceNumber } = await import("@/lib/operations/payment")
     const r = await reconcilePaymentByInvoiceNumber(metaInvoiceNumber, {
       amountPaid: total,
@@ -380,17 +395,23 @@ async function handleCheckoutCompleted(session: StripeSession) {
         .single()
 
       if (activationWithInvoice?.portal_invoice_id) {
-        try {
-          const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
-          const today = new Date().toISOString().split("T")[0]
-          await syncInvoiceStatus("invoice", activationWithInvoice.portal_invoice_id, "Paid", today, total)
-          console.warn(`[stripe-webhook] Marked invoice ${activationWithInvoice.portal_invoice_id} as Paid`)
-        } catch (e) {
-          console.error("[stripe-webhook] Failed to mark invoice as Paid:", e)
+        // CARD FEE (dev_task 6ec6872a): book the fee ONTO the draft invoice from the
+        // ACTUAL charge BEFORE runActivation settles it (its settle_full caps at the
+        // invoice total, so the total must be base+fee first). All-or-throw: a write
+        // failure propagates to a non-200 and Stripe retries from a non-terminal
+        // invoice. On base-mismatch → 'overage': settle at base, raise a review.
+        const { bookCardFee } = await import("@/lib/finance/card-fee-booking")
+        const feeResult = await bookCardFee(activationWithInvoice.portal_invoice_id, total)
+        if (feeResult.outcome === "overage") {
+          const { raiseCardFeeOverageIssue } = await import("@/lib/finance/card-fee-issues")
+          await raiseCardFeeOverageIssue({ paymentId: activationWithInvoice.portal_invoice_id, base: feeResult.base, charged: total, gatewayPaymentId: paymentIntentId || sessionId })
         }
       }
 
-      // Trigger activate-service workflow directly (no HTTP hop)
+      // Trigger activate-service workflow directly (no HTTP hop). Settles the (now
+      // fee-bumped) draft invoice via applyMoneyToInvoice → amount_paid = the actual
+      // charge. Invoice is Paid on PAYMENT; if activation then fails, it stays Paid
+      // and the failure raises a portal issue for staff (plan §10).
       try {
         const activateResult = await runActivation(pending.id)
         if (!activateResult.ok) {
@@ -406,6 +427,10 @@ async function handleCheckoutCompleted(session: StripeSession) {
             category: "Payment",
             status: "To Do",
           })
+          // Paid but auto-setup failed → surface in the staff Portal Chats "!" Issue
+          // tab (dev_task 6ec6872a). Deduped on the payment id across Stripe retries.
+          const { raiseActivationFailedIssue } = await import("@/lib/finance/card-fee-issues")
+          await raiseActivationFailedIssue({ paymentId: activationPortalInvoiceId, pendingActivationId: pending.id, clientName, email, error: activateResult.error || "activate-service failed", gatewayPaymentId: paymentIntentId || sessionId })
         }
       } catch (e) {
         console.error("[stripe-webhook] Failed to trigger activate-service:", e)
@@ -420,6 +445,8 @@ async function handleCheckoutCompleted(session: StripeSession) {
           category: "Payment",
           status: "To Do",
         })
+        const { raiseActivationFailedIssue } = await import("@/lib/finance/card-fee-issues")
+        await raiseActivationFailedIssue({ paymentId: activationPortalInvoiceId, pendingActivationId: pending.id, clientName, email, error: e instanceof Error ? e.message : String(e), gatewayPaymentId: paymentIntentId || sessionId })
       }
     } else {
       // No pending activation — create follow-up task
