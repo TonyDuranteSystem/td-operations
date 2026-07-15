@@ -152,6 +152,7 @@ describe("SCENARIO MATRIX — foreign exchange & transfers (Phase 3)", () => {
     })
     expect(d.fx_translation_adjustment).toBeCloseTo(-555.56, 2)
     expect(g(d, 3).status).toBe("pass")
+    expect(Math.abs(d.balance_sheet_check)).toBeLessThan(0.01) // the ONE identity the screen + Excel also read
     expect(d.pnl.netIncome).toBeCloseTo(10000, 2)
     expect(d.notes.some(n => n.includes("may be missing"))).toBe(false)
   })

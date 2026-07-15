@@ -65,6 +65,7 @@ interface View {
     total_liabilities: number
     ending_capital_total: number
     fx_translation_adjustment?: number
+    balance_sheet_check?: number
     notes: string[]
   }
   gates: Gate[]
@@ -1599,6 +1600,12 @@ export function TaxFinancialsReview({ accountId, taxYear, locale, mode = 'client
                       <span className="ml-1 text-[11px] text-zinc-400">{it ? '(non è reddito)' : '(not income)'}</span>
                     </dt>
                     <dd className="font-medium">{fmt(view.draft.fx_translation_adjustment ?? 0)}</dd>
+                  </div>
+                )}
+                {isStaff && (
+                  <div className={`flex justify-between border-t border-zinc-100 pt-1.5 ${Math.abs(view.draft.balance_sheet_check ?? 0) > 1 ? 'text-red-700 font-semibold' : 'text-emerald-700'}`}>
+                    <dt>{Math.abs(view.draft.balance_sheet_check ?? 0) > 1 ? '⚠ Balance check (off by)' : '✓ Balance check'}</dt>
+                    <dd>{fmt(view.draft.balance_sheet_check ?? 0)}</dd>
                   </div>
                 )}
               </dl>

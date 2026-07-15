@@ -97,10 +97,12 @@ export function evaluateGates(input: EvaluateGatesInput): GateResult[] {
   // adjustment. Currency exchanges no longer show as a bare "off by" — they are
   // named and carried in equity, never in income or member capital.
   {
-    const rhs = draft.total_liabilities + draft.ending_capital_total + draft.fx_translation_adjustment
-    results.push(close(draft.total_assets, rhs)
+    // Single source of the balance identity (draft.balance_sheet_check): assets −
+    // (liabilities + capital + FX translation adjustment + unclassified cash). The
+    // screen and the Excel read the SAME field, so none can drift.
+    results.push(close(draft.balance_sheet_check, 0)
       ? { id: 3, title: "Balance sheet balances", status: "pass", blocking: false, detail: `Assets ${draft.total_assets.toFixed(2)} = liabilities + capital${Math.abs(draft.fx_translation_adjustment) > 0.01 ? " + foreign-exchange translation adjustment" : ""}.` }
-      : { id: 3, title: "Balance sheet balances", status: "fail", blocking: false, detail: `Assets ${draft.total_assets.toFixed(2)} ≠ liabilities ${draft.total_liabilities.toFixed(2)} + capital ${draft.ending_capital_total.toFixed(2)} + FX adjustment ${draft.fx_translation_adjustment.toFixed(2)} (off by ${(draft.total_assets - rhs).toFixed(2)}) — usually uncategorized transactions or a beginning-balance gap.` })
+      : { id: 3, title: "Balance sheet balances", status: "fail", blocking: false, detail: `The balance sheet is off by ${draft.balance_sheet_check.toFixed(2)} (assets ${draft.total_assets.toFixed(2)} vs liabilities ${draft.total_liabilities.toFixed(2)} + capital ${draft.ending_capital_total.toFixed(2)} + FX adjustment ${draft.fx_translation_adjustment.toFixed(2)}) — usually uncategorized transactions or a beginning-balance gap.` })
   }
 
   // ── Gate 4: M-2 ties (roll-forward arithmetic) ──

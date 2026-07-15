@@ -111,6 +111,13 @@ export interface FinancialDraft {
   /** Gross USD volume of the conversion rows (Σ|amount|) — context for the
    *  translation adjustment and the "unexpectedly large" review alarm. */
   conversion_gross: number
+  /** Balance-sheet residual — total_assets − (total_liabilities + ending capital
+   *  + fx_translation_adjustment + uncategorized cash). ~0 when the sheet ties.
+   *  THE single source of the balance identity: gate 3, the portal screen, and
+   *  the Excel all read this field instead of each re-summing the components, so
+   *  a renderer can never again silently drop a term (the FX-missing-from-Excel
+   *  bug). */
+  balance_sheet_check: number
   /** Contribution/distribution amounts that matched no member by name — needs staff/client resolution. */
   unattributed: { contributions: number; distributions: number }
   notes: string[]
@@ -424,6 +431,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     ending_capital_total: endingCapitalTotal,
     fx_translation_adjustment: fxTranslationAdjustment,
     conversion_gross: conversionGross,
+    balance_sheet_check: endingCash - (0 + endingCapitalTotal + fxTranslationAdjustment + pnl.uncategorizedTotal),
     unattributed: { contributions: unattributedContrib, distributions: unattributedDist },
     notes,
   }

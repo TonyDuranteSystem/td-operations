@@ -133,6 +133,14 @@ export async function buildFinancialsWorkbook(input: FinancialsExcelInput): Prom
   addRow(bs, "Net Income", draft.pnl.netIncome, false, 1)
   addRow(bs, "Less: Distributions", -draft.pnl.totalDistributions, false, 1)
   addRow(bs, "Total Partners' Equity (ending capital)", draft.ending_capital_total, true)
+  // Foreign-exchange translation adjustment — a DISCLOSED equity item that sits
+  // BELOW the ending-capital subtotal, OUTSIDE the M-2 roll-forward: it is never
+  // income and never part of any member's tax-basis capital (CPA condition).
+  // Mirrors the portal screen. Without this line the CHECK was off by exactly the
+  // residual on any account with currency exchanges.
+  if (Math.abs(draft.fx_translation_adjustment) > 0.01) {
+    addRow(bs, "Foreign-exchange translation adjustment (not income, not in member capital)", draft.fx_translation_adjustment, false, 1)
+  }
   // Reconciling line (2026-07-02): uncategorized rows move cash (they're inside
   // ending_cash) but not equity (excluded from netIncome) — so the sheet is out
   // of balance by EXACTLY their net. Name the gap instead of leaving a mystery
@@ -141,8 +149,11 @@ export async function buildFinancialsWorkbook(input: FinancialsExcelInput): Prom
     const recon = addRow(bs, `⚠ Unclassified cash movement (${draft.pnl.uncategorizedCount} uncategorized transactions — categorize to balance)`, draft.pnl.uncategorizedTotal, false, 1)
     recon.font = { bold: true, color: { argb: "FFCC0000" } }
   }
-  const checkRow = addRow(bs, "CHECK: Assets − Liabilities − Equity", draft.total_assets - draft.total_liabilities - draft.ending_capital_total, true)
-  if (Math.abs(draft.total_assets - draft.total_liabilities - draft.ending_capital_total) > 1) {
+  // CHECK reads the engine's ONE balance identity (draft.balance_sheet_check =
+  // assets − liabilities − capital − FX adjustment − unclassified cash), the same
+  // field gate 3 and the screen use — so this file can never disagree with them.
+  const checkRow = addRow(bs, "CHECK: Assets − Liabilities − Equity − adjustments", draft.balance_sheet_check, true)
+  if (Math.abs(draft.balance_sheet_check) > 1) {
     checkRow.font = { bold: true, color: { argb: "FFCC0000" } }
   }
   bs.addRow({})
