@@ -34,7 +34,7 @@ Pick the smallest tier that fits the stakes. A full pass is several parallel Opu
 2. **Spawn the tier's reviewers in parallel**, one message, multiple Agent calls:
    - light = `senior-engineer` + `project-director`; standard/full/deep = the 3 core (`senior-engineer`, `ai-architect`, `project-director`), plus topic specialists for full/deep.
    - Give each the exact scope. **Auto-feed the real change** — pass the actual `git diff` (or the plan text) into each reviewer's prompt rather than a hand-summarized scope, so they reason on ground truth. Require file+line citations.
-   - **After the pass, log the verdict** to the active dev-tracker job (reviewers + tier + GO/FIX-FIRST + any blockers) via `dev_task_update` as a progress entry (R112), so the board carries the review trail.
+   - **After the pass, log the verdict AND its token cost** to the active dev-tracker job via `dev_task_update` as a progress entry (R112): reviewers + tier + GO/FIX-FIRST + any blockers, plus the pass's **total token cost** — sum the `subagent_tokens` the harness reports in each reviewer's Agent-tool result metadata (NOT the reviewer's prose). If that metadata isn't available, record "tokens: unavailable" — never guess a number (R093). This keeps the review trail AND makes the cost/value of each council pass visible over time.
 3. **Collect the structured outputs.** Each reviewer returns a defect/concern list or an enumerated "none found".
 4. **Escalate disjunctively.** If ANY reviewer returns a concrete, cited blocker → the plan is "fix first". No vote counting, no unanimity. The valuable signal is "did anyone find a blocker", not "did everyone bless it".
 5. **If the three core reviewers disagree significantly, pull in ONE tiebreaker specialist** (per PROTOCOL.md) — chosen for the domain of the disagreement — to review the contested point with fresh evidence BEFORE the final recommendation. Capped at one extra reviewer. Do not smooth a real split over silently.
@@ -55,6 +55,7 @@ Match on meaning, not exact keywords — the phrases are cues, not a whitelist. 
 | banking, payments, credentials, auth, PII, data exposure, uploads, webhooks | Security |
 | contracts, offers, leases, operating agreements, ICA, consent, liability, terms | Legal-Reviewer |
 | performance, scalability, slow pages, function-timeout, query cost, bundle size | Performance-Optimizer |
+| database migration, DDL, schema change, backfill, constraint/enum, data integrity, prod-vs-sandbox drift | Data-Migration-Reviewer, Security |
 | test coverage, missing unit tests, e2e, regression risk, "is this proven?" | QA-Tester |
 | external / third-party integrations (Tesla, banking APIs, other vendor APIs) | Security, Performance-Optimizer (and flag a dedicated integration specialist if the work is deep) |
 
