@@ -82,8 +82,12 @@ export function buildCompletenessSummary(input: CompletenessInput): Completeness
   // Gate 3 — balance sheet doesn't balance (the headline "is anything missing?").
   const g3 = gate(gates, 3)
   if (g3?.status === "fail") {
-    const off = draft.total_assets - (draft.total_liabilities + draft.ending_capital_total)
-    items.push({ code: "balance_sheet_off", severity: "warn", amount: off })
+    // Read the ONE authoritative residual (assets − (liabilities + capital +
+    // fx_translation_adjustment + uncategorized cash)). Never re-sum the
+    // components here — a hand re-sum silently drops the FX + uncategorized
+    // terms and disagrees with gate 3 / the Excel / the portal check, which is
+    // exactly the term-dropping bug balance_sheet_check exists to prevent.
+    items.push({ code: "balance_sheet_off", severity: "warn", amount: draft.balance_sheet_check })
   }
 
   // Gate 4 — capital roll-forward arithmetic (rare; informational for the client).

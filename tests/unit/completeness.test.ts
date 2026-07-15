@@ -23,10 +23,15 @@ function draft(over: Partial<FinancialDraft> = {}): FinancialDraft {
     beginning_cash: 0,
     beginning_cash_source: null,
     beginning_capital_total: 0,
+    bank_balances: null,
+    operating_expense_breakdown: [],
     ending_cash: 0,
     total_assets: 0,
     total_liabilities: 0,
     ending_capital_total: 0,
+    fx_translation_adjustment: 0,
+    conversion_gross: 0,
+    balance_sheet_check: 0,
     unattributed: { contributions: 0, distributions: 0 },
     notes: [],
     ...over,
@@ -44,16 +49,38 @@ describe("buildCompletenessSummary", () => {
     expect(r.can_accept_as_is).toBe(true)
   })
 
-  it("emits balance_sheet_off with the signed gap when gate 3 fails", () => {
+  it("emits balance_sheet_off reading the authoritative balance_sheet_check when gate 3 fails", () => {
     const gates = passingGates().map(g => g.id === 3 ? gate(3, "fail") : g)
     const r = buildCompletenessSummary(input({
       gates,
-      draft: draft({ total_assets: 1000, total_liabilities: 0, ending_capital_total: 250 }),
+      draft: draft({ total_assets: 1000, total_liabilities: 0, ending_capital_total: 250, balance_sheet_check: 750 }),
     }))
     const bs = r.items.find(i => i.code === "balance_sheet_off")
     expect(bs).toBeTruthy()
     expect(bs!.severity).toBe("warn")
     expect(bs!.amount).toBeCloseTo(750, 6)
+  })
+
+  it("balance_sheet_off uses balance_sheet_check, NOT a re-sum of assets − capital (multi-currency regression)", () => {
+    // Multi-currency client: a hand re-sum (total_assets − (liabilities + capital) = 900)
+    // would DROP the FX translation line and disagree with gate 3 / the Excel. The
+    // authoritative residual is balance_sheet_check. Old buggy code returned 900; the
+    // fixed code must return the check value.
+    const gates = passingGates().map(g => g.id === 3 ? gate(3, "fail") : g)
+    const r = buildCompletenessSummary(input({
+      gates,
+      draft: draft({
+        total_assets: 1000,
+        total_liabilities: 0,
+        ending_capital_total: 100,
+        fx_translation_adjustment: 850,
+        balance_sheet_check: 50,
+      }),
+    }))
+    const bs = r.items.find(i => i.code === "balance_sheet_off")
+    expect(bs!.amount).toBeCloseTo(50, 6)
+    // guard against a regression back to the component re-sum
+    expect(bs!.amount).not.toBeCloseTo(900, 6)
   })
 
   it("emits reconciliation_gap (gate 1) and ownership_incomplete (gate 5) on failure", () => {
