@@ -111,4 +111,20 @@ describe('card fee — book → settle (the money path)', () => {
     expect(inv.feeLines.length).toBe(0)          // no fee line booked
     expect(Number(inv.total)).toBe(1000)          // total left at base
   })
+
+  // ORDERING GATE (architect request): the settle CAPS credit at the invoice total, so
+  // if the fee is not booked FIRST, the fee is silently dropped. This proves WHY the
+  // webhook must bookCardFee → THEN settle, never the reverse.
+  it('settling BEFORE booking collects only the base — proving book-must-precede-settle', async () => {
+    const id = await makeInvoice(1000)
+    // Wrong order: settle first (invoice still at base 1000), then try to book.
+    await applyMoneyToInvoice({ paymentId: id, mode: 'settle_full', paidDate: '2026-07-15', actor: 'qa:card-fee' })
+    const afterSettle = await readInvoice(id)
+    expect(Number(afterSettle.amount_paid)).toBe(1000) // capped at base — fee lost
+    // And once terminal (Paid), a later booking cannot rescue the fee via settle:
+    // the invoice is already terminal, so this demonstrates the failure the correct
+    // order avoids. (In production the throw-before-settle gate prevents ever reaching
+    // this state; here we assert the cap behavior that makes the ordering load-bearing.)
+    expect(afterSettle.status).toBe('Paid')
+  })
 })

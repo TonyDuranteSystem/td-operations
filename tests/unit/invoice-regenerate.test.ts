@@ -137,7 +137,9 @@ describe("buildRegeneratedLineItems", () => {
   it("handles an empty item list", () => {
     expect(buildRegeneratedLineItems([], 0)).toEqual([])
     expect(buildRegeneratedLineItems([], 100)).toEqual([
-      { description: CREDIT_LINE_LABEL, quantity: 1, unit_price: -100, amount: -100 },
+      // item_type carried through for card-fee safety (dev_task 6ec6872a); a credit
+      // line is a service adjustment.
+      { description: CREDIT_LINE_LABEL, quantity: 1, unit_price: -100, amount: -100, item_type: "service" },
     ])
   })
 })
