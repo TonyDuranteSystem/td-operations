@@ -34,6 +34,12 @@ Branch: `claude/card-fee-charge-6ec6872a`. Migration: `scripts/migrations/202607
 - **Confirm the NAMED watcher has DIRECT access to the flag NOW** — not "ask a
   developer during the incident." The abort is only real if the watcher can flip it in
   seconds. Verify this before Step 3, not during it.
+- **The flag's tool is the Finance → Overview switch button** (admin-only card,
+  "Card Processing Fee"). ⚠️ The button cuts BOTH ways: it makes turning the fee ON
+  one tap away for any admin. Until Step 3/4 pass, NOBODY taps ON except as the
+  watched Step 3 arming — and the NAMED WATCHER personally performs that arming flip
+  (their one manual flip proves they can abort just as fast; an automated test does
+  not satisfy this). (Director's ship condition, 2026-07-15.)
 
 ## Step 3 — arm, then drive the FIRST real card charge (chosen, not random)
 - Pick a SMALL, KNOWN, friendly client for the first live card payment. Low-stakes by
