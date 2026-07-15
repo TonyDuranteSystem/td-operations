@@ -39,7 +39,9 @@ CHANGED=$( { git diff --name-only origin/main...HEAD 2>/dev/null; \
 # Sensitive-area path/name patterns (edit this list to tune — keep it flexible).
 # Anchored to path segments / distinctive names to limit false positives.
 PATTERN='lib/tax/|financial|/pnl|invoice|payment|payout|billing|escrow|lib/portal/|components/portal/|app/portal/|lib/operations/|formation|onboarding|compliance|deadline|renewal|referral|itin|ss4|lease|offer|banking|registered.agent'
-HITS=$(printf '%s\n' "$CHANGED" | grep -Ei "$PATTERN")
+# Exclude the council's own tooling + docs/tests — they contain these WORDS (e.g. a
+# "compliance" specialist filename) but are not business code. Only real app code counts.
+HITS=$(printf '%s\n' "$CHANGED" | grep -Ev '^(\.claude/|docs/|tests/)' | grep -Ei "$PATTERN")
 [ -z "$HITS" ] && exit 0
 
 # Total changed lines across committed + staged + unstaged (fixes commit-time undercount).
