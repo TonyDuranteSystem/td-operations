@@ -77,7 +77,7 @@ export function extractWizardOwner(submittedData: Record<string, unknown>): Owne
   return name ? { name, pct: null } : null
 }
 
-export async function getFinancialsView(accountId: string, taxYear: number): Promise<FinancialsView> {
+export async function getFinancialsView(accountId: string, taxYear: number, opts: { skipPriorCarry?: boolean } = {}): Promise<FinancialsView> {
   // Latest completed submission carries the wizard answers + the prior-return record.
   const { data: sub } = await supabaseAdmin
     .from("tax_return_submissions")
@@ -90,7 +90,17 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
     .maybeSingle() as { data: { submitted_data: Record<string, unknown> | null; prior_return_extracted: PriorReturnCaseRecord | null } | null }
 
   const submittedData = sub?.submitted_data ?? {}
-  const priorReturn = sub?.prior_return_extracted ?? null
+  // Cross-year carry-forward (2026-07-15): year N's beginning balances must come
+  // from OUR corrected/finalized year N-1 books, NOT a stale extraction of the
+  // originally-filed prior return. (Dynamiq trap: 2025 was starting from the
+  // mis-filed 2024's $1,142,397 cash instead of the corrected $391,863.70.) When
+  // we hold complete, self-tying N-1 books, synthesize the prior from THEIR
+  // ending (cash + per-member ending capital), overriding the uploaded extraction.
+  let priorReturn = sub?.prior_return_extracted ?? null
+  if (!opts.skipPriorCarry) {
+    const carried = await carryPriorFromOurBooks(accountId, taxYear)
+    if (carried) priorReturn = carried
+  }
 
   // Paginated read — buildFinancialDraft re-sorts internally, so `id` order is
   // fine here; the point is to get EVERY row past the 1000-row cap (a >1000-tx
@@ -155,7 +165,9 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const ownership = resolveOwnership({ priorK1s, wizardMembers, accountContacts })
 
   // W6 sync-back — only a complete, conflict-free resolution is auto-written.
-  if (ownership.complete && ownership.conflicts.length === 0) {
+  // Skipped when this view is being computed only to carry into a later year
+  // (skipPriorCarry) — a prior-year read must have no write side effects.
+  if (ownership.complete && ownership.conflicts.length === 0 && !opts.skipPriorCarry) {
     await syncOwnershipBack(accountId, ownership)
   }
 
@@ -191,6 +203,61 @@ export async function getFinancialsView(accountId: string, taxYear: number): Pro
   const completeness = buildCompletenessSummary({ gates, draft, missingFxCurrencies })
 
   return { draft, gates, canConfirm: canConfirm(gates), completeness, ownership, priorReturn, transactionCount: transactions.length, providedBalances }
+}
+
+/**
+ * Year N's prior-year source, synthesized from OUR OWN corrected year N-1 books
+ * when we hold them (transactions ingested for N-1) AND they self-tie — so
+ * beginning cash + per-member beginning capital carry from the corrected close,
+ * not a stale extraction of the originally-filed (possibly wrong) prior return.
+ * Returns null when there is no usable N-1 (caller keeps the uploaded / none
+ * path unchanged). Computes N-1 with skipPriorCarry so it never recurses to N-2.
+ *
+ * v1 reads the LIVE corrected N-1 draft; once the attestation-snapshot lands
+ * (dev_task fa37121d) this should read the frozen attested N-1 snapshot instead.
+ */
+async function carryPriorFromOurBooks(accountId: string, taxYear: number): Promise<PriorReturnCaseRecord | null> {
+  const priorYear = taxYear - 1
+  const { count } = await supabaseAdmin
+    .from("bank_transactions")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .eq("tax_year", priorYear)
+  if (!count || count === 0) return null
+
+  const priorView = await getFinancialsView(accountId, priorYear, { skipPriorCarry: true })
+  const d = priorView.draft
+  if (d.beginning_cash === null) return null            // N-1 has no resolved beginning — not carryable
+  if (Math.abs(d.balance_sheet_check) > 1) return null  // never carry a prior year that doesn't tie
+  return buildPriorFromDraft(d, priorYear, new Date().toISOString())
+}
+
+/** PURE: map a corrected year N-1 draft into the prior-return record the engine
+ *  reads for year N (Schedule L ending cash + per-member K-1 ending capital →
+ *  next year's beginning). Exported for tests. Members carry by NAME (K-1
+ *  partner_name), so a renamed/changed member roster across years won't carry —
+ *  a known roster-reconciliation limitation flagged for follow-up. */
+export function buildPriorFromDraft(draft: FinancialDraft, priorYear: number, nowIso: string): PriorReturnCaseRecord {
+  return {
+    case: "we_filed",
+    status: "validated",
+    tax_return_id: null,
+    note: `Beginning balances carried from our corrected ${priorYear} books.`,
+    recorded_at: nowIso,
+    source: "our_corrected_books",
+    issues: [],
+    extracted: {
+      form_type: "1065",
+      tax_year: priorYear,
+      ein: null,
+      schedule_l: {
+        beginning: { cash: 0, total_assets: 0, total_liabilities: 0, capital: 0 },
+        ending: { cash: draft.ending_cash, total_assets: draft.total_assets, total_liabilities: draft.total_liabilities, capital: draft.ending_capital_total },
+      },
+      m2: { beginning_capital: draft.beginning_capital_total, ending_capital: draft.ending_capital_total },
+      k1s: draft.members.map(m => ({ partner_name: m.name, ownership_pct: m.pct, ending_capital: m.ending_capital })),
+    },
+  }
 }
 
 /**
