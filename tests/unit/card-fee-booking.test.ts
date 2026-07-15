@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { deriveBase, CARD_FEE_DESCRIPTION } from '@/lib/finance/card-fee-booking'
+import { buildRegeneratedLineItems } from '@/lib/portal/invoice-regenerate'
 
 describe('deriveBase (immutable base = sum of non-fee line items)', () => {
   it('sums only the non-fee lines', () => {
@@ -38,5 +39,24 @@ describe('deriveBase (immutable base = sum of non-fee line items)', () => {
 
   it('exports the fee description used as the line label', () => {
     expect(CARD_FEE_DESCRIPTION).toBe('Card processing fee')
+  })
+})
+
+// RED TEST (senior-engineer request): proves the invoice-EDIT gap (plan TODO b) is
+// real, not an assumption. The line-item regeneration primitive that credit-netting
+// and updateInvoice both use strips a fee line's marker and folds it into the base —
+// so editing a fee-bearing invoice today would wipe the fee. This is marked `.fails`
+// (it currently FAILS as intended); when the fee-aware-writer work lands, the fix is
+// to remove `.fails` and this becomes a normal green guard.
+describe('KNOWN GAP — invoice edit must preserve the fee line (fee-aware writers, plan TODO b)', () => {
+  it.fails('regeneration should preserve a fee line but currently drops its marker', () => {
+    const items = [
+      { description: 'Service', quantity: 1, unit_price: 1000, amount: 1000, item_type: 'service' },
+      { description: CARD_FEE_DESCRIPTION, quantity: 1, unit_price: 50, amount: 50, item_type: 'fee' },
+    ]
+    const out = buildRegeneratedLineItems(items, 0) as Array<{ item_type?: string; description: string }>
+    // DESIRED (will hold once fixed): the fee line survives, marked as a fee.
+    const feeLine = out.find((i) => i.description === CARD_FEE_DESCRIPTION)
+    expect(feeLine?.item_type).toBe('fee')
   })
 })
