@@ -25,7 +25,7 @@ import { bookCardFee } from '@/lib/finance/card-fee-booking'
 const TEST_CONTACT_ID = '374197ce-d670-40bb-a6f6-6cb64b41699f' // Stefano Pretto (sandbox test)
 const createdPaymentIds: string[] = []
 
-async function makeInvoice(base: number, rate = 0.05): Promise<string> {
+async function makeInvoice(base: number, rate = 0.05): Promise<{ id: string; invoiceNumber: string }> {
   const res = await createTDInvoice({
     contact_id: TEST_CONTACT_ID,
     currency: 'USD',
@@ -38,7 +38,7 @@ async function makeInvoice(base: number, rate = 0.05): Promise<string> {
   })
   if (!res?.paymentId) throw new Error('makeInvoice: no payment_id')
   createdPaymentIds.push(res.paymentId)
-  return res.paymentId
+  return { id: res.paymentId, invoiceNumber: res.invoiceNumber }
 }
 
 async function readInvoice(id: string) {
@@ -69,7 +69,7 @@ afterAll(async () => {
 
 describe('card fee — book → settle (the money path)', () => {
   it('books the fee from the actual charge, then settles fully consistent', async () => {
-    const id = await makeInvoice(1000) // base 1000, rate 5%
+    const { id } = await makeInvoice(1000) // base 1000, rate 5%
     const charged = 1050
 
     const booked = await bookCardFee(id, charged)
@@ -93,7 +93,7 @@ describe('card fee — book → settle (the money path)', () => {
   })
 
   it('a webhook retry does NOT double the fee (idempotent)', async () => {
-    const id = await makeInvoice(2000)
+    const { id } = await makeInvoice(2000)
     await bookCardFee(id, 2100)
     await bookCardFee(id, 2100) // retry
     await bookCardFee(id, 2100) // retry again
@@ -104,7 +104,7 @@ describe('card fee — book → settle (the money path)', () => {
   })
 
   it('books NO fee and reports overage when the charge does not match the base', async () => {
-    const id = await makeInvoice(1000)
+    const { id } = await makeInvoice(1000)
     const booked = await bookCardFee(id, 5000) // wildly off → base mismatch
     expect(booked.outcome).toBe('overage')
     const inv = await readInvoice(id)
@@ -116,7 +116,7 @@ describe('card fee — book → settle (the money path)', () => {
   // if the fee is not booked FIRST, the fee is silently dropped. This proves WHY the
   // webhook must bookCardFee → THEN settle, never the reverse.
   it('settling BEFORE booking collects only the base — proving book-must-precede-settle', async () => {
-    const id = await makeInvoice(1000)
+    const { id } = await makeInvoice(1000)
     // Wrong order: settle first (invoice still at base 1000), then try to book.
     await applyMoneyToInvoice({ paymentId: id, mode: 'settle_full', paidDate: '2026-07-15', actor: 'qa:card-fee' })
     const afterSettle = await readInvoice(id)
@@ -126,5 +126,46 @@ describe('card fee — book → settle (the money path)', () => {
     // order avoids. (In production the throw-before-settle gate prevents ever reaching
     // this state; here we assert the cap behavior that makes the ordering load-bearing.)
     expect(afterSettle.status).toBe('Paid')
+  })
+})
+
+describe('card fee — per-payment-route safety', () => {
+  // Path B (existing-invoice reconcile — renewals/installments paid by card): book the
+  // fee, then settle via the REAL reconcile path the webhook uses. amount_paid must be
+  // the full charge, and the invoice fully consistent.
+  it('Path B (reconcile): book → reconcile collects base+fee, invoice consistent', async () => {
+    const { id, invoiceNumber } = await makeInvoice(1000)
+    await bookCardFee(id, 1050)
+    const { reconcilePaymentByInvoiceNumber } = await import('@/lib/operations/payment')
+    const r = await reconcilePaymentByInvoiceNumber(invoiceNumber, {
+      amountPaid: 1050, paidDate: '2026-07-15', stripePaymentId: `qa_pi_${Date.now()}`,
+    })
+    expect(r.reconciled).toBe(true)
+    const inv = await readInvoice(id)
+    expect(Number(inv.total)).toBe(1050)
+    expect(Number(inv.amount_paid)).toBe(1050)   // full charge collected via the real path
+    expect(Number(inv.card_fee_amount)).toBe(50)
+    expect(inv.feeLines.length).toBe(1)
+    expect(inv.status).toBe('Paid')
+  })
+
+  // THE GATE: bookCardFee is all-or-throw. A load/write failure must RAISE so the
+  // webhook returns non-200 and the gateway retries — never a silent half-book. A
+  // missing invoice is the cleanest forced failure.
+  it('throws on a missing invoice (so the webhook returns non-200 and retries)', async () => {
+    await expect(bookCardFee('00000000-0000-0000-0000-000000000000', 1050)).rejects.toThrow()
+  })
+
+  // Exact-base charge (fee 0, e.g. a rate of 0): no fee line, settles at base cleanly.
+  it('no_fee when the charge equals the base (no fee line, clean settle)', async () => {
+    const { id } = await makeInvoice(1000, 0) // 0% rate → no fee
+    const booked = await bookCardFee(id, 1000)
+    expect(booked.outcome).toBe('no_fee')
+    await applyMoneyToInvoice({ paymentId: id, mode: 'settle_full', paidDate: '2026-07-15', actor: 'qa:card-fee' })
+    const inv = await readInvoice(id)
+    expect(inv.feeLines.length).toBe(0)
+    expect(Number(inv.total)).toBe(1000)
+    expect(Number(inv.amount_paid)).toBe(1000)
+    expect(inv.status).toBe('Paid')
   })
 })
