@@ -12,6 +12,23 @@ This is the operating memory for the Council of Reviewers. The SessionStart rost
 ## Disagreement → tiebreaker (mandatory)
 If the three core reviewers **disagree significantly** — e.g. one returns a concrete blocker while another says GO, or they split on whether something is a real defect — do NOT just average them. Before writing the final recommendation, **pull in exactly ONE extra specialist** chosen for the domain of the disagreement (the routing table picks it; if none fits, flag the gap and add one). That specialist reviews the specific contested point with fresh, independent evidence and its finding breaks the tie. Then the Project Director writes the synthesis, naming the original disagreement and how the tiebreaker resolved it. This keeps a real split from being silently smoothed over, and it's the one case where the Council widens itself automatically — capped at one extra reviewer so it can't spiral.
 
+## Automatic expert selection (do this BEFORE any council analysis)
+The coordinator (the main session, acting as Project Director) selects the team from the task — the user should not have to name experts:
+1. **Read the task/context** (what it touches, which code/domain, whether it's a bug/plan/change).
+2. **Route** via the SKILL.md topic table — pull in every specialist the task plausibly touches (money/tax→CPA+Finance; DB change/migration→Data-Migration-Reviewer; website/bank→Ecommerce-Bank-Auditor; compliance→Compliance-Deadlines-Auditor; etc.).
+3. **ALWAYS include the Bug-Hunter** when the task is a **bug, issue, defect, investigation, or audit** — anything from the dev-tracker (td-dev/td-bug/td-support) or that Antonio describes as a problem to solve/investigate. Bug-Hunter is mandatory for that class; skipping it is a protocol violation. **Precedence — the size gate wins:** a genuinely trivial, obvious one-line fix is exempt from the council entirely (skip it, per the size gate); "Bug-Hunter mandatory" only applies once a bug is non-trivial enough to convene the council at all. So a bug is either "too trivial → no council" OR "convene → Bug-Hunter is in." There is no in-between where you convene for a bug and leave Bug-Hunter out.
+4. **Pick the tier by stakes** (size gate still applies — trivial one-liners skip the council entirely).
+5. If no specialist fits, propose one before proceeding (rule 5).
+
+## Bug / investigation flow (two phases — mandatory for bugs & investigations)
+When Antonio shares a bug/issue to solve or asks for an investigation, run this ordered flow — do NOT jump straight to a recommendation:
+
+**Phase 1 — INVESTIGATE (find the truth).** Convene the **Bug-Hunter + the routed specialists** (read-only). They produce **concrete, cited findings** — file+line where possible, a concrete repro, root cause. The main session ALSO verifies the key facts first-hand (R093). No fix is proposed yet.
+
+**Phase 2 — PLAN + INTERNAL APPROVAL (before Antonio sees it).** From the findings, form a **proposed fix plan**. Then the **three core reviewers — Senior Engineer + AI Architect + Project Director — must review and approve or improve that plan.** Any one concrete cited blocker → revise the plan and re-check (disjunctive). **Only a plan that clears this internal approval reaches Antonio**, presented in plain English with any reviewer disagreement named. Antonio's "go" remains the only authorization to actually change anything.
+
+This is the ACTION complement of the operating contract: the council does the investigation + internal vetting so what reaches Antonio is already stress-tested, not a first draft. **Scale the INVESTIGATION (Phase 1) breadth to the bug** — a small bug convenes Bug-Hunter alone or with one routed specialist; a real production/money/client bug convenes Bug-Hunter + the full routed set. **Phase-2 internal approval is ALWAYS the 3 core reviewers** (Senior Engineer + AI Architect + Project Director), regardless of how small the bug — that is the plan-quality gate and it does not scale down. (If the bug is so trivial it wouldn't survive the size gate, it never enters this flow at all — you just fix it.) So the tier vocabulary (`light`/`full`) governs Phase-1 specialist breadth here, not the fixed 3-core Phase-2 approval.
+
 ## What is deferred / must NOT be built without a fresh review
 - A spawned "coordinator/meta" subagent that picks or invents experts (routing is done inline by the main session off the table).
 - Unattended, automatic creation of new specialists.

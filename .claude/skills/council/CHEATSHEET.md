@@ -26,6 +26,12 @@ If you don't pick a tier, it picks by stakes — small work gets light, money/ta
 - **"Find bugs before this breaks in production"** → `/council with Bug-Hunter` (or `/council deep` for the hardest cases).
 - **Just shipped something small** → `/council light`.
 
+## When you report a bug or ask for an investigation
+You don't need to name experts — the council picks them from the task, and the **Bug Hunter is always included** for a bug/issue/investigation. It runs in two steps automatically:
+1. **Investigate** — the Bug Hunter + the right specialists find the root cause with exact code references.
+2. **Internal approval** — a fix plan is written, then your three core reviewers approve or improve it **before** it reaches you.
+You only see the final, already-stress-tested recommendation — and nothing changes until you say go.
+
 ## The team
 **Core (always):** Senior Engineer · AI Architect · Project Director
 **Specialists (auto-pulled by topic):** CPA-IRS · Finance-Auditor · Compliance-Deadlines-Auditor · Business-Analyst · Web-Auditor · Ecommerce-Bank-Auditor · Security · Legal-Reviewer · Performance-Optimizer · QA-Tester · Data-Migration-Reviewer · Bug-Hunter
