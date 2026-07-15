@@ -57,6 +57,7 @@ Match on meaning, not exact keywords — the phrases are cues, not a whitelist. 
 | performance, scalability, slow pages, function-timeout, query cost, bundle size | Performance-Optimizer |
 | database migration, DDL, schema change, backfill, constraint/enum, data integrity, prod-vs-sandbox drift | Data-Migration-Reviewer, Security |
 | test coverage, missing unit tests, e2e, regression risk, "is this proven?" | QA-Tester |
+| hard-to-find bugs, edge cases, race conditions, boundary/off-by-one, failure modes, "what could break in production" | Bug-Hunter (aggressive; pair with QA-Tester for high-stakes correctness) |
 | external / third-party integrations (Tesla, banking APIs, other vendor APIs) | Security, Performance-Optimizer (and flag a dedicated integration specialist if the work is deep) |
 
 If the task's domain is NOT covered by any specialist above, that is a **gap** — see "No good match → propose an expert BEFORE final advice".

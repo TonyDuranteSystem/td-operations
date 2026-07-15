@@ -23,11 +23,12 @@ If you don't pick a tier, it picks by stakes — small work gets light, money/ta
 - **Client bank-application prep** (their website's credibility) → `/council with Ecommerce-Bank-Auditor` (checks legitimacy, professionalism, policy pages, security signals a bank looks for).
 - **Contract / offer / lease wording** → `/council full` (Legal Reviewer flags exposure).
 - **Database migration / schema change / backfill** → `/council full` (Data & Migration Reviewer + Security).
+- **"Find bugs before this breaks in production"** → `/council with Bug-Hunter` (or `/council deep` for the hardest cases).
 - **Just shipped something small** → `/council light`.
 
 ## The team
 **Core (always):** Senior Engineer · AI Architect · Project Director
-**Specialists (auto-pulled by topic):** CPA-IRS · Finance-Auditor · Compliance-Deadlines-Auditor · Business-Analyst · Web-Auditor · Ecommerce-Bank-Auditor · Security · Legal-Reviewer · Performance-Optimizer · QA-Tester · Data-Migration-Reviewer
+**Specialists (auto-pulled by topic):** CPA-IRS · Finance-Auditor · Compliance-Deadlines-Auditor · Business-Analyst · Web-Auditor · Ecommerce-Bank-Auditor · Security · Legal-Reviewer · Performance-Optimizer · QA-Tester · Data-Migration-Reviewer · Bug-Hunter
 
 ## The rules that protect you
 - Any one reviewer finding a real, pinpointed problem = **"fix first"** (no rubber-stamp voting).
