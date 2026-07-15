@@ -12,6 +12,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
+import { pinnedRateForInheritance } from "@/lib/payments/card-fee-config"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
 import { verifyInternalWebhookSecret } from "@/lib/webhook-internal-auth"
 
@@ -280,6 +281,13 @@ export async function POST(req: NextRequest) {
             quantity: 1,
           }],
           currency,
+          // The invoice INHERITS the offer's pinned card-fee rate — never re-read
+          // live config here, or a per-deal rate (e.g. a waived 0%) is silently
+          // replaced by the current default at sign time. undefined (no pin on a
+          // legacy offer) falls back to the configured rate inside createTDInvoice.
+          card_fee_rate: pinnedRateForInheritance(
+            (offer as { card_fee_rate?: number | string | null }).card_fee_rate,
+          ),
           mark_as_paid: false,
           notes: `Auto-created at contract signing. Offer: ${offer_token}`,
           // Bug 2 fix — keyed on offer_token only (NOT contactId). The contact

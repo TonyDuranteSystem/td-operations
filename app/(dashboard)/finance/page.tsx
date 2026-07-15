@@ -1,7 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isMatchableInvoice } from '@/lib/finance/invoice-matchability'
-import { isDashboardUser } from '@/lib/auth'
+import { isDashboardUser, isAdmin } from '@/lib/auth'
+import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
 import type { OpenInvoice } from './bank-feed-tab'
@@ -18,6 +19,17 @@ export default async function FinancePage({
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isDashboardUser(user)) redirect('/login')
   const userIsAdmin = isDashboardUser(user)
+
+  // Card-fee master switch — visible ONLY to true admins (isAdmin, not just any
+  // dashboard user). The server action re-checks the role independently; this
+  // gate only controls whether the card renders. Council-approved Phase A.
+  const userIsTrueAdmin = isAdmin(user)
+  const cardFee = userIsTrueAdmin
+    ? {
+        enabled: await isCardFeeEnabled(),
+        ratePercent: Math.round((await getConfiguredCardFeeRate()) * 100),
+      }
+    : null
 
   const activeTab = searchParams.tab ?? 'clients'
   const selectedClientId = searchParams.client ?? null
@@ -342,6 +354,7 @@ export default async function FinancePage({
         allInvoicesFlat={allInvoicesFlat}
         tdExpenses={tdExpenses}
         isAdmin={userIsAdmin}
+        cardFee={cardFee}
       />
     </div>
   )

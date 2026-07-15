@@ -77,6 +77,40 @@ export async function createUnifiedInvoiceDraft(input: {
   })
 }
 
+// ── Card processing fee — global kill switch (Council-approved Phase A, 2026-07-15) ──
+
+/**
+ * Flip the global card-fee switch from the Finance dashboard.
+ *
+ * OFF = every card payment charges the BASE price (overrides every per-deal 5%
+ * pin). ON = each deal's pinned rate applies again. Propagates within ~1 minute
+ * (per-instance config cache); payment links already issued keep their price.
+ *
+ * Admin gate is INSIDE the action — page-level tab visibility is not a
+ * security boundary (Council condition). Uses the merge-safe setter, never the
+ * generic app-settings PUT (whole-value replace would clobber the stored rate).
+ */
+export async function toggleCardFee(enabled: boolean): Promise<ActionResult<{ enabled: boolean }>> {
+  const { createClient } = await import('@/lib/supabase/server')
+  const { isAdmin } = await import('@/lib/auth')
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isAdmin(user)) {
+    return { success: false, error: 'Admin access required' }
+  }
+
+  return safeAction(async () => {
+    const { setCardFeeEnabled } = await import('@/lib/payments/card-fee-config')
+    await setCardFeeEnabled(enabled, `finance-ui:${user.email ?? user.id}`)
+    revalidatePath('/finance')
+    return { enabled }
+  }, {
+    action_type: 'update',
+    table_name: 'app_settings',
+    summary: `Card processing fee switched ${enabled ? 'ON' : 'OFF'} from the Finance dashboard`,
+  })
+}
+
 // ── Invoice actions (operate on payments table directly — source of truth for TD billing) ──
 
 export async function markInvoicePaid(
