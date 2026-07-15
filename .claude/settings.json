@@ -135,6 +135,11 @@
             "timeout": 5
           },
           {
+            "type": "command",
+            "command": "bash .claude/hooks/council-roster.sh",
+            "timeout": 5
+          },
+          {
             "type": "prompt",
             "prompt": "Session starting. MANDATORY FIRST STEP: Read the git pull result above — if it pulled new commits, acknowledge what changed. Then follow CLAUDE.md Session Start protocol: (1) sysdoc_read('session-context'), (2) query dev_tasks for BOTH pending work (status in_progress/todo) AND recently completed (status done, ORDER BY updated_at DESC LIMIT 3) so you know what was JUST done, (3) git status + recent commits. Present: 'Last completed' + 'Pending' + 'Next steps' (from progress_log PENDING of most recent task). Then ask 'What do we work on?' — ALSO (R107): the System Reference Library was printed above; before working on any listed subsystem, read its docs/systems/<x>.md FIRST instead of re-deriving it from the DB/code. If you work on a subsystem that has NO doc there, CREATE it as part of the job. ALSO (R112 — dev-tracker board): if this session does dev work (feature/bug/refactor), tie it to ONE dev job — dev_task_list to find the open one and CONTINUE it (don't duplicate), or dev_task_create with a channel + a plain-English summary + the technical request — and keep it current as you go (findings, frozen plan, milestone advances, decisions, child bugs).",
             "timeout": 60

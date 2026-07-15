@@ -42,6 +42,14 @@ When Antonio says "riprendiamo", "dove eravamo", "continua", "resume", or starts
    Then ask "What do we work on?"
 Do this AUTOMATICALLY without Antonio having to explain what was being worked on.
 
+## Council of Reviewers — convene before significant plans
+A standing multi-agent review harness lives in `.claude/skills/council/` (skill: `/council`) plus three real read-only reviewer subagents (`senior-engineer`, `ai-architect`, `project-director`). It is a parallel red-team, NOT a voting body — it shapes plans; **Antonio's explicit "go" is the only authorization gate**.
+
+- **When:** before presenting any significant plan, or before shipping a non-trivial change — especially anything touching money, client-facing sends, irreversible actions, tax/legal/compliance, or sandbox-vs-prod. **Size-gate it:** skip entirely for trivial edits and casual chat (convening 3+ agents for small work is wasted tokens).
+- **How:** the main session is the coordinator — read the topic→specialist table in the skill, spawn the 3 core reviewers (plus any selected specialists) in parallel, require file+line citations, and escalate **disjunctively** (any one cited blocker → "fix first"; no unanimity, no tally). The Project Director writes the plain-English synthesis for Antonio, naming any reviewer disagreement.
+- **Specialists** (tax→CPA-IRS/Finance-Auditor, CRM→Business-Analyst, web/bank→Web-Auditor/Security, contracts→Legal-Reviewer) are content templates in `.claude/skills/council/specialists/`, run inline via a `general-purpose` subagent this turn. `/council with <Name>` uses one now; `@add-specialist <Name>` creates a new reusable template (permanent registered agent only wakes next session). If no specialist covers the task's domain, flag it to Antonio with the exact add-command — never silently skip a domain, never auto-invent an expert.
+- **Deferred (do not build without a fresh review):** a spawned coordinator/meta agent, unattended auto-creation of specialists, Agent Teams experimental mode. Standing rules: `.claude/skills/council/PROTOCOL.md` (reprinted each session by the roster hook).
+
 ## Save IMMEDIATELY after EVERY significant action — MANDATORY
 When the conversation gets long, Claude compresses old messages (compaction). After compaction, ALL context is lost unless it was saved to Supabase FIRST. This has already caused 2+ hours of lost recovery time. It WILL happen again if you don't save.
 

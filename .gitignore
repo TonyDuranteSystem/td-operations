@@ -49,6 +49,8 @@ next-env.d.ts
 !.claude/agents/
 !.claude/hooks/
 !.claude/settings.json
+!.claude/skills/
+!.claude/skills/**
 .vercel
 !.vercel/project.json
 test-results/
