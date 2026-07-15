@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import { cn } from '@/lib/utils'
+import { CardFeeSwitch } from './card-fee-switch'
 
 interface ClientSummary {
   id: string
@@ -25,6 +26,8 @@ interface Props {
   clientList: ClientSummary[]
   agingBuckets: AgingBuckets
   recentAuditLog: Array<Record<string, unknown>>
+  /** Global card-fee switch — rendered only for true admins (null hides the card). */
+  cardFee?: { enabled: boolean; ratePercent: number } | null
 }
 
 function fmt(n: number): string {
@@ -49,7 +52,7 @@ function getAuditDescription(entry: any): string {
   return parts.join(' ') || 'Invoice activity'
 }
 
-export function OverviewTab({ stats, clientList, agingBuckets, recentAuditLog }: Props) {
+export function OverviewTab({ stats, clientList, agingBuckets, recentAuditLog, cardFee }: Props) {
   const router = useRouter()
 
   // Top overdue clients
@@ -63,6 +66,9 @@ export function OverviewTab({ stats, clientList, agingBuckets, recentAuditLog }:
 
   return (
     <div className="p-6 space-y-6 overflow-y-auto max-h-[calc(100vh-200px)]">
+      {/* Card-fee master switch — admins only (prop is null for non-admins) */}
+      {cardFee && <CardFeeSwitch initialEnabled={cardFee.enabled} ratePercent={cardFee.ratePercent} />}
+
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="rounded-lg border bg-card p-4">

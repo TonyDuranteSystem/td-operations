@@ -104,9 +104,14 @@ export async function resolveChargeRate(
 /** Update the configured rate (CRM settings surface). Clamps + logs to action_log. */
 export async function setConfiguredCardFeeRate(rate: number, actor: string): Promise<number> {
   const clamped = normalizeRate(rate)
+  // MERGE, never replace: `enabled` (the kill switch) lives in the same JSONB.
+  // A whole-object write here would silently re-arm a switched-off fee
+  // (isCardFeeEnabled defaults missing → ON). Council blocker, 2026-07-15.
+  const { data } = await supabaseAdmin.from('app_settings').select('value').eq('key', SETTINGS_KEY).maybeSingle()
+  const current = (data?.value as Record<string, unknown> | null) ?? {}
   await supabaseAdmin
     .from('app_settings')
-    .upsert({ key: SETTINGS_KEY, value: { card_rate: clamped }, updated_at: new Date().toISOString() })
+    .upsert({ key: SETTINGS_KEY, value: { ...current, card_rate: clamped }, updated_at: new Date().toISOString() })
   cached = null
   try {
     await supabaseAdmin.from('action_log').insert({
@@ -133,6 +138,24 @@ export async function resolvePinnedRate(
   const n = typeof pinned === 'string' ? Number(pinned) : pinned
   if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n
   return getConfiguredCardFeeRate()
+}
+
+/**
+ * Convert a row's stored pin (numeric column → number | string | null) into the
+ * value to PASS THROUGH to a downstream creation site, preserving an explicit 0
+ * (a waived deal) and returning undefined when there is no pin (caller falls
+ * back to the configured rate). Used by the offer-signed webhook so the invoice
+ * inherits the OFFER's pin instead of re-reading live config (Council blocker,
+ * 2026-07-15: a waived offer must not mint a 5% invoice).
+ */
+export function pinnedRateForInheritance(
+  stored: number | string | null | undefined,
+): number | undefined {
+  // Number('') === 0 — an empty string must mean "no pin", never "waived".
+  if (typeof stored === 'string' && stored.trim() === '') return undefined
+  const n = typeof stored === 'string' ? Number(stored) : stored
+  if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1) return n
+  return undefined
 }
 
 export function __resetCardFeeConfigCache(): void {

@@ -38,6 +38,8 @@ interface Props {
   allInvoicesFlat: InvoiceRecord[]
   tdExpenses: TDExpenseRecord[]
   isAdmin: boolean
+  /** Card-fee master switch state — null for non-admins (hides the card). */
+  cardFee?: { enabled: boolean; ratePercent: number } | null
 }
 
 const allTabs = [
@@ -51,7 +53,7 @@ export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
-  allInvoicesFlat, tdExpenses, isAdmin,
+  allInvoicesFlat, tdExpenses, isAdmin, cardFee,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -156,7 +158,7 @@ export function FinanceDashboard({
           />
         )}
         {tab === 'overview' && (
-          <OverviewTab stats={stats} clientList={clientList} agingBuckets={agingBuckets} recentAuditLog={recentAuditLog} />
+          <OverviewTab stats={stats} clientList={clientList} agingBuckets={agingBuckets} recentAuditLog={recentAuditLog} cardFee={cardFee} />
         )}
       </div>
     </div>
