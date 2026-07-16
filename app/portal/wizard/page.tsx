@@ -16,13 +16,20 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, getFlexibleServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
-import { getInProgressFormations } from '@/lib/portal/queries'
+import { getInProgressFormations, getPortalAccounts } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { listQuestions } from '@/lib/td-communication/questions-queries'
 import { buildTdCommWizardConfig, type TdCommWizardConfig } from '@/lib/td-communication/question-to-field'
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
+import {
+  resolveTaxWizardEligibility,
+  taxWizardSurfaceVisible,
+  CLOSED_REASON_COPY,
+  type TaxWizardEligibility,
+  type TaxWizardClosedReason,
+} from '@/lib/tax/wizard-eligibility'
 import { firstYearCoherent } from '@/lib/tax/prior-return-case'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
@@ -132,16 +139,17 @@ export default async function WizardPage({
   // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
   let accountId = contactId ? '' : (cookieAccountId || '')
   if (contactId && !formationLeadId) {
-    const { data: links } = await supabaseAdmin
-      .from('account_contacts')
-      .select('account_id')
-      .eq('contact_id', contactId)
-
-    if (links?.length) {
-      const owned = links.map(l => l.account_id)
-      const targetId = cookieAccountId && owned.includes(cookieAccountId)
+    // Default-company rule UNIFIED with the layout/home (2026-07-16, quirk
+    // found during the MMLLC E2E walk): this page used to pick the first row
+    // of a raw, UNORDERED link query — so a two-company client with no cookie
+    // saw the home page scoped to one company and the wizard scoped to the
+    // OTHER. getPortalAccounts is the shared list every other surface uses:
+    // primary first, then alphabetical, Active/Suspended only.
+    const owned = await getPortalAccounts(contactId)
+    if (owned.length) {
+      const targetId = cookieAccountId && owned.some(a => a.id === cookieAccountId)
         ? cookieAccountId
-        : owned[0]
+        : owned[0].id
       accountId = targetId
 
       const { data: a } = await supabaseAdmin
@@ -156,6 +164,16 @@ export default async function WizardPage({
   // Formation lead scope forces a blank formation wizard with no account context.
   if (formationLeadId) {
     accountId = ''
+  }
+
+  // ── Tax wizard eligibility (PTBT incident, dev job 8cc8e1c8) ──
+  // ONE resolver decides "is the tax wizard open, for which year" for every
+  // path through this page — the SD-derived picker, the ?type=tax forced
+  // link, AND the offer-fallback. Memoized so the page hits the DB once.
+  let taxGateMemo: TaxWizardEligibility | null = null
+  const getTaxGate = async (): Promise<TaxWizardEligibility> => {
+    if (!taxGateMemo) taxGateMemo = await resolveTaxWizardEligibility({ accountId, contactId })
+    return taxGateMemo
   }
 
   // Determine wizard type from offer or service deliveries
@@ -242,26 +260,25 @@ export default async function WizardPage({
       pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
     }
     if (types.includes('Tax Return') || types.includes('Tax Return One-Time')) {
-      // Stage-based gating: the tax wizard is only meaningful once the SD
-      // has reached "Wizard Available" (Tax Return stage_order=4, Tax Return
-      // One-Time stage_order=1). Earlier stages are billing/extension gates
-      // the client cannot self-resolve — surfacing the wizard there would
-      // collect data the team isn't ready to process. Legacy SDs still
-      // carrying "Company Data Pending" fall back to the company_info wizard
-      // so the standalone-business intake flow keeps working.
+      // Eligibility comes from the shared resolver (lib/tax/wizard-eligibility):
+      // open tax_returns row + formation-year guard + named stage allow-list,
+      // fail-closed. The old inline PRE_WIZARD_STAGES deny-list lived only on
+      // this path and let unknown stages — and every ?type=tax link — through.
       const taxReturnSd = (sds || []).find(s =>
         s.service_type === 'Tax Return' || s.service_type === 'Tax Return One-Time',
       )
-      const stage = taxReturnSd?.stage
       const serviceType = taxReturnSd?.service_type === 'Tax Return One-Time' ? 'Tax Return One-Time' : 'Tax Return'
-      const PRE_WIZARD_STAGES = new Set(['1st Installment Paid', 'Extension Filed', 'Awaiting 2nd Payment'])
-      if (stage === 'Company Data Pending') {
+      const gate = await getTaxGate()
+      if (gate.mode === 'company_info') {
         pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType })
-      } else if (stage && PRE_WIZARD_STAGES.has(stage) && serviceType === 'Tax Return') {
-        // No wizard yet — bundle TR is gated behind the 2nd installment.
-      } else {
+      } else if (taxWizardSurfaceVisible(gate)) {
+        // open / review / review-LOCKED (under_review, confirmed): the locked
+        // states keep the tab so the client can still VIEW their submitted
+        // data read-only (isLocked below) — only submitting is gated.
         pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType })
       }
+      // otherwise closed → no tax tab: nothing to collect (pre-wizard stage,
+      // no open season, or no filing requirement).
     }
 
     // If only one pending wizard, use it directly
@@ -333,6 +350,42 @@ export default async function WizardPage({
         else if (directOffer?.contract_type === 'itin') wizardType = 'itin'
       }
     }
+  }
+
+  // ── TAX WIZARD FINAL GATE — covers ?type=tax AND the offer-fallback path ──
+  // The derived picker above already consulted the resolver, but a forced
+  // ?type=tax link (home card, tax banner, financials-review Edit) and the
+  // offer-fallback both bypass that block entirely — exactly how PTBT reached
+  // a wizard whose SD sat at a pre-wizard stage. Locked review states still
+  // render (read-only); genuinely-closed states get the friendly card below.
+  let taxClosedNotice: TaxWizardClosedReason | null = null
+  let pinnedTaxYear: number | null = null
+  if (wizardType === 'tax') {
+    const gate = await getTaxGate()
+    if (gate.mode === 'company_info') {
+      wizardType = 'company_info'
+    } else if (!taxWizardSurfaceVisible(gate)) {
+      taxClosedNotice = gate.reason ?? 'no_tax_return_open'
+    } else {
+      pinnedTaxYear = gate.taxYear
+    }
+  }
+  if (taxClosedNotice) {
+    const copy = CLOSED_REASON_COPY[taxClosedNotice]
+    return (
+      <div className="px-4 py-6 lg:px-8">
+        <div className="mx-auto max-w-xl rounded-xl border border-zinc-200 bg-white p-8 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-2xl">🗓️</div>
+          <h2 className="mb-2 text-lg font-semibold text-zinc-900">
+            {locale === 'it' ? 'Questionario fiscale non disponibile' : 'Tax questionnaire not available'}
+          </h2>
+          <p className="text-sm text-zinc-600">{locale === 'it' ? copy.it : copy.en}</p>
+          <a href="/portal" className="mt-6 inline-block rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+            {locale === 'it' ? 'Torna al portale' : 'Back to portal'}
+          </a>
+        </div>
+      </div>
+    )
   }
 
   // A formation is for a NEW company — it must never bind to or pre-fill an
@@ -823,6 +876,14 @@ export default async function WizardPage({
               ? 'Le informazioni della tua azienda sono state ricevute. Stiamo preparando tutto per la tua dichiarazione dei redditi. Questa pagina si aggiornerà automaticamente.'
               : 'Your company information has been received. We are preparing everything for your Tax Return. This page will update automatically.'}
           </p>
+        </div>
+      )}
+      {/* Tax year chip (PTBT fix): the client must SEE which tax year they are
+          filing — the wrong-year submission was invisible because no year
+          string existed anywhere in the pre-submission wizard. */}
+      {wizardType === 'tax' && pinnedTaxYear !== null && (
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-4 py-1.5 text-sm font-semibold text-blue-800">
+          🗓️ {locale === 'it' ? `Anno fiscale ${pinnedTaxYear}` : `Tax year ${pinnedTaxYear}`}
         </div>
       )}
       {/* Don't render form when on banking picker page (no provider selected) or during company_info processing */}

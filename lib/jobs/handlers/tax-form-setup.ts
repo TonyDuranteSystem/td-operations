@@ -36,6 +36,8 @@ interface TaxFormPayload {
   contact_id: string | null
   account_id: string | null
   tax_return_id: string | null
+  /** Pinned by the submit route's eligibility resolver (PTBT fix) — used verbatim when present. */
+  tax_year?: number | null
   changed_fields: Record<string, { old: unknown; new: unknown }> | null
   submitted_data?: Record<string, unknown>
   upload_paths?: string[]
@@ -71,9 +73,16 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
   const entityType = p.entity_type || (sd.entity_type as string) || "SMLLC"
   const uploadPaths = p.upload_paths || []
 
-  // ─── 0. LOOK UP TAX RETURN (for tax_year + id) ───
+  // ─── 0. RESOLVE TAX RETURN (tax_year + id) ───
+  // The submit route PINS the year + tax_returns row via the eligibility
+  // resolver and passes them in the payload — use them verbatim. The old
+  // "any active tax return" fallback attributed a resubmission to an
+  // already-FILED year, and a missing row used to fall through to the DB
+  // default / calendar guesses (the PTBT silent-2025 incident). For legacy
+  // payloads without a pinned year, only an OPEN row counts; no row = the
+  // steps that need a year are skipped loudly, never guessed.
   let taxReturnId: string | null = p.tax_return_id
-  let taxYear: number | null = null
+  let taxYear: number | null = typeof p.tax_year === "number" ? p.tax_year : null
   let companyName = p.company_name || p.token
 
   if (p.account_id) {
@@ -88,35 +97,24 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         if (acc) companyName = acc.company_name
       }
 
-      // Find the tax return for this account (most recent pending one)
-      const { data: tr } = await supabaseAdmin
-        .from("tax_returns")
-        .select("id, tax_year, status")
-        .eq("account_id", p.account_id)
-        .eq("data_received", false)
-        .order("tax_year", { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      if (tr) {
-        taxReturnId = tr.id
-        taxYear = tr.tax_year
-        result.steps.push(step("tax_return_lookup", "ok", `Found tax_returns ${tr.id} (${tr.tax_year})`))
+      if (taxYear !== null) {
+        result.steps.push(step("tax_return_lookup", "ok", `Pinned by submit route: tax_year ${taxYear}${taxReturnId ? `, tax_returns ${taxReturnId}` : ""}`))
       } else {
-        // Fallback: find any active tax return
-        const { data: tr2 } = await supabaseAdmin
+        const { data: tr } = await supabaseAdmin
           .from("tax_returns")
-          .select("id, tax_year")
+          .select("id, tax_year, status")
           .eq("account_id", p.account_id)
-          .order("tax_year", { ascending: false })
+          .eq("data_received", false)
+          .order("tax_year", { ascending: true })
           .limit(1)
           .maybeSingle()
-        if (tr2) {
-          taxReturnId = tr2.id
-          taxYear = tr2.tax_year
-          result.steps.push(step("tax_return_lookup", "ok", `Found tax_returns ${tr2.id} (${tr2.tax_year}) [fallback]`))
+
+        if (tr) {
+          taxReturnId = tr.id
+          taxYear = tr.tax_year
+          result.steps.push(step("tax_return_lookup", "ok", `Found open tax_returns ${tr.id} (${tr.tax_year})`))
         } else {
-          result.steps.push(step("tax_return_lookup", "skipped", "No tax_returns record found"))
+          result.steps.push(step("tax_return_lookup", "skipped", "No OPEN tax_returns record — year-dependent steps will skip (never guessed)"))
         }
       }
     } catch (e) {
@@ -278,6 +276,19 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         .maybeSingle()
 
       if (sdRecord) {
+        // PRECONDITION (PTBT fix): only a wizard-open stage may advance to
+        // "Data Submitted". The old unconditional UPDATE dragged an SD there
+        // from ANY stage — 1st Installment Paid (premature submission, the
+        // 2nd-installment billing gate skipped) or even BACKWARD from
+        // Preparation on a stale-tab resubmit. A resubmit already at
+        // "Data Submitted" is a clean no-op (no history churn).
+        const SD_ADVANCE_FROM_STAGES = new Set(["Wizard Available", "Payment Received"])
+        if (sdRecord.stage === "Data Submitted") {
+          result.steps.push(step("sd_advance", "skipped", `SD ${sdRecord.id} already at Data Submitted (resubmit)`))
+        } else if (!sdRecord.stage || !SD_ADVANCE_FROM_STAGES.has(sdRecord.stage)) {
+          result.steps.push(step("sd_advance", "skipped",
+            `SD ${sdRecord.id} at "${sdRecord.stage ?? "NULL"}" — not a wizard-open stage, refusing to advance (eligibility gate should have blocked this submit)`))
+        } else {
         const history = Array.isArray(sdRecord.stage_history) ? sdRecord.stage_history : []
         history.push({
           event: "tax_form_submitted",
@@ -297,11 +308,13 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
             stage_history: history,
           })
           .eq("id", sdRecord.id)
+          .eq("stage", sdRecord.stage)
 
         if (sdErr) {
           result.steps.push(step("sd_advance", "error", sdErr.message))
         } else {
           result.steps.push(step("sd_advance", "ok", `SD ${sdRecord.id} → Data Submitted`))
+        }
         }
       } else {
         result.steps.push(step("sd_advance", "skipped", "No active Tax Return SD found"))
@@ -371,7 +384,10 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
             token: p.token,
             submittedAt: now,
             companyName,
-            year: taxYear || new Date().getFullYear() - 1,
+            // No calendar guess: an unpinned year files the package under a
+            // fabricated Drive year folder (silent-2025 class). Undated root
+            // beats wrongly-dated folder.
+            year: taxYear ?? undefined,
           },
           // Portal wizard uploads ALL files to the shared "onboarding-uploads"
           // bucket (app/api/portal/wizard-upload[-url]/route.ts), NOT the tax
@@ -562,7 +578,8 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
     const raw = Buffer.from(
       `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
       `To: support@tonydurante.us\r\n` +
-      `Subject: [TASK] Tax Form Completed (Portal) - ${companyName}${taxYear ? ` (${taxYear})` : ""}\r\n` +
+      // R041: RFC 2047 base64 encoding — companyName can carry non-ASCII.
+      `Subject: =?utf-8?B?${Buffer.from(`[TASK] Tax Form Completed (Portal) - ${companyName}${taxYear ? ` (${taxYear})` : ""}`).toString("base64")}?=\r\n` +
       `MIME-Version: 1.0\r\n` +
       `Content-Type: text/html; charset=utf-8\r\n\r\n` +
       emailBody

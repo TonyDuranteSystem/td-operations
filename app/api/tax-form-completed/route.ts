@@ -388,7 +388,12 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
         if (sd) {
           const advanceResult = await advanceStageIfAt({
             delivery_id: sd.id,
-            if_current_stage: ["Data Link Sent", "Activated", "Wizard Available", "1st Installment Paid", "2nd Installment Paid"],
+            // "1st Installment Paid" / "2nd Installment Paid" REMOVED from the
+            // from-list (PTBT fix, dev job 8cc8e1c8): a completed legacy form
+            // must not drag a pre-wizard SD into review — that jump skips the
+            // 2nd-installment billing gate. Legacy staff-sent links for clients
+            // at those stages now leave the SD untouched (skipped silently).
+            if_current_stage: ["Data Link Sent", "Activated", "Wizard Available"],
             target_stage: "Data Submitted",
             actor: "tax-form-completed",
             notes: `Tax form submitted by client (${sub.tax_year}) — entering review`,

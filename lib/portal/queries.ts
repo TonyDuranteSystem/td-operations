@@ -6,6 +6,7 @@ import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
 import type { FormationStageRow } from '@/lib/portal/formation-progress'
 import { normalizeStageHistory } from '@/lib/stage-history-helpers'
+import { resolveTaxWizardEligibility } from '@/lib/tax/wizard-eligibility'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -1424,6 +1425,15 @@ export async function getPortalActionItems(
     .in('service_type', requiredSdTypes)
   const activeWizardSdTypes = new Set((activeWizardSds ?? []).map(s => s.service_type))
 
+  // Tax wizard cards additionally require the shared eligibility resolver to
+  // say the wizard is actually open (open tax_returns row + formation-year
+  // guard + wizard-open SD stage) or in its client-editable review loop.
+  // Before this gate (PTBT incident, dev job 8cc8e1c8) ANY active Tax Return
+  // SD — including one parked pre-season at "1st Installment Paid" — surfaced
+  // a "Start Tax Return Form" card whose ?type=tax link bypassed every check.
+  const taxEligibility = await resolveTaxWizardEligibility({ accountId, contactId })
+  const taxWizardActionable = taxEligibility.mode === 'open' || taxEligibility.mode === 'review'
+
   // Track wizard_types we already have an in_progress card for, so the
   // SD-driven "Start <Wizard>" pass below doesn't double up.
   const inProgressWizardTypes = new Set<string>()
@@ -1431,6 +1441,7 @@ export async function getPortalActionItems(
   for (const w of wizardRes.data ?? []) {
     const requiredSd = WIZARD_SD_REQUIRED[w.wizard_type]
     if (requiredSd && !activeWizardSdTypes.has(requiredSd)) continue
+    if ((w.wizard_type === 'tax' || w.wizard_type === 'tax_return') && !taxWizardActionable) continue
 
     inProgressWizardTypes.add(w.wizard_type)
 
@@ -1497,6 +1508,7 @@ export async function getPortalActionItems(
   for (const sd of candidateSds) {
     const wt = wizardTypeForServiceType(sd.service_type)
     if (!wt) continue
+    if (wt === 'tax' && !taxWizardActionable) continue
     if (inProgressWizardTypes.has(wt)) continue
     if (submittedWizardTypes.has(wt)) continue
     if (sdSurfacedWizards.has(wt)) continue
@@ -1554,6 +1566,10 @@ export async function getPortalActionItems(
   )
 
   for (const tr of (taxRes as { data: Array<{ id: string; tax_year: number; return_type: string; created_at: string }> | null }).data ?? []) {
+    // Skip when the shared resolver says the wizard isn't actionable — this
+    // sibling card previously contradicted the SD-card gating (it filtered
+    // only on tax_returns.status, not the SD stage / formation guard).
+    if (!taxWizardActionable) continue
     // Skip when the SD is on_hold (pause banner covers the communication).
     if (taxReturnSdOnHold) continue
     // Skip when the client already submitted THIS tax year's data (year-accurate).
