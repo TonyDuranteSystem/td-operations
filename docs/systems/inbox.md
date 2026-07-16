@@ -386,6 +386,19 @@ Function.
     key for an unknown origin:** a real key is one some payload will match and
     "confirm" with. Unknown must mean unknown; the hide still applies and retires
     via the tombstone.
+- **A label view filters by the label's ID (`labelIds`), never by `in:<name>`.**
+  Gmail's `in:`/`label:` search operators take the NAME; `labelIds` and the modify
+  endpoint take the ID. The sidebar sends the ID, so the old `q: in:<id>` matched
+  nothing and **every custom folder in the CRM listed zero emails** — invisible for
+  months because for SYSTEM labels the id IS the name (INBOX/STARRED/SENT), so only
+  user folders were dead. Verified live on support@ 2026-07-16: `in:label_5` → 0,
+  `in:_archive` → ~201. The ID is this view's identity everywhere else (`viewKey`
+  keys on it), so resolving id→name would introduce a SECOND identity for one list
+  — and it would need a labels.list call per fetch plus quoting for names with
+  spaces/slashes. `-in:trash` rides along as a `q` (threads.list accepts both).
+  **Lesson worth more than the fix:** a green unit test proved the query string was
+  the one we intended; only a live call proved the string was meaningless to Gmail.
+
 - **EVERY mutation argument travels as a mutation VARIABLE — the row included, not
   just the ids.** `mutationFn`/`onSuccess` read the NEWEST render's closure (react-
   query refreshes a pending mutation's options every render), and an offline PWA

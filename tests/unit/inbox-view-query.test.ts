@@ -68,8 +68,17 @@ describe("buildGmailQueryParams", () => {
   const cases: Array<[string, InboxView, { labelIds?: string; q?: string }]> = [
     ["default inbox → labelIds INBOX", { kind: "inbox" }, { labelIds: "INBOX" }],
     ["trash → labelIds TRASH", { kind: "trash" }, { labelIds: "TRASH" }],
-    ["label → in:<lower> -in:trash", { kind: "label", label: "STARRED" }, { q: "in:starred -in:trash" }],
-    ["label INBOX → in:inbox -in:trash", { kind: "label", label: "INBOX" }, { q: "in:inbox -in:trash" }],
+    // A label view filters by the label's ID and excludes trash via `q`.
+    // `in:<id>` matched NOTHING (verified live: in:label_5 → 0, in:_archive → ~201),
+    // which is why every custom folder listed zero emails. Never build the label
+    // query from a NAME: `view.label` is an id, and the id is this view's identity
+    // everywhere else (viewKey keys on it).
+    ["label → labelIds + -in:trash", { kind: "label", label: "STARRED" }, { labelIds: "STARRED", q: "-in:trash" }],
+    ["label INBOX → labelIds + -in:trash", { kind: "label", label: "INBOX" }, { labelIds: "INBOX", q: "-in:trash" }],
+    // The case that was broken: a real user-folder id, which is NOT its name.
+    ["user folder → its ID, never its name", { kind: "label", label: "Label_5" }, { labelIds: "Label_5", q: "-in:trash" }],
+    // Names with spaces/slashes need no quoting or escaping under labelIds.
+    ["nested user folder", { kind: "label", label: "Label_7" }, { labelIds: "Label_7", q: "-in:trash" }],
     ["search → query -in:trash -in:spam", { kind: "search", query: "invoice" }, { q: "invoice -in:trash -in:spam" }],
   ]
   it.each(cases)("%s", (_name, view, expected) => {

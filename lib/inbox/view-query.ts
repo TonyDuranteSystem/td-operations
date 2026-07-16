@@ -89,9 +89,25 @@ export function buildGmailQueryParams(view: InboxView): { labelIds?: string; q?:
       // Viewing Trash: filter directly by label.
       return { labelIds: "TRASH" }
     case "label":
-      // `q` rather than labelIds: it reflects label changes faster than the
-      // labelIds index, which can be stale for 30+ seconds after a modify.
-      return { q: `in:${view.label.toLowerCase()} -in:trash` }
+      // `labelIds` takes the label's ID; `q`'s `in:`/`label:` operators take its
+      // NAME. `view.label` is an ID (the sidebar sends `label.id`), so the old
+      // `q: in:<id>` matched NOTHING and every custom folder listed zero emails
+      // — verified live on support@ 2026-07-16: `in:label_5` → 0 results,
+      // `in:_archive` → ~201. It went unnoticed because for SYSTEM labels the id
+      // IS the name (INBOX/STARRED/SENT), so only user folders were dead.
+      //
+      // Filter by ID and keep `-in:trash` as a `q` alongside it (threads.list
+      // accepts both; `gmailGet` serializes them). Chosen over resolving id→name
+      // because the ID is already this view's identity end-to-end (`viewKey`
+      // keys on it), so a name would introduce a second identity for one list —
+      // and it needs no labels.list call, no quoting of names with spaces or
+      // slashes, and it survives a rename.
+      //
+      // The old comment claimed `q` was deliberate because the labelIds index
+      // lags 30s+ after a modify. Unverified, and irrelevant either way: a view
+      // that returns 0 rows 100% of the time is not competing with one that lags
+      // — and absorbing that lag is exactly what the override layer above does.
+      return { labelIds: view.label, q: "-in:trash" }
     case "search":
       // Search with no label filter searches ALL mail, not just the inbox.
       return { q: `${view.query} -in:trash -in:spam` }
@@ -124,7 +140,7 @@ export function hidesFromCurrentView(action: HideAction, view: InboxView): boole
       // `labelIds: INBOX`. Both trash and archive strip INBOX → the row leaves.
       return true
     case "label":
-      // `q = in:<label> -in:trash`.
+      // `labelIds = <this label> + q = -in:trash`.
       // trash  → excluded by `-in:trash` → leaves.
       // archive→ strips ONLY INBOX, and the label survives → the row STAYS…
       //          unless the label IS the inbox, where `in:inbox` no longer matches.
