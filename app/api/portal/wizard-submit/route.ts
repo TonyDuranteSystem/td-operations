@@ -26,6 +26,7 @@ import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
 import { buildSubmissionRecord } from '@/lib/portal/submission-record'
+import { buildSubmissionToken } from '@/lib/portal/submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
@@ -218,9 +219,6 @@ export async function POST(req: NextRequest) {
     let submissionId: string | null = null
 
     if (submissionTable) {
-      const nameSlug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').slice(0, 40)
-      submissionToken = `portal-${nameSlug}-${new Date().getFullYear()}`
-
       const uploadPaths = extractUploadPaths(data)
 
       // Tax year is PINNED by the eligibility resolver — 'open' carries the
@@ -296,6 +294,20 @@ export async function POST(req: NextRequest) {
         }
       } else {
         // ── FRESH SUBMISSION ──
+        // Token: unique per (person, SUBJECT, filing period) — the legacy
+        // name+calendar-year shape let one owner's second company OVERWRITE
+        // the first company's submission via the token upsert (proven live,
+        // 2026-07-16 E2E walk). See lib/portal/submission-token.ts.
+        submissionToken = buildSubmissionToken({
+          clientName,
+          wizardType: wizard_type,
+          taxYear,
+          accountId: account_id || null,
+          leadId: lead_id || null,
+          contactId: contact_id || null,
+          calendarYear: new Date().getFullYear(),
+        })
+
         // The submission tables do NOT share one column set (formation has no
         // account_id, tax_return has no lead_id, itin/closure have no entity_type,
         // only tax_return has tax_year). buildSubmissionRecord centralizes those

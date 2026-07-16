@@ -16,7 +16,7 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, getFlexibleServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
-import { getInProgressFormations } from '@/lib/portal/queries'
+import { getInProgressFormations, getPortalAccounts } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
@@ -139,16 +139,17 @@ export default async function WizardPage({
   // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
   let accountId = contactId ? '' : (cookieAccountId || '')
   if (contactId && !formationLeadId) {
-    const { data: links } = await supabaseAdmin
-      .from('account_contacts')
-      .select('account_id')
-      .eq('contact_id', contactId)
-
-    if (links?.length) {
-      const owned = links.map(l => l.account_id)
-      const targetId = cookieAccountId && owned.includes(cookieAccountId)
+    // Default-company rule UNIFIED with the layout/home (2026-07-16, quirk
+    // found during the MMLLC E2E walk): this page used to pick the first row
+    // of a raw, UNORDERED link query — so a two-company client with no cookie
+    // saw the home page scoped to one company and the wizard scoped to the
+    // OTHER. getPortalAccounts is the shared list every other surface uses:
+    // primary first, then alphabetical, Active/Suspended only.
+    const owned = await getPortalAccounts(contactId)
+    if (owned.length) {
+      const targetId = cookieAccountId && owned.some(a => a.id === cookieAccountId)
         ? cookieAccountId
-        : owned[0]
+        : owned[0].id
       accountId = targetId
 
       const { data: a } = await supabaseAdmin
