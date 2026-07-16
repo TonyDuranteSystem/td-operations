@@ -20,6 +20,7 @@
  * reproduce Gmail's index lag).
  */
 import type { InboxConversation } from "@/lib/types"
+import { hidesFromCurrentView, viewKey, type HideAction, type InboxView, type ViewScope } from "@/lib/inbox/view-query"
 
 /** Server payload shape, extended with completeness signals (see the route). */
 export interface ConversationsPayload {
@@ -40,9 +41,36 @@ export interface ConversationsPayload {
 
 export type OverrideKind = "hidden" | "pinned"
 
-/** A delete (`hidden`) or restore (`pinned`) optimistic intent for one row. */
+/** A delete (`hidden`) or restore (`pinned`) optimistic intent for one row.
+ *
+ *  Two different questions, two different fields — do not collapse them:
+ *
+ *  - **APPLY** ("is this override true in the list on screen?") is answered by
+ *    `action` for a hide: it is a NEGATIVE claim, derivable from what we DID, and
+ *    true in every view whose query the action removes the row from. A trash in
+ *    the Inbox correctly hides the row in Starred too.
+ *    For a pin, APPLY is answered by `originView`: a pin is a POSITIVE claim
+ *    ("this row IS in this list") that the action cannot support (the snapshot
+ *    carries no label set), so it holds ONLY in the list that produced it.
+ *    Action-keying a pin would inject a never-starred email into Starred.
+ *
+ *  - **JUDGE** ("may this payload advance/release the override?") is answered by
+ *    `originView` for BOTH kinds. Releasing needs the positive fact "this list
+ *    would otherwise contain this row", and only the origin payload has it.
+ *    `action` never carried that evidence: it answers "would the action remove the
+ *    row IF it were here", which is not "it was here and now isn't". Reading it as
+ *    the latter released a hide from a list the row was never in — Luca could
+ *    bulk-delete in the Inbox, glance at a folder, and watch all 12 come back
+ *    (council, 2026-07-16).
+ *
+ *  So: `action` = the claim; `originView` = the witness. */
 export interface RowOverride {
   kind: OverrideKind
+  /** `hidden` only — WHAT was done, so each view can decide whether it APPLIES. */
+  action?: HideAction
+  /** BOTH kinds — the `viewKey` of the list this override was born in. The only
+   *  payload allowed to JUDGE it; for a pin, also the only list it applies in. */
+  originView?: string
   /** For `pinned` (and as a fallback for `hidden`): last-known full row, so a
    *  restored email stays visible while Gmail re-indexes the untrash. */
   snapshot?: InboxConversation
@@ -100,8 +128,25 @@ function affirmativelyAbsent(id: string, present: Set<string>, unenriched: Set<s
   return true
 }
 
+/** Which list a payload was fetched for. STAMPED AT THE FETCH, never inferred:
+ *  the reconcile is given the payload's own identity, not the app's current one.
+ *
+ *  Why this exists: `useQuery` keeps showing the previous list while a new one
+ *  loads (`keepPreviousData`), and serves a cached list for a view instantly. So
+ *  "the view the user is on" and "the view this payload came from" are routinely
+ *  DIFFERENT — and every hole the council found on 2026-07-16 was an instance of
+ *  judging one list's rows against another list's rules. Carrying the origin on
+ *  the payload makes that state unrepresentable rather than merely guarded. */
+export interface PayloadOrigin {
+  view: InboxView
+  scope: ViewScope
+}
+
 export interface ReconcileInput {
   payload: ConversationsPayload
+  /** The list THIS payload came from. Everything is decided against it: which
+   *  overrides apply to these rows, and which of them this payload may judge. */
+  origin: PayloadOrigin
   /** Current hide/pin overrides, keyed by conversation id. */
   overrides: Map<string, RowOverride>
   /** Current unread overrides, keyed by conversation id. */
@@ -150,17 +195,34 @@ export function advanceReleases(input: ReconcileInput): {
 
   const nextOverrides = new Map<string, RowOverride>()
   const nextUnread = new Map<string, UnreadOverride>()
+  const payloadView = viewKey(input.origin.view, input.origin.scope)
 
   // ── 1. Advance / release hide & pin overrides ──────────────────────────
   for (const [id, ov] of Array.from(input.overrides)) {
-    // GC backstop: an override older than the TTL is dropped outright.
-    if (now - ov.createdAt > cfg.ttlMs) continue
-
     // Tombstone phase: already released, just suppressing re-appearance briefly.
     if (ov.releasedAt != null) {
       if (now - ov.releasedAt <= cfg.tombstoneMs) {
         nextOverrides.set(id, ov) // keep suppressing (hidden) for one more cycle
       }
+      continue
+    }
+
+    // GC backstop: an override the server never confirmed within the TTL.
+    // A HIDE must not simply vanish here — dropping it bare lets the row pop
+    // straight back if Gmail is still lagging, which is the whole bug. Retire it
+    // THROUGH the tombstone instead, so the release is always monotone. This is
+    // the normal end for a hide no payload can confirm: archive-from-a-folder
+    // legitimately leaves the row in that list, so no view can ever witness it.
+    if (now - ov.createdAt > cfg.ttlMs) {
+      if (ov.kind === "hidden") nextOverrides.set(id, { ...ov, releasedAt: now })
+      continue // a pin just expires — the row is real, the server owns it now
+    }
+
+    // Only the list an override was BORN in may judge it. Absence from any other
+    // list is not evidence: the row was never there to leave. Everything else is
+    // carried forward UNTOUCHED — never advanced, never dropped.
+    if (ov.originView !== payloadView) {
+      nextOverrides.set(id, ov)
       continue
     }
 
@@ -231,9 +293,18 @@ export function computeVisibleList(input: ReconcileInput): InboxConversation[] {
   const nextOverrides = input.overrides
   const nextUnread = input.unread
 
+  const payloadView = viewKey(input.origin.view, input.origin.scope)
+
+  // Apply a hide ONLY in views whose query the action actually removes the row
+  // from — judged against the view THIS payload came from, since these are its
+  // rows. This is the SINGLE place the predicate is applied, so tombstoned ids
+  // inherit it — otherwise a hide released+tombstoned in the Inbox would keep
+  // re-hiding the row in Trash for the whole tombstone window.
   const hidden = new Set<string>()
   for (const [id, ov] of Array.from(nextOverrides)) {
-    if (ov.kind === "hidden") hidden.add(id) // includes tombstoned ids
+    if (ov.kind === "hidden" && hidesFromCurrentView(ov.action ?? "trash", input.origin.view)) {
+      hidden.add(id) // includes tombstoned ids
+    }
   }
 
   const visible: InboxConversation[] = []
@@ -261,9 +332,13 @@ export function computeVisibleList(input: ReconcileInput): InboxConversation[] {
     }
   }
 
-  // Inject pinned (restored) rows the server hasn't caught up to yet.
+  // Inject pinned (restored) rows the server hasn't caught up to yet — ONLY in
+  // the view that produced the snapshot. A pin asserts "this row belongs in THIS
+  // list"; we have no evidence for that anywhere else, and injecting it would
+  // render the row into a list it may not belong to (a never-starred email
+  // appearing in Starred after an Undo).
   for (const [id, ov] of Array.from(nextOverrides)) {
-    if (ov.kind !== "pinned" || seen.has(id)) continue
+    if (ov.kind !== "pinned" || ov.originView !== payloadView || seen.has(id)) continue
     const row = ov.snapshot ?? input.prev.get(id)
     if (row) {
       visible.push(row)
@@ -297,21 +372,43 @@ export function makeStub(id: string): InboxConversation {
 
 // ── Override constructors (used by the shell's mutation handlers) ──────────
 
-export function makeHiddenOverride(now: number, snapshot?: InboxConversation): RowOverride {
-  return { kind: "hidden", snapshot, createdAt: now, agree: 0, disagree: 0 }
+/** A delete/archive intent.
+ *  `action` makes the hide portable across views — always pass the real one
+ *  ('archive' hides ONLY in inbox-scoped views; 'trash' hides everywhere but Trash).
+ *  `originView` is the list it was done in — the ONLY one allowed to confirm it.
+ *  The snapshot lets a later Undo pin the exact row back. */
+export function makeHiddenOverride(now: number, action: HideAction, originView: string, snapshot?: InboxConversation): RowOverride {
+  return { kind: "hidden", action, originView, snapshot, createdAt: now, agree: 0, disagree: 0 }
 }
 
-export function makePinnedOverride(now: number, snapshot?: InboxConversation): RowOverride {
-  return { kind: "pinned", snapshot, createdAt: now, agree: 0, disagree: 0 }
+/** `originView` (a `viewKey`) is REQUIRED: a pin is only valid in the view whose
+ *  payload produced the snapshot. */
+export function makePinnedOverride(now: number, originView: string, snapshot?: InboxConversation): RowOverride {
+  return { kind: "pinned", originView, snapshot, createdAt: now, agree: 0, disagree: 0 }
 }
 
 /** Shallow-equal check for two override maps — lets the client skip a state
- *  write (and the render it triggers) when a reconcile released nothing. */
+ *  write (and the render it triggers) when a reconcile released nothing.
+ *
+ *  Compares EVERY decision-bearing field, including `action`/`originView` which
+ *  `advanceReleases` never touches. Those two are what "equal" would quietly lie
+ *  about: the same id can legitimately be re-stamped with a different origin (a
+ *  row deleted, restored, then deleted again from another list), and a caller that
+ *  skipped the write would keep the stale claim. Cheap; do not narrow it back to
+ *  "the fields the reconcile happens to mutate today". */
 export function overrideMapsEqual(a: Map<string, RowOverride>, b: Map<string, RowOverride>): boolean {
   if (a.size !== b.size) return false
   for (const [id, ov] of Array.from(a)) {
     const o = b.get(id)
-    if (!o || o.kind !== ov.kind || o.agree !== ov.agree || o.disagree !== ov.disagree || o.releasedAt !== ov.releasedAt) {
+    if (
+      !o ||
+      o.kind !== ov.kind ||
+      o.agree !== ov.agree ||
+      o.disagree !== ov.disagree ||
+      o.releasedAt !== ov.releasedAt ||
+      o.action !== ov.action ||
+      o.originView !== ov.originView
+    ) {
       return false
     }
   }

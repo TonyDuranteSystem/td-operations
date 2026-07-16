@@ -4,6 +4,7 @@ import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 import { MARK_LABEL_PREFIX, markFromLabelNames } from "@/lib/inbox/color-marks"
 import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-html"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { buildGmailQueryParams, toInboxView } from "@/lib/inbox/view-query"
 import {
   isInstantSearchQuery,
   isBackfillDone,
@@ -132,25 +133,16 @@ export async function GET(req: NextRequest) {
           maxResults: '100', // Gmail API max per request
         }
 
-        // Label filter: INBOX (default), SENT, DRAFT, STARRED, TRASH, or custom label ID
-        if (labelFilter) {
-          if (labelFilter === 'TRASH') {
-            // When viewing Trash, use label filter directly
-            gmailParams.labelIds = labelFilter
-          } else {
-            // Use q parameter instead of labelIds — it reflects label changes faster
-            // after modify operations (labelIds index can be stale for 30+ seconds)
-            gmailParams.q = `in:${labelFilter.toLowerCase()} -in:trash`
-          }
-        } else if (searchQuery) {
-          // Search with no label filter: search ALL mail (not just inbox)
-          gmailParams.q = `${searchQuery} -in:trash -in:spam`
-        } else {
-          // Default (no label, no search): show INBOX — matches what Gmail UI shows.
-          // Previously used 'newer_than:30d' which returned 3000+ threads,
-          // making it impossible to show all emails even with pagination.
-          gmailParams.labelIds = 'INBOX'
-        }
+        // The view→query mapping lives in ONE place (`lib/inbox/view-query.ts`) so
+        // the client's "does this action remove the row from the view I'm looking
+        // at?" predicate DERIVES from these same rules instead of a hand-written
+        // second copy that drifts. (A drifting copy produced two review blockers:
+        // `label='INBOX'` is a real view, and a label beats a stale search box.)
+        // Label beats search — `toInboxView` encodes that precedence.
+        Object.assign(
+          gmailParams,
+          buildGmailQueryParams(toInboxView({ label: labelFilter, search: searchQuery }))
+        )
 
         // Pagination
         if (pageToken) {

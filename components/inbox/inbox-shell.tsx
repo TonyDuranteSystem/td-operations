@@ -25,6 +25,7 @@ import {
   makePinnedOverride,
   makeUnreadOverride,
 } from '@/lib/inbox/conversation-reconcile'
+import { ORIGIN_UNKNOWN, type HideAction } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
@@ -68,6 +69,14 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
   const [selected, setSelected] = useState<InboxConversation | null>(null)
+  // WHICH LIST the open email was opened from. `selected` is a row source that
+  // OUTLIVES its list: clearing the search reverts the pane to the Inbox while
+  // the email stays open, and a ?thread= deep link opens one with no list behind
+  // it at all. The toolbar Delete acts on THIS row, so it must be stamped with
+  // this origin — not with whatever list happens to be showing (council,
+  // 2026-07-16: deleting a cleared-search result would otherwise be 'confirmed'
+  // by the Inbox, and Undo would inject an archived email into it).
+  const [selectedOrigin, setSelectedOrigin] = useState<string>(ORIGIN_UNKNOWN)
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeMenuOpen, setComposeMenuOpen] = useState(false)
   const [forwardData, setForwardData] = useState<{ subject: string; body: string; from: string } | null>(null)
@@ -89,25 +98,35 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // remount inside the window doesn't un-hide a just-deleted row; `unread` holds
   // mark-read/unread optimism and is in-memory. The reconcile pass in
   // ConversationList releases both only on confirmed server agreement.
+  // The key is versioned on the ENTRY SHAPE: an override written by an older build
+  // lacks `action`/`originView`, and under the current rules an undefined originView
+  // is judgeable by nobody. Bumping the key drops those rather than stranding them.
+  // Older keys are read once — only to DELETE them: the blob holds real client
+  // email (sender, subject, preview), and an unread key would keep it in every
+  // staff browser forever instead of self-expiring after 5 min.
   const [overrides, setOverrides] = useState<Map<string, RowOverride>>(() => {
     if (typeof window === 'undefined') return new Map()
     try {
-      const stored = localStorage.getItem('inbox-overrides')
+      const stored = localStorage.getItem('inbox-overrides-v3')
       if (!stored) return new Map()
       const parsed = JSON.parse(stored) as { entries: [string, RowOverride][]; ts: number }
       if (Date.now() - parsed.ts > 5 * 60 * 1000) {
-        localStorage.removeItem('inbox-overrides')
+        localStorage.removeItem('inbox-overrides-v3')
         return new Map()
       }
       return new Map(parsed.entries)
     } catch { return new Map() }
   })
   const [unread, setUnread] = useState<Map<string, UnreadOverride>>(new Map())
+  // Evict superseded versions of the store (they can never be read again).
+  useEffect(() => {
+    try { for (const k of ['inbox-overrides', 'inbox-overrides-v2']) localStorage.removeItem(k) } catch { /* ignore */ }
+  }, [])
   // Persist hidden/pinned intents so a PWA remount mid-window keeps them.
   useEffect(() => {
     try {
-      if (overrides.size === 0) localStorage.removeItem('inbox-overrides')
-      else localStorage.setItem('inbox-overrides', JSON.stringify({ entries: Array.from(overrides.entries()), ts: Date.now() }))
+      if (overrides.size === 0) localStorage.removeItem('inbox-overrides-v3')
+      else localStorage.setItem('inbox-overrides-v3', JSON.stringify({ entries: Array.from(overrides.entries()), ts: Date.now() }))
     } catch { /* ignore */ }
   }, [overrides])
   // Overrides are optimistic state for ONE mailbox's list. On a mailbox switch,
@@ -120,6 +139,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     setOverrides(new Map())
     setUnread(new Map())
   }, [activeMailbox])
+  // WHICH LIST the rows on screen came from, reported by ConversationList (which
+  // owns the payload). Every override is stamped with THIS.
+  //
+  // The shell deliberately does NOT derive a view of its own any more. It knows
+  // what was SELECTED (label/search/mailbox/channel), and that is a different
+  // thing: clicking a folder flips the selection instantly while the previous
+  // rows stay on screen and clickable for the whole fetch (by design —
+  // `keepPreviousData`, so the pane never flashes empty). Stamping the selection
+  // marked rows with a list that never held them, which then "confirmed" a delete
+  // it never saw and, on Undo, injected those emails into that folder. Both
+  // reviewers found it independently (2026-07-16) — the same mistake as judging
+  // by the current view, on the write side. One owner, one answer.
+  const [payloadViewKey, setPayloadViewKey] = useState<string | null>(null)
+  // No payload yet → no list to attribute a row to. Say so rather than guessing:
+  // any REAL key is one some payload will match and "confirm" with. Unknown must
+  // mean unknown — the override still APPLIES (action-derived) and retires via
+  // the TTL tombstone instead of being confirmed by a stranger.
+  const originViewKey = payloadViewKey ?? ORIGIN_UNKNOWN
   const queryClient = useQueryClient()
   // Print/Save-as-PDF handler registered by the open MessageThread (it holds the
   // email bodies; the toolbar only holds the conversation metadata).
@@ -252,10 +289,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     setShareItems(items)
   }, [queryClient, selectedIds, buildEmailShareItem, activeMailbox])
 
-  const handleEmailDeleted = useCallback((conv: InboxConversation) => {
-    // Hide the row optimistically AND snapshot it, so an Undo can pin the exact
-    // row back while Gmail re-indexes the untrash.
-    setOverrides(prev => new Map(prev).set(conv.id, makeHiddenOverride(Date.now(), conv)))
+  // ALWAYS clears the open email; CONDITIONALLY records the hide. The hide carries
+  // the ACTION so each view decides for itself whether the row is gone from it:
+  // 'trash' removes it everywhere but Trash; 'archive' only from inbox-scoped
+  // views (it keeps the folder label — archiving from a folder legitimately leaves
+  // the email there, so hiding it created a claim the server could never confirm).
+  const handleEmailDeleted = useCallback((action: HideAction, conv: InboxConversation, originView: string) => {
+    setOverrides(prev => new Map(prev).set(conv.id, makeHiddenOverride(Date.now(), action, originView, conv)))
     setSelected(prev => prev?.id === conv.id ? null : prev)
   }, [])
 
@@ -263,15 +303,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // row stays visible (from its snapshot) until Gmail re-indexes the untrash and
   // the server confirms it's back — no more "restored but invisible for 5 min"
   // (Luca, 2026-07-13). The reconcile pass releases the pin on server agreement.
+  // A pin asserts "this row belongs in THIS list" — and the snapshot carries no
+  // labels, so we have no evidence for that anywhere else. Injecting it elsewhere
+  // would render e.g. a never-starred email into Starred, where it could not die
+  // for minutes.
+  //
+  // The pin INHERITS the hide's own `originView` rather than re-deriving one. That
+  // is the list the snapshot came from — the exact claim the pin is making — and
+  // it is already recorded on the hide we are converting. Re-deriving would depend
+  // on the Undo toast's closure still holding the delete-time value, which is true
+  // today but silently wrong the moment a payload for another list lands inside
+  // the toast's 8-second life (council, 2026-07-16).
   const handleEmailRestored = useCallback((id: string) => {
     setOverrides(prev => {
       const existing = prev.get(id)
-      // Only the single-email path creates a hidden intent; if there's none
-      // (e.g. the deferred bulk path) leave it — bulk still reconciles via refetch.
       if (!existing || existing.kind !== 'hidden') return prev
-      return new Map(prev).set(id, makePinnedOverride(Date.now(), existing.snapshot))
+      return new Map(prev).set(id, makePinnedOverride(Date.now(), existing.originView ?? originViewKey, existing.snapshot))
     })
-  }, [])
+  }, [originViewKey])
 
   const bulkMode = selectedIds.size > 0
 
@@ -304,9 +353,17 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   }
 
   const emailActionMutation = useMutation({
-    mutationFn: async ({ action, forwardTo, color }: { action: string; forwardTo?: string; color?: string | null }) => {
-      if (!selected) return
-      const threadId = selected.id.replace('gmail:', '')
+    // THE ROW AND ITS LIST BOTH TRAVEL WITH THE REQUEST, frozen at click time —
+    // the same rule the bulk path's `ids` follows, and for the same reasons.
+    // NEVER read `selected` in `mutationFn` or `onSuccess`: react-query refreshes
+    // a pending mutation's options every render and reads the NEWEST closure at
+    // settle, and when the PWA is offline it PAUSES before sending and re-reads
+    // `mutationFn` on resume. Reading it live meant: open A → Delete → (drop
+    // signal / click row B) → the resumed request trashes **B**, a live client
+    // email, with no Undo, while A survives (council, 2026-07-16).
+    mutationFn: async ({ action, forwardTo, color, conv }: { action: string; forwardTo?: string; color?: string | null; originView?: string; conv?: InboxConversation | null }) => {
+      if (!conv) return
+      const threadId = conv.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -316,24 +373,28 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       return res.json()
     },
     onSuccess: (data, variables) => {
+      // `acted` is the row the REQUEST was about — never `selected`, which by now
+      // may be a different email entirely (see mutationFn).
+      const acted = variables.conv
       if (variables.action === 'set_color') {
         // Optimistically paint the list row + the open conversation
         const colorMark = variables.color ?? null
-        if (selected) {
+        if (acted) {
           queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
             { queryKey: ['inbox-conversations'] },
             (old) => old
-              ? { ...old, conversations: old.conversations.map(c => c.id === selected.id ? { ...c, colorMark } : c) }
+              ? { ...old, conversations: old.conversations.map(c => c.id === acted.id ? { ...c, colorMark } : c) }
               : old
           )
-          setSelected(prev => prev ? { ...prev, colorMark } : prev)
+          // Only repaint the open email if it IS the one we recoloured.
+          setSelected(prev => prev && prev.id === acted.id ? { ...prev, colorMark } : prev)
         }
         toast.success(colorMark ? `Marked ${markByKey(colorMark)?.label ?? colorMark}` : 'Mark removed')
         return
       }
       if (variables.action === 'archive' || variables.action === 'trash') {
-        if (selected) {
-          handleEmailDeleted(selected)
+        if (acted) {
+          handleEmailDeleted(variables.action as HideAction, acted, variables.originView ?? ORIGIN_UNKNOWN)
         }
       }
       if (variables.action === 'trash') {
@@ -341,7 +402,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         // (Antonio, 2026-07-14 — it previously had none). Capture the id now:
         // handleEmailDeleted above clears `selected`, and the toast callback runs
         // later.
-        const deletedId = selected?.id
+        const deletedId = acted?.id
         const snapshot = (data as { restore?: unknown } | undefined)?.restore
         toast('Email deleted', {
           action: {
@@ -414,15 +475,17 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   })
 
   const bulkActionMutation = useMutation({
-    // The selection travels WITH the request as a variable, captured once at
-    // click time by the caller. Both the send (below) and the optimistic hide
-    // (onSuccess) read that SAME frozen list, so they can never diverge.
+    // The selection AND the view we acted from travel WITH the request as
+    // variables, captured once at click time by the caller. Both the send (below)
+    // and the optimistic hide (onSuccess) read that SAME frozen pair, so they can
+    // never diverge — the hide is stamped with the list the rows were deleted
+    // FROM, even if the user has since clicked into another one.
     // Reading live `selectedIds` in either place is a trap: onSuccess gets the
     // newest render's closure, and — when the PWA is offline — react-query PAUSES
     // the mutation before sending and re-reads `mutationFn` on resume, so a
     // checkbox ticked meanwhile would be trashed with no Undo (or a de-selected
     // one hidden though never sent, sticky + persisted for 5 min).
-    mutationFn: async ({ action, labelId, ids }: { action: string; labelId?: string; ids: string[] }) => {
+    mutationFn: async ({ action, labelId, ids }: { action: string; labelId?: string; ids: string[]; originView: string }) => {
       const threadIds = ids.map(id => id.replace('gmail:', ''))
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
@@ -462,7 +525,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           // is NOT in the raw payload). If both miss (a carried-forward
           // unenriched row), the reconcile falls back to the list's last-known
           // copy, which conversation-list retains for overridden ids.
-          idsAtStart.forEach(id => next.set(id, makeHiddenOverride(Date.now(), rowsById.get(id) ?? prev.get(id)?.snapshot)))
+          idsAtStart.forEach(id => next.set(id, makeHiddenOverride(Date.now(), variables.action as HideAction, variables.originView, rowsById.get(id) ?? prev.get(id)?.snapshot)))
           return next
         })
         if (selected && idSet.has(selected.id)) setSelected(null)
@@ -604,6 +667,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
   const handleSelect = (conversation: InboxConversation) => {
     setSelected(conversation)
+    setSelectedOrigin(originViewKey) // the list this row was picked from
     setWorkerOpen(false) // worker chat is per email thread
     if (conversation.unread > 0) {
       setUnread(prev => new Map(prev).set(conversation.id, makeUnreadOverride(0, prev.get(conversation.id)?.baseline ?? conversation.unread, Date.now())))
@@ -793,7 +857,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           </span>
           <div className="flex items-center gap-1 ml-auto relative">
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'trash', ids: Array.from(selectedIds) })}
+              onClick={() => bulkActionMutation.mutate({ action: 'trash', ids: Array.from(selectedIds), originView: originViewKey })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
             >
@@ -801,7 +865,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               Delete
             </button>
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'archive', ids: Array.from(selectedIds) })}
+              onClick={() => bulkActionMutation.mutate({ action: 'archive', ids: Array.from(selectedIds), originView: originViewKey })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
             >
@@ -809,7 +873,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               Archive
             </button>
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'mark_read', ids: Array.from(selectedIds) })}
+              onClick={() => bulkActionMutation.mutate({ action: 'mark_read', ids: Array.from(selectedIds), originView: originViewKey })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
             >
@@ -817,7 +881,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               Mark Read
             </button>
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'mark_unread', ids: Array.from(selectedIds) })}
+              onClick={() => bulkActionMutation.mutate({ action: 'mark_unread', ids: Array.from(selectedIds), originView: originViewKey })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
             >
@@ -839,7 +903,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                     <button
                       key={label.id}
                       onClick={() => {
-                        bulkActionMutation.mutate({ action: 'move_to_label', labelId: label.id, ids: Array.from(selectedIds) })
+                        bulkActionMutation.mutate({ action: 'move_to_label', labelId: label.id, ids: Array.from(selectedIds), originView: originViewKey })
                         setMoveToOpen(false)
                       }}
                       className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
@@ -896,12 +960,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
-            onDeleted={handleEmailDeleted}
+            onDeleted={(conv) => handleEmailDeleted('trash', conv, originViewKey)}
             onRestored={handleEmailRestored}
             overrides={overrides}
             unread={unread}
             onUnreadOverride={(id, value, baseline) => setUnread(prev => new Map(prev).set(id, makeUnreadOverride(value, prev.get(id)?.baseline ?? baseline, Date.now())))}
             onReconciled={(o, u) => { setOverrides(o); setUnread(u) }}
+            onPayloadOrigin={setPayloadViewKey}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
@@ -1007,7 +1072,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         </HoverHint>
                         <HoverHint label="Archive">
                           <button
-                            onClick={() => emailActionMutation.mutate({ action: 'archive' })}
+                            onClick={() => emailActionMutation.mutate({ action: 'archive', originView: selectedOrigin, conv: selected })}
                             disabled={emailActionMutation.isPending}
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
                           >
@@ -1016,7 +1081,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         </HoverHint>
                         <HoverHint label="Star">
                           <button
-                            onClick={() => emailActionMutation.mutate({ action: 'star' })}
+                            onClick={() => emailActionMutation.mutate({ action: 'star', conv: selected })}
                             disabled={emailActionMutation.isPending}
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
                           >
@@ -1049,7 +1114,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                                     key={m.key}
                                     onClick={() => {
                                       setColorMenuOpen(false)
-                                      emailActionMutation.mutate({ action: 'set_color', color: m.key })
+                                      emailActionMutation.mutate({ action: 'set_color', color: m.key, conv: selected })
                                     }}
                                     className={cn(
                                       'h-5 w-5 rounded-full hover:scale-110 transition-transform',
@@ -1062,7 +1127,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                                 <button
                                   onClick={() => {
                                     setColorMenuOpen(false)
-                                    emailActionMutation.mutate({ action: 'set_color', color: null })
+                                    emailActionMutation.mutate({ action: 'set_color', color: null, conv: selected })
                                   }}
                                   className="h-5 w-5 rounded-full border border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:scale-110 transition-transform"
                                   title="Remove mark"
@@ -1075,7 +1140,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         </div>
                         <HoverHint label="Mark as unread">
                           <button
-                            onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
+                            onClick={() => emailActionMutation.mutate({ action: 'mark_unread', conv: selected })}
                             disabled={emailActionMutation.isPending}
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
                           >
@@ -1109,7 +1174,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         </HoverHint>
                         <HoverHint label={openUnread ? 'Mark as read' : 'Mark as unread'}>
                           <button
-                            onClick={() => emailActionMutation.mutate({ action: openUnread ? 'mark_read' : 'mark_unread' })}
+                            onClick={() => emailActionMutation.mutate({ action: openUnread ? 'mark_read' : 'mark_unread', conv: selected })}
                             disabled={emailActionMutation.isPending}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-600 hover:text-zinc-800 text-xs font-medium transition-colors ml-1"
                           >
@@ -1119,7 +1184,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         </HoverHint>
                         <HoverHint label="Delete (moves to Trash)">
                           <button
-                            onClick={() => emailActionMutation.mutate({ action: 'trash' })}
+                            onClick={() => emailActionMutation.mutate({ action: 'trash', originView: selectedOrigin, conv: selected })}
                             disabled={emailActionMutation.isPending}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
                           >

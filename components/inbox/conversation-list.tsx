@@ -15,7 +15,9 @@ import {
   type RowOverride,
   type UnreadOverride,
   type ConversationsPayload,
+  type PayloadOrigin,
 } from '@/lib/inbox/conversation-reconcile'
+import { toInboxView, viewKey } from '@/lib/inbox/view-query'
 
 const EMPTY_OVERRIDES: Map<string, RowOverride> = new Map()
 const EMPTY_UNREAD: Map<string, UnreadOverride> = new Map()
@@ -37,6 +39,11 @@ interface ConversationListProps {
   onUnreadOverride?: (id: string, value: number, baseline: number) => void
   /** Push the reconciled (released) override maps back up to the parent. */
   onReconciled?: (overrides: Map<string, RowOverride>, unread: Map<string, UnreadOverride>) => void
+  /** Report WHICH list the rows currently on screen came from (its `viewKey`), so
+   *  the parent stamps every override with the payload the user actually acted on
+   *  — never with the view they have merely selected. Null until the first payload
+   *  lands. See the effect below for why the difference is not academic. */
+  onPayloadOrigin?: (viewKey: string | null) => void
   // Bulk selection
   bulkMode: boolean
   selectedIds: Set<string>
@@ -73,7 +80,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, overrides, unread, onUnreadOverride, onReconciled, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
@@ -169,7 +176,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
-  const { data, isLoading, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number }>({
+  const { data, isLoading, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin }>({
     queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
     queryFn: async () => {
       // Throw on non-2xx (R099): a failed refetch must NOT replace the list
@@ -192,7 +199,20 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       if (!res.ok) {
         throw new Error(json.error || 'Failed to load conversations')
       }
-      return json
+      // STAMP the payload with the list it came from — here and nowhere else.
+      // This closure captures exactly the queryKey inputs above, so the stamp is
+      // correct by construction. The reconcile is never told "the view the user
+      // is on": with keepPreviousData (and an instant cache hit when returning to
+      // a view) the rows on screen routinely belong to a DIFFERENT list than the
+      // one selected, and judging them by the current view's rules is what let a
+      // foreign list "confirm" a delete it could never have seen — Luca's 12
+      // bulk-deleted emails came back (council, 2026-07-16).
+      // ⚠️ A new dimension in the queryKey MUST be added here too.
+      const origin: PayloadOrigin = {
+        view: toInboxView({ label: labelFilter ?? null, search: searchQuery ?? null }),
+        scope: { mailbox: mailbox ?? 'support', channel: activeChannel },
+      }
+      return { ...json, origin }
     },
     // Push is the primary refresh (see inbox-shell). The poll is a fallback for
     // a missed push (watch lapse / PWA background) — kept reasonably tight so
@@ -214,20 +234,51 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // advances reliably — [data] would skip when react-query structural-shares an
   // unchanged payload, leaving the 5-min TTL as the only release path.
   useEffect(() => {
-    if (!data || !onReconciled) return
+    // The optimistic-override machinery is Gmail-only (a delete/undo exists
+    // nowhere else — see the row Delete below), and a WhatsApp payload lists a
+    // different id-universe entirely: it can't contain a `gmail:` id, so letting
+    // it judge would "confirm" every pending Gmail delete at once. `origin` also
+    // carries the channel, which makes that unrepresentable — this is the second
+    // lock, so the foreign list never even pays for the pass.
+    if (!data?.origin || !onReconciled || isWhatsApp) return
     const payload: ConversationsPayload = { conversations: data.conversations ?? [], unenrichedIds: data.unenrichedIds, partial: data.partial }
-    const advanced = advanceReleases({ payload, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
+    const advanced = advanceReleases({ payload, origin: data.origin, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
     if (!overrideMapsEqual(advanced.overrides, ov) || !unreadMapsEqual(advanced.unread, un)) {
       onReconciled(advanced.overrides, advanced.unread)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataUpdatedAt])
 
+  // Tell the parent which list these rows came from, so an override created by a
+  // click is stamped with the payload the user was LOOKING AT. The two differ far
+  // more often than they sound: `keepPreviousData` deliberately keeps the old
+  // rows on screen (and interactive) for the whole of the next view's fetch, and
+  // a revisited view renders from cache instantly. Selecting rows in the Inbox,
+  // clicking a folder, then hitting Delete would otherwise stamp those Inbox rows
+  // with the FOLDER — a list that never held them, which then both "confirms" the
+  // delete it never saw and, on Undo, injects the Inbox emails into that folder
+  // (council, 2026-07-16).
+  useEffect(() => {
+    if (!onPayloadOrigin) return
+    onPayloadOrigin(data?.origin ? viewKey(data.origin.view, data.origin.scope) : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.origin])
+
   // Build the visible rows (pure — no counter changes here); reads the
   // carried-forward `prev` so a row the server couldn't enrich keeps its real data.
+  // Everything is decided against the payload's OWN origin, so a list rendered
+  // from `keepPreviousData` is still judged by the rules of the view it came from.
+  //
+  // NOT gated on `isWhatsApp`: that flips the instant the tab is clicked, while
+  // `data` is still the previous GMAIL payload — and returning the raw list there
+  // FAILS OPEN, un-applying a hide and flashing a just-deleted email back. The
+  // origin is the honest test, and running the reconcile over a genuine WhatsApp
+  // payload is a no-op anyway (its ids can't collide with `gmail:`, and a pin's
+  // key carries the channel so it can't be injected here).
   const visibleRows = useMemo(() => {
-    const payload: ConversationsPayload = { conversations: data?.conversations ?? [], unenrichedIds: data?.unenrichedIds, partial: data?.partial }
-    return computeVisibleList({ payload, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
+    if (!data?.origin) return data?.conversations ?? []
+    const payload: ConversationsPayload = { conversations: data.conversations ?? [], unenrichedIds: data.unenrichedIds, partial: data.partial }
+    return computeVisibleList({ payload, origin: data.origin, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, ov, un])
 
