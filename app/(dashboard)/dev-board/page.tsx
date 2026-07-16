@@ -34,15 +34,19 @@ export default async function DevBoardPage({
     /* non-blocking */
   }
 
-  const { data } = await db
+  const { data, error } = await db
     .from("dev_tasks")
     .select(
-      "id, title, type, status, priority, channel, milestones, summary_plain, description, findings, plan, decisions, blockers, progress_log, parent_task_id, created_at, updated_at, completed_at, knowledge_ref, knowledge_status",
+      "id, title, type, status, priority, channel, milestones, summary_plain, business_impact, simple_next_step, owner, due_date, origin_url, related_files, description, findings, plan, decisions, blockers, progress_log, parent_task_id, created_at, updated_at, completed_at, knowledge_ref, knowledge_status",
     )
     .neq("status", "cancelled")
     .order("priority", { ascending: true })
     .order("created_at", { ascending: false })
     .limit(500)
+
+  // A failed select must NOT render as an empty board (it would look like every
+  // job vanished — e.g. code deployed before the plain-fields migration ran).
+  if (error) console.error("[dev-board] jobs query failed:", error.message)
 
   const jobs: DevJob[] = (data || []) as DevJob[]
 
@@ -55,7 +59,14 @@ export default async function DevBoardPage({
           Sessions keep this current so nothing is lost.
         </p>
       </div>
-      <DevBoard jobs={jobs} initialChannel={sp.channel ?? ""} />
+      {error ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          Couldn&apos;t load the board: {error.message}. The jobs are safe in the tracker — this is a
+          loading problem, not lost work (check that the latest database migration has been applied).
+        </div>
+      ) : (
+        <DevBoard jobs={jobs} initialChannel={sp.channel ?? ""} />
+      )}
     </div>
   )
 }

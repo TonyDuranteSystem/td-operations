@@ -27,6 +27,17 @@ export const ACTIVE_BOARD_LANES = BOARD_LANES.filter((l) => l.key !== "done")
 /** The "done" lane meta, rendered as the folded shipped drawer, not a column. */
 export const DONE_LANE = BOARD_LANES.find((l) => l.key === "done")!
 
+/**
+ * A card's origin link must be an IN-APP relative path — this is rendered as a
+ * live <a href> in a staff-admin session, so absolute (`https://`),
+ * protocol-relative (`//evil.com`) and scheme (`javascript:`) URLs are all
+ * rejected. Enforced at every WRITE site (MCP tools, share route) AND at
+ * render time in dev-board.tsx (belt and braces).
+ */
+export function isSafeInternalUrl(url: string): boolean {
+  return url.startsWith("/") && !url.startsWith("//")
+}
+
 /** Lane a status belongs to, or null when it should not appear (cancelled). */
 export function laneForStatus(status: string): BoardLaneKey | null {
   switch (status) {
