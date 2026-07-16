@@ -18,6 +18,13 @@ import { LinkClientDialog } from './link-client-dialog'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
 import { COLOR_MARKS, markByKey } from '@/lib/inbox/color-marks'
+import {
+  type RowOverride,
+  type UnreadOverride,
+  makeHiddenOverride,
+  makePinnedOverride,
+  makeUnreadOverride,
+} from '@/lib/inbox/conversation-reconcile'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
@@ -76,20 +83,43 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [shareFromBulk, setShareFromBulk] = useState(false)
   const [deepLinkDone, setDeepLinkDone] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
-  const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set()
+  // Optimistic overrides — the single source of "what the list shows" layered
+  // on the eventually-consistent Gmail payload (Luca flicker fix). `overrides`
+  // holds hidden (deleted) + pinned (restored) intents and is PERSISTED so a
+  // remount inside the window doesn't un-hide a just-deleted row; `unread` holds
+  // mark-read/unread optimism and is in-memory. The reconcile pass in
+  // ConversationList releases both only on confirmed server agreement.
+  const [overrides, setOverrides] = useState<Map<string, RowOverride>>(() => {
+    if (typeof window === 'undefined') return new Map()
     try {
-      const stored = localStorage.getItem('inbox-deleted-ids')
-      if (!stored) return new Set()
-      const parsed = JSON.parse(stored) as { ids: string[]; ts: number }
+      const stored = localStorage.getItem('inbox-overrides')
+      if (!stored) return new Map()
+      const parsed = JSON.parse(stored) as { entries: [string, RowOverride][]; ts: number }
       if (Date.now() - parsed.ts > 5 * 60 * 1000) {
-        localStorage.removeItem('inbox-deleted-ids')
-        return new Set()
+        localStorage.removeItem('inbox-overrides')
+        return new Map()
       }
-      return new Set(parsed.ids)
-    } catch { return new Set() }
+      return new Map(parsed.entries)
+    } catch { return new Map() }
   })
+  const [unread, setUnread] = useState<Map<string, UnreadOverride>>(new Map())
+  // Persist hidden/pinned intents so a PWA remount mid-window keeps them.
+  useEffect(() => {
+    try {
+      if (overrides.size === 0) localStorage.removeItem('inbox-overrides')
+      else localStorage.setItem('inbox-overrides', JSON.stringify({ entries: Array.from(overrides.entries()), ts: Date.now() }))
+    } catch { /* ignore */ }
+  }, [overrides])
+  // Overrides are optimistic state for ONE mailbox's list. On a mailbox switch,
+  // clear them so a support@ pin/hide can't leak into the antonio@ view (a
+  // pinned row would otherwise render in the wrong mailbox). Guarded so the
+  // persisted overrides loaded at mount survive the initial render.
+  const mailboxMountRef = useRef(true)
+  useEffect(() => {
+    if (mailboxMountRef.current) { mailboxMountRef.current = false; return }
+    setOverrides(new Map())
+    setUnread(new Map())
+  }, [activeMailbox])
   const queryClient = useQueryClient()
   // Print/Save-as-PDF handler registered by the open MessageThread (it holds the
   // email bodies; the toolbar only holds the conversation metadata).
@@ -99,8 +129,8 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const isGmail = selected?.channel === 'gmail'
   // Read/unread state of the OPEN email: optimistic override wins, else the row.
   const openUnread = selected
-    ? (unreadOverrides.has(selected.id)
-        ? (unreadOverrides.get(selected.id) ?? 0) > 0
+    ? (unread.has(selected.id)
+        ? (unread.get(selected.id)?.value ?? 0) > 0
         : selected.unread > 0)
     : false
 
@@ -222,44 +252,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     setShareItems(items)
   }, [queryClient, selectedIds, buildEmailShareItem, activeMailbox])
 
-  const handleEmailDeleted = useCallback((id: string) => {
-    setDeletedIds(prev => {
-      const next = new Set(prev).add(id)
-      try {
-        localStorage.setItem('inbox-deleted-ids', JSON.stringify({
-          ids: Array.from(next),
-          ts: Date.now()
-        }))
-      } catch { /* ignore */ }
-      return next
-    })
-    setSelected(prev => prev?.id === id ? null : prev)
+  const handleEmailDeleted = useCallback((conv: InboxConversation) => {
+    // Hide the row optimistically AND snapshot it, so an Undo can pin the exact
+    // row back while Gmail re-indexes the untrash.
+    setOverrides(prev => new Map(prev).set(conv.id, makeHiddenOverride(Date.now(), conv)))
+    setSelected(prev => prev?.id === conv.id ? null : prev)
   }, [])
 
-  // Undo of a delete. The mirror of handleEmailDeleted, and it is REQUIRED for
-  // Undo to work at all: a deleted thread is hidden by `deletedIds` (persisted,
-  // 5-min TTL) to paper over Gmail's label-index lag, and the list filters on
-  // that set. Untrashing in Gmail and refetching is NOT enough — the restored
-  // row comes back from Gmail and is then filtered straight back out, so the
-  // toast said "Email restored" while the email stayed invisible for 5 minutes
-  // (Luca, 2026-07-13; dev_task 204f7685). Drop the id from the set AND from
-  // localStorage, or a remount re-reads the stale id and re-hides it.
+  // Undo of a delete. Convert the hidden intent into a PINNED one: the restored
+  // row stays visible (from its snapshot) until Gmail re-indexes the untrash and
+  // the server confirms it's back — no more "restored but invisible for 5 min"
+  // (Luca, 2026-07-13). The reconcile pass releases the pin on server agreement.
   const handleEmailRestored = useCallback((id: string) => {
-    setDeletedIds(prev => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      try {
-        if (next.size === 0) {
-          localStorage.removeItem('inbox-deleted-ids')
-        } else {
-          localStorage.setItem('inbox-deleted-ids', JSON.stringify({
-            ids: Array.from(next),
-            ts: Date.now()
-          }))
-        }
-      } catch { /* ignore */ }
-      return next
+    setOverrides(prev => {
+      const existing = prev.get(id)
+      // Only the single-email path creates a hidden intent; if there's none
+      // (e.g. the deferred bulk path) leave it — bulk still reconciles via refetch.
+      if (!existing || existing.kind !== 'hidden') return prev
+      return new Map(prev).set(id, makePinnedOverride(Date.now(), existing.snapshot))
     })
   }, [])
 
@@ -323,7 +333,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       }
       if (variables.action === 'archive' || variables.action === 'trash') {
         if (selected) {
-          handleEmailDeleted(selected.id)
+          handleEmailDeleted(selected)
         }
       }
       if (variables.action === 'trash') {
@@ -353,11 +363,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   const err = await res.json().catch(() => ({}))
                   throw new Error(err.error || 'Failed to restore email.')
                 }
-                // Clear the hidden-row id BEFORE refetching, or the restored
-                // thread is filtered straight back out (see handleEmailRestored).
+                // Pin the restored row visible — do NOT immediately refetch the
+                // conversations list: that racing refetch into Gmail's untrash
+                // lag is exactly what made the row vanish for a few seconds. The
+                // pin holds it until the server confirms it's back.
                 handleEmailRestored(deletedId)
                 toast.success('Email restored')
-                queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                 queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
                 queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
               } catch (err) {
@@ -375,23 +386,23 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       }
       if (variables.action === 'mark_unread') {
         if (selected) {
-          setUnreadOverrides(prev => new Map(prev).set(selected.id, 1))
+          setUnread(prev => new Map(prev).set(selected.id, makeUnreadOverride(Math.max(selected.unread, 1), prev.get(selected.id)?.baseline ?? selected.unread, Date.now())))
         }
         setSelected(null)
         toast.success('Marked as unread')
       }
-      if (variables.action === 'trash' || variables.action === 'archive') {
-        setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-          queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-          queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
-        }, 2000)
-      } else if (variables.action === 'mark_unread' || variables.action === 'mark_read') {
-        // The optimistic unread override already updated the badge — do NOT
-        // force a ~300-Gmail-call conversations refetch just to flip a read
-        // dot (that heavy refetch under load is exactly what blanked the
-        // list, Antonio 2026-07-08). Stats/labels are cheap; the 30s poll
-        // reconciles the list. Gmail's label index lags anyway.
+      if (variables.action === 'mark_unread' || variables.action === 'mark_read') {
+        // Optimistic unread already updated the badge — do NOT force a heavy
+        // (~300-Gmail-call) conversations refetch just to flip a read dot. The
+        // reconcile releases the override once Gmail catches up. Stats/labels
+        // are cheap.
+        queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+        queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+      } else if (variables.action === 'trash' || variables.action === 'archive') {
+        // Handled optimistically by the hide override; the Gmail push event +
+        // the poll reconcile the server list. No immediate conversations
+        // refetch — that racing refetch into Gmail's untrash lag is what made
+        // restored emails vanish. Refresh cheap stats/labels only.
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
         queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
       } else {
@@ -437,9 +448,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       // Optimistic unread badges — Gmail's index lags label changes
       if (variables.action === 'mark_read' || variables.action === 'mark_unread') {
         const v = variables.action === 'mark_read' ? 0 : 1
-        setUnreadOverrides(prev => {
+        // Baselines from the cached list so each override releases only when
+        // Gmail moves OFF the pre-action value (not on a stale lagging read).
+        const unreadById = new Map<string, number>()
+        for (const [, d] of queryClient.getQueriesData<{ conversations: InboxConversation[] }>({ queryKey: ['inbox-conversations'] })) {
+          d?.conversations?.forEach(c => unreadById.set(c.id, c.unread))
+        }
+        setUnread(prev => {
           const next = new Map(prev)
-          selectedIds.forEach(id => next.set(id, v))
+          selectedIds.forEach(id => next.set(id, makeUnreadOverride(v, next.get(id)?.baseline ?? unreadById.get(id) ?? (v === 0 ? 1 : 0), Date.now())))
           return next
         })
       }
@@ -550,7 +567,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     setSelected(conversation)
     setWorkerOpen(false) // worker chat is per email thread
     if (conversation.unread > 0) {
-      setUnreadOverrides(prev => new Map(prev).set(conversation.id, 0))
+      setUnread(prev => new Map(prev).set(conversation.id, makeUnreadOverride(0, prev.get(conversation.id)?.baseline ?? conversation.unread, Date.now())))
     }
   }
 
@@ -842,9 +859,10 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             onSelect={handleSelect}
             onDeleted={handleEmailDeleted}
             onRestored={handleEmailRestored}
-            deletedIds={deletedIds}
-            unreadOverrides={unreadOverrides}
-            onUnreadOverride={(id, v) => setUnreadOverrides(prev => new Map(prev).set(id, v))}
+            overrides={overrides}
+            unread={unread}
+            onUnreadOverride={(id, value, baseline) => setUnread(prev => new Map(prev).set(id, makeUnreadOverride(value, prev.get(id)?.baseline ?? baseline, Date.now())))}
+            onReconciled={(o, u) => { setOverrides(o); setUnread(u) }}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}

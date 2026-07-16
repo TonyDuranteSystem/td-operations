@@ -63,6 +63,12 @@ export async function GET(req: NextRequest) {
 
     const conversations: InboxConversation[] = []
     let gmailNextPageToken: string | undefined
+    // Completeness signals for the client reconcile (Luca flicker fix): thread
+    // ids that ARE in the mailbox but whose metadata fetch failed this round
+    // (absence ≠ "left the inbox"), and whether the list itself is incomplete
+    // (a page failed) so the client freezes optimistic-override releases.
+    const unenrichedIds: string[] = []
+    let listPartial = false
 
     // Start email lookup in parallel (used later for Gmail matching)
     const emailLookupPromise =
@@ -164,9 +170,20 @@ export async function GET(req: NextRequest) {
           const pageParams = { ...gmailParams }
           if (currentPageToken) pageParams.pageToken = currentPageToken
 
-          const listResult = (await gmailGet("/threads", pageParams, gmailUser)) as {
+          let listResult: {
             threads?: Array<{ id: string; snippet: string; historyId: string }>
             nextPageToken?: string
+          }
+          try {
+            listResult = (await gmailGet("/threads", pageParams, gmailUser)) as typeof listResult
+          } catch (pageErr) {
+            // A later page failing must NOT discard the page(s) we already have
+            // (that whole-list 503 blanked the inbox under load). Keep what we
+            // fetched, flag the list incomplete, and stop paginating.
+            if (page === 0) throw pageErr // nothing collected yet → real failure
+            console.warn("[inbox] thread page fetch failed, keeping earlier pages:", pageErr)
+            listPartial = true
+            break
           }
 
           if (listResult.threads) {
@@ -214,8 +231,15 @@ export async function GET(req: NextRequest) {
           // Our own mailbox addresses — used to find external party
           const OUR_EMAILS = new Set(['support@tonydurante.us', 'antonio.durante@tonydurante.us'])
 
-          for (const result of threadDetails) {
-            if (result.status !== "fulfilled") continue
+          for (let i = 0; i < threadDetails.length; i++) {
+            const result = threadDetails[i]
+            if (result.status !== "fulfilled") {
+              // Metadata fetch failed (rate-limit/timeout): report the id as
+              // present-but-unenriched instead of silently dropping the thread
+              // — dropping it is exactly what blinked good emails off the list.
+              unenrichedIds.push(`gmail:${threadsToFetch[i].id}`)
+              continue
+            }
             const thread = result.value
             const firstMsg = thread.messages[0]
             const lastMsg = thread.messages[thread.messages.length - 1]
@@ -368,6 +392,9 @@ export async function GET(req: NextRequest) {
       total: conversations.length,
       ...(gmailNextPageToken ? { nextPageToken: gmailNextPageToken } : {}),
       ...(gmailDegraded ? { gmailDegraded: true } : {}),
+      // Completeness signals for the client reconcile (Luca flicker fix).
+      ...(unenrichedIds.length ? { unenrichedIds } : {}),
+      ...(listPartial || gmailDegraded ? { partial: true } : {}),
     })
   } catch (error) {
     console.error("Inbox conversations error:", error)

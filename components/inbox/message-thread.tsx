@@ -233,21 +233,12 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
   })
 
   useEffect(() => {
-    // Optimistically clear unread badge immediately in the cache
-    queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
-      { queryKey: ['inbox-conversations'] },
-      (old) => {
-        if (!old) return old
-        return {
-          ...old,
-          conversations: old.conversations.map((c) =>
-            c.id === conversation.id ? { ...c, unread: 0 } : c
-          ),
-        }
-      }
-    )
-
-    // Then fire the actual API call to Gmail
+    // Mark the thread read in Gmail. The optimistic badge is now handled by the
+    // parent's unread OVERRIDE (set in handleSelect) — the single optimistic
+    // writer. We deliberately no longer write `unread: 0` straight into the
+    // conversations cache: that second write mutated the payload the reconcile
+    // treats as "server truth", tripping the baseline check so the just-read row
+    // flickered back to unread on the next poll (council code-review 2026-07-15).
     markReadMutation.mutate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id])
