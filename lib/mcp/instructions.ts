@@ -55,7 +55,7 @@ Source conflict detection: Claude-authored documents (session-context, checkpoin
 
 Before making ANY technical claim about how the system works (data flow, architecture, what a feature does, why something is broken):
 1. Read the source first — sysdoc_read('session-context'), kb_search, relevant sysdocs, dev_task_list, and actual code (file + line number).
-2. Show your evidence — every claim must cite its source. No citation = don't say it.
+2. Show your evidence — every claim must be BACKED by a verified citation. No citation = don't say it. The citation lives in your internal record or the reply's "Technical details" footer — NEVER in the reply body ("Present Plainly" below governs what Antonio reads).
 3. Name your assumptions — if you haven't verified something, say "I haven't verified this yet." Never present assumptions as facts.
 4. Challenge your first answer — root cause is usually 2-3 layers deep. Ask yourself: "What am I assuming that could be wrong?"
 This applies to EVERY conversation. If you make a wrong claim that wastes time reading and correcting, that is a failure.

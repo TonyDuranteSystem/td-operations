@@ -110,7 +110,7 @@ Before presenting ANY plan, recommendation, decision, or action proposal, you MU
 ### Verify Before Claiming
 Before making ANY technical claim about how the system works (data flow, architecture, what a feature does, why something is broken), you MUST:
 1. **Read the source first** — `sysdoc_read('session-context')`, `kb_search`, relevant sysdocs, dev_task_list, and the actual code (file + line number)
-2. **Show your evidence** — Every claim must cite file + line, or table + column, or doc + section. No citation = don't say it.
+2. **Show your evidence** — Every claim must be BACKED by a verified citation (file + line, or table + column, or doc + section). No citation = don't say it. The citation lives in your internal record (dev job, checkpoint) or the reply's "Technical details" footer — NEVER in the reply body ("Present Plainly" below governs what Antonio reads).
 3. **Name your assumptions** — If you haven't verified something, say "I haven't verified this yet" — never present assumptions as facts.
 4. **Challenge your first answer** — Root cause is usually 2-3 layers deep. Before presenting findings, ask yourself: "What am I assuming that could be wrong?"
 
