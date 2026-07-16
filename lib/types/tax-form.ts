@@ -56,6 +56,30 @@ export interface FieldConfig {
   isArray?: boolean
   /** Array sub-fields */
   arrayFields?: Omit<FieldConfig, 'step' | 'entityTypes' | 'isArray' | 'arrayFields'>[]
+  /** Domain minimum for numeric values. Currency fields default to 0 (a
+   *  negative dollar amount is never legitimate on these forms — see
+   *  fieldMin). An explicit min overrides the type default. */
+  min?: number
+}
+
+/** Effective minimum for a field's numeric value: explicit `min` wins,
+ *  otherwise currency ⇒ 0 (amounts on these forms cannot be negative),
+ *  otherwise unbounded. Shared by both tax-form pages and the portal
+ *  wizard so the rule lives in exactly one place. */
+export function fieldMin(field: { type: string; min?: number }): number | undefined {
+  if (field.min !== undefined) return field.min
+  return field.type === 'currency' ? 0 : undefined
+}
+
+/** True when a field HAS a numeric value and that value is below the
+ *  field's effective minimum. Empty/absent values never violate (presence
+ *  is the `required` check's job, not this one). */
+export function violatesFieldMin(field: { type: string; min?: number }, value: unknown): boolean {
+  const min = fieldMin(field)
+  if (min === undefined) return false
+  if (value === undefined || value === null || value === '') return false
+  const n = Number(value)
+  return !Number.isNaN(n) && n < min
 }
 
 // ─── Step Labels ────────────────────────────────────────────

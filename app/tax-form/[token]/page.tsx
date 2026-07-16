@@ -2,13 +2,14 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   TOOLTIPS,
   STEPS,
   getFieldsForStep,
+  fieldMin,
+  violatesFieldMin,
   type TaxFormSubmission,
   type FieldConfig,
   type LabelKey,
@@ -195,12 +196,19 @@ export default function TaxFormPage() {
   }
 
   function isStepValid(step: number): boolean {
+    if (!submission) return false
     const required = getRequiredFieldsForStep(step)
-    return required.every(f => {
+    const presenceOk = required.every(f => {
       const val = formData[f.key]
       if (f.type === 'boolean') return val !== undefined && val !== null && val !== ''
       return val !== undefined && val !== null && String(val).trim() !== ''
     })
+    // Domain minimums (currency ⇒ 0): a filled value below the field's
+    // minimum blocks the step even on optional fields.
+    const minOk = getFieldsForStep(submission.entity_type, step)
+      .filter(f => !f.isArray)
+      .every(f => !violatesFieldMin(f, formData[f.key]))
+    return presenceOk && minOk
   }
 
   // ─── Submit ─────────────────────────────────────────────
@@ -357,7 +365,15 @@ export default function TaxFormPage() {
             onChange={e => updateField(field.key, field.type === 'number' || field.type === 'currency' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
             placeholder={field.type === 'currency' ? '0.00' : ''}
             step={field.type === 'currency' ? '0.01' : undefined}
+            min={fieldMin(field)}
           />
+        )}
+        {violatesFieldMin(field, value) && (
+          <p style={{ color: '#dc2626', fontSize: 12, marginTop: 4 }}>
+            {fieldMin(field) === 0
+              ? (lang === 'en' ? 'This amount cannot be negative.' : 'Questo importo non può essere negativo.')
+              : (lang === 'en' ? `Must be at least ${fieldMin(field)}.` : `Deve essere almeno ${fieldMin(field)}.`)}
+          </p>
         )}
       </div>
     )
@@ -425,7 +441,7 @@ export default function TaxFormPage() {
               <input className="tf-input" placeholder={L.rpt_address} value={txn.rpt_address || ''} onChange={e => { const t = [...transactions]; t[i] = { ...t[i], rpt_address: e.target.value }; setTransactions(t) }} />
               <input className="tf-input" placeholder={L.rpt_country} value={txn.rpt_country || ''} onChange={e => { const t = [...transactions]; t[i] = { ...t[i], rpt_country: e.target.value }; setTransactions(t) }} />
               <input className="tf-input" placeholder={L.rpt_vat_number} value={txn.rpt_vat_number || ''} onChange={e => { const t = [...transactions]; t[i] = { ...t[i], rpt_vat_number: e.target.value }; setTransactions(t) }} />
-              <input className="tf-input tf-input-sm" type="number" step="0.01" placeholder={L.rpt_amount} value={txn.rpt_amount || ''} onChange={e => { const t = [...transactions]; t[i] = { ...t[i], rpt_amount: e.target.value }; setTransactions(t) }} />
+              <input className="tf-input tf-input-sm" type="number" step="0.01" min={0} placeholder={L.rpt_amount} value={txn.rpt_amount || ''} onChange={e => { const t = [...transactions]; t[i] = { ...t[i], rpt_amount: e.target.value }; setTransactions(t) }} />
               <input className="tf-input" placeholder={L.rpt_description} value={txn.rpt_description || ''} onChange={e => { const t = [...transactions]; t[i] = { ...t[i], rpt_description: e.target.value }; setTransactions(t) }} />
             </div>
           </div>
