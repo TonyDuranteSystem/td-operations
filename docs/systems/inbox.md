@@ -321,11 +321,34 @@ Function.
   `lib/inbox/attachment-open.ts` is an ALLOW-LIST (PDF + raster images). SVG /
   HTML / XML must DOWNLOAD, never open in a tab: an inline SVG attachment would
   be same-origin XSS in the staff CRM session. Never add a scriptable type.
-- **A deleted email is hidden client-side by `deletedIds`** (Set + localStorage,
-  5-min TTL) because Gmail's label index lags. Any code path that RESTORES a
-  thread (Undo/untrash) MUST clear the id from that set *and* from localStorage
-  (`onRestored`), or the row is refetched from Gmail and then filtered straight
-  back out — the 2026-07-13 "says restored but the email never comes back" bug.
+- **A deleted email is hidden client-side by an OPTIMISTIC OVERRIDE — never by
+  trusting Gmail's list**, whose label index lags 30–60s.
+  `lib/inbox/conversation-reconcile.ts` owns ONE override map (`hidden` after a
+  delete, `pinned` after an Undo) plus a separate unread map.
+  `computeVisibleList` applies them over every payload (safe every render);
+  `advanceReleases` runs ONCE per fetch (keyed on `dataUpdatedAt` — `[data]`
+  skips react-query's structural-shared deep-equal polls) and releases ONLY on
+  stable AFFIRMATIVE server agreement: a hide releases after 2 complete payloads
+  that affirmatively lack the thread, then TOMBSTONES ~90s (Gmail's index is
+  non-monotonic — that tombstone is what stops a deleted email popping back); an
+  Undo PINS the row visible from its snapshot until the server confirms it is
+  back; an unread override releases when the server moves OFF the pre-action
+  BASELINE (never on the written value); a `partial` payload freezes ALL
+  releases; the 5-min TTL is GC ONLY, never the primary release.
+  **`deletedIds` and `localStorage['inbox-deleted-ids']` NO LONGER EXIST — do not
+  resurrect them.** The state is `localStorage['inbox-overrides']`, cleared on a
+  mailbox switch. There must be exactly ONE optimistic writer: `message-thread`
+  used to also write `unread:0` straight into the conversations cache, which
+  corrupted the reconcile's baseline and flickered rows back to unread — never
+  add a second writer.
+- **⚠️ KNOWN BUG, LIVE (dev_tasks `30b5a53a` + `a06411a2`): a hide the server can
+  never confirm pops back after 5 minutes.** The release condition is "absent from
+  the payload", so a hide is only legitimate when the action actually removes the
+  row from the CURRENT view. `archive` strips ONLY `INBOX` — so archiving from a
+  label / Starred / search view leaves the thread in that payload, the hide never
+  releases, and the TTL GC drops it with no tombstone → the row reappears. Same
+  shape for a hide created in one view and applied in another. **Rule for any NEW
+  hide: never create one that the current view's own Gmail query cannot confirm.**
 - **Trashing STRIPS `UNREAD` / `STARRED` / `IMPORTANT`, and Gmail cannot tell you
   what they were afterwards.** Any new delete path MUST snapshot them *before*
   the modify (`snapshotBeforeTrash`) and any Undo MUST hand that snapshot back so
@@ -346,9 +369,25 @@ Function.
   only the `RESTORABLE_LABELS` allow-list, so an Undo can never be turned into
   "add an arbitrary label (TRASH / SPAM / any user label) to this message id".
 - **All three delete paths must keep their Undo** (per-row trash icon, open-email
-  toolbar Delete, bulk-bar Delete). Note they hide rows DIFFERENTLY: the first
-  two go through `deletedIds`, the bulk one filters the react-query cache — so a
-  bulk Undo does not need `onRestored`, but the other two do.
+  toolbar Delete, bulk-bar Delete). They now ALL hide through the SAME override
+  map — the bulk path's old react-query cache-filter is GONE — so every one of
+  them needs `onRestored` (it flips the `hidden` intent to `pinned`), and a bulk
+  Undo restores from the row snapshots captured at delete time. Snapshot source,
+  best→worst: the raw cached row → an existing override's snapshot (a row that is
+  currently PINNED is injected from its snapshot and is NOT in the raw payload) →
+  the list's retained last-known copy (`conversation-list` keeps one for every
+  overridden id). With none of those, an Undo restores the row INVISIBLY.
+- **The selection must travel WITH the request as a mutation VARIABLE.** NEVER read
+  `selectedIds` inside `mutationFn` or `onSuccess`: react-query hands `onSuccess`
+  the newest render's closure, AND it PAUSES a mutation when offline and re-reads
+  `mutationFn` on resume. So a checkbox ticked mid-flight gets trashed with no Undo,
+  and a de-selected one gets hidden though it was never sent — sticky and persisted
+  for 5 minutes (the old cache-filter self-corrected on the next refetch; an
+  override does not). Freezing only one side (e.g. via `onMutate`) is NOT enough.
+- **A failed bulk action must SAY SO.** The bulk path had no `onError` and a bare
+  `throw new Error('Bulk action failed')` that discarded the server's body (the R099
+  antipattern), so a rate-limited bulk delete of 30 emails was a silent no-op. Parse
+  the server's `error` and toast it.
 - **A BULK ACTION CAN PARTIALLY FAIL AND STILL RETURN HTTP 200.** The bulk branch
   uses `Promise.allSettled` and reports `succeeded` / `failed`. NEVER build a
   bulk toast from the client's own selection size — report what the SERVER did,
