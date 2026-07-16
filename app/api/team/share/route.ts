@@ -8,9 +8,15 @@ import { getSupportPersonUserId } from '@/lib/settings'
 import { findOrCreateConversation } from '@/lib/team/find-conversation'
 import { parseClientRef } from '@/lib/team/conversations'
 import { loadStageSetForType } from '@/lib/dev-tracker/load-stage-set'
-import { initialMilestones, deriveStatusForSet } from '@/lib/dev-tracker/milestones'
+import { initialMilestones, deriveStatusForSet, labelForStage } from '@/lib/dev-tracker/milestones'
+import { generatePlainFields } from '@/lib/dev-tracker/plain-summary'
+import { isSafeInternalUrl } from '@/lib/dev-tracker/board'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { NextRequest, NextResponse } from 'next/server'
+
+// The Dev-Board target runs an AI patch phase after the insert (~16s worst
+// case with model failover) — keep the route comfortably above that.
+export const maxDuration = 60
 
 /**
  * POST /api/team/share
@@ -77,6 +83,12 @@ export async function POST(request: NextRequest) {
     const db = supabaseAdmin as any
     const set = await loadStageSetForType(db, type)
     const startStage = set.stages[0]?.key || 'requested'
+
+    // Durable write FIRST (council ordering contract): the card must exist
+    // even if the AI patch below times out — a staff share must never hang
+    // ~16s and then be lost. buildShareCards already enforces relative URLs;
+    // the extra guard blocks protocol-relative '//host' values.
+    const originUrl = card.url && isSafeInternalUrl(card.url) ? card.url : null
     const { data: job, error } = await db
       .from('dev_tasks')
       .insert({
@@ -87,11 +99,42 @@ export async function POST(request: NextRequest) {
         channel,
         description,
         summary_plain: note || card.title || null,
+        origin_url: originUrl,
         milestones: initialMilestones(now, `${displayName} (shared)`, startStage),
       })
       .select('id')
       .single()
     if (error) return NextResponse.json({ error: error.message || 'Could not create the card.' }, { status: 500 })
+
+    // AI patch phase — plain-English card fields (same contract as the
+    // dev_task tools): best-effort, null on failure keeps the note/title.
+    const ai = await generatePlainFields({
+      title,
+      type,
+      priority: 'medium',
+      channel,
+      stageLabel: labelForStage(set, startStage),
+      description,
+      findings: null,
+      plan: null,
+      decisions: null,
+      blockers: null,
+      callerSummary: note || card.title || null,
+      progressTail: [],
+    })
+    if (ai) {
+      const { error: patchErr } = await db
+        .from('dev_tasks')
+        .update({
+          summary_plain: ai.summary_plain,
+          business_impact: ai.business_impact,
+          simple_next_step: ai.simple_next_step,
+          plain_generated_at: new Date().toISOString(),
+        })
+        .eq('id', job.id)
+      if (patchErr) console.error('[team/share] plain-fields patch failed:', patchErr.message)
+    }
+
     return NextResponse.json({ ok: true, dev_task_id: job.id, url: `/dev-board/${job.id}` })
   }
 

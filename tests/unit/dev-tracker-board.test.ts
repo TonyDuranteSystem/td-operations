@@ -6,8 +6,25 @@ import {
   laneForStatus,
   groupJobsByLane,
   channelsInJobs,
+  isSafeInternalUrl,
   BOARD_LANE_LABEL,
 } from "@/lib/dev-tracker/board"
+
+describe("isSafeInternalUrl", () => {
+  it("accepts in-app relative paths", () => {
+    expect(isSafeInternalUrl("/inbox?thread=gmail:123&mailbox=support")).toBe(true)
+    expect(isSafeInternalUrl("/portal-chats?account=abc&message=def")).toBe(true)
+    expect(isSafeInternalUrl("/")).toBe(true)
+  })
+  it("rejects absolute, protocol-relative and scheme URLs", () => {
+    expect(isSafeInternalUrl("https://evil.com/x")).toBe(false)
+    expect(isSafeInternalUrl("//evil.com/x")).toBe(false)
+    // eslint-disable-next-line no-script-url
+    expect(isSafeInternalUrl("javascript:alert(1)")).toBe(false)
+    expect(isSafeInternalUrl("mailto:a@b.c")).toBe(false)
+    expect(isSafeInternalUrl("")).toBe(false)
+  })
+})
 
 describe("board lanes", () => {
   it("has five ordered lanes ending in Done", () => {
