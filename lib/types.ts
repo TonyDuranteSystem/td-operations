@@ -530,6 +530,9 @@ export interface InboxConversation {
   /** Client email views: 'received' = last message is from the client,
    *  'sent' = last message is from us */
   direction?: 'received' | 'sent'
+  /** True when the server could not fully load this thread this round (a stub /
+   *  carried-forward row) — the UI marks it so it never looks like real data. */
+  partial?: boolean
 }
 
 export interface InboxAttachment {

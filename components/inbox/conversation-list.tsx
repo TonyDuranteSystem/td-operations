@@ -1,25 +1,42 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useMemo, useRef, useEffect } from 'react'
 import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey } from '@/lib/inbox/color-marks'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
+import {
+  advanceReleases,
+  computeVisibleList,
+  overrideMapsEqual,
+  unreadMapsEqual,
+  type RowOverride,
+  type UnreadOverride,
+  type ConversationsPayload,
+} from '@/lib/inbox/conversation-reconcile'
+
+const EMPTY_OVERRIDES: Map<string, RowOverride> = new Map()
+const EMPTY_UNREAD: Map<string, UnreadOverride> = new Map()
 
 interface ConversationListProps {
   activeChannel: InboxChannel | null
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
-  onDeleted?: (id: string) => void
-  /** Undo of a delete — clears the id from the parent's hidden-row set so the
-   *  restored thread is visible again on the next refetch. Without this, Undo
-   *  untrashes in Gmail but the row stays filtered out (Luca, 2026-07-13). */
+  onDeleted?: (conv: InboxConversation) => void
+  /** Undo of a delete — pins the restored row visible until Gmail confirms it's
+   *  back (the reconcile releases the pin), so it never vanishes mid-lag. */
   onRestored?: (id: string) => void
-  deletedIds?: Set<string>
-  unreadOverrides?: Map<string, number>
-  /** Optimistically set a row's unread override in the parent (badge + bold). */
-  onUnreadOverride?: (id: string, unread: number) => void
+  /** Optimistic hide/pin intents, keyed by conversation id (from the parent). */
+  overrides?: Map<string, RowOverride>
+  /** Optimistic unread values, keyed by conversation id (from the parent). */
+  unread?: Map<string, UnreadOverride>
+  /** Optimistically set a row's unread override: value + the server baseline at
+   *  action time (so the reconcile releases only when Gmail moves off it). */
+  onUnreadOverride?: (id: string, value: number, baseline: number) => void
+  /** Push the reconciled (released) override maps back up to the parent. */
+  onReconciled?: (overrides: Map<string, RowOverride>, unread: Map<string, UnreadOverride>) => void
   // Bulk selection
   bulkMode: boolean
   selectedIds: Set<string>
@@ -56,7 +73,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, deletedIds, unreadOverrides, onUnreadOverride, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, overrides, unread, onUnreadOverride, onReconciled, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
@@ -74,7 +91,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       return action
     },
     onMutate: ({ conv, action }) => {
-      onUnreadOverride?.(conv.id, action === 'mark_unread' ? Math.max(conv.unread, 1) : 0)
+      onUnreadOverride?.(conv.id, action === 'mark_unread' ? Math.max(conv.unread, 1) : 0, conv.unread)
     },
     onSuccess: (action) => {
       toast.success(action === 'mark_unread' ? 'Marked as unread' : 'Marked as read')
@@ -98,7 +115,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     },
     onMutate: async (conv) => {
       await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
-      if (onDeleted) onDeleted(conv.id)
+      onDeleted?.(conv)
     },
     onSuccess: (data, conv) => {
       toast('Email deleted', {
@@ -122,13 +139,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 const err = await res.json().catch(() => ({}))
                 throw new Error(err.error || 'Failed to restore email.')
               }
-              // MUST come before the refetch: the row is hidden by the parent's
-              // `deletedIds` set, so untrashing in Gmail alone brings the thread
-              // back from the API only for it to be filtered out again. Clearing
-              // the id is what actually makes it reappear (Luca, 2026-07-13).
+              // Pin the restored row visible — do NOT immediately refetch the
+              // conversations list: that racing refetch landed inside Gmail's
+              // untrash lag and returned WITHOUT the row, so it vanished for a
+              // few seconds (Luca, 2026-07-13). The pin holds it until the
+              // reconcile sees the server confirm it's back.
               onRestored?.(conv.id)
               toast.success('Email restored')
-              queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
               queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
               queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
             } catch (err) {
@@ -140,10 +157,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         },
         duration: 8000,
       })
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-        queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      }, 15000)
+      // No delayed refetch: the hide override + the Gmail push event + the poll
+      // reconcile the server list. The old 15s refetch fired stale (even after
+      // an Undo) and re-pulled Gmail's lagging list — a flicker source.
     },
     onError: () => {
       toast.error('Failed to delete email')
@@ -153,7 +169,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
-  const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
+  const { data, isLoading, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number }>({
     queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
     queryFn: async () => {
       // Throw on non-2xx (R099): a failed refetch must NOT replace the list
@@ -178,22 +194,57 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       }
       return json
     },
-    refetchInterval: searchQuery ? false : 30_000,
+    // Push is the primary refresh (see inbox-shell). The poll is a fallback for
+    // a missed push (watch lapse / PWA background) — kept reasonably tight so
+    // the inbox never goes minutes stale, but no longer the 30s churn that, with
+    // full-replace, drove the flicker.
+    refetchInterval: searchQuery ? false : 75_000,
     // Never flash an empty pane while a refetch (or a mailbox/filter switch)
     // is in flight — keep showing the list we already have (Antonio
     // 2026-07-08: the list "disappeared" on actions/scroll under Gmail load).
     placeholderData: keepPreviousData,
   })
 
-  const conversations = (data?.conversations || [])
-    .filter(c => !deletedIds?.has(c.id))
-    .map(c => unreadOverrides?.has(c.id) ? { ...c, unread: unreadOverrides.get(c.id)! } : c)
-    .filter(c => {
-      if (!unreadFilter || unreadFilter === 'all') return true
-      if (unreadFilter === 'unread') return c.unread > 0
-      if (unreadFilter === 'read') return c.unread === 0
-      return true
-    })
+  const ov = overrides ?? EMPTY_OVERRIDES
+  const un = unread ?? EMPTY_UNREAD
+  const prevRef = useRef<Map<string, InboxConversation>>(new Map())
+
+  // Advance optimistic-override RELEASES once per FETCH. Keyed on dataUpdatedAt
+  // (changes every fetch, even a deep-equal one) so the stability counter
+  // advances reliably — [data] would skip when react-query structural-shares an
+  // unchanged payload, leaving the 5-min TTL as the only release path.
+  useEffect(() => {
+    if (!data || !onReconciled) return
+    const payload: ConversationsPayload = { conversations: data.conversations ?? [], unenrichedIds: data.unenrichedIds, partial: data.partial }
+    const advanced = advanceReleases({ payload, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
+    if (!overrideMapsEqual(advanced.overrides, ov) || !unreadMapsEqual(advanced.unread, un)) {
+      onReconciled(advanced.overrides, advanced.unread)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataUpdatedAt])
+
+  // Build the visible rows (pure — no counter changes here); reads the
+  // carried-forward `prev` so a row the server couldn't enrich keeps its real data.
+  const visibleRows = useMemo(() => {
+    const payload: ConversationsPayload = { conversations: data?.conversations ?? [], unenrichedIds: data?.unenrichedIds, partial: data?.partial }
+    return computeVisibleList({ payload, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, ov, un])
+
+  // Remember the shown ENRICHED rows for next round's carry-forward (in an
+  // effect, never mutating the ref during render).
+  useEffect(() => {
+    const next = new Map<string, InboxConversation>()
+    for (const c of visibleRows) if (!c.partial) next.set(c.id, c)
+    prevRef.current = next
+  }, [visibleRows])
+
+  const conversations = useMemo(() => visibleRows.filter(c => {
+    if (!unreadFilter || unreadFilter === 'all') return true
+    if (unreadFilter === 'unread') return c.unread > 0
+    if (unreadFilter === 'read') return c.unread === 0
+    return true
+  }), [visibleRows, unreadFilter])
 
   if (isLoading) {
     return (
