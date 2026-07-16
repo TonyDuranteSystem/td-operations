@@ -39,6 +39,14 @@ export const SWEEP_MAX_ATTEMPTS = 3
 /** financials_meta key holding the per-row fire counter. */
 export const SWEEP_ATTEMPTS_KEY = "completion_sweep_attempts"
 
+/** financials_meta key marking that a team-chat alert about this row was
+ *  already posted — without it, a watch-mode candidate (which stays eligible
+ *  until someone acts) would re-alert every 30 minutes. */
+export const SWEEP_ALERTED_KEY = "completion_sweep_alerted"
+
+/** Team-chat channel the ⚠️ alert posts to (falls back to the general room). */
+export const SWEEP_ALERT_CHANNEL = "td-taxreturn"
+
 export interface SweepCandidate {
   status: string | null
   completed_at: string | null
@@ -63,6 +71,40 @@ export function isSweepEligible(row: SweepCandidate, now: Date): boolean {
   if (completed < Date.parse(SWEEP_CUTOFF_ISO)) return false
   if (completed > now.getTime() - SWEEP_GRACE_MINUTES * 60_000) return false
   return true
+}
+
+export interface SweepAlertItem {
+  company: string
+  tax_year: number | null
+  outcome: "dry_run_candidate" | "rescued" | "fire_failed" | "gave_up"
+  detail?: string
+  attempt?: number
+}
+
+/**
+ * One ⚠️ team-chat alert per sweep run covering every alertable row.
+ * @Luca gets a targeted push — the whole point is that a lost submission is
+ * SEEN, not buried in a log. Returns null when there is nothing to say.
+ */
+export function formatSweepAlert(items: SweepAlertItem[], dryRun: boolean): string | null {
+  if (items.length === 0) return null
+  const label = (i: SweepAlertItem) => `${i.company}${i.tax_year ? ` (${i.tax_year})` : ""}`
+  const lines = items.map(i => {
+    switch (i.outcome) {
+      case "dry_run_candidate":
+        return `• ${label(i)} — completion follow-up never ran (found in watch mode, nothing fired yet)`
+      case "rescued":
+        return `• ${label(i)} — follow-up had silently failed; the sweep re-ran it successfully${i.detail ? ` (${i.detail})` : ""}`
+      case "fire_failed":
+        return `• ${label(i)} — rescue attempt ${i.attempt ?? "?"}/${SWEEP_MAX_ATTEMPTS} FAILED${i.detail ? `: ${i.detail}` : ""}`
+      case "gave_up":
+        return `• ${label(i)} — sweep GAVE UP after ${SWEEP_MAX_ATTEMPTS} attempts, needs a human`
+    }
+  })
+  const header = dryRun
+    ? `⚠️ @Luca Tax completion sweep (watch mode): ${items.length} submission${items.length > 1 ? "s" : ""} whose follow-up never ran`
+    : `⚠️ @Luca Tax completion sweep: action on ${items.length} submission${items.length > 1 ? "s" : ""}`
+  return `${header}\n${lines.join("\n")}\nDetails on the System Health page.`
 }
 
 /**

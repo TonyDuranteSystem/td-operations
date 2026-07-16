@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  formatSweepAlert,
   isSweepEligible,
   parseChainResults,
   sweepAttempts,
@@ -120,5 +121,39 @@ describe('sweepAttempts', () => {
     expect(sweepAttempts({})).toBe(0)
     expect(sweepAttempts({ [SWEEP_ATTEMPTS_KEY]: 'abc' })).toBe(0)
     expect(sweepAttempts({ [SWEEP_ATTEMPTS_KEY]: -3 })).toBe(0)
+  })
+})
+
+describe('formatSweepAlert', () => {
+  it('returns null when there is nothing to alert', () => {
+    expect(formatSweepAlert([], true)).toBeNull()
+    expect(formatSweepAlert([], false)).toBeNull()
+  })
+
+  it('opens with the warning triangle and mentions Luca', () => {
+    const msg = formatSweepAlert([{ company: 'Acme LLC', tax_year: 2025, outcome: 'dry_run_candidate' }], true)
+    expect(msg).toMatch(/^⚠️ @Luca/)
+    expect(msg).toContain('Acme LLC (2025)')
+    expect(msg).toContain('watch mode')
+  })
+
+  it('describes each outcome distinctly in live mode', () => {
+    const msg = formatSweepAlert(
+      [
+        { company: 'A LLC', tax_year: 2025, outcome: 'rescued' },
+        { company: 'B LLC', tax_year: 2025, outcome: 'fire_failed', detail: 'http 500', attempt: 2 },
+        { company: 'C LLC', tax_year: 2025, outcome: 'gave_up' },
+      ],
+      false,
+    )
+    expect(msg).toContain('re-ran it successfully')
+    expect(msg).toContain('attempt 2/3 FAILED: http 500')
+    expect(msg).toContain('GAVE UP')
+    expect(msg).toMatch(/^⚠️ @Luca/)
+  })
+
+  it('omits the year suffix when tax_year is null', () => {
+    const msg = formatSweepAlert([{ company: 'Acme LLC', tax_year: null, outcome: 'gave_up' }], false)
+    expect(msg).toContain('• Acme LLC —')
   })
 })
