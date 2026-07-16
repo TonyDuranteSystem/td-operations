@@ -13,17 +13,19 @@ import {
   advanceReleases,
   computeVisibleList,
   makeHiddenOverride,
-  makePinnedOverride,
   makeUnreadOverride,
   type RowOverride,
   type UnreadOverride,
   type ConversationsPayload,
   DEFAULT_RECONCILE_CONFIG,
+  makeMoveOverrides,
+  overrideKey,
 } from "@/lib/inbox/conversation-reconcile"
 import type { InboxConversation } from "@/lib/types"
-import { viewKey, ORIGIN_UNKNOWN, type HideAction, type InboxView } from "@/lib/inbox/view-query"
+import { viewKey, toInboxView, ORIGIN_UNKNOWN, type RowAction, type InboxView } from "@/lib/inbox/view-query"
 
 const SCOPE = { mailbox: "support", channel: "gmail" }
+const TRASH_KEY = viewKey({ kind: "trash" }, SCOPE)
 
 function conv(id: string, over: Partial<InboxConversation> = {}): InboxConversation {
   return {
@@ -63,14 +65,14 @@ class InboxClient {
    *  an override stamped with the selection instead of the payload. */
   origin: InboxView = { kind: "inbox" }
   /** Which action the next hide models — trash unless a test says archive. */
-  action: HideAction = "trash"
+  action: RowAction = "trash"
 
   tick(ms: number) { this.now += ms; return this }
   /** Click a different list. Deliberately does NOT move `origin` — the rows on
    *  screen are still the old list's until the next fetch resolves — and does NOT
    *  clear the overrides. Both are what the shell actually does. */
   viewing(view: InboxView) { this.view = view; return this }
-  doing(action: HideAction) { this.action = action; return this }
+  doing(action: RowAction) { this.action = action; return this }
   /** The key an override gets stamped with = the PAYLOAD's list, never the
    *  selection (inbox-shell's `originViewKey`). */
   private stamp() { return viewKey(this.origin, SCOPE) }
@@ -94,21 +96,28 @@ class InboxClient {
     this.visible = computeVisibleList({ payload: this.last, origin: { view: this.origin, scope: SCOPE }, overrides: this.overrides, unread: this.unread, prev: this.prev, now: this.now })
     const next = new Map<string, InboxConversation>()
     for (const c of this.visible) if (!c.partial) next.set(c.id, c)
-    for (const [id, o] of Array.from(this.overrides)) {
-      if (next.has(id)) continue
-      const keep = this.prev.get(id) ?? o.snapshot
-      if (keep) next.set(id, keep)
+    // Read the row off the ENTRY: the map key is opaque (id + view), and two
+    // entries can share an id. Keying `prev` by the map key instead of the id
+    // silently starves the pin's snapshot fallback — the row comes back as a
+    // "Loading…" stub instead of the real email.
+    for (const o of Array.from(this.overrides.values())) {
+      if (next.has(o.id)) continue
+      const keep = this.prev.get(o.id) ?? o.snapshot
+      if (keep) next.set(o.id, keep)
     }
     this.prev = next
     return this
   }
 
-  delete(c: InboxConversation) { this.overrides = new Map(this.overrides).set(c.id, makeHiddenOverride(this.now, this.action, this.stamp(), c)); return this.render() }
+  delete(c: InboxConversation) { this.overrides = this.dropClaims(c.id).set(overrideKey(c.id, this.stamp()), makeHiddenOverride(this.now, c.id, this.action, this.stamp(), c)); return this.render() }
   /** Bulk trash/archive: snapshot every selected row into a hidden intent. */
   bulkDelete(cs: InboxConversation[]) {
-    const n = new Map(this.overrides)
-    cs.forEach((c) => n.set(c.id, makeHiddenOverride(this.now, this.action, this.stamp(), c)))
-    this.overrides = n
+    let n = this.overrides
+    cs.forEach((c) => {
+      n = (() => { const m = new Map(n); for (const [k, o] of Array.from(n)) if (o.id === c.id) m.delete(k); return m })()
+      n.set(overrideKey(c.id, this.stamp()), makeHiddenOverride(this.now, c.id, this.action, this.stamp(), c))
+    })
+    this.overrides = new Map(n)
     return this.render()
   }
   bulkUndo(ids: string[]) { ids.forEach((id) => this.undo(id)); return this.render() }
@@ -116,35 +125,82 @@ class InboxClient {
    *  pinned row) → the hide gets NO snapshot, as the real code would produce. */
   bulkDeleteNoSnapshot(ids: string[]) {
     const n = new Map(this.overrides)
-    ids.forEach((id) => n.set(id.startsWith("gmail:") ? id : `gmail:${id}`, makeHiddenOverride(this.now, this.action, this.stamp(), undefined)))
+    ids.forEach((id) => { const g = id.startsWith("gmail:") ? id : `gmail:${id}`; n.set(overrideKey(g, this.stamp()), makeHiddenOverride(this.now, g, this.action, this.stamp(), undefined)) })
     this.overrides = n
     return this.render()
   }
   /** Partial-failure guard: drop the whole batch's hides (we don't know which failed). */
   bulkDropHides(ids: string[]) {
     const n = new Map(this.overrides)
-    ids.forEach((id) => n.delete(id.startsWith("gmail:") ? id : `gmail:${id}`))
+    ids.forEach((id) => n.delete(overrideKey(id.startsWith("gmail:") ? id : `gmail:${id}`, this.stamp())))
     this.overrides = n
     return this.render()
   }
+  /** Undo = a MOVE: out of Trash, back to the list it was deleted from — the
+   *  same `makeMoveOverrides` the shell calls, and the hide it replaces is
+   *  removed (a hide would otherwise outrank the pin in its own view). */
   undo(id: string) {
     const gid = id.startsWith("gmail:") ? id : `gmail:${id}`
-    const ex = this.overrides.get(gid) // real component always keys by the full id
-    // The pin inherits the hide's origin — the list the snapshot came from —
-    // exactly as handleEmailRestored does.
-    this.overrides = new Map(this.overrides).set(gid, makePinnedOverride(this.now, ex?.originView ?? this.stamp(), ex?.snapshot))
+    let hide: RowOverride | undefined
+    for (const o of Array.from(this.overrides.values())) {
+      // `action !== "untrash"` mirrors the shell's findHide: a restore is not a
+      // delete, so it can never answer "where was this deleted from?".
+      if (o.id === gid && o.kind === "hidden" && !o.releasedAt && o.action !== "untrash") hide = o
+    }
+    // Mirror the shell exactly: no delete to undo → NO-OP. Dropping claims before
+    // this check wiped the pin a previous Undo had just created.
+    if (!hide) return this.render()
+    const n = this.dropClaims(gid)
+    for (const [k, ov] of makeMoveOverrides({
+      now: this.now, id: gid, action: "untrash",
+      from: TRASH_KEY, to: hide.originView ?? null, snapshot: hide.snapshot,
+    })) n.set(k, ov)
+    this.overrides = n
     return this.render()
+  }
+  /** Restore FROM Trash to a chosen destination (the shell's handleRestoredTo).
+   *  Drops every prior claim first — including the hide from the list the row was
+   *  deleted in, which still applies wherever a trash removes a row and would
+   *  outrank the pin. */
+  restoreTo(c: InboxConversation, dest: InboxView) {
+    const n = this.dropClaims(c.id)
+    for (const [k, ov] of makeMoveOverrides({
+      now: this.now, id: c.id, action: "untrash",
+      from: TRASH_KEY, to: viewKey(dest, SCOPE), snapshot: c,
+    })) n.set(k, ov)
+    this.overrides = n
+    return this.render()
+  }
+  /** The shell's restore onError: roll the optimistic move back. */
+  restoreFailed(id: string) { this.overrides = this.dropClaims(id.startsWith("gmail:") ? id : `gmail:${id}`); return this.render() }
+  /** The shell's `dropClaimsFor`: a new intent supersedes every prior claim. */
+  private dropClaims(id: string) {
+    const n = new Map(this.overrides)
+    for (const [k, o] of Array.from(this.overrides)) if (o.id === id) n.delete(k)
+    return n
   }
   /** Delete the OPEN email from the toolbar. Unlike a row click, `selected` can
    *  outlive its list (clear the search and the pane reverts to the Inbox while
    *  the email stays open), so it is stamped with the origin captured when it
    *  was OPENED — passed here explicitly, as the real mutation variable is. */
   deleteOpen(c: InboxConversation, openedFrom: string) {
-    this.overrides = new Map(this.overrides).set(c.id, makeHiddenOverride(this.now, this.action, openedFrom, c))
+    this.overrides = new Map(this.overrides).set(overrideKey(c.id, openedFrom), makeHiddenOverride(this.now, c.id, this.action, openedFrom, c))
     return this.render()
   }
   open(c: InboxConversation) { this.unread = new Map(this.unread).set(c.id, makeUnreadOverride(0, c.unread, this.now)); return this.render() }
 
+  /** The live (non-tombstoned or tombstoned) override for a row, whatever list
+   *  it belongs to — the map key is opaque, so look it up by the entry's id. */
+  hideOf(id: string) {
+    const gid = id.startsWith("gmail:") ? id : `gmail:${id}`
+    for (const o of Array.from(this.overrides.values())) if (o.id === gid && o.kind === "hidden") return o
+    return undefined
+  }
+  pinOf(id: string) {
+    const gid = id.startsWith("gmail:") ? id : `gmail:${id}`
+    for (const o of Array.from(this.overrides.values())) if (o.id === gid && o.kind === "pinned") return o
+    return undefined
+  }
   ids() { return this.visible.map((c) => c.id) }
   has(id: string) { return this.visible.some((c) => c.id === (id.startsWith("gmail:") ? id : `gmail:${id}`)) }
   unreadOf(id: string) { return this.visible.find((c) => c.id === (id.startsWith("gmail:") ? id : `gmail:${id}`))?.unread }
@@ -174,7 +230,12 @@ describe("E2E: delete → Undo → the restored email NEVER vanishes across the 
     // and A is continuously present the whole time (no vanish, no re-blink).
     c.tick(POLL).fetch(payload([A, B])); expect(c.has("A")).toBe(true)
     c.tick(POLL).fetch(payload([A, B])); expect(c.has("A")).toBe(true)
-    expect(c.overrides.has("gmail:A")).toBe(false) // pin released, now server-sourced
+    expect(c.pinOf("A")).toBeUndefined() // pin released, now server-sourced
+    // The Undo also left a hide keeping A OUT of Trash — correct, and it is
+    // still pending because no Trash payload has landed to witness it. That is
+    // the point of one-witness-per-half: the Inbox catching up says nothing
+    // about whether Trash has.
+    expect(c.hideOf("A")?.action).toBe("untrash")
   })
 })
 
@@ -281,7 +342,13 @@ describe("E2E: BULK delete/undo now behaves like the single path", () => {
     c.tick(POLL).fetch(payload([A, B, C])); expect(c.has("A")).toBe(true)
     c.tick(POLL).fetch(payload([A, B, C]))
     expect(c.has("A")).toBe(true); expect(c.has("B")).toBe(true)
-    expect(c.overrides.size).toBe(0)
+    // Both pins are released — the rows are server-sourced now.
+    expect(c.pinOf("A")).toBeUndefined(); expect(c.pinOf("B")).toBeUndefined()
+    // What remains is each row's `untrash` hide holding it OUT of Trash. Still
+    // pending, correctly: no Trash payload has landed to witness them, and the
+    // Inbox catching up says nothing about whether Trash has.
+    expect(c.hideOf("A")?.action).toBe("untrash")
+    expect(c.hideOf("B")?.action).toBe("untrash")
   })
 
   it("bulk-deleting a row Gmail couldn't load still restores VISIBLY on Undo", () => {
@@ -325,7 +392,7 @@ describe("E2E: a partial/degraded payload freezes releases (nothing dropped mid-
     // Gmail rate-limited → partial payload missing A. A must NOT be treated as
     // "confirmed gone" → hide is held, no release progress.
     c.tick(POLL).fetch(payload([B], { partial: true }))
-    expect(c.overrides.get("gmail:A")?.agree).toBe(0)
+    expect(c.hideOf("A")?.agree).toBe(0)
     expect(c.has("A")).toBe(false) // still hidden (user deleted it), correctly
     // a restored pin also survives a partial round
     c.undo("A")
@@ -362,12 +429,18 @@ describe("E2E: an optimistic hide is judged by what the action does to THIS view
     expect(c.has("A")).toBe(false)
   })
 
-  it("archive from the INBOX label hides it — there, the label IS the inbox", () => {
-    const A = conv("A")
-    const c = new InboxClient().viewing({ kind: "label", label: "INBOX" }).doing("archive")
-    c.fetch(payload([A]))
-    c.delete(A)
-    expect(c.has("A")).toBe(false)
+  it("archive from the Inbox hides it — the sidebar's Inbox IS the default Inbox", () => {
+    // `{kind:'label',label:'INBOX'}` is no longer reachable: toInboxView collapses
+    // it into `{kind:'inbox'}` so the list has ONE identity (two keys for one list
+    // meant a restored email wouldn't appear in the Inbox you were looking at).
+    // Both entry points must therefore behave identically here.
+    for (const label of [null, "INBOX"]) {
+      const A = conv("A")
+      const c = new InboxClient().viewing(toInboxView({ label, search: null })).doing("archive")
+      c.fetch(payload([A]))
+      c.delete(A)
+      expect(c.has("A")).toBe(false)
+    }
   })
 
   it("a row deleted in the Inbox still SHOWS in Trash — the hide does not leak across", () => {
@@ -393,7 +466,7 @@ describe("E2E: an optimistic hide is judged by what the action does to THIS view
     c.viewing({ kind: "trash" })
     c.tick(POLL).fetch(payload([A]))
     c.tick(POLL).fetch(payload([A]))
-    const ov = c.overrides.get("gmail:A")
+    const ov = c.hideOf("A")
     expect(ov?.disagree).toBe(0)
     expect(ov?.agree).toBe(0) // untouched: not judgeable from here
     c.viewing({ kind: "inbox" }).fetch(payload([]))
@@ -438,14 +511,14 @@ describe("E2E: an override is stamped with the list the rows came from, not the 
     // The folder's payload lands. A was NEVER in this folder, so its absence
     // here proves nothing: it must NOT count toward releasing the hide.
     c.tick(2000).fetch(payload([]))
-    expect(c.overrides.get("gmail:A")?.agree).toBe(0)
+    expect(c.hideOf("A")?.agree).toBe(0)
     c.tick(POLL).fetch(payload([]))
-    expect(c.overrides.get("gmail:A")?.agree).toBe(0)
-    expect(c.overrides.get("gmail:A")?.releasedAt).toBeUndefined() // never released by a non-witness
+    expect(c.hideOf("A")?.agree).toBe(0)
+    expect(c.hideOf("A")?.releasedAt).toBeUndefined() // never released by a non-witness
 
     // Back in the Inbox — the list that actually held it — it judges normally.
     c.viewing({ kind: "inbox" }).tick(POLL).fetch(payload([B]))
-    expect(c.overrides.get("gmail:A")?.agree).toBe(1)
+    expect(c.hideOf("A")?.agree).toBe(1)
   })
 
   it("Undo after that delete restores into the INBOX, and never into the folder", () => {
@@ -475,8 +548,8 @@ describe("E2E: an override is stamped with the list the rows came from, not the 
     c.bulkDelete([A, B])
 
     c.tick(2000).fetch(payload([])) // folder payload — not a witness
-    expect(c.overrides.get("gmail:A")?.agree).toBe(0)
-    expect(c.overrides.get("gmail:B")?.agree).toBe(0)
+    expect(c.hideOf("A")?.agree).toBe(0)
+    expect(c.hideOf("B")?.agree).toBe(0)
 
     // A bulk Undo here must not inject two Inbox emails into the folder.
     c.bulkUndo(["A", "B"])
@@ -512,8 +585,8 @@ describe("E2E: the open email is stamped with the list it was OPENED from", () =
     // The Inbox never held A. Its absence here must prove nothing.
     c.tick(POLL).fetch(payload([B]))
     c.tick(POLL).fetch(payload([B]))
-    expect(c.overrides.get("gmail:A")?.agree).toBe(0)
-    expect(c.overrides.get("gmail:A")?.releasedAt).toBeUndefined()
+    expect(c.hideOf("A")?.agree).toBe(0)
+    expect(c.hideOf("A")?.releasedAt).toBeUndefined()
 
     // And an Undo must not put an archived email into the Inbox list.
     c.undo("A")
@@ -535,13 +608,221 @@ describe("E2E: the open email is stamped with the list it was OPENED from", () =
 
     // No list can confirm it, not even the one it happens to be in.
     c.tick(POLL).fetch(payload([B]))
-    expect(c.overrides.get("gmail:A")?.agree).toBe(0)
+    expect(c.hideOf("A")?.agree).toBe(0)
 
     // It retires monotonically through the tombstone, never a bare drop.
     c.tick(DEFAULT_RECONCILE_CONFIG.ttlMs).fetch(payload([A, B]))
     expect(c.has("A")).toBe(false)
-    expect(c.overrides.get("gmail:A")?.releasedAt).toBe(c.now)
+    expect(c.hideOf("A")?.releasedAt).toBe(c.now)
     c.tick(DEFAULT_RECONCILE_CONFIG.tombstoneMs + 1).fetch(payload([A, B]))
-    expect(c.overrides.has("gmail:A")).toBe(false)
+    expect(c.hideOf("A")).toBeUndefined()
+  })
+})
+
+/**
+ * RESTORE FROM TRASH (Antonio, 2026-07-16): *"there is a button that says
+ * Restore. I click, and I see it in the folder that I decide to restore… with no
+ * delay, with no 5 minutes, with nothing. It must work."*
+ *
+ * A restore is a MOVE: the row leaves Trash AND appears at its destination, both
+ * optimistically. Two overrides, one per list, each with its own single witness —
+ * because Trash and the destination catch up at different times.
+ */
+describe("E2E: Restore from Trash — instant in BOTH lists, no waiting on Gmail", () => {
+  const INBOX: InboxView = { kind: "inbox" }
+  const FOLDER: InboxView = { kind: "label", label: "Label_5" }
+
+  it("leaves Trash the instant it's clicked, and does not come back while Gmail lags", () => {
+    const A = conv("A"), B = conv("B")
+    const c = new InboxClient().viewing({ kind: "trash" }).fetch(payload([A, B]))
+    expect(c.has("A")).toBe(true) // it IS in Trash — that's why Restore is here
+
+    c.restoreTo(A, INBOX)
+    expect(c.has("A")).toBe(false) // gone from Trash immediately
+
+    // Gmail's index still lists it in Trash for 30-60s. It must NOT flicker back.
+    c.tick(3000).fetch(payload([A, B])); expect(c.has("A")).toBe(false)
+    c.tick(POLL).fetch(payload([A, B])); expect(c.has("A")).toBe(false)
+    // Gmail catches up; the hide releases and tombstones, still not shown.
+    c.tick(POLL).fetch(payload([B])); expect(c.has("A")).toBe(false)
+    c.tick(POLL).fetch(payload([B])); expect(c.has("A")).toBe(false)
+  })
+
+  it("is ALREADY in the Inbox when you get there — not in 5 minutes", () => {
+    const A = conv("A"), B = conv("B")
+    const c = new InboxClient().viewing({ kind: "trash" }).fetch(payload([A]))
+    c.restoreTo(A, INBOX)
+
+    // Antonio clicks Inbox. Gmail has NOT re-indexed the untrash, so its payload
+    // does not contain A at all. He must still see it — that is the whole ask.
+    c.viewing(INBOX).tick(500).fetch(payload([B]))
+    expect(c.has("A")).toBe(true)
+    // …and it stays put across the whole lag window.
+    c.tick(POLL).fetch(payload([B])); expect(c.has("A")).toBe(true)
+    c.tick(POLL).fetch(payload([B])); expect(c.has("A")).toBe(true)
+    // Gmail catches up → the pin releases and the row is server-sourced. Never blinked.
+    c.tick(POLL).fetch(payload([A, B])); expect(c.has("A")).toBe(true)
+    c.tick(POLL).fetch(payload([A, B])); expect(c.has("A")).toBe(true)
+    expect(c.pinOf("A")).toBeUndefined()
+  })
+
+  it("restoring INTO a folder puts it in THAT folder, and not in the Inbox", () => {
+    const A = conv("A")
+    const c = new InboxClient().viewing({ kind: "trash" }).fetch(payload([A]))
+    c.restoreTo(A, FOLDER)
+
+    // The chosen folder shows it at once, through the lag.
+    c.viewing(FOLDER).tick(500).fetch(payload([]))
+    expect(c.has("A")).toBe(true)
+
+    // The Inbox must NOT: the server drops INBOX when a destination is picked,
+    // so pinning it there would show a row that isn't going to be there.
+    c.viewing(INBOX).tick(500).fetch(payload([]))
+    expect(c.has("A")).toBe(false)
+  })
+
+  it("the two halves release independently — Trash catching up doesn't un-pin the Inbox", () => {
+    const A = conv("A")
+    const c = new InboxClient().viewing({ kind: "trash" }).fetch(payload([A]))
+    c.restoreTo(A, INBOX)
+
+    // Trash re-indexes FIRST and confirms A is gone → its hide releases.
+    c.tick(POLL).fetch(payload([])); c.tick(POLL).fetch(payload([]))
+    // The Inbox pin is untouched by that — a Trash payload is not its witness.
+    const pin = c.pinOf("A")
+    expect(pin?.agree).toBe(0)
+    // And the Inbox still shows it while ITS index lags.
+    c.viewing(INBOX).tick(POLL).fetch(payload([]))
+    expect(c.has("A")).toBe(true)
+  })
+
+  it("deleting again after a restore wins — the newer intent is the user's", () => {
+    const A = conv("A")
+    const c = new InboxClient().viewing({ kind: "trash" }).fetch(payload([A]))
+    c.restoreTo(A, INBOX)
+    c.viewing(INBOX).tick(500).fetch(payload([]))
+    expect(c.has("A")).toBe(true) // pinned back
+
+    // He changes his mind and deletes it from the Inbox. The pin must lose:
+    // showing a row he just deleted is the worse failure.
+    c.doing("trash").delete(A)
+    expect(c.has("A")).toBe(false)
+    c.tick(POLL).fetch(payload([]))
+    expect(c.has("A")).toBe(false)
+  })
+})
+
+/**
+ * The two blockers the bug-hunter found in the first Restore build. Both were
+ * invisible to the tests above because those all start from a clean map with the
+ * row only in Trash — a shape the real app rarely has.
+ */
+describe("E2E: Restore clears the STALE claims a row already carries", () => {
+  it("a row deleted from a FOLDER, then restored from Trash, lands in the Inbox — not nowhere", () => {
+    // THE BLOCKER: the folder's hide (action 'trash') still applies in the Inbox
+    // — a trash removes a row from there too — and a hide outranks a pin. Leaving
+    // it meant the email was in NEITHER Trash nor Inbox for up to 6.5 minutes:
+    // Antonio's exact sentence, broken.
+    const A = conv("A"), B = conv("B")
+    const FOLDER: InboxView = { kind: "label", label: "Label_5" }
+    const c = new InboxClient().viewing(FOLDER).fetch(payload([A, B]))
+    c.delete(A) // deleted from the folder
+    expect(c.has("A")).toBe(false)
+
+    // It IS in Trash — that's where he goes to get it back.
+    c.viewing({ kind: "trash" }).tick(2000).fetch(payload([A]))
+    expect(c.has("A")).toBe(true)
+    c.restoreTo(A, { kind: "inbox" })
+    expect(c.has("A")).toBe(false) // leaves Trash at once
+
+    // …and it MUST be in the Inbox, immediately, even though Gmail still omits it.
+    c.viewing({ kind: "inbox" }).tick(500).fetch(payload([B]))
+    expect(c.has("A")).toBe(true)
+    c.tick(POLL).fetch(payload([B]))
+    expect(c.has("A")).toBe(true)
+  })
+
+  it("delete → Undo → delete again → the email IS in Trash, not missing for 5 minutes", () => {
+    // The Undo leaves an `untrash` hide holding the row OUT of Trash. Re-deleting
+    // puts it genuinely back IN Trash, so that hide is now a false claim — and it
+    // could never release (the row is present every round), so only the TTL would
+    // clear it: missing from Trash for up to 6.5 min.
+    const A = conv("A"), B = conv("B")
+    const c = new InboxClient().fetch(payload([A, B]))
+    c.delete(A)
+    c.tick(1000).undo("gmail:A")
+    expect(c.has("A")).toBe(true)
+
+    c.tick(1000).delete(A) // changed his mind
+    expect(c.has("A")).toBe(false) // gone from the Inbox
+
+    // Trash must show it.
+    c.viewing({ kind: "trash" }).tick(2000).fetch(payload([A]))
+    expect(c.has("A")).toBe(true)
+  })
+
+  it("clicking Undo twice does not make the restored email disappear", () => {
+    // `findHide` answers "where was this deleted from?" and must ignore the
+    // restore's OWN `untrash` hide. The toast lives 8s and the button is
+    // clickable the whole time, so a second Undo (a double-click, or a stale
+    // toast) is ordinary. Without the guard the second Undo matches the untrash
+    // hide → `to === from` → the pin is dropped and NOT re-created → the email
+    // he just restored vanishes from the Inbox.
+    const A = conv("A"), B = conv("B")
+    const c = new InboxClient().fetch(payload([A, B]))
+    c.delete(A)
+    c.tick(500).undo("gmail:A")
+    expect(c.has("A")).toBe(true)
+    expect(c.pinOf("A")?.originView).toBe(viewKey({ kind: "inbox" }, SCOPE))
+
+    c.tick(200).undo("gmail:A") // clicked again
+    expect(c.has("A")).toBe(true) // still there — a second Undo is a no-op
+    expect(c.pinOf("A")?.originView).toBe(viewKey({ kind: "inbox" }, SCOPE))
+    // …and it stays through the lag, exactly as one Undo would.
+    c.tick(POLL).fetch(payload([B]))
+    expect(c.has("A")).toBe(true)
+  })
+})
+
+/**
+ * Round 2 findings. Every one of these is a bug that shipped past the previous
+ * round's tests because the harness mirrored the shell's OMISSION rather than
+ * its intent.
+ */
+describe("E2E: every intent-writer clears the row's stale claims — including the bulk bar", () => {
+  it("undo, then BULK delete → the email is in Trash, not missing for 6 minutes", () => {
+    // THE BLOCKER: the bulk bar was the 4th writer and didn't drop claims. The
+    // Undo's `untrash` hide survived, holding the row OUT of Trash while it was
+    // genuinely IN Trash — unwitnessable, so only the TTL would clear it.
+    const A = conv("A"), B = conv("B")
+    const c = new InboxClient().fetch(payload([A, B]))
+    c.delete(A)
+    c.tick(1000).undo("gmail:A")
+    expect(c.has("A")).toBe(true) // back in the Inbox
+
+    // He ticks it and uses the bulk Delete bar this time.
+    c.tick(1000).bulkDelete([A])
+    expect(c.has("A")).toBe(false)
+
+    // Trash must show it — this is where he goes to find it.
+    c.viewing({ kind: "trash" }).tick(2000).fetch(payload([A]))
+    expect(c.has("A")).toBe(true)
+  })
+
+  it("a FAILED restore puts the row back in Trash — you can't retry on an invisible row", () => {
+    // The optimistic move fires before the request. If the request fails the
+    // email is still in Trash, so leaving the move would hide it from the one
+    // list it is in, while the toast says "Failed — try again".
+    const A = conv("A")
+    const c = new InboxClient().viewing({ kind: "trash" }).fetch(payload([A]))
+    c.restoreTo(A, { kind: "inbox" })
+    expect(c.has("A")).toBe(false) // optimistically gone
+
+    c.restoreFailed("gmail:A") // the server said no
+    expect(c.has("A")).toBe(true) // …and it's visibly back, ready to retry
+
+    // It also must not linger as a phantom pin in the Inbox.
+    c.viewing({ kind: "inbox" }).tick(500).fetch(payload([]))
+    expect(c.has("A")).toBe(false)
   })
 })

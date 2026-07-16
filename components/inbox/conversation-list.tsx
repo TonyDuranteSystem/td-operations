@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useMemo, useRef, useEffect } from 'react'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, ArchiveRestore } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey } from '@/lib/inbox/color-marks'
@@ -27,9 +27,15 @@ interface ConversationListProps {
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
   onDeleted?: (conv: InboxConversation) => void
-  /** Undo of a delete — pins the restored row visible until Gmail confirms it's
-   *  back (the reconcile releases the pin), so it never vanishes mid-lag. */
+  /** Undo of a delete — moves the row out of Trash and back to the list it was
+   *  deleted from, both optimistically, so neither waits on Gmail. */
   onRestored?: (id: string) => void
+  /** Restore FROM the Trash list: the row leaves Trash and appears at `dest`
+   *  (its viewKey), both instantly. `destLabelId` is null for the Inbox. */
+  onRestoredTo?: (conv: InboxConversation, destLabelId: string | null) => void
+  /** The restore FAILED — undo the optimistic move so the row is visible again
+   *  in Trash, where it still is. */
+  onRestoreFailed?: (id: string) => void
   /** Optimistic hide/pin intents, keyed by conversation id (from the parent). */
   overrides?: Map<string, RowOverride>
   /** Optimistic unread values, keyed by conversation id (from the parent). */
@@ -80,7 +86,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   // Toggle a row read/unread from the list (next to the row Delete). Uses the
@@ -102,6 +108,60 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     },
     onSuccess: (action) => {
       toast.success(action === 'mark_unread' ? 'Marked as unread' : 'Marked as read')
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+    },
+  })
+
+  // Restore out of Trash. `untrash` puts the row back where it was — custom
+  // folder labels are never stripped by trashing, so they survive and come back
+  // on their own; the server re-adds INBOX and re-applies the read/star state it
+  // snapshotted. A destination only ADDS a label and drops INBOX, which is what
+  // "restore into that folder instead" means.
+  const restoreMutation = useMutation({
+    // The row travels WITH the request (never read live — see inbox-shell).
+    mutationFn: async ({ conv, destLabelId }: { conv: InboxConversation; destLabelId?: string | null }) => {
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId: conv.id.replace('gmail:', ''),
+          action: 'untrash',
+          mailbox,
+          destLabelId: destLabelId ?? undefined,
+        }),
+      })
+      if (!res.ok) {
+        // R099 — surface the server's reason; a silent failure here looks
+        // identical to a success and the row would vanish from Trash anyway.
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to restore email.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onMutate: async ({ conv, destLabelId }) => {
+      await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
+      onRestoredTo?.(conv, destLabelId ?? null)
+    },
+    onError: (err, { conv }) => {
+      // Roll the optimistic move BACK — the email is still in Trash, and hiding
+      // it there while telling the user to retry means retrying on an invisible
+      // row. (The hide could never be witnessed away either: Trash keeps
+      // returning the row, so only the TTL would clear it — bug-hunter.)
+      onRestoreFailed?.(conv.id)
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to restore email.')
+    },
+    onSuccess: (data, { conv, destLabelId }) => {
+      // Where it ACTUALLY landed — the server files down a ladder (destination →
+      // Inbox → back to Trash), so a fallback must correct our optimistic pin and
+      // the toast, or we show a row in a folder it isn't in and name it too.
+      const filedTo = (data as { filedTo?: string } | undefined)?.filedTo ?? destLabelId ?? 'INBOX'
+      // Correct the pin to where it ACTUALLY landed. `onRestoredTo` drops the
+      // row's claims and re-emits the move, so it is safe to repeat — but the
+      // parent guards it: if the row has since been deleted again, re-writing
+      // would resurrect an email the user just deleted.
+      if (filedTo !== (destLabelId ?? 'INBOX')) onRestoredTo?.(conv, filedTo === 'INBOX' ? null : filedTo)
+      toast.success(filedTo === 'INBOX' ? 'Email restored to Inbox' : 'Email restored to folder')
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
       queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
     },
@@ -225,6 +285,11 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     placeholderData: keepPreviousData,
   })
 
+  // Is the list ON SCREEN the Trash? Derived from the PAYLOAD's own view, never
+  // from the selection: during a view switch the rows shown are still the old
+  // list's, and a Restore button over Inbox rows would be a Restore that deletes.
+  const inTrash = data?.origin?.view.kind === 'trash'
+
   const ov = overrides ?? EMPTY_OVERRIDES
   const un = unread ?? EMPTY_UNREAD
   const prevRef = useRef<Map<string, InboxConversation>>(new Map())
@@ -293,10 +358,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   useEffect(() => {
     const next = new Map<string, InboxConversation>()
     for (const c of visibleRows) if (!c.partial) next.set(c.id, c)
-    for (const [id, o] of Array.from(ov)) {
-      if (next.has(id)) continue
-      const keep = prevRef.current.get(id) ?? o.snapshot
-      if (keep) next.set(id, keep)
+    // The override map is keyed by (id + view), so read the row off the entry —
+    // the key is opaque. Two entries can share an id (a move hides it from one
+    // list and pins it into another); either one keeps the row alive here.
+    for (const o of Array.from(ov.values())) {
+      if (next.has(o.id)) continue
+      const keep = prevRef.current.get(o.id) ?? o.snapshot
+      if (keep) next.set(o.id, keep)
     }
     prevRef.current = next
   }, [visibleRows, ov])
@@ -445,17 +513,34 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 >
                   {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
                 </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    deleteMutation.mutate(conv)
-                  }}
-                  disabled={deleteMutation.isPending}
-                  className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
-                  title="Delete"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {inTrash ? (
+                  /* In Trash, Delete was a lie: it fired `trash` on an already-
+                     trashed thread — a no-op that still toasted "Email deleted".
+                     Restore is the action that belongs here. */
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      restoreMutation.mutate({ conv })
+                    }}
+                    disabled={restoreMutation.isPending}
+                    className="p-1.5 rounded hover:bg-green-100 text-zinc-400 hover:text-green-600 transition-colors"
+                    title="Restore to Inbox"
+                  >
+                    <ArchiveRestore className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteMutation.mutate(conv)
+                    }}
+                    disabled={deleteMutation.isPending}
+                    className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             )}
           </div>

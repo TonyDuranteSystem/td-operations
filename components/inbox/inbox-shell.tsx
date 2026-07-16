@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -22,10 +22,11 @@ import {
   type RowOverride,
   type UnreadOverride,
   makeHiddenOverride,
-  makePinnedOverride,
+  makeMoveOverrides,
   makeUnreadOverride,
+  overrideKey,
 } from '@/lib/inbox/conversation-reconcile'
-import { ORIGIN_UNKNOWN, type HideAction } from '@/lib/inbox/view-query'
+import { ORIGIN_UNKNOWN, viewKey, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
@@ -85,6 +86,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
+  const [restoreToOpen, setRestoreToOpen] = useState(false)
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const [workerOpen, setWorkerOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
@@ -98,20 +100,23 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // remount inside the window doesn't un-hide a just-deleted row; `unread` holds
   // mark-read/unread optimism and is in-memory. The reconcile pass in
   // ConversationList releases both only on confirmed server agreement.
-  // The key is versioned on the ENTRY SHAPE: an override written by an older build
-  // lacks `action`/`originView`, and under the current rules an undefined originView
-  // is judgeable by nobody. Bumping the key drops those rather than stranding them.
+  // The key is versioned on the ENTRY SHAPE — and BOTH the entry and the map key
+  // changed again (entries now carry `id`; the key is (id + view) so one email can
+  // hold two overrides at once). A v3 entry is unkeyable under these rules, so it
+  // is dropped rather than stranded. Cost: a browser mid-window at deploy time
+  // loses its pending hides and a just-deleted row pops back once — it self-heals
+  // within 5 minutes, and it is the accepted price of every bump here.
   // Older keys are read once — only to DELETE them: the blob holds real client
   // email (sender, subject, preview), and an unread key would keep it in every
   // staff browser forever instead of self-expiring after 5 min.
   const [overrides, setOverrides] = useState<Map<string, RowOverride>>(() => {
     if (typeof window === 'undefined') return new Map()
     try {
-      const stored = localStorage.getItem('inbox-overrides-v3')
+      const stored = localStorage.getItem('inbox-overrides-v4')
       if (!stored) return new Map()
       const parsed = JSON.parse(stored) as { entries: [string, RowOverride][]; ts: number }
       if (Date.now() - parsed.ts > 5 * 60 * 1000) {
-        localStorage.removeItem('inbox-overrides-v3')
+        localStorage.removeItem('inbox-overrides-v4')
         return new Map()
       }
       return new Map(parsed.entries)
@@ -120,13 +125,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [unread, setUnread] = useState<Map<string, UnreadOverride>>(new Map())
   // Evict superseded versions of the store (they can never be read again).
   useEffect(() => {
-    try { for (const k of ['inbox-overrides', 'inbox-overrides-v2']) localStorage.removeItem(k) } catch { /* ignore */ }
+    try { for (const k of ['inbox-overrides', 'inbox-overrides-v2', 'inbox-overrides-v3']) localStorage.removeItem(k) } catch { /* ignore */ }
   }, [])
   // Persist hidden/pinned intents so a PWA remount mid-window keeps them.
   useEffect(() => {
     try {
-      if (overrides.size === 0) localStorage.removeItem('inbox-overrides-v3')
-      else localStorage.setItem('inbox-overrides-v3', JSON.stringify({ entries: Array.from(overrides.entries()), ts: Date.now() }))
+      if (overrides.size === 0) localStorage.removeItem('inbox-overrides-v4')
+      else localStorage.setItem('inbox-overrides-v4', JSON.stringify({ entries: Array.from(overrides.entries()), ts: Date.now() }))
     } catch { /* ignore */ }
   }, [overrides])
   // Overrides are optimistic state for ONE mailbox's list. On a mailbox switch,
@@ -151,6 +156,15 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // it never saw and, on Undo, injected those emails into that folder. Both
   // reviewers found it independently (2026-07-16) — the same mistake as judging
   // by the current view, on the write side. One owner, one answer.
+  // The id-universe these lists are drawn from. Used ONLY to NAME a list other
+  // than the one on screen — the Trash a Restore takes a row OUT of, and the
+  // destination it puts it INTO. It is NOT "the current view": that mistake is
+  // exactly what the payload stamp below exists to prevent.
+  const viewScope = useMemo<ViewScope>(
+    () => ({ mailbox: activeMailbox, channel: activeChannel ?? 'gmail' }),
+    [activeMailbox, activeChannel]
+  )
+  const trashViewKey = useMemo(() => viewKey({ kind: 'trash' }, viewScope), [viewScope])
   const [payloadViewKey, setPayloadViewKey] = useState<string | null>(null)
   // No payload yet → no list to attribute a row to. Say so rather than guessing:
   // any REAL key is one some payload will match and "confirm" with. Unknown must
@@ -294,8 +308,8 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // 'trash' removes it everywhere but Trash; 'archive' only from inbox-scoped
   // views (it keeps the folder label — archiving from a folder legitimately leaves
   // the email there, so hiding it created a claim the server could never confirm).
-  const handleEmailDeleted = useCallback((action: HideAction, conv: InboxConversation, originView: string) => {
-    setOverrides(prev => new Map(prev).set(conv.id, makeHiddenOverride(Date.now(), action, originView, conv)))
+  const handleEmailDeleted = useCallback((action: RowAction, conv: InboxConversation, originView: string) => {
+    setOverrides(prev => dropClaimsFor(prev, conv.id).set(overrideKey(conv.id, originView), makeHiddenOverride(Date.now(), conv.id, action, originView, conv)))
     setSelected(prev => prev?.id === conv.id ? null : prev)
   }, [])
 
@@ -303,24 +317,232 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // row stays visible (from its snapshot) until Gmail re-indexes the untrash and
   // the server confirms it's back — no more "restored but invisible for 5 min"
   // (Luca, 2026-07-13). The reconcile pass releases the pin on server agreement.
-  // A pin asserts "this row belongs in THIS list" — and the snapshot carries no
-  // labels, so we have no evidence for that anywhere else. Injecting it elsewhere
-  // would render e.g. a never-starred email into Starred, where it could not die
-  // for minutes.
+  /** The most recent DELETE (`trash`/`archive`) for a row, whatever list it was
+   *  made in — i.e. "was this deleted, and from where?". The map is keyed by
+   *  (id + view) and the key is opaque, so scanning is the only honest way to ask.
+   *  `untrash` hides are excluded: a restore is not a delete, and treating one as
+   *  the answer sends the Undo's pin back to Trash (where it is dropped, since
+   *  `to === from`) instead of to the list the row actually came from. */
+  const findHide = (m: Map<string, RowOverride>, id: string): RowOverride | undefined => {
+    let best: RowOverride | undefined
+    for (const o of Array.from(m.values())) {
+      if (o.id === id && o.kind === 'hidden' && !o.releasedAt && o.action !== 'untrash') {
+        if (!best || o.createdAt > best.createdAt) best = o
+      }
+    }
+    return best
+  }
+  /** Drop EVERY existing claim about a row. A new user intent supersedes all of
+   *  them, and a stale half is not harmless: a hide left over from the folder a
+   *  row was deleted in still APPLIES in the Inbox (trash removes it from there
+   *  too), and a hide outranks a pin — so restoring would land the email in
+   *  NEITHER list until the TTL, up to 6.5 minutes. Likewise a re-delete must
+   *  drop the `untrash` hide holding the row out of Trash, or the row is missing
+   *  from Trash — the one place it now is (bug-hunter, 2026-07-16). */
+  const dropClaimsFor = (m: Map<string, RowOverride>, id: string): Map<string, RowOverride> => {
+    const next = new Map(m)
+    for (const [k, o] of Array.from(m)) if (o.id === id) next.delete(k)
+    return next
+  }
+  const snapshotOf = (m: Map<string, RowOverride>, id: string): InboxConversation | undefined => {
+    for (const o of Array.from(m.values())) if (o.id === id && o.snapshot) return o.snapshot
+    return undefined
+  }
+
+  // Undo of a delete = a MOVE: the row leaves Trash and returns to the list it
+  // was deleted from. Both halves are optimistic, so it is instant in BOTH places
+  // — which also fixes a live bug for free: until now Undo only flipped the hide
+  // to a pin in ONE view, so the restored email sat in Trash for another 30-60s.
   //
-  // The pin INHERITS the hide's own `originView` rather than re-deriving one. That
-  // is the list the snapshot came from — the exact claim the pin is making — and
-  // it is already recorded on the hide we are converting. Re-deriving would depend
-  // on the Undo toast's closure still holding the delete-time value, which is true
-  // today but silently wrong the moment a payload for another list lands inside
-  // the toast's 8-second life (council, 2026-07-16).
+  // The destination is the HIDE's own `originView` — the list the snapshot came
+  // from, recorded at delete time. Re-deriving it here would depend on the Undo
+  // toast's closure still holding the delete-time value, which stops being true
+  // the moment a payload for another list lands inside the toast's 8s life.
   const handleEmailRestored = useCallback((id: string) => {
     setOverrides(prev => {
-      const existing = prev.get(id)
-      if (!existing || existing.kind !== 'hidden') return prev
-      return new Map(prev).set(id, makePinnedOverride(Date.now(), existing.originView ?? originViewKey, existing.snapshot))
+      const hide = findHide(prev, id)
+      if (!hide) return prev
+      // Every prior claim about this row must GO — not just the one hide we
+      // matched. The row is coming back, and any surviving hide would suppress
+      // the pin we are about to add (a hide outranks a pin).
+      const next = dropClaimsFor(prev, id)
+      for (const [k, ov] of makeMoveOverrides({
+        now: Date.now(),
+        id,
+        action: 'untrash',
+        from: trashViewKey,
+        to: hide.originView ?? null,
+        snapshot: hide.snapshot,
+      })) next.set(k, ov)
+      return next
     })
-  }, [originViewKey])
+  }, [trashViewKey])
+
+  // Restore FROM Trash — the button Antonio asked for. A MOVE: the row leaves
+  // Trash and appears at its destination, both optimistically, so neither waits
+  // on Gmail's 30-60s index. No destination = the Inbox (what `untrash` does
+  // server-side); a destination = that folder instead.
+  //
+  // The `from` is the TRASH key rather than the payload's key on purpose: this is
+  // only reachable from the Trash list, and naming it explicitly means the hide
+  // says what it means even if the button is ever reused elsewhere.
+  /** `scope` is passed explicitly by the late `filedTo` correction, which must use
+   *  the scope of the CLICK, not of whatever mailbox is open when the response
+   *  lands (a mid-flight mailbox switch clears the map for a reason). */
+  const handleRestoredTo = useCallback((conv: InboxConversation, destLabelId: string | null, scope?: ViewScope) => {
+    const dest = viewKey(destLabelId ? { kind: 'label', label: destLabelId } : { kind: 'inbox' }, scope ?? viewScope)
+    setOverrides(prev => {
+      // Clear every stale claim first — above all the hide from the list this row
+      // was deleted IN. It still applies wherever a trash removes a row (i.e. the
+      // Inbox), and a hide outranks a pin, so leaving it would restore the email
+      // into NEITHER list.
+      const next = dropClaimsFor(prev, conv.id)
+      for (const [k, ov] of makeMoveOverrides({
+        now: Date.now(),
+        id: conv.id,
+        action: 'untrash',
+        from: trashViewKey,
+        to: dest,
+        snapshot: conv,
+      })) next.set(k, ov)
+      return next
+    })
+    setSelected(prev => (prev?.id === conv.id ? null : prev))
+  }, [trashViewKey, viewScope])
+
+  // Restore the OPEN email (Trash only). Mirrors the row Restore; the row travels
+  // as a mutation variable, never read live at settle.
+  const restoreOpenMutation = useMutation({
+    mutationFn: async ({ conv, destLabelId }: { conv: InboxConversation; destLabelId: string | null; scope: ViewScope; pinnedAt: string }) => {
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId: conv.id.replace('gmail:', ''),
+          action: 'untrash',
+          mailbox: activeMailbox,
+          destLabelId: destLabelId ?? undefined,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to restore email.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onError: (err, { conv }) => {
+      // Roll the optimistic move BACK. Without this the email is hidden from
+      // Trash — the one list it is actually still in — and phantom-pinned into
+      // the Inbox for minutes, while the toast tells the user to retry on a row
+      // he cannot see. The bulk path already concedes this principle on a partial
+      // failure (bug-hunter, 2026-07-16).
+      setOverrides(prev => dropClaimsFor(prev, conv.id))
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to restore email.')
+    },
+    onSuccess: (data, { conv, destLabelId, scope, pinnedAt }) => {
+      // Trust WHERE IT ACTUALLY LANDED, not where we asked. The server files down
+      // a ladder (destination → Inbox → back to Trash), so on a fallback our
+      // optimistic pin would otherwise sit on a folder the email is not in and
+      // the toast would name it — a row that isn't there, under a lie.
+      const filedTo = (data as { filedTo?: string } | undefined)?.filedTo ?? destLabelId ?? 'INBOX'
+      if (filedTo !== (destLabelId ?? 'INBOX')) {
+        // Correct the pin to where it ACTUALLY landed — but only if our own pin is
+        // still this row's live claim. He may have deleted it again while the
+        // request was in flight, and re-writing then would resurrect an email he
+        // just deleted (senior engineer, 2026-07-16).
+        setOverrides(prev => {
+          const stillOurs = Array.from(prev.values()).some(o => o.id === conv.id && o.kind === 'pinned' && o.originView === pinnedAt)
+          if (!stillOurs) return prev
+          const next = dropClaimsFor(prev, conv.id)
+          for (const [k, ov] of makeMoveOverrides({
+            now: Date.now(), id: conv.id, action: 'untrash',
+            from: viewKey({ kind: 'trash' }, scope),
+            to: viewKey(filedTo === 'INBOX' ? { kind: 'inbox' } : { kind: 'label', label: filedTo }, scope),
+            snapshot: conv,
+          })) next.set(k, ov)
+          return new Map(next)
+        })
+      }
+      const name = filedTo === 'INBOX' ? 'Inbox' : (userLabels.find(l => l.id === filedTo)?.name ?? 'folder')
+      toast.success(`Email restored to ${name}`)
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+    },
+  })
+  const handleRestoreOpen = useCallback((conv: InboxConversation, destLabelId: string | null) => {
+    // Freeze the scope + the pin's key at CLICK time; a late correction must not
+    // read whatever mailbox is open when the response lands.
+    const scope = viewScope
+    const pinnedAt = viewKey(destLabelId ? { kind: 'label', label: destLabelId } : { kind: 'inbox' }, scope)
+    handleRestoredTo(conv, destLabelId, scope) // optimistic move first — instant in both lists
+    restoreOpenMutation.mutate({ conv, destLabelId, scope, pinnedAt })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleRestoredTo, viewScope])
+
+  // Is the list ON SCREEN the Trash? From the PAYLOAD's key, never the selection —
+  // during a view switch the rows shown are still the previous list's.
+  const viewingTrash = payloadViewKey === trashViewKey
+
+  // Bulk Restore out of Trash. Each row is a MOVE (out of Trash, into the Inbox),
+  // and the failures are un-hidden individually — the route reports which ids
+  // failed, and a row that is still in Trash must be visible there.
+  const bulkRestoreMutation = useMutation({
+    mutationFn: async ({ ids }: { ids: string[] }) => {
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadIds: ids.map(id => id.replace('gmail:', '')),
+          action: 'untrash',
+          bulk: true,
+          mailbox: activeMailbox,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to restore emails.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onError: (err, { ids }) => {
+      setOverrides(prev => {
+        let next = prev
+        ids.forEach(id => { next = dropClaimsFor(next, id) })
+        return new Map(next)
+      })
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to restore emails.')
+    },
+    onSuccess: (data, { ids }) => {
+      const out = data as { succeeded?: number; failed?: number; failedIds?: string[] } | undefined
+      const failedSet = new Set((out?.failedIds ?? []).map(t => `gmail:${t}`))
+      if (failedSet.size > 0) {
+        setOverrides(prev => {
+          let next = prev
+          failedSet.forEach(id => { next = dropClaimsFor(next, id) })
+          return new Map(next)
+        })
+        toast.warning(`Restored ${ids.length - failedSet.size} of ${ids.length} — ${failedSet.size} are still in Trash.`)
+      } else {
+        toast.success(`${ids.length} email${ids.length > 1 ? 's' : ''} restored to Inbox`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+    },
+  })
+  const handleBulkRestore = useCallback(() => {
+    const ids = Array.from(selectedIds)
+    const rowsById = new Map<string, InboxConversation>()
+    for (const [, d] of queryClient.getQueriesData<{ conversations: InboxConversation[] }>({ queryKey: ['inbox-conversations'] })) {
+      d?.conversations?.forEach(c => { if (ids.includes(c.id)) rowsById.set(c.id, c) })
+    }
+    ids.forEach(id => {
+      const row = rowsById.get(id)
+      if (row) handleRestoredTo(row, null)
+    })
+    setSelectedIds(new Set())
+    bulkRestoreMutation.mutate({ ids })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIds, handleRestoredTo])
 
   const bulkMode = selectedIds.size > 0
 
@@ -394,7 +616,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       }
       if (variables.action === 'archive' || variables.action === 'trash') {
         if (acted) {
-          handleEmailDeleted(variables.action as HideAction, acted, variables.originView ?? ORIGIN_UNKNOWN)
+          handleEmailDeleted(variables.action as RowAction, acted, variables.originView ?? ORIGIN_UNKNOWN)
         }
       }
       if (variables.action === 'trash') {
@@ -518,15 +740,25 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           d?.conversations?.forEach(c => { if (idSet.has(c.id)) rowsById.set(c.id, c) })
         }
         setOverrides(prev => {
-          const next = new Map(prev)
+          let next = prev
           // Snapshot source, best → worst: the raw cached row; else an existing
           // override's snapshot (e.g. re-deleting a row that is currently PINNED
           // from an earlier Undo — such a row is injected from its snapshot and
           // is NOT in the raw payload). If both miss (a carried-forward
           // unenriched row), the reconcile falls back to the list's last-known
           // copy, which conversation-list retains for overridden ids.
-          idsAtStart.forEach(id => next.set(id, makeHiddenOverride(Date.now(), variables.action as HideAction, variables.originView, rowsById.get(id) ?? prev.get(id)?.snapshot)))
-          return next
+          //
+          // Drop each row's prior claims FIRST — this is an intent-writer like
+          // the other three. Re-deleting a row that was restored leaves its
+          // `untrash` hide behind otherwise, and that hide holds the row OUT of
+          // Trash while it is genuinely IN Trash: it can never be witnessed away,
+          // so the email is missing from Trash for the full TTL (bug-hunter).
+          idsAtStart.forEach(id => {
+            const snap = rowsById.get(id) ?? snapshotOf(next, id)
+            next = dropClaimsFor(next, id)
+            next.set(overrideKey(id, variables.originView), makeHiddenOverride(Date.now(), id, variables.action as RowAction, variables.originView, snap))
+          })
+          return new Map(next)
         })
         if (selected && idSet.has(selected.id)) setSelected(null)
       }
@@ -552,7 +784,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       // Reporting `count` regardless would tell the user every email was handled
       // when some were not (Antonio 2026-07-14). Always report what the SERVER
       // actually did; fall back to `count` only if the field is absent.
-      const summary = data as { succeeded?: number; failed?: number; restore?: unknown } | undefined
+      const summary = data as { succeeded?: number; failed?: number; failedIds?: string[]; restore?: unknown } | undefined
       const okCount = typeof summary?.succeeded === 'number' ? summary.succeeded : count
       const failCount = typeof summary?.failed === 'number' ? summary.failed : 0
 
@@ -577,9 +809,16 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       // genuinely-trashed ones linger until Gmail's index catches up, which is
       // strictly better than hiding an email the user still has.
       if (failCount > 0 && (variables.action === 'trash' || variables.action === 'archive')) {
+        // The route now reports WHICH ids failed, so un-hide exactly those rather
+        // than the whole batch. (Delete by the SAME composite key the hide was
+        // written with: this deleted by bare id and silently became a no-op the
+        // moment the map was re-keyed — the valve was dead while its own comment
+        // promised it worked, leaving 12 live emails hidden for 5 min.)
+        const failedIds = (summary?.failedIds ?? []).map(t => `gmail:${t}`)
+        const toClear = failedIds.length > 0 ? failedIds : idsAtStart // unknown → all
         setOverrides(prev => {
           const next = new Map(prev)
-          idsAtStart.forEach(id => next.delete(id))
+          toClear.forEach(id => next.delete(overrideKey(id, variables.originView)))
           return next
         })
       }
@@ -625,22 +864,37 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                 }
                 // Same honesty rule on the way back: a partial restore must NOT
                 // be announced as a full one.
-                const out = await res.json().catch(() => ({})) as { succeeded?: number; failed?: number }
+                const out = await res.json().catch(() => ({})) as { succeeded?: number; failed?: number; failedIds?: string[] }
                 const rOk = typeof out.succeeded === 'number' ? out.succeeded : ids.length
                 const rFail = typeof out.failed === 'number' ? out.failed : 0
+                // WHICH ones failed — the route reports the ids now. Restoring a
+                // thread that is still in Trash writes an `untrash` hide that
+                // Trash can never witness away (it keeps returning the row), so
+                // the email is invisible for the full TTL — in the one place this
+                // toast tells him to look (senior engineer, 2026-07-16).
+                const failedSet = new Set((out.failedIds ?? []).map(t => `gmail:${t}`))
 
                 // Flip each hidden intent to PINNED (handleEmailRestored) so the
                 // rows come straight back from their snapshots and STAY until
                 // Gmail confirms the untrash. No conversations refetch here: that
                 // racing refetch lands inside the untrash lag and returns without
                 // them — the exact "restored but invisible" bug.
-                ids.forEach(id => handleEmailRestored(id))
+                ids.filter(id => !failedSet.has(id)).forEach(id => handleEmailRestored(id))
+                // The ones that failed are still deleted: clear their claims so
+                // they show up in Trash, where they actually are.
+                if (failedSet.size > 0) {
+                  setOverrides(prev => {
+                    let next = prev
+                    failedSet.forEach(id => { next = dropClaimsFor(next, id) })
+                    return new Map(next)
+                  })
+                }
                 queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
                 queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
 
                 if (rFail > 0) {
                   toast.warning(
-                    `Restored ${rOk} of ${ids.length} — ${rFail} could not be restored. Check Trash.`,
+                    `Restored ${rOk} of ${ids.length} — ${rFail} could not be restored and are still in Trash.`,
                   )
                 } else {
                   toast.success(`${rOk} email${rOk > 1 ? 's' : ''} restored`)
@@ -856,22 +1110,41 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             {selectedIds.size} selected
           </span>
           <div className="flex items-center gap-1 ml-auto relative">
-            <button
-              onClick={() => bulkActionMutation.mutate({ action: 'trash', ids: Array.from(selectedIds), originView: originViewKey })}
-              disabled={bulkActionMutation.isPending}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete
-            </button>
-            <button
-              onClick={() => bulkActionMutation.mutate({ action: 'archive', ids: Array.from(selectedIds), originView: originViewKey })}
-              disabled={bulkActionMutation.isPending}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
-            >
-              <Archive className="h-3.5 w-3.5" />
-              Archive
-            </button>
+            {viewingTrash ? (
+              /* In Trash, Delete and Archive are NO-OPS that still toast "3 emails
+                 deleted" — and the Undo on that toast would UN-delete them, the
+                 opposite of what was asked. Restore is the action that belongs on
+                 a selection of trashed emails, and it matches the row and the open
+                 email (senior engineer, 2026-07-16: the bulk bar was the surface I
+                 fixed everywhere else and missed here). */
+              <button
+                onClick={() => handleBulkRestore()}
+                disabled={bulkActionMutation.isPending}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-green-100 text-green-700 hover:bg-green-200 transition-colors"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />
+                Restore
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => bulkActionMutation.mutate({ action: 'trash', ids: Array.from(selectedIds), originView: originViewKey })}
+                  disabled={bulkActionMutation.isPending}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </button>
+                <button
+                  onClick={() => bulkActionMutation.mutate({ action: 'archive', ids: Array.from(selectedIds), originView: originViewKey })}
+                  disabled={bulkActionMutation.isPending}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                  Archive
+                </button>
+              </>
+            )}
             <button
               onClick={() => bulkActionMutation.mutate({ action: 'mark_read', ids: Array.from(selectedIds), originView: originViewKey })}
               disabled={bulkActionMutation.isPending}
@@ -967,6 +1240,8 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             onUnreadOverride={(id, value, baseline) => setUnread(prev => new Map(prev).set(id, makeUnreadOverride(value, prev.get(id)?.baseline ?? baseline, Date.now())))}
             onReconciled={(o, u) => { setOverrides(o); setUnread(u) }}
             onPayloadOrigin={setPayloadViewKey}
+            onRestoredTo={handleRestoredTo}
+            onRestoreFailed={(id) => setOverrides(prev => dropClaimsFor(prev, id))}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
@@ -1182,16 +1457,74 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                             {openUnread ? 'Mark read' : 'Mark unread'}
                           </button>
                         </HoverHint>
-                        <HoverHint label="Delete (moves to Trash)">
-                          <button
-                            onClick={() => emailActionMutation.mutate({ action: 'trash', originView: selectedOrigin, conv: selected })}
-                            disabled={emailActionMutation.isPending}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete
-                          </button>
-                        </HoverHint>
+                        {selectedOrigin === trashViewKey ? (
+                          /* The open email came from Trash: Delete here fired
+                             `trash` on an already-trashed thread — a no-op that
+                             still toasted "Email deleted". Restore is the action
+                             that belongs on a trashed email, and it matches the
+                             row button one pane over. */
+                          <>
+                            <HoverHint label="Restore to Inbox">
+                              <button
+                                onClick={() => selected && handleRestoreOpen(selected, null)}
+                                disabled={restoreOpenMutation.isPending}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-green-50 hover:bg-green-100 text-green-600 hover:text-green-800 text-xs font-medium transition-colors ml-1"
+                              >
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                                Restore
+                              </button>
+                            </HoverHint>
+                            {/* "…and I see it in the folder that I decide to
+                                restore" — pick the destination instead of the
+                                Inbox. Same optimistic move; the pin lands on the
+                                folder you choose. */}
+                            <div className="relative">
+                              <HoverHint label="Restore to a folder…">
+                                <button
+                                  onClick={() => setRestoreToOpen(!restoreToOpen)}
+                                  disabled={restoreOpenMutation.isPending}
+                                  className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md bg-green-50 hover:bg-green-100 text-green-600 hover:text-green-800 text-xs font-medium transition-colors"
+                                >
+                                  <FolderInput className="h-3.5 w-3.5" />
+                                </button>
+                              </HoverHint>
+                              {restoreToOpen && (
+                                <>
+                                  <div className="fixed inset-0 z-40" onClick={() => setRestoreToOpen(false)} />
+                                  <div className="absolute right-0 top-full mt-1 z-50 bg-white border rounded-md shadow-xl min-w-[180px] py-1">
+                                    <button
+                                      onClick={() => { setRestoreToOpen(false); if (selected) handleRestoreOpen(selected, null) }}
+                                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
+                                    >
+                                      Inbox
+                                    </button>
+                                    {userLabels.length > 0 && <div className="my-1 border-t border-zinc-100" />}
+                                    {userLabels.map(label => (
+                                      <button
+                                        key={label.id}
+                                        onClick={() => { setRestoreToOpen(false); if (selected) handleRestoreOpen(selected, label.id) }}
+                                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
+                                      >
+                                        {label.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <HoverHint label="Delete (moves to Trash)">
+                            <button
+                              onClick={() => emailActionMutation.mutate({ action: 'trash', originView: selectedOrigin, conv: selected })}
+                              disabled={emailActionMutation.isPending}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete
+                            </button>
+                          </HoverHint>
+                        )}
                       </>
                     )}
                   </div>

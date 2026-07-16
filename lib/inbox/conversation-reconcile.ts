@@ -20,7 +20,7 @@
  * reproduce Gmail's index lag).
  */
 import type { InboxConversation } from "@/lib/types"
-import { hidesFromCurrentView, viewKey, type HideAction, type InboxView, type ViewScope } from "@/lib/inbox/view-query"
+import { removesFromView, viewKey, type RowAction, type InboxView, type ViewScope } from "@/lib/inbox/view-query"
 
 /** Server payload shape, extended with completeness signals (see the route). */
 export interface ConversationsPayload {
@@ -66,10 +66,19 @@ export type OverrideKind = "hidden" | "pinned"
  *  So: `action` = the claim; `originView` = the witness. */
 export interface RowOverride {
   kind: OverrideKind
+  /** The conversation this override is about. Carried ON the entry because the
+   *  map is keyed by (id + originView) — one email can hold two overrides at once
+   *  (a Restore hides it from Trash AND pins it into its destination). The key is
+   *  OPAQUE: never parse the id back out of it. `viewKey` embeds raw search text,
+   *  so a search for `a|b` would make any separator ambiguous and hand you the
+   *  wrong id — which is a hide applied to the wrong email (council, 2026-07-16). */
+  id: string
   /** `hidden` only — WHAT was done, so each view can decide whether it APPLIES. */
-  action?: HideAction
-  /** BOTH kinds — the `viewKey` of the list this override was born in. The only
-   *  payload allowed to JUDGE it; for a pin, also the only list it applies in. */
+  action?: RowAction
+  /** BOTH kinds — the `viewKey` of the list this override is a claim about. The
+   *  only payload allowed to JUDGE it; for a pin, also the only list it applies
+   *  in. (For a pin this reads better as "targetView": a Restore pins the row
+   *  into its DESTINATION, which is not where the override was born.) */
   originView?: string
   /** For `pinned` (and as a fallback for `hidden`): last-known full row, so a
    *  restored email stays visible while Gmail re-indexes the untrash. */
@@ -198,11 +207,15 @@ export function advanceReleases(input: ReconcileInput): {
   const payloadView = viewKey(input.origin.view, input.origin.scope)
 
   // ── 1. Advance / release hide & pin overrides ──────────────────────────
-  for (const [id, ov] of Array.from(input.overrides)) {
+  // `key` is OPAQUE (id + originView) — the row is always `ov.id`. One email can
+  // hold two entries here: a Restore hides it from Trash and pins it into its
+  // destination, and each is judged only by its own list.
+  for (const [key, ov] of Array.from(input.overrides)) {
+    const id = ov.id
     // Tombstone phase: already released, just suppressing re-appearance briefly.
     if (ov.releasedAt != null) {
       if (now - ov.releasedAt <= cfg.tombstoneMs) {
-        nextOverrides.set(id, ov) // keep suppressing (hidden) for one more cycle
+        nextOverrides.set(key, ov) // keep suppressing (hidden) for one more cycle
       }
       continue
     }
@@ -214,7 +227,7 @@ export function advanceReleases(input: ReconcileInput): {
     // the normal end for a hide no payload can confirm: archive-from-a-folder
     // legitimately leaves the row in that list, so no view can ever witness it.
     if (now - ov.createdAt > cfg.ttlMs) {
-      if (ov.kind === "hidden") nextOverrides.set(id, { ...ov, releasedAt: now })
+      if (ov.kind === "hidden") nextOverrides.set(key, { ...ov, releasedAt: now })
       continue // a pin just expires — the row is real, the server owns it now
     }
 
@@ -222,7 +235,7 @@ export function advanceReleases(input: ReconcileInput): {
     // list is not evidence: the row was never there to leave. Everything else is
     // carried forward UNTOUCHED — never advanced, never dropped.
     if (ov.originView !== payloadView) {
-      nextOverrides.set(id, ov)
+      nextOverrides.set(key, ov)
       continue
     }
 
@@ -232,13 +245,13 @@ export function advanceReleases(input: ReconcileInput): {
       if (affirmativelyAbsent(id, present, unenriched, partial)) {
         const agree = ov.agree + 1
         if (agree >= cfg.stability) {
-          nextOverrides.set(id, { ...ov, agree, releasedAt: now })
+          nextOverrides.set(key, { ...ov, agree, releasedAt: now })
         } else {
-          nextOverrides.set(id, { ...ov, agree })
+          nextOverrides.set(key, { ...ov, agree })
         }
       } else {
         // Still present / unenriched / partial → NOT confirmed gone; hold hide.
-        nextOverrides.set(id, { ...ov, agree: 0 })
+        nextOverrides.set(key, { ...ov, agree: 0 })
       }
     } else {
       // pinned (restored): release once the server AFFIRMATIVELY contains it,
@@ -250,17 +263,17 @@ export function advanceReleases(input: ReconcileInput): {
           // Confirmed back — release the pin (row now comes from the server).
           continue
         }
-        nextOverrides.set(id, { ...ov, agree, disagree: 0 })
+        nextOverrides.set(key, { ...ov, agree, disagree: 0 })
       } else if (affirmativelyAbsent(id, present, unenriched, partial)) {
         const disagree = ov.disagree + 1
         // Deleted-elsewhere: sustained affirmative absence past the stale cap.
         if (disagree >= cfg.stability && now - ov.createdAt > cfg.stalePinMs) {
           continue // drop the pin — it's genuinely gone
         }
-        nextOverrides.set(id, { ...ov, agree: 0, disagree })
+        nextOverrides.set(key, { ...ov, agree: 0, disagree })
       } else {
         // Unenriched or partial → unknown; keep the pin, reset both counters.
-        nextOverrides.set(id, { ...ov, agree: 0, disagree: 0 })
+        nextOverrides.set(key, { ...ov, agree: 0, disagree: 0 })
       }
     }
   }
@@ -301,9 +314,9 @@ export function computeVisibleList(input: ReconcileInput): InboxConversation[] {
   // inherit it — otherwise a hide released+tombstoned in the Inbox would keep
   // re-hiding the row in Trash for the whole tombstone window.
   const hidden = new Set<string>()
-  for (const [id, ov] of Array.from(nextOverrides)) {
-    if (ov.kind === "hidden" && hidesFromCurrentView(ov.action ?? "trash", input.origin.view)) {
-      hidden.add(id) // includes tombstoned ids
+  for (const ov of Array.from(nextOverrides.values())) {
+    if (ov.kind === "hidden" && removesFromView(ov.action ?? "trash", input.origin.view)) {
+      hidden.add(ov.id) // includes tombstoned ids
     }
   }
 
@@ -337,12 +350,16 @@ export function computeVisibleList(input: ReconcileInput): InboxConversation[] {
   // list"; we have no evidence for that anywhere else, and injecting it would
   // render the row into a list it may not belong to (a never-starred email
   // appearing in Starred after an Undo).
-  for (const [id, ov] of Array.from(nextOverrides)) {
-    if (ov.kind !== "pinned" || ov.originView !== payloadView || seen.has(id)) continue
-    const row = ov.snapshot ?? input.prev.get(id)
+  // A pin whose row is ALSO hidden here loses: the hide is the newer, explicit
+  // intent (delete-then-restore-then-delete-again), and showing a row the user
+  // just deleted is the worse failure.
+  for (const ov of Array.from(nextOverrides.values())) {
+    if (ov.kind !== "pinned" || ov.originView !== payloadView) continue
+    if (seen.has(ov.id) || hidden.has(ov.id)) continue
+    const row = ov.snapshot ?? input.prev.get(ov.id)
     if (row) {
       visible.push(row)
-      seen.add(id)
+      seen.add(ov.id)
     }
   }
 
@@ -372,19 +389,69 @@ export function makeStub(id: string): InboxConversation {
 
 // ── Override constructors (used by the shell's mutation handlers) ──────────
 
-/** A delete/archive intent.
- *  `action` makes the hide portable across views — always pass the real one
- *  ('archive' hides ONLY in inbox-scoped views; 'trash' hides everywhere but Trash).
- *  `originView` is the list it was done in — the ONLY one allowed to confirm it.
- *  The snapshot lets a later Undo pin the exact row back. */
-export function makeHiddenOverride(now: number, action: HideAction, originView: string, snapshot?: InboxConversation): RowOverride {
-  return { kind: "hidden", action, originView, snapshot, createdAt: now, agree: 0, disagree: 0 }
+/**
+ * The map key for an override: the row + the list the claim is about.
+ *
+ * OPAQUE — never parse it. The id lives on the entry (`ov.id`). `viewKey` embeds
+ * raw search text, so any separator can appear inside it and splitting would hand
+ * back a wrong id — i.e. a hide applied to an email the user never touched.
+ */
+export function overrideKey(id: string, view: string): string {
+  return `${id}\u0000${view}`
 }
 
-/** `originView` (a `viewKey`) is REQUIRED: a pin is only valid in the view whose
- *  payload produced the snapshot. */
-export function makePinnedOverride(now: number, originView: string, snapshot?: InboxConversation): RowOverride {
-  return { kind: "pinned", originView, snapshot, createdAt: now, agree: 0, disagree: 0 }
+/** A delete/archive/untrash intent — the row is GONE from every view this action
+ *  removes it from.
+ *  `action` makes the hide portable across views — always pass the real one
+ *  ('archive' hides ONLY in inbox-scoped views; 'trash' hides everywhere but
+ *  Trash; 'untrash' removes it from Trash alone).
+ *  `originView` is the list it was done in — the ONLY one allowed to confirm it.
+ *  The snapshot lets a later Undo pin the exact row back. */
+export function makeHiddenOverride(now: number, id: string, action: RowAction, originView: string, snapshot?: InboxConversation): RowOverride {
+  return { kind: "hidden", id, action, originView, snapshot, createdAt: now, agree: 0, disagree: 0 }
+}
+
+/** `originView` (a `viewKey`) is REQUIRED: a pin only holds in the ONE list it
+ *  claims the row is in — for a Restore that is the DESTINATION, not where the
+ *  action happened. */
+export function makePinnedOverride(now: number, id: string, originView: string, snapshot?: InboxConversation): RowOverride {
+  return { kind: "pinned", id, originView, snapshot, createdAt: now, agree: 0, disagree: 0 }
+}
+
+/**
+ * Move a row between two lists — the shape of BOTH "Restore from Trash" and the
+ * Undo of a delete (a trash IS a move to Trash).
+ *
+ * A move is not a new kind of override: it is the two we already have, emitted
+ * together. The row LEAVES `from` (a hide, witnessed by `from`'s payload) and
+ * APPEARS in `to` (a pin, witnessed by `to`'s payload). Each half has exactly one
+ * witness, and each releases on its own clock — which is correct: Trash and the
+ * Inbox catch up at different times and there is no reason to couple them. A
+ * single entry spanning two views would need two agree counters, two tombstones
+ * and a "half-released" state — two overrides wearing one struct (council,
+ * 2026-07-16: "if your plan grows a third override kind, you have taken a wrong
+ * turn").
+ *
+ * `to` may be null when the destination isn't a list we can name (e.g. restoring
+ * while the destination view was never loaded) — then only the hide is emitted
+ * and the row simply appears when the server catches up.
+ */
+export function makeMoveOverrides(args: {
+  now: number
+  id: string
+  action: RowAction
+  from: string
+  to: string | null
+  snapshot?: InboxConversation
+}): Array<[string, RowOverride]> {
+  const { now, id, action, from, to, snapshot } = args
+  const out: Array<[string, RowOverride]> = [
+    [overrideKey(id, from), makeHiddenOverride(now, id, action, from, snapshot)],
+  ]
+  if (to && to !== from) {
+    out.push([overrideKey(id, to), makePinnedOverride(now, id, to, snapshot)])
+  }
+  return out
 }
 
 /** Shallow-equal check for two override maps — lets the client skip a state

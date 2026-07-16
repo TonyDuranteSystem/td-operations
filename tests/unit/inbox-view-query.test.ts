@@ -5,14 +5,14 @@
  * can never confirm — the row hangs until the TTL drops it with no tombstone and
  * pops back minutes later. The params table below is a BYTE-FOR-BYTE lock on what
  * the conversations route sends to Gmail: if someone edits a query string, this
- * test fails and they must revisit `hidesFromCurrentView` in the same breath.
+ * test fails and they must revisit `removesFromView` in the same breath.
  */
 import { describe, it, expect } from "vitest"
 import {
   toInboxView,
   viewKey,
   buildGmailQueryParams,
-  hidesFromCurrentView,
+  removesFromView,
   type InboxView,
 } from "@/lib/inbox/view-query"
 
@@ -21,8 +21,19 @@ describe("toInboxView", () => {
     expect(toInboxView({ label: "TRASH", search: null })).toEqual({ kind: "trash" })
   })
 
-  it("treats INBOX as a label view — it is reachable from the sidebar", () => {
-    expect(toInboxView({ label: "INBOX", search: null })).toEqual({ kind: "label", label: "INBOX" })
+  it("collapses the INBOX label into the inbox view — ONE list, ONE identity", () => {
+    // The sidebar's Inbox button sends the label id 'INBOX'; "no label" also means
+    // the Inbox. Two shapes for one list = two view keys, and an override stamped
+    // with one is invisible to the other — restore an email and it would not show
+    // up in the Inbox you are looking at.
+    expect(toInboxView({ label: "INBOX", search: null })).toEqual({ kind: "inbox" })
+    expect(toInboxView({ label: "INBOX", search: null })).toEqual(toInboxView({ label: null, search: null }))
+  })
+
+  it("gives the sidebar Inbox and the default Inbox the SAME key", () => {
+    const fromSidebar = viewKey(toInboxView({ label: "INBOX", search: null }), S)
+    const fromDefault = viewKey(toInboxView({ label: null, search: null }), S)
+    expect(fromSidebar).toBe(fromDefault)
   })
 
   it("lets a label WIN over a search — the route's own precedence", () => {
@@ -74,7 +85,6 @@ describe("buildGmailQueryParams", () => {
     // query from a NAME: `view.label` is an id, and the id is this view's identity
     // everywhere else (viewKey keys on it).
     ["label → labelIds + -in:trash", { kind: "label", label: "STARRED" }, { labelIds: "STARRED", q: "-in:trash" }],
-    ["label INBOX → labelIds + -in:trash", { kind: "label", label: "INBOX" }, { labelIds: "INBOX", q: "-in:trash" }],
     // The case that was broken: a real user-folder id, which is NOT its name.
     ["user folder → its ID, never its name", { kind: "label", label: "Label_5" }, { labelIds: "Label_5", q: "-in:trash" }],
     // Names with spaces/slashes need no quoting or escaping under labelIds.
@@ -86,35 +96,45 @@ describe("buildGmailQueryParams", () => {
   })
 })
 
-describe("hidesFromCurrentView", () => {
+describe("removesFromView", () => {
   // The whole matrix. Read this as: "if I do <action> while looking at <view>,
   // does the row leave the list?"
-  const matrix: Array<[InboxView, { trash: boolean; archive: boolean }]> = [
+  const matrix: Array<[InboxView, { trash: boolean; archive: boolean; untrash: boolean }]> = [
     // labelIds:INBOX — both actions strip INBOX.
-    [{ kind: "inbox" }, { trash: true, archive: true }],
+    [{ kind: "inbox" }, { trash: true, archive: true, untrash: false }], // untrash ADDS it here
     // labelIds:TRASH — neither action removes the TRASH label. Nothing leaves.
-    [{ kind: "trash" }, { trash: false, archive: false }],
+    [{ kind: "trash" }, { trash: false, archive: false, untrash: true }], // ONLY untrash empties Trash
     // in:starred -in:trash — trash is excluded; archive leaves STARRED intact.
-    [{ kind: "label", label: "STARRED" }, { trash: true, archive: false }],
-    // in:inbox -in:trash — the label IS the inbox, so archive removes it too.
-    [{ kind: "label", label: "INBOX" }, { trash: true, archive: true }],
-    // Case-insensitive: the query lowercases the label anyway.
-    [{ kind: "label", label: "inbox" }, { trash: true, archive: true }],
+    [{ kind: "label", label: "STARRED" }, { trash: true, archive: false, untrash: false }],
     // A user label survives archive.
-    [{ kind: "label", label: "Clients/Acme" }, { trash: true, archive: false }],
+    [{ kind: "label", label: "Clients/Acme" }, { trash: true, archive: false, untrash: false }],
     // All-mail search: archive doesn't remove it, trash does.
-    [{ kind: "search", query: "invoice" }, { trash: true, archive: false }],
+    [{ kind: "search", query: "invoice" }, { trash: true, archive: false, untrash: false }],
   ]
 
   it.each(matrix)("%j", (view, expected) => {
-    expect(hidesFromCurrentView("trash", view)).toBe(expected.trash)
-    expect(hidesFromCurrentView("archive", view)).toBe(expected.archive)
+    expect(removesFromView("trash", view)).toBe(expected.trash)
+    expect(removesFromView("archive", view)).toBe(expected.archive)
+    expect(removesFromView("untrash", view)).toBe(expected.untrash)
   })
 
-  it("never hides anything from Trash — what makes a just-deleted email visible there", () => {
-    // Guards Luca's Restore-from-Trash feature: if either of these flips to true,
-    // deleting a mail while IN Trash would blank the row he needs to restore.
-    expect(hidesFromCurrentView("trash", { kind: "trash" })).toBe(false)
-    expect(hidesFromCurrentView("archive", { kind: "trash" })).toBe(false)
+  it("a delete never empties a row out of Trash — only a restore does", () => {
+    // Trash is where Luca goes to FIND a deleted email. If either of the first two
+    // flipped to true, deleting would blank the row he needs to restore; if the
+    // third were false, Restore would leave it sitting there looking un-restored.
+    expect(removesFromView("trash", { kind: "trash" })).toBe(false)
+    expect(removesFromView("archive", { kind: "trash" })).toBe(false)
+    expect(removesFromView("untrash", { kind: "trash" })).toBe(true)
+  })
+
+  it("a restore is never a hide anywhere else — elsewhere it ADDS a row", () => {
+    // A pin, not a hide, is what makes a restored email appear at its destination.
+    for (const view of [
+      { kind: "inbox" } as const,
+      { kind: "label", label: "Label_5" } as const,
+      { kind: "search", query: "invoice" } as const,
+    ]) {
+      expect(removesFromView("untrash", view)).toBe(false)
+    }
   })
 })

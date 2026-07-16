@@ -38,7 +38,7 @@ async function snapshotBeforeTrash(threadId: string, asUser: string): Promise<Re
  * Undo of a trash: untrash every message, put the thread back in INBOX, and
  * re-apply the labels captured at trash time.
  */
-async function untrashThread(threadId: string, asUser: string, restore: RestoreEntry[]) {
+async function untrashThread(threadId: string, asUser: string, restore: RestoreEntry[], destLabelId?: string): Promise<{ filedTo: string }> {
   // Gmail doesn't allow removing TRASH via modify — must use /untrash per message
   const trashThread = (await gmailGet(`/threads/${threadId}`, { format: 'minimal' }, asUser)) as {
     messages: Array<{ id: string }>
@@ -46,7 +46,50 @@ async function untrashThread(threadId: string, asUser: string, restore: RestoreE
   await Promise.all(
     trashThread.messages.map((m) => gmailPost(`/messages/${m.id}/untrash`, {}, asUser))
   )
-  await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: ["INBOX"] }, asUser)
+  // Default: back to the INBOX. Note trashing never strips a custom folder label
+  // (it removes only INBOX/UNREAD/STARRED/IMPORTANT), so a restored email keeps
+  // its folders for free — "put it back where it was" needs no snapshot.
+  //
+  // With a destination, the email goes THERE instead of the Inbox: add that
+  // label and drop INBOX. Always-INBOX is the deliberate fallback — it is the one
+  // list the user is certain to look in, so a restore can never land somewhere
+  // invisible.
+  // ── The email is now in NO list: the untrash above stripped TRASH and nothing
+  // has been added yet. Every failure from here must leave it somewhere the user
+  // can SEE it — never "reachable only by search".
+  //
+  // Ladder: the requested destination → the Inbox → put it back in Trash. The
+  // Inbox rung matters most: it is the one this ships with (nothing sends a
+  // destination yet), and the first version guarded only the destination branch —
+  // i.e. only the path no client could reach (bug-hunter, twice).
+  let filedTo = destLabelId ?? "INBOX"
+  const file = (params: Record<string, string[]>) => gmailPost(`/threads/${threadId}/modify`, params, asUser)
+  try {
+    await file(
+      destLabelId
+        ? { addLabelIds: [destLabelId], removeLabelIds: ["INBOX"] }
+        : { addLabelIds: ["INBOX"] }
+    )
+  } catch (err) {
+    console.warn(`[untrash] filing ${threadId} into ${filedTo} failed`, err)
+    try {
+      // Rung 2 — the Inbox. (If the destination WAS the Inbox this is a retry,
+      // which is exactly right for the rate-limit case that dominates here.)
+      await file({ addLabelIds: ["INBOX"] })
+      filedTo = "INBOX"
+    } catch (err2) {
+      // Rung 3 — undo our own untrash so the state stays HONEST: the email goes
+      // back to Trash, exactly where the user last saw it, and the error we throw
+      // is then true ("restore failed") instead of a lie over a vanished email.
+      console.error(`[untrash] INBOX fallback for ${threadId} failed; re-trashing to avoid stranding`, err2)
+      try {
+        await file({ addLabelIds: ["TRASH"] })
+      } catch (err3) {
+        console.error(`[untrash] re-trash of ${threadId} FAILED — thread is in no list`, err3)
+      }
+      throw err2
+    }
+  }
 
   // Restore the read/starred/important state the trash stripped.
   if (restore.length > 0) {
@@ -56,12 +99,13 @@ async function untrashThread(threadId: string, asUser: string, restore: RestoreE
       )
     )
   }
+  return { filedTo }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color, restore } = body as {
+    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox, color, restore, destLabelId } = body as {
       threadId?: string
       threadIds?: string[]
       action: EmailAction | 'mark_read'
@@ -75,6 +119,9 @@ export async function POST(req: NextRequest) {
        *  trashed, round-tripped by the browser. Single: RestoreEntry[]. Bulk: a
        *  map keyed by threadId. Sanitized before use — never trusted. */
       restore?: unknown
+      /** untrash: restore INTO this label instead of the Inbox (a Gmail label id).
+       *  Omit for the default "back where it was + Inbox". */
+      destLabelId?: string
     }
 
     if (!(await checkMailboxAccess(mailbox))) {
@@ -121,11 +168,21 @@ export async function POST(req: NextRequest) {
       )
       const succeeded = results.filter(r => r.status === 'fulfilled').length
       const failed = results.filter(r => r.status === 'rejected').length
+      // WHICH ones failed, not just how many. `allSettled` knows the identity and
+      // we were throwing it away, so the client could only guess — it dropped the
+      // whole batch's optimistic hides on any failure (crude but safe), and on the
+      // UNDO path it dropped none, hiding the still-trashed emails from Trash: the
+      // one place its own toast told the user to look (senior engineer, 2026-07-16).
+      const failedIds = threadIds.filter((_, i) => results[i].status === 'rejected')
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') console.warn(`[bulk ${action}] ${threadIds[i]} failed`, r.reason)
+      })
       return NextResponse.json({
         success: true,
         action,
         succeeded,
         failed,
+        failedIds,
         total: threadIds.length,
         ...(action === 'trash' ? { restore: bulkRestore } : {}),
       })
@@ -201,8 +258,28 @@ export async function POST(req: NextRequest) {
       }
 
       case "untrash": {
-        await untrashThread(threadId, asUser, sanitizeRestorePayload(restore))
-        return NextResponse.json({ success: true, action: "untrashed" })
+        if (destLabelId != null) {
+          if (typeof destLabelId !== "string" || !destLabelId) {
+            return NextResponse.json({ error: "destLabelId must be a non-empty string" }, { status: 400 })
+          }
+          // Only a real USER folder. A system list would file the email somewhere
+          // the client cannot name: 'TRASH' would untrash-then-re-trash while the
+          // UI hid it from Trash, and the pin would sit at a view key that
+          // `toInboxView` never produces, so it would apply nowhere.
+          const labelsRes = (await gmailGet("/labels", {}, asUser)) as {
+            labels?: Array<{ id: string; type?: string }>
+          }
+          const dest = (labelsRes.labels ?? []).find((l) => l.id === destLabelId)
+          if (!dest || dest.type !== "user") {
+            return NextResponse.json(
+              { error: "Restore destination must be one of your folders." },
+              { status: 400 }
+            )
+          }
+        }
+        const filed = await untrashThread(threadId, asUser, sanitizeRestorePayload(restore), destLabelId)
+        // Report where it ACTUALLY landed — not where we were asked to put it.
+        return NextResponse.json({ success: true, action: "untrashed", filedTo: filed.filedTo })
       }
 
       case "mark_unread": {
