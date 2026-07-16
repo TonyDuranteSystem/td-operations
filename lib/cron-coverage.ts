@@ -52,6 +52,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/refresh-issue-counts": "0 8 * * *",
   "/api/cron/payment-integrity-alarm": "0 9 * * *",
   "/api/cron/tax-reactivation": "30 10 * * *",
+  "/api/cron/tax-completion-sweep": "*/30 * * * *",
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",
   "/api/cron/itin-processing-check": "0 9 * * 1",
