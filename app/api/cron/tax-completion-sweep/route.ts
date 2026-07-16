@@ -27,14 +27,19 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { reportSystemError } from "@/lib/system-errors"
 import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
+import { postTeamMessage } from "@/lib/team/post-message"
 import {
+  formatSweepAlert,
   isSweepEligible,
   parseChainResults,
   sweepAttempts,
+  SWEEP_ALERT_CHANNEL,
+  SWEEP_ALERTED_KEY,
   SWEEP_ATTEMPTS_KEY,
   SWEEP_CUTOFF_ISO,
   SWEEP_MAX_ATTEMPTS,
   SWEEP_MAX_FIRES_PER_RUN,
+  type SweepAlertItem,
 } from "@/lib/tax/completion-sweep"
 
 export const dynamic = "force-dynamic"
@@ -54,11 +59,16 @@ export async function GET(req: NextRequest) {
   const dryRun = process.env.TAX_COMPLETION_SWEEP_DRY_RUN !== "false"
   const now = new Date()
   const outcomes: { submission_id: string; token: string | null; outcome: string; detail?: string }[] = []
+  // Rows to announce in the ⚠️ team-chat alert this run, and rows to stamp
+  // with the alerted marker afterwards (so watch-mode candidates and gave-up
+  // rows alert ONCE, not every 30 minutes).
+  const alertItems: (SweepAlertItem & { submission_id: string })[] = []
+  const markAlerted: { id: string; meta: Record<string, unknown> }[] = []
 
   try {
     const { data: rows, error } = await supabaseAdmin
       .from("tax_return_submissions")
-      .select("id, token, status, completed_at, review_status, financials_meta")
+      .select("id, token, account_id, tax_year, status, completed_at, review_status, financials_meta")
       .eq("status", "completed")
       .is("review_status", null)
       .gte("completed_at", SWEEP_CUTOFF_ISO)
@@ -69,9 +79,26 @@ export async function GET(req: NextRequest) {
 
     const eligible = (rows ?? []).filter(r => isSweepEligible(r, now))
 
+    const companyNames = new Map<string, string>()
+    const accountIds = Array.from(new Set(eligible.map(r => r.account_id).filter(Boolean))) as string[]
+    if (accountIds.length > 0) {
+      const { data: accounts } = await supabaseAdmin
+        .from("accounts")
+        .select("id, company_name")
+        .in("id", accountIds)
+      for (const a of accounts ?? []) companyNames.set(a.id, a.company_name)
+    }
+    const companyOf = (row: { account_id: string | null; token: string | null }) =>
+      (row.account_id && companyNames.get(row.account_id)) || row.token || "unknown submission"
+
     if (dryRun) {
       for (const row of eligible) {
         outcomes.push({ submission_id: row.id, token: row.token, outcome: "dry_run_candidate" })
+        const meta = (row.financials_meta ?? {}) as Record<string, unknown>
+        if (!meta[SWEEP_ALERTED_KEY]) {
+          alertItems.push({ submission_id: row.id, company: companyOf(row), tax_year: row.tax_year, outcome: "dry_run_candidate" })
+          markAlerted.push({ id: row.id, meta })
+        }
       }
     } else {
       for (const row of eligible.slice(0, SWEEP_MAX_FIRES_PER_RUN)) {
@@ -80,6 +107,10 @@ export async function GET(req: NextRequest) {
 
         if (attempts >= SWEEP_MAX_ATTEMPTS) {
           outcomes.push({ submission_id: row.id, token: row.token, outcome: "gave_up", detail: `${attempts} attempts` })
+          if (!meta[SWEEP_ALERTED_KEY]) {
+            alertItems.push({ submission_id: row.id, company: companyOf(row), tax_year: row.tax_year, outcome: "gave_up" })
+            markAlerted.push({ id: row.id, meta })
+          }
           await reportSystemError({
             source: "server",
             route: ENDPOINT,
@@ -126,6 +157,13 @@ export async function GET(req: NextRequest) {
               outcome: "rescued",
               detail: errorSteps.length ? `with step errors: ${errorSteps.join("; ")}` : undefined,
             })
+            alertItems.push({
+              submission_id: row.id,
+              company: companyOf(row),
+              tax_year: row.tax_year,
+              outcome: "rescued",
+              detail: errorSteps.length ? `with step errors: ${errorSteps.join("; ")}` : undefined,
+            })
             await reportSystemError({
               source: "server",
               route: ENDPOINT,
@@ -133,12 +171,9 @@ export async function GET(req: NextRequest) {
               context: { submission_id: row.id, token: row.token, attempt: attempts + 1, errorSteps },
             })
           } else {
-            outcomes.push({
-              submission_id: row.id,
-              token: row.token,
-              outcome: "fire_failed",
-              detail: `http ${res.status}; ${errorSteps.join("; ") || "marker step did not run"}`,
-            })
+            const detail = `http ${res.status}; ${errorSteps.join("; ") || "marker step did not run"}`
+            outcomes.push({ submission_id: row.id, token: row.token, outcome: "fire_failed", detail })
+            alertItems.push({ submission_id: row.id, company: companyOf(row), tax_year: row.tax_year, outcome: "fire_failed", detail, attempt: attempts + 1 })
             await reportSystemError({
               source: "server",
               route: ENDPOINT,
@@ -148,12 +183,9 @@ export async function GET(req: NextRequest) {
             })
           }
         } catch (e) {
-          outcomes.push({
-            submission_id: row.id,
-            token: row.token,
-            outcome: "fire_failed",
-            detail: e instanceof Error ? e.message : String(e),
-          })
+          const detail = e instanceof Error ? e.message : String(e)
+          outcomes.push({ submission_id: row.id, token: row.token, outcome: "fire_failed", detail })
+          alertItems.push({ submission_id: row.id, company: companyOf(row), tax_year: row.tax_year, outcome: "fire_failed", detail, attempt: attempts + 1 })
           await reportSystemError({
             source: "server",
             route: ENDPOINT,
@@ -164,12 +196,35 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const failed = outcomes.some(o => o.outcome === "fire_failed" || o.outcome === "gave_up")
+    // ⚠️ Team-chat alert — a lost submission must be SEEN, not buried in the
+    // cron log. One message per run; td-taxreturn first, general as fallback.
+    // A failed post never fails the sweep (the log + system-health still have
+    // everything), but it is recorded.
+    let alertPosted = false
+    const alertMessage = formatSweepAlert(alertItems, dryRun)
+    if (alertMessage) {
+      try {
+        await postTeamMessage({ channel: SWEEP_ALERT_CHANNEL, message: alertMessage }).catch(async () => {
+          await postTeamMessage({ channel: "general", message: alertMessage })
+        })
+        alertPosted = true
+        for (const { id, meta } of markAlerted) {
+          await supabaseAdmin
+            .from("tax_return_submissions")
+            .update({ financials_meta: { ...meta, [SWEEP_ALERTED_KEY]: true } })
+            .eq("id", id)
+        }
+      } catch (e) {
+        outcomes.push({ submission_id: "-", token: null, outcome: "alert_failed", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    const failed = outcomes.some(o => o.outcome === "fire_failed" || o.outcome === "gave_up" || o.outcome === "alert_failed")
     logCron({
       endpoint: ENDPOINT,
       status: failed ? "error" : "success",
       duration_ms: Date.now() - startTime,
-      details: { dry_run: dryRun, scanned: rows?.length ?? 0, eligible: eligible.length, outcomes },
+      details: { dry_run: dryRun, scanned: rows?.length ?? 0, eligible: eligible.length, outcomes, alert_posted: alertPosted },
     })
 
     return NextResponse.json({
