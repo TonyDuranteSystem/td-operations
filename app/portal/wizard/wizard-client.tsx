@@ -94,6 +94,16 @@ function isFieldVisible(field: FieldConfig, stepFields: FieldConfig[], data: Rec
   return parent ? isFieldVisible(parent, stepFields, data, depth + 1) : true
 }
 
+// A filled number below the field's domain minimum (e.g. a negative money
+// amount) blocks the step even when the field is optional. Empty values are
+// the required-check's business, not this one's. Pure module-level — no hook deps.
+function belowFieldMin(field: { min?: number }, val: unknown): boolean {
+  if (field.min === undefined) return false
+  if (val === undefined || val === null || val === '' || typeof val === 'boolean') return false
+  const n = Number(val)
+  return !Number.isNaN(n) && n < field.min
+}
+
 type BankGuide = { name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }
 
 /** "Before You Start" step: tells the client to upload their transactions as a
@@ -502,6 +512,7 @@ export function WizardClient({
             if (String(refValue) !== field.conditional.value) continue
           }
           if (field.required && isEmptyValue(formData[`member_${idx}_${field.name}`])) return false
+          if (belowFieldMin(field, formData[`member_${idx}_${field.name}`])) return false
         }
       }
       // Tax MMLLC: members are the full roster — ownership must total 100%
@@ -533,11 +544,13 @@ export function WizardClient({
         for (let idx = 0; idx < count; idx++) {
           for (const rf of field.repeaterFields ?? []) {
             if (rf.required && isEmptyValue(formData[`${field.name}_${idx}_${rf.name}`])) return false
+            if (belowFieldMin(rf, formData[`${field.name}_${idx}_${rf.name}`])) return false
           }
         }
         continue
       }
       if (field.required && isEmptyValue(formData[field.name])) return false
+      if (belowFieldMin(field, formData[field.name])) return false
     }
     return true
   }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC])

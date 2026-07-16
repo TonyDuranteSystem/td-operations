@@ -24,6 +24,10 @@ export interface FieldConfig {
    *  high-stakes choice — e.g. "don't upload PDFs, they're slow and lossy". */
   danger?: { text: string; textIt?: string }
   prefilled?: boolean
+  /** Domain minimum for `number` fields (e.g. 0 on money amounts — a negative
+   *  dollar figure is never legitimate). Rendered as the input's min attribute
+   *  AND enforced by the wizard step gate. */
+  min?: number
   accept?: string                  // file input accept attribute override
   repeaterFields?: FieldConfig[]   // sub-fields for repeater type
   repeaterAddLabel?: string
@@ -429,6 +433,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           value={String(value ?? '')}
           inputMode={field.format === 'ein' ? 'numeric' : undefined}
           maxLength={field.format === 'ein' ? 10 : undefined}
+          min={field.type === 'number' ? field.min : undefined}
           onChange={e => {
             const raw = e.target.value
             if (field.format === 'ein') {
@@ -442,6 +447,14 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
         />
       )}
 
+      {field.type === 'number' && field.min !== undefined && value !== '' && value !== null && value !== undefined &&
+        !Number.isNaN(Number(value)) && Number(value) < field.min && (
+        <p className="text-xs text-red-500">
+          {field.min === 0
+            ? (locale === 'it' ? 'Questo importo non può essere negativo.' : 'This amount cannot be negative.')
+            : (locale === 'it' ? `Deve essere almeno ${field.min}.` : `Must be at least ${field.min}.`)}
+        </p>
+      )}
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )
