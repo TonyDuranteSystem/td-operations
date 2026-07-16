@@ -48,7 +48,11 @@ export const REVIEW_TRANSITIONS: Record<ReviewStatus | "null", ReviewStatus[]> =
   under_review: ["approved", "revision_requested"],
   revision_requested: ["resubmitted"],
   resubmitted: ["under_review"],
-  approved: ["confirmed", "revision_requested"],
+  // approved → submitted: a client EDIT invalidates the approval (added
+  // 2026-07-16, PTBT fix — closes the approve-then-swap window where edited
+  // data could be confirmed unreviewed). The submit route performs this
+  // transition synchronously.
+  approved: ["confirmed", "revision_requested", "submitted"],
   confirmed: ["reopened"],
   reopened: ["submitted"],
 }

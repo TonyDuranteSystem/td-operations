@@ -32,6 +32,13 @@ import { collectUploadPaths } from '@/lib/portal/wizard-uploads'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
+import {
+  resolveTaxWizardEligibility,
+  CLOSED_REASON_COPY,
+  type TaxWizardEligibility,
+  type TaxWizardClosedReason,
+} from '@/lib/tax/wizard-eligibility'
+import { buildReviewHistoryEntry, type ReviewStatus } from '@/lib/tax/review-status'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -124,6 +131,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // ─── 0c. TAX WIZARD ELIGIBILITY GATE (PTBT incident, dev job 8cc8e1c8) ───
+    // MUST run before ANY state write: a rejection after step 2 would leave
+    // wizard_progress 'submitted', so the client's retry hits the step-1 dedup
+    // and gets a false "Already submitted" with no submission row — silent
+    // data loss. This server-side check is the gate that matters; the home
+    // card and wizard page consult the same resolver for UX only.
+    let taxEligibility: TaxWizardEligibility | null = null
+    if (wizard_type === 'tax' || wizard_type === 'tax_return') {
+      taxEligibility = await resolveTaxWizardEligibility({ accountId: account_id, contactId: contact_id })
+      if (taxEligibility.mode === 'closed' || taxEligibility.mode === 'company_info') {
+        const reason: TaxWizardClosedReason =
+          taxEligibility.mode === 'company_info' ? 'pre_wizard_stage' : (taxEligibility.reason ?? 'no_tax_return_open')
+        console.warn(`[wizard-submit] Tax wizard submit REJECTED (${reason}) account=${account_id} contact=${contact_id}`)
+        return NextResponse.json(
+          { error: CLOSED_REASON_COPY[reason].en, error_it: CLOSED_REASON_COPY[reason].it, reason },
+          { status: 409 },
+        )
+      }
+    }
+
     // ─── 1. DEDUPLICATION ───
     // Skip dedup check when allow_resubmit=true (client editing a previous submission)
     if (progress_id && !allow_resubmit) {
@@ -196,71 +223,131 @@ export async function POST(req: NextRequest) {
 
       const uploadPaths = extractUploadPaths(data)
 
-      // For tax submissions, look up tax_year from tax_returns (required field)
-      let taxYear: number | null = null
-      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && account_id) {
-        const { data: tr } = await supabaseAdmin
-          .from('tax_returns')
-          .select('tax_year')
-          .eq('account_id', account_id)
-          .eq('data_received', false)
-          .order('tax_year', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        taxYear = tr?.tax_year ?? null
-      }
-
-      // The submission tables do NOT share one column set (formation has no
-      // account_id, tax_return has no lead_id, itin/closure have no entity_type,
-      // only tax_return has tax_year). buildSubmissionRecord centralizes those
-      // per-table rules; tests/unit/submission-record.test.ts cross-checks the
-      // columns it can emit against the generated DB types, so a future drift
-      // fails CI loudly instead of as a 500 / false "submission failed" toast.
-      const submissionRecord = buildSubmissionRecord(submissionTable, {
-        token: submissionToken,
-        contact_id: contact_id || null,
-        account_id: account_id || null,
-        lead_id: lead_id || null,
-        entity_type: entity_type || null,
-        submitted_data: data,
-        upload_paths: uploadPaths,
-        tax_year: taxYear,
-      })
-
-      const { data: sub, error: subErr } = await supabaseAdmin
-        .from(submissionTable as never)
-        .upsert(submissionRecord as never, { onConflict: 'token' })
-        .select('id')
-        .single()
-
-      if (subErr) {
-        // Do NOT silently continue. Previously this just logged and let
-        // submissionId stay null, which caused the background handler to
-        // bail with "invalid payload" and the client to see "submitted
-        // successfully" while the auto-chain never ran. Fail loudly so the
-        // client retries and so the error is visible in logs.
-        console.error('[wizard-submit] Submission upsert failed:', subErr.message)
+      // Tax year is PINNED by the eligibility resolver — 'open' carries the
+      // open tax_returns row's year; 'review' carries the submission's stored
+      // year. Never derived from a calendar and never left to the DB column
+      // default (the PTBT silent-2025 mechanism).
+      const taxYear: number | null = taxEligibility?.taxYear ?? null
+      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && taxYear === null) {
+        // Defensive: the 0c gate guarantees a year for tax submissions.
+        console.error('[wizard-submit] Tax submission reached save with no pinned tax year — gate bug')
         return NextResponse.json(
-          { error: `Failed to save submission: ${subErr.message}` },
-          { status: 500 },
+          { error: CLOSED_REASON_COPY.no_tax_return_open.en, reason: 'no_tax_return_open' },
+          { status: 409 },
         )
       }
-      submissionId = (sub as Record<string, unknown> | null)?.id as string || null
 
-      // Mark the tax submission "submitted" SYNCHRONOUSLY on first submit so the
-      // portal banner reads "submitted — under review" the instant the client
-      // lands back on the dashboard. The background handler (tax-form-setup
-      // step 9) otherwise sets review_status a few seconds later, leaving the
-      // client briefly on the "Complete your tax form" banner and prone to
-      // re-submitting (Luca, 2026-06-25). Guarded to review_status IS NULL so a
-      // resubmit-after-revision is left untouched for the handler's
-      // submitted/resubmitted logic; the handler still appends review_history.
-      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && submissionId) {
-        await supabaseAdmin
+      if (taxEligibility?.mode === 'review' && taxEligibility.submissionId) {
+        // ── REVIEW-LOOP EDIT: update the SAME submission row by id. ──
+        // Never the token upsert: the token embeds the CALENDAR year, so a
+        // December→January resubmit (and every pre-portal legacy token) would
+        // INSERT a twin row and orphan the reviewed one, splitting the review
+        // history and the staff task's reference.
+        const nowIso = new Date().toISOString()
+        const { data: curSub, error: curErr } = await supabaseAdmin
           .from('tax_return_submissions')
-          .update({ review_status: 'submitted' })
-          .eq('id', submissionId)
-          .is('review_status', null)
+          .select('id, token, review_status, review_history')
+          .eq('id', taxEligibility.submissionId)
+          .single()
+        if (curErr || !curSub) {
+          console.error('[wizard-submit] Review-mode submission lookup failed:', curErr?.message)
+          return NextResponse.json(
+            { error: `Failed to save submission: ${curErr?.message ?? 'submission not found'}` },
+            { status: 500 },
+          )
+        }
+
+        const { error: updErr } = await supabaseAdmin
+          .from('tax_return_submissions')
+          .update({ submitted_data: data, upload_paths: uploadPaths, updated_at: nowIso })
+          .eq('id', curSub.id)
+        if (updErr) {
+          console.error('[wizard-submit] Review-mode submission update failed:', updErr.message)
+          return NextResponse.json(
+            { error: `Failed to save submission: ${updErr.message}` },
+            { status: 500 },
+          )
+        }
+        submissionId = curSub.id
+        submissionToken = curSub.token
+
+        // Close the approve-then-swap window SYNCHRONOUSLY: an edit at
+        // 'approved' (or 'reopened') must invalidate the approval BEFORE the
+        // client can see a stale "Confirm" banner — the background handler
+        // is fire-and-forget and may run seconds later or never. The
+        // approved→submitted transition is legal per REVIEW_TRANSITIONS
+        // (client edit invalidates approval). revision_requested is left for
+        // the handler's resubmitted logic (its legal next state).
+        const prev = (curSub.review_status ?? null) as ReviewStatus | null
+        if (prev === 'approved' || prev === 'reopened') {
+          const history = Array.isArray(curSub.review_history) ? curSub.review_history : []
+          history.push(buildReviewHistoryEntry({
+            from: prev,
+            to: 'submitted',
+            at: nowIso,
+            by: contact_id ? `client:${contact_id}` : 'portal',
+            note: 'Client edited data — approval invalidated at submit time',
+          }))
+          await supabaseAdmin
+            .from('tax_return_submissions')
+            .update({ review_status: 'submitted', review_history: history })
+            .eq('id', curSub.id)
+            .eq('review_status', prev)
+        }
+      } else {
+        // ── FRESH SUBMISSION ──
+        // The submission tables do NOT share one column set (formation has no
+        // account_id, tax_return has no lead_id, itin/closure have no entity_type,
+        // only tax_return has tax_year). buildSubmissionRecord centralizes those
+        // per-table rules; tests/unit/submission-record.test.ts cross-checks the
+        // columns it can emit against the generated DB types, so a future drift
+        // fails CI loudly instead of as a 500 / false "submission failed" toast.
+        const submissionRecord = buildSubmissionRecord(submissionTable, {
+          token: submissionToken,
+          contact_id: contact_id || null,
+          account_id: account_id || null,
+          lead_id: lead_id || null,
+          entity_type: entity_type || null,
+          submitted_data: data,
+          upload_paths: uploadPaths,
+          tax_year: taxYear,
+        })
+
+        const { data: sub, error: subErr } = await supabaseAdmin
+          .from(submissionTable as never)
+          .upsert(submissionRecord as never, { onConflict: 'token' })
+          .select('id')
+          .single()
+
+        if (subErr) {
+          // Do NOT silently continue. Previously this just logged and let
+          // submissionId stay null, which caused the background handler to
+          // bail with "invalid payload" and the client to see "submitted
+          // successfully" while the auto-chain never ran. Fail loudly so the
+          // client retries and so the error is visible in logs.
+          console.error('[wizard-submit] Submission upsert failed:', subErr.message)
+          return NextResponse.json(
+            { error: `Failed to save submission: ${subErr.message}` },
+            { status: 500 },
+          )
+        }
+        submissionId = (sub as Record<string, unknown> | null)?.id as string || null
+
+        // Mark the tax submission "submitted" SYNCHRONOUSLY on first submit so the
+        // portal banner reads "submitted — under review" the instant the client
+        // lands back on the dashboard. The background handler (tax-form-setup
+        // step 9) otherwise sets review_status a few seconds later, leaving the
+        // client briefly on the "Complete your tax form" banner and prone to
+        // re-submitting (Luca, 2026-06-25). Guarded to review_status IS NULL so a
+        // resubmit-after-revision is left untouched for the handler's
+        // submitted/resubmitted logic; the handler still appends review_history.
+        if ((wizard_type === 'tax' || wizard_type === 'tax_return') && submissionId) {
+          await supabaseAdmin
+            .from('tax_return_submissions')
+            .update({ review_status: 'submitted' })
+            .eq('id', submissionId)
+            .is('review_status', null)
+        }
       }
 
       // Prior-year return matrix (tax wizard, master plan §5): resolve the
@@ -601,9 +688,12 @@ export async function POST(req: NextRequest) {
         source: 'portal_wizard',
       }
 
-      // For tax wizard, add tax-specific fields
+      // For tax wizard, carry the PINNED year + tax_returns row from the
+      // eligibility resolver so the handler never re-derives them (its old
+      // any-row / calendar fallbacks attributed data to wrong years).
       if (wizard_type === 'tax' || wizard_type === 'tax_return') {
-        payload.tax_return_id = null // Handler will look up from account
+        payload.tax_return_id = taxEligibility?.taxReturnId ?? null
+        payload.tax_year = taxEligibility?.taxYear ?? null
         payload.changed_fields = null // Portal wizard doesn't track diffs
       }
 
