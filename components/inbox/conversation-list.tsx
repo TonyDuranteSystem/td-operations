@@ -232,12 +232,23 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   }, [data, ov, un])
 
   // Remember the shown ENRICHED rows for next round's carry-forward (in an
-  // effect, never mutating the ref during render).
+  // effect, never mutating the ref during render). ALSO retain the last-known
+  // row for any id currently under an override: a hidden row drops out of
+  // `visibleRows`, but an Undo needs its data to pin back. Without this, a
+  // carried-forward (unenriched) row that gets deleted has no snapshot anywhere
+  // — the raw payload never had it — and its Undo would restore it INVISIBLY,
+  // the exact bug this whole reconcile exists to kill (bug-hunter, bulk review).
+  // Bounded by (visible rows + active overrides), so it cannot grow unbounded.
   useEffect(() => {
     const next = new Map<string, InboxConversation>()
     for (const c of visibleRows) if (!c.partial) next.set(c.id, c)
+    for (const [id, o] of Array.from(ov)) {
+      if (next.has(id)) continue
+      const keep = prevRef.current.get(id) ?? o.snapshot
+      if (keep) next.set(id, keep)
+    }
     prevRef.current = next
-  }, [visibleRows])
+  }, [visibleRows, ov])
 
   const conversations = useMemo(() => visibleRows.filter(c => {
     if (!unreadFilter || unreadFilter === 'all') return true

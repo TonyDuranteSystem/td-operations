@@ -63,16 +63,47 @@ class InboxClient {
     return this
   }
 
-  /** Re-render off the last payload (after a user action changed overrides). */
+  /** Re-render off the last payload (after a user action changed overrides).
+   *  Mirrors conversation-list: remember the shown enriched rows AND retain the
+   *  last-known row for any overridden id (a hidden row leaves `visible`, but an
+   *  Undo needs its data to pin back). */
   render() {
     this.visible = computeVisibleList({ payload: this.last, overrides: this.overrides, unread: this.unread, prev: this.prev, now: this.now })
     const next = new Map<string, InboxConversation>()
     for (const c of this.visible) if (!c.partial) next.set(c.id, c)
+    for (const [id, o] of Array.from(this.overrides)) {
+      if (next.has(id)) continue
+      const keep = this.prev.get(id) ?? o.snapshot
+      if (keep) next.set(id, keep)
+    }
     this.prev = next
     return this
   }
 
   delete(c: InboxConversation) { this.overrides = new Map(this.overrides).set(c.id, makeHiddenOverride(this.now, c)); return this.render() }
+  /** Bulk trash/archive: snapshot every selected row into a hidden intent. */
+  bulkDelete(cs: InboxConversation[]) {
+    const n = new Map(this.overrides)
+    cs.forEach((c) => n.set(c.id, makeHiddenOverride(this.now, c)))
+    this.overrides = n
+    return this.render()
+  }
+  bulkUndo(ids: string[]) { ids.forEach((id) => this.undo(id)); return this.render() }
+  /** Bulk-delete ids the RAW cache doesn't hold (a carried-forward unenriched or
+   *  pinned row) → the hide gets NO snapshot, as the real code would produce. */
+  bulkDeleteNoSnapshot(ids: string[]) {
+    const n = new Map(this.overrides)
+    ids.forEach((id) => n.set(id.startsWith("gmail:") ? id : `gmail:${id}`, makeHiddenOverride(this.now, undefined)))
+    this.overrides = n
+    return this.render()
+  }
+  /** Partial-failure guard: drop the whole batch's hides (we don't know which failed). */
+  bulkDropHides(ids: string[]) {
+    const n = new Map(this.overrides)
+    ids.forEach((id) => n.delete(id.startsWith("gmail:") ? id : `gmail:${id}`))
+    this.overrides = n
+    return this.render()
+  }
   undo(id: string) {
     const gid = id.startsWith("gmail:") ? id : `gmail:${id}`
     const ex = this.overrides.get(gid) // real component always keys by the full id
@@ -181,6 +212,74 @@ describe("E2E: mark-read stays read (the headline flicker) across the label lag"
     // a real new reply → server unread jumps to 2 (off baseline) → override releases
     c.tick(POLL).fetch(payload([conv("A", { unread: 2 })]))
     expect(c.unreadOf("A")).toBe(2)
+  })
+})
+
+describe("E2E: BULK delete/undo now behaves like the single path", () => {
+  it("bulk-deleted rows never pop back while Gmail's index lags", () => {
+    const A = conv("A"), B = conv("B"), C = conv("C")
+    const c = new InboxClient()
+    c.fetch(payload([A, B, C]))
+    c.bulkDelete([A, B]) // select A+B → delete
+    expect(c.ids()).toEqual(["gmail:C"])
+    // the push refetch lands while Gmail still lists A+B (trash-index lag)
+    c.tick(2500).fetch(payload([A, B, C]))
+    expect(c.ids()).toEqual(["gmail:C"]) // no pop-back (old bug: both returned)
+    // Gmail catches up → two stable-absent rounds release the hides
+    c.tick(POLL).fetch(payload([C])); expect(c.ids()).toEqual(["gmail:C"])
+    c.tick(POLL).fetch(payload([C])); expect(c.ids()).toEqual(["gmail:C"])
+  })
+
+  it("bulk Undo brings every row back and they STAY through the untrash lag", () => {
+    const A = conv("A"), B = conv("B"), C = conv("C")
+    const c = new InboxClient()
+    c.fetch(payload([A, B, C]))
+    c.bulkDelete([A, B])
+    c.tick(1000).bulkUndo(["gmail:A", "gmail:B"])
+    expect(c.has("A")).toBe(true); expect(c.has("B")).toBe(true) // instantly back
+
+    // server hasn't re-indexed the untrash → omits A+B. They must STAY.
+    c.tick(3000).fetch(payload([C]))
+    expect(c.has("A")).toBe(true); expect(c.has("B")).toBe(true) // old bug: invisible ~1min
+    c.tick(POLL).fetch(payload([C]))
+    expect(c.has("A")).toBe(true); expect(c.has("B")).toBe(true)
+
+    // Gmail catches up → pins release, rows now server-sourced, never blinked
+    c.tick(POLL).fetch(payload([A, B, C])); expect(c.has("A")).toBe(true)
+    c.tick(POLL).fetch(payload([A, B, C]))
+    expect(c.has("A")).toBe(true); expect(c.has("B")).toBe(true)
+    expect(c.overrides.size).toBe(0)
+  })
+
+  it("bulk-deleting a row Gmail couldn't load still restores VISIBLY on Undo", () => {
+    // The row the user ticks may be a CARRIED-FORWARD (unenriched) row — it is
+    // rendered from the list's last-known copy and is NOT in the raw payload, so
+    // the hide gets no snapshot. Undo must still bring it back on screen.
+    const A = conv("A", { name: "Real A" }), B = conv("B")
+    const c = new InboxClient()
+    c.fetch(payload([A, B]))
+    c.tick(POLL).fetch(payload([B], { unenrichedIds: ["gmail:A"] })) // A carried forward
+    expect(c.has("A")).toBe(true)
+
+    c.bulkDeleteNoSnapshot(["gmail:A"]) // raw cache had no A → hide without snapshot
+    expect(c.has("A")).toBe(false)
+
+    c.tick(1000).undo("gmail:A")
+    expect(c.has("A")).toBe(true) // restored VISIBLY (old bug: invisible until Gmail caught up)
+    expect(c.visible.find((x) => x.id === "gmail:A")?.name).toBe("Real A") // real data, not a stub
+  })
+
+  it("PARTIAL FAILURE: dropping the batch's hides never leaves a live email invisible", () => {
+    const A = conv("A"), B = conv("B")
+    const c = new InboxClient()
+    c.fetch(payload([A, B]))
+    c.bulkDelete([A, B])
+    expect(c.ids()).toEqual([]) // both optimistically hidden
+    // the route reports "1 failed" but not WHICH → drop the whole batch's hides
+    c.bulkDropHides(["gmail:A", "gmail:B"])
+    c.tick(500).fetch(payload([A, B])) // refetch shows the true state
+    expect(c.has("A")).toBe(true)
+    expect(c.has("B")).toBe(true) // the one that survived is NOT hidden
   })
 })
 

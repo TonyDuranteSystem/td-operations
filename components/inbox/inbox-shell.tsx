@@ -414,36 +414,58 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   })
 
   const bulkActionMutation = useMutation({
-    mutationFn: async ({ action, labelId }: { action: string; labelId?: string }) => {
-      const threadIds = Array.from(selectedIds).map(id => id.replace('gmail:', ''))
+    // The selection travels WITH the request as a variable, captured once at
+    // click time by the caller. Both the send (below) and the optimistic hide
+    // (onSuccess) read that SAME frozen list, so they can never diverge.
+    // Reading live `selectedIds` in either place is a trap: onSuccess gets the
+    // newest render's closure, and — when the PWA is offline — react-query PAUSES
+    // the mutation before sending and re-reads `mutationFn` on resume, so a
+    // checkbox ticked meanwhile would be trashed with no Undo (or a de-selected
+    // one hidden though never sent, sticky + persisted for 5 min).
+    mutationFn: async ({ action, labelId, ids }: { action: string; labelId?: string; ids: string[] }) => {
+      const threadIds = ids.map(id => id.replace('gmail:', ''))
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ threadIds, action, labelId, bulk: true, mailbox: activeMailbox }),
       })
-      if (!res.ok) throw new Error('Bulk action failed')
+      if (!res.ok) {
+        // R099 — surface the server's actual reason; a bare throw made a failed
+        // bulk action a silent no-op (no toast at all) under Gmail rate-limits.
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Bulk action failed — please try again.')
+      }
       return res.json()
     },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Bulk action failed — please try again.')
+    },
     onSuccess: (data, variables) => {
-      const count = selectedIds.size
-      // Snapshot the ids before clearSelection() empties the set — the Undo toast
-      // callback runs long after this handler returns.
-      const idsAtStart = Array.from(selectedIds)
+      const idsAtStart = variables.ids
+      const idSet = new Set(idsAtStart)
+      const count = idsAtStart.length
       if (variables.action === 'archive' || variables.action === 'trash') {
-        queryClient.setQueriesData(
-          { queryKey: ['inbox-conversations'] },
-          (old: unknown) => {
-            if (!old || typeof old !== 'object') return old
-            const data = old as { conversations?: InboxConversation[]; total?: number }
-            if (!data.conversations) return old
-            return {
-              ...data,
-              conversations: data.conversations.filter(c => !selectedIds.has(c.id)),
-              total: (data.total ?? data.conversations.length) - count,
-            }
-          }
-        )
-        if (selected && selectedIds.has(selected.id)) setSelected(null)
+        // Hide via the SAME override map as the single-row delete, snapshotting
+        // the full rows FIRST. The old cache-filter threw the rows away, so (a)
+        // the next push refetch repopulated them from Gmail's lagging index and
+        // they popped back for 30-60s, and (b) a bulk Undo had nothing to put
+        // back and relied on a refetch into the untrash lag (invisible ~1 min).
+        const rowsById = new Map<string, InboxConversation>()
+        for (const [, d] of queryClient.getQueriesData<{ conversations: InboxConversation[] }>({ queryKey: ['inbox-conversations'] })) {
+          d?.conversations?.forEach(c => { if (idSet.has(c.id)) rowsById.set(c.id, c) })
+        }
+        setOverrides(prev => {
+          const next = new Map(prev)
+          // Snapshot source, best → worst: the raw cached row; else an existing
+          // override's snapshot (e.g. re-deleting a row that is currently PINNED
+          // from an earlier Undo — such a row is injected from its snapshot and
+          // is NOT in the raw payload). If both miss (a carried-forward
+          // unenriched row), the reconcile falls back to the list's last-known
+          // copy, which conversation-list retains for overridden ids.
+          idsAtStart.forEach(id => next.set(id, makeHiddenOverride(Date.now(), rowsById.get(id) ?? prev.get(id)?.snapshot)))
+          return next
+        })
+        if (selected && idSet.has(selected.id)) setSelected(null)
       }
       // Optimistic unread badges — Gmail's index lags label changes
       if (variables.action === 'mark_read' || variables.action === 'mark_unread') {
@@ -456,7 +478,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         }
         setUnread(prev => {
           const next = new Map(prev)
-          selectedIds.forEach(id => next.set(id, makeUnreadOverride(v, next.get(id)?.baseline ?? unreadById.get(id) ?? (v === 0 ? 1 : 0), Date.now())))
+          idsAtStart.forEach(id => next.set(id, makeUnreadOverride(v, next.get(id)?.baseline ?? unreadById.get(id) ?? (v === 0 ? 1 : 0), Date.now())))
           return next
         })
       }
@@ -485,6 +507,19 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       // for 30s is barely better than no warning. Refetch immediately so the
       // survivors come back. Failure-path only, so the 2026-07-08 "don't refetch
       // on every bulk action" guard (a SUCCESS-path concern) is untouched.
+      // PARTIAL FAILURE: some selected emails were NOT actually deleted/archived.
+      // We hid the whole batch optimistically, and the route reports COUNTS, not
+      // which ids failed — so drop the hides for the entire batch rather than
+      // leave a still-live email invisible while the toast says "1 failed". The
+      // genuinely-trashed ones linger until Gmail's index catches up, which is
+      // strictly better than hiding an email the user still has.
+      if (failCount > 0 && (variables.action === 'trash' || variables.action === 'archive')) {
+        setOverrides(prev => {
+          const next = new Map(prev)
+          idsAtStart.forEach(id => next.delete(id))
+          return next
+        })
+      }
       if (variables.action === 'move_to_label' || failCount > 0) {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       }
@@ -495,9 +530,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
       // Bulk Delete gets an Undo too (Antonio, 2026-07-14 — it previously had
       // none). `ids` is captured here because clearSelection() above has already
-      // emptied selectedIds by the time the toast callback runs. Bulk delete
-      // hides the rows by filtering the react-query cache (not `deletedIds`), so
-      // the Undo only needs the untrash + a refetch.
+      // emptied selectedIds by the time the toast callback runs. Bulk delete now
+      // hides via the shared override map (with row snapshots), so the Undo pins
+      // the exact rows back instead of relying on a refetch into Gmail's lag.
       if (variables.action === 'trash') {
         const ids = idsAtStart
         const snapshot = summary?.restore
@@ -531,8 +566,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                 const rOk = typeof out.succeeded === 'number' ? out.succeeded : ids.length
                 const rFail = typeof out.failed === 'number' ? out.failed : 0
 
+                // Flip each hidden intent to PINNED (handleEmailRestored) so the
+                // rows come straight back from their snapshots and STAY until
+                // Gmail confirms the untrash. No conversations refetch here: that
+                // racing refetch lands inside the untrash lag and returns without
+                // them — the exact "restored but invisible" bug.
                 ids.forEach(id => handleEmailRestored(id))
-                queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                 queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
                 queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
 
@@ -754,7 +793,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           </span>
           <div className="flex items-center gap-1 ml-auto relative">
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'trash' })}
+              onClick={() => bulkActionMutation.mutate({ action: 'trash', ids: Array.from(selectedIds) })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
             >
@@ -762,7 +801,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               Delete
             </button>
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'archive' })}
+              onClick={() => bulkActionMutation.mutate({ action: 'archive', ids: Array.from(selectedIds) })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
             >
@@ -770,7 +809,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               Archive
             </button>
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'mark_read' })}
+              onClick={() => bulkActionMutation.mutate({ action: 'mark_read', ids: Array.from(selectedIds) })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
             >
@@ -778,7 +817,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
               Mark Read
             </button>
             <button
-              onClick={() => bulkActionMutation.mutate({ action: 'mark_unread' })}
+              onClick={() => bulkActionMutation.mutate({ action: 'mark_unread', ids: Array.from(selectedIds) })}
               disabled={bulkActionMutation.isPending}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
             >
@@ -800,7 +839,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                     <button
                       key={label.id}
                       onClick={() => {
-                        bulkActionMutation.mutate({ action: 'move_to_label', labelId: label.id })
+                        bulkActionMutation.mutate({ action: 'move_to_label', labelId: label.id, ids: Array.from(selectedIds) })
                         setMoveToOpen(false)
                       }}
                       className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
