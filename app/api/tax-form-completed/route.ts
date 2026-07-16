@@ -59,6 +59,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Form not completed" }, { status: 400 })
     }
 
+    // A submission whose chain already ran (review_status written by step 4C)
+    // must not be re-processed: a late sweep refire or duplicate trigger would
+    // resend the team email and REGRESS an in-flight review (under_review →
+    // submitted re-enables client editing). 'revision_requested' stays
+    // allowed — the one state where a legitimate resubmission arrives with
+    // the marker already set.
+    if (sub.review_status && sub.review_status !== "revision_requested") {
+      return NextResponse.json({ ok: true, skipped: "already_processed", review_status: sub.review_status })
+    }
+
     const results: { step: string; status: string; detail?: string }[] = []
 
     // Get company name
@@ -463,13 +473,22 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
 
         if (fullSub?.submitted_data && acc?.drive_folder_id) {
           const { saveFormToDrive } = await import("@/lib/form-to-drive")
+          // The submission's files live in whichever bucket they were uploaded
+          // to: the PORTAL wizard uses "onboarding-uploads" with a "tax/{id}/…"
+          // path scheme; the EXTERNAL public tax form (this route's actual
+          // caller) uploads to the "tax-form-uploads" config default with a
+          // "{slug}-{year}/…" scheme. Pick by path prefix — same rule as
+          // tax_form_review. A hardcoded "onboarding-uploads" here made every
+          // external Drive copy fail (0 files) since 2026-06-12.
+          const uploadPaths = (fullSub.upload_paths as string[]) || []
+          const portalUpload = uploadPaths.some(p => p.startsWith("tax/"))
           const driveResult = await saveFormToDrive(
             "tax_return",
             fullSub.submitted_data as Record<string, unknown>,
-            (fullSub.upload_paths as string[]) || [],
+            uploadPaths,
             acc.drive_folder_id,
             { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
-            { bucket: "onboarding-uploads" }
+            portalUpload ? { bucket: "onboarding-uploads" } : undefined
           )
           if (driveResult.summaryFileId) {
             results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
