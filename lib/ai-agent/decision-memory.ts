@@ -311,17 +311,22 @@ export async function contradictMemory(id: string, newDecision: string): Promise
   if (!newDecision?.trim()) throw new Error("contradictMemory: newDecision is required")
 
   // Load the old memory so the replacement keeps the same situation/context.
+  // client_key + bot_said are LOAD-BEARING here (WS1.5 fix, 2026-07-17): before,
+  // they were not selected, so correcting a CLIENT-scoped lesson produced a new
+  // GLOBAL lesson — the client-specific fact leaked into every client's recall
+  // and vanished from that client's brain.
   const { data: old, error } = await db
     .from("decision_memory")
     .select(
-      "situation, reasoning, tags, domain, actors, source_type, source_ref, confidence, times_contradicted"
+      "situation, reasoning, tags, domain, actors, source_type, source_ref, confidence, times_contradicted, client_key, bot_said"
     )
     .eq("id", id)
     .single()
   if (error) throw new Error(`contradictMemory read failed: ${error.message}`)
   if (!old) throw new Error(`contradictMemory: memory ${id} not found`)
 
-  // Create the replacement memory for the same situation.
+  // Create the replacement memory for the same situation — preserving the client
+  // scope so a client-specific correction stays client-specific.
   const newId = await saveDecisionMemory({
     situation: old.situation as string,
     decision: newDecision,
@@ -332,6 +337,8 @@ export async function contradictMemory(id: string, newDecision: string): Promise
     sourceType: (old.source_type as string) ?? "contradiction",
     sourceRef: (old.source_ref as string | null) ?? undefined,
     confidence: (old.confidence as number | null) ?? undefined,
+    clientKey: (old.client_key as string | null) ?? undefined,
+    botSaid: (old.bot_said as string | null) ?? undefined,
   })
 
   // Mark the old memory contradicted + superseded, pointing at the replacement.
@@ -347,4 +354,21 @@ export async function contradictMemory(id: string, newDecision: string): Promise
   if (updErr) throw new Error(`contradictMemory update failed: ${updErr.message}`)
 
   return newId
+}
+
+/**
+ * VOID a memory (WS1.5, 2026-07-17) — remove a wrong lesson WITHOUT a
+ * replacement. `contradictMemory` requires a new decision and creates a fresh
+ * active row, so it can't express "this is just wrong, drop it" (wiring a Void
+ * button to it would plant an active "(voided)" lesson). This flips status to
+ * 'voided'; recall filters `status='active'`, so a voided lesson is immediately
+ * excluded from every prompt, while the row is preserved for audit. Idempotent.
+ */
+export async function voidMemory(id: string): Promise<void> {
+  if (!id) throw new Error("voidMemory: id is required")
+  const { error } = await db
+    .from("decision_memory")
+    .update({ status: "voided", updated_at: new Date().toISOString() })
+    .eq("id", id)
+  if (error) throw new Error(`voidMemory failed: ${error.message}`)
 }

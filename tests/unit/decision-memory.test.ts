@@ -27,6 +27,7 @@ import {
   recallDecisionMemory,
   confirmMemory,
   contradictMemory,
+  voidMemory,
   EMBEDDING_DIM,
 } from "@/lib/ai-agent/decision-memory"
 
@@ -269,5 +270,50 @@ describe("contradictMemory", () => {
 
   it("throws when newDecision missing", async () => {
     await expect(contradictMemory("mem-old", "")).rejects.toThrow(/newDecision is required/)
+  })
+
+  it("PRESERVES client scope — a client-specific correction stays client-scoped (WS1.5)", async () => {
+    mockFetchOnceEmbedding(validEmbedding())
+    const oldRow = {
+      situation: "how to bill THIS client",
+      reasoning: null, tags: null, domain: null, actors: null,
+      source_type: "chat", source_ref: "msg-9", confidence: 0.6, times_contradicted: 0,
+      client_key: "account:acct-42", bot_said: "I said EUR",
+    }
+    const readBuilder = builder({ data: oldRow, error: null })
+    const insertBuilder = builder({ data: { id: "mem-new" }, error: null })
+    const updateBuilder = builder({ data: null, error: null })
+    mockFrom
+      .mockReturnValueOnce(readBuilder)
+      .mockReturnValueOnce(insertBuilder)
+      .mockReturnValue(updateBuilder)
+
+    await contradictMemory("mem-old", "bill in USD for this client")
+
+    // The replacement must carry the SAME client_key — not leak to global (null).
+    expect(insertBuilder.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ client_key: "account:acct-42" })
+    )
+  })
+})
+
+// ─── voidMemory ──────────────────────────────────────────────────
+
+describe("voidMemory", () => {
+  it("flips status to 'voided' (removed from recall, no replacement)", async () => {
+    const updateBuilder = builder({ data: null, error: null })
+    mockFrom.mockReturnValue(updateBuilder)
+
+    await voidMemory("mem-bad")
+
+    expect(updateBuilder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "voided" })
+    )
+    // No insert — a void must NOT create a new active row.
+    expect(updateBuilder.insert).not.toHaveBeenCalled()
+  })
+
+  it("throws when id missing", async () => {
+    await expect(voidMemory("")).rejects.toThrow(/id is required/)
   })
 })
