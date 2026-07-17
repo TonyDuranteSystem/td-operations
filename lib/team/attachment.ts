@@ -8,6 +8,63 @@
 import type { ChatAttachment } from '@/lib/types'
 import { validateChatAttachment, CHAT_ATTACHMENT_MAX_MB } from '@/lib/portal/chat-attachment'
 
+/** Max files that can ride on a single chat message. */
+export const CHAT_ATTACHMENT_MAX_COUNT = 5
+
+export interface ChatFileIntake {
+  /** Files that passed validation and fit under the per-message cap. */
+  accepted: File[]
+  /** Names of files rejected (blocked type, or empty/folder). */
+  rejected: string[]
+  /** How many valid files were dropped because the cap was already reached. */
+  overflow: number
+}
+
+/**
+ * Normalize + validate a batch of incoming files (paperclip pick, drag-drop, or
+ * paste) before they are staged in the composer. Pure — no React, no upload.
+ *
+ * - Nameless pasted blobs (some browsers give a clipboard image an empty name)
+ *   get a synthesized `pasted-<ts>.<ext>` name so the upload route (which
+ *   requires a file_name) and the block-list both have something to work with.
+ * - Empty files / dropped folders (size 0) are rejected — they otherwise create
+ *   a permanent failed-send loop.
+ * - Everything else runs the shared active-content block-list.
+ * - The per-message cap is applied against how many files are ALREADY staged.
+ */
+export function prepareChatFiles(
+  incoming: File[],
+  currentCount: number,
+  cap: number = CHAT_ATTACHMENT_MAX_COUNT,
+): ChatFileIntake {
+  const valid: File[] = []
+  const rejected: string[] = []
+
+  for (const original of incoming) {
+    let file = original
+    if (!file.name) {
+      const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'png'
+      file = new File([original], `pasted-${Date.now()}.${ext}`, { type: original.type })
+    }
+    if (file.size === 0) {
+      rejected.push(file.name || 'item')
+      continue
+    }
+    if (validateChatAttachment(file.name, file.size, file.type)) {
+      rejected.push(file.name)
+      continue
+    }
+    valid.push(file)
+  }
+
+  const room = Math.max(0, cap - currentCount)
+  return {
+    accepted: valid.slice(0, room),
+    rejected,
+    overflow: Math.max(0, valid.length - room),
+  }
+}
+
 /**
  * Upload a single file to team-chat storage via a signed URL.
  * Throws Error(<user-friendly message>) on any failure (R099 — callers surface
