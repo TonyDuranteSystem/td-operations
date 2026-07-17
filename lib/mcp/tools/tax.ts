@@ -1158,10 +1158,14 @@ export function registerTaxTools(server: McpServer) {
             // sending anyway is the theatre this whole change exists to stop, so
             // it blocks the send until a human names the file. Naming any file by
             // id settles the question.
+            // Never report the file we just attached as "not used" — an operator
+            // who named it by id has already answered this question, and a
+            // self-contradicting warning is how real warnings stop being read.
+            const unusedConflicts = pick.conflicted.filter(f => f.id !== chosen?.id)
             if (chosen && !pnl_file_id) {
               pnlConflicts.push(`P&L — attaching "${chosen.name}", but ${pick.conflictNote} If one of those is the corrected P&L, pass pnl_file_id to use it instead; if none of them is, pass pnl_file_id=${chosen.id} to confirm this one.`)
-            } else {
-              notes.push(`P&L — ${pick.conflictNote}`)
+            } else if (unusedConflicts.length > 0) {
+              notes.push(`P&L — ${unusedConflicts.length} other file(s) mention ${tax_year} next to another year, so their year cannot be read from the name and they were NOT used: ${unusedConflicts.map(f => `"${f.name}" (id ${f.id})`).join(", ")}`)
             }
           }
           if (chosen) {

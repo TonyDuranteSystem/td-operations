@@ -78,6 +78,15 @@ describe("pickFileForYear — the wrong-year attacks the Council landed", () => 
     expect(pick(files, 2024).file).toBeNull()
   })
 
+  it("exposes the unreadable files themselves, so a caller can stop calling the chosen one 'not used'", () => {
+    // Found in sandbox QA: naming the revision-dated file by id attached it, and
+    // the very same run warned that it "was NOT used". A self-contradicting
+    // warning is how real warnings stop being read.
+    const p = pick([f("clean", "Acme - PnL 2025.xlsx"), f("revised", "Acme - PnL 2025 (revised 2026-01-30).xlsx")], 2025)
+    expect(p.conflicted.map(c => c.id)).toEqual(["revised"])
+    expect(p.conflicted.filter(c => c.id !== "revised")).toEqual([]) // nothing left to warn about
+  })
+
   it("a stray unreadable file does NOT block a clean winner (having the right file must never be worse)", () => {
     const p = pick([f("clean", "Acme - PnL 2025.xlsx"), f("stray", "Acme - PnL 2024 (revised 2025).xlsx")], 2025)
     expect(p.file?.id).toBe("clean")

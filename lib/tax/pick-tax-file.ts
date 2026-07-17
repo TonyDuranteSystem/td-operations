@@ -52,6 +52,13 @@ export interface FilePick {
   /** Every candidate whose year was proven, best first. */
   candidates: DriveCandidate[]
   /**
+   * Candidates whose year could not be read (they mention the year alongside
+   * another). Exposed so a caller can drop one the operator has since chosen by
+   * id — telling someone a file "was NOT used" while attaching it is worse than
+   * saying nothing.
+   */
+  conflicted: DriveCandidate[]
+  /**
    * A genuine "which of these is it?" — MORE THAN ONE file provably belongs to
    * the year. Nobody can tell which numbers should be filed, so the caller MUST
    * treat this as a stop until a human names the file.
@@ -171,7 +178,7 @@ export function pickFileForYear(files: DriveCandidate[], taxYear: number, opts: 
     ? `${conflicted.length} file(s) mention ${taxYear} next to another year, so their year cannot be read from the name and they were NOT used: ${conflicted.map(f => `"${f.name}" (id ${f.id})`).join(", ")}`
     : null
 
-  if (proven.length === 0) return { file: null, candidates: [], ambiguityNote: null, conflictNote }
+  if (proven.length === 0) return { file: null, candidates: [], conflicted, ambiguityNote: null, conflictNote }
 
   const file = proven[0].file
   // A real stop: several files provably belong to the year and only a human
@@ -182,7 +189,7 @@ export function pickFileForYear(files: DriveCandidate[], taxYear: number, opts: 
   const ambiguityNote = proven.length > 1
     ? `${proven.length} files provably belong to ${taxYear} — using ${describe(proven[0], yearFolderFileIds)}. Also: ${proven.slice(1).map(c => describe(c, yearFolderFileIds)).join("; ")}`
     : null
-  return { file, candidates: proven.map(c => c.file), ambiguityNote, conflictNote }
+  return { file, candidates: proven.map(c => c.file), conflicted, ambiguityNote, conflictNote }
 }
 
 /** Describe a candidate so a human can actually tell two of them apart. */
