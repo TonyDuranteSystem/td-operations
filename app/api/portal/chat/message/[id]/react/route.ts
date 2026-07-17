@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isDashboardUser } from '@/lib/auth'
+import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { requirePortalCapability } from '@/lib/portal/team/gate'
 import { createPortalNotification } from '@/lib/portal/notifications'
@@ -140,6 +140,34 @@ export async function POST(
         notifyAdminOfReaction(msg.account_id, msg.contact_id, emoji).catch(() => {})
       }
     }
+  }
+
+  // 🧠 ADDED by STAFF → save this message to memory (WS1: Antonio's Slack
+  // "react 🧠 to save" behavior, now in the CRM). STAFF ONLY — clients can react
+  // on portal messages, so this must never fire for a client 🧠. Best-effort.
+  try {
+    if (staff && added) {
+      const { isBrainEmoji, saveChatMessageAsMemory } = await import('@/lib/ai-agent/chat-memory-reaction')
+      if (isBrainEmoji(emoji)) {
+        const { data: full } = await supabaseAdmin
+          .from('portal_messages')
+          .select('message')
+          .eq('id', id)
+          .maybeSingle()
+        if (full?.message) {
+          await saveChatMessageAsMemory({
+            messageText: full.message,
+            savedByName: getUserDisplayName(user),
+            surface: 'portal',
+            messageId: id,
+            accountId: msg.account_id,
+            contactId: msg.contact_id,
+          })
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[portal react] 🧠 memory save failed (non-fatal):', err)
   }
 
   return NextResponse.json({ ok: true, added, reactions })
