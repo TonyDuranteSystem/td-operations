@@ -56,6 +56,7 @@ export function normalizeThreadType(type: unknown): ThreadType {
 export const CRM_READ_TOOL_NAMES = [
   "search_accounts",
   "get_account_detail",
+  "get_client_360", // full client snapshot in one labeled read (council WS3.1)
   "search_contacts",
   "search_services",
   "search_payments",

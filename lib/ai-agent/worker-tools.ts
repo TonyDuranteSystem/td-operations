@@ -70,6 +70,10 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // CRM read tools
   "search_accounts",
   "get_account_detail",
+  // Full client snapshot (account + contacts + services + payments + tasks +
+  // recent messages + deadlines) in one labeled read — was AGENT-only; the
+  // worker had to re-assemble it from many calls (council WS3.1).
+  "get_client_360",
   "search_contacts",
   "search_services",
   "search_payments",
