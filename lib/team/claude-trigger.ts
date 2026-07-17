@@ -34,12 +34,16 @@ export async function triggerClaudeReply(params: {
   promptBody: string
   promptMessageId: string
   senderIsAntonio: boolean
+  /** The thread ROOT of the prompt (prompt.root_id ?? prompt.id). Claude's
+   *  answer is stamped with this so it stays inside the same Slack-style thread
+   *  the question was asked in, instead of escaping to the main channel. */
+  promptRootId?: string | null
   /** Invitation-gate continuation: the route determined this thread is an
    *  active Claude conversation (discussion + prior Claude participation), so
    *  run without requiring an in-body @claude. */
   force?: boolean
 }): Promise<string | null> {
-  const { threadId, promptBody, promptMessageId, senderIsAntonio, force } = params
+  const { threadId, promptBody, promptMessageId, senderIsAntonio, promptRootId, force } = params
   if (!force && !mentionsClaude(promptBody)) return null
 
   // 1. Placeholder bubble authored by Claude. reply_to_id links it to the
@@ -54,6 +58,7 @@ export async function triggerClaudeReply(params: {
       sender_name: CLAUDE_SENDER_NAME,
       message: THINKING_PLACEHOLDER,
       reply_to_id: promptMessageId,
+      root_id: promptRootId ?? promptMessageId,
       read_at: new Date().toISOString(),
     })
     .select('id')

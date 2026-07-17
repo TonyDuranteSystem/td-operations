@@ -66,17 +66,22 @@ export async function POST(
     .single()
   if (!thread) return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
 
-  // reply_to must belong to this thread.
+  // reply_to must belong to this thread. Capture the parent's root so this
+  // reply is stamped with the thread's ORIGINAL message (Slack-style 2-level
+  // threading): a reply always flattens to the root, even a reply-to-a-reply.
+  let rootId: string | null = null
   if (replyToId) {
-    const { data: parent } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: parent } = await (supabaseAdmin as any)
       .from('internal_messages')
-      .select('id')
+      .select('id, root_id')
       .eq('id', replyToId)
       .eq('thread_id', threadId)
       .single()
     if (!parent) {
       return NextResponse.json({ error: 'reply_to_id not found in this thread' }, { status: 400 })
     }
+    rootId = parent.root_id ?? parent.id
   }
 
   // Resolve @mentions against the staff directory.
@@ -94,6 +99,7 @@ export async function POST(
       sender_name: displayName,
       message,
       reply_to_id: replyToId,
+      root_id: rootId,
       attachments,
       card: card ?? null,
       mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
@@ -122,14 +128,18 @@ export async function POST(
   // Notifications (best-effort, never block the send).
   try {
     const preview = message.slice(0, 120) || (attachments?.length ? `📎 ${attachments[0].name}` : card ? '📇 Shared a card' : 'New message')
-    // Push ONLY for a DM (to the other participant) or an @mention (to the
-    // mentioned teammates) — Antonio 2026-07-09. Ordinary channel/discussion
-    // chatter no longer buzzes the whole team (matches the DM/@mention dot).
+    // Deep-link: a reply opens the thread pane on its root; a top-level message
+    // opens the channel.
+    const threadUrl = `/team-chat?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
+    // Push ONLY for a DM (to the other participant), an @mention (to the
+    // mentioned teammates), a client-conversation you're in, or a THREAD REPLY
+    // (to that thread's participants) — Antonio 2026-07-09. Ordinary top-level
+    // channel chatter still buzzes no one (matches the DM/@mention dot).
     if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${displayName} mentioned you`,
         body: preview,
-        url: `/team-chat?thread=${threadId}`,
+        url: threadUrl,
         tag: `team-mention-${threadId}`,
       })
     } else if (thread.thread_type === 'dm') {
@@ -138,8 +148,28 @@ export async function POST(
         await sendPushToAdminUsers([otherId], {
           title: displayName,
           body: preview,
-          url: `/team-chat?thread=${threadId}`,
+          url: threadUrl,
           tag: `team-dm-${threadId}`,
+        })
+      }
+    } else if (rootId && (thread.thread_type === 'channel' || thread.thread_type === 'general')) {
+      // Slack-style thread reply in a channel: ping only the people IN this
+      // thread (root author + prior repliers), never the whole channel.
+      const { CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: participants } = await (supabaseAdmin as any)
+        .from('internal_messages')
+        .select('sender_id')
+        .eq('thread_id', threadId)
+        .or(`id.eq.${rootId},root_id.eq.${rootId}`)
+      const ids = (Array.from(new Set((participants ?? []).map((p: { sender_id: string }) => p.sender_id))) as string[])
+        .filter((uid) => uid && uid !== user.id && uid !== CLAUDE_SENDER_UUID)
+      if (ids.length > 0) {
+        await sendPushToAdminUsers(ids, {
+          title: `${displayName} replied in a thread`,
+          body: preview,
+          url: threadUrl,
+          tag: `team-thread-${rootId}`,
         })
       }
     } else if (thread.thread_type === 'discussion') {
@@ -160,7 +190,7 @@ export async function POST(
         await sendPushToAdminUsers(ids, {
           title: `${displayName} · ${thread.title ?? 'Conversation'}`,
           body: preview,
-          url: `/team-chat?thread=${threadId}`,
+          url: threadUrl,
           tag: `team-conversation-${threadId}`,
         })
       }
@@ -189,6 +219,7 @@ export async function POST(
           sender_name: CLAUDE_SENDER_NAME,
           message: outcome.message,
           reply_to_id: msg.id,
+          root_id: msg.root_id ?? msg.id,
           read_at: now,
         })
         return NextResponse.json({ message: msg, approval_handled: true })
@@ -205,6 +236,9 @@ export async function POST(
   let invokeClaude = mentions.claude
   if (!invokeClaude && message && thread.thread_type === 'discussion') {
     const { shouldAutoContinueWithClaude, CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')
+    // Discussions render flat (Slack threads are a channel-only feature in v1),
+    // so the "Claude already participated" check stays thread-wide to preserve
+    // the invitation-gate continuation.
     const { data: claudeMsg } = await supabaseAdmin
       .from('internal_messages')
       .select('id')
@@ -225,6 +259,7 @@ export async function POST(
         threadId,
         promptBody: message,
         promptMessageId: msg.id,
+        promptRootId: msg.root_id ?? msg.id,
         senderIsAntonio: isAdmin(user),
         force: true,
       })

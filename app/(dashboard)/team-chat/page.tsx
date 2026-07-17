@@ -21,7 +21,7 @@ import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } fro
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
-import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg } from './types'
+import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta } from './types'
 
 const AVATAR_COLORS = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-orange-500', 'bg-rose-500', 'bg-cyan-500', 'bg-amber-500', 'bg-indigo-500']
 const QUICK_EMOJIS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂', '🎉']
@@ -83,6 +83,10 @@ export default function TeamWorkspacePage() {
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; thread_id: string; thread_label: string; message: string; sender_name: string; created_at: string }[] | null>(null)
   const [reactFor, setReactFor] = useState<string | null>(null)
+  // Slack threads: per-root metadata (reply counts + unread) and the currently
+  // open thread pane (a root message id, or null when no pane is open).
+  const [threadMeta, setThreadMeta] = useState<Record<string, ThreadMeta>>({})
+  const [openRootId, setOpenRootId] = useState<string | null>(null)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -93,11 +97,28 @@ export default function TeamWorkspacePage() {
   const emojiRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
+  // Refs so the once-subscribed realtime handler reads live values.
+  const currentUserIdRef = useRef<string | null>(null)
+  const openRootIdRef = useRef<string | null>(null)
 
   const { isRecording, isTranscribing, startRecording, stopRecording, isSupported: voiceSupported } =
     useVoiceInput({ language: 'en-US', onTranscript: t => setText(p => p ? `${p} ${t}` : t), onError: m => toast.error(m) })
 
   const selected = useMemo(() => threads.find(t => t.id === selectedId) ?? null, [threads, selectedId])
+  currentUserIdRef.current = currentUserId
+  openRootIdRef.current = openRootId
+
+  // Slack threads are a channel/general feature; DMs and client discussions keep
+  // the flat inline layout (and their @claude continuation) unchanged.
+  const isThreadedChannel = !!selected && (selected.thread_type === 'channel' || selected.thread_type === 'general')
+  // The main channel stream shows ROOTS only (incl. soft-deleted roots as
+  // tombstones so their replies stay attached); replies live in the pane.
+  const streamMessages = useMemo(
+    () => (isThreadedChannel ? messages.filter(m => !m.root_id) : messages),
+    [isThreadedChannel, messages],
+  )
+  const paneRoot = useMemo(() => (openRootId ? messages.find(m => m.id === openRootId) ?? null : null), [openRootId, messages])
+  const paneReplies = useMemo(() => (openRootId ? messages.filter(m => m.root_id === openRootId) : []), [openRootId, messages])
 
   const loadThreads = useCallback(async (selectFirst = false) => {
     try {
@@ -134,6 +155,7 @@ export default function TeamWorkspacePage() {
         }
         return d.messages
       })
+      setThreadMeta(d.thread_meta ?? {})
       // Optimistically clear this thread's unread badge locally.
       setThreads(prev => prev.map(t => t.id === threadId ? { ...t, unread_count: 0 } : t))
     } catch {
@@ -181,8 +203,8 @@ export default function TeamWorkspacePage() {
     }
   }, [deepLinkThread, threads])
 
-  // Load messages when a thread is selected
-  useEffect(() => { if (selectedId) loadMessages(selectedId) }, [selectedId, loadMessages])
+  // Load messages when a thread is selected (and close any open thread pane).
+  useEffect(() => { if (selectedId) { setOpenRootId(null); loadMessages(selectedId) } }, [selectedId, loadMessages])
 
   // Realtime: messages + thread list
   useEffect(() => {
@@ -195,6 +217,21 @@ export default function TeamWorkspacePage() {
         const m = payload.new as TeamMsg
         if (m.thread_id === selectedIdRef.current) {
           setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, { ...m, reply_to_preview: null }])
+          // A reply from someone else bumps its thread's count + unread dot
+          // (unless that thread's pane is already open).
+          if (m.root_id && m.sender_id !== currentUserIdRef.current) {
+            const rid = m.root_id
+            const paneOpen = openRootIdRef.current === rid
+            setThreadMeta(prev => {
+              const cur = prev[rid]
+              return {
+                ...prev,
+                [rid]: cur
+                  ? { ...cur, reply_count: cur.reply_count + 1, last_reply_at: m.created_at, last_reply_sender: m.sender_name, unread: cur.unread || !paneOpen }
+                  : { reply_count: 1, last_reply_at: m.created_at, last_reply_sender: m.sender_name, unread: !paneOpen },
+              }
+            })
+          }
         }
         refreshList()
       })
@@ -376,9 +413,12 @@ export default function TeamWorkspacePage() {
           attachments = await Promise.all(files.map(f => uploadTeamAttachment(f, selectedId)))
         } finally { setUploading(false) }
       }
+      // Reply target: a quoted message, else the open thread's root, else a
+      // top-level channel post. The server flattens to the correct thread root.
+      const replyTargetId = sentReply?.id ?? openRootId ?? null
       const r = await fetch(`/api/team/threads/${selectedId}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: sentText, reply_to_id: sentReply?.id ?? null, attachments }),
+        body: JSON.stringify({ message: sentText, reply_to_id: replyTargetId, attachments }),
       })
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Failed to send') }
       // Optimistically render the sender's own message immediately, instead of
@@ -393,6 +433,19 @@ export default function TeamWorkspacePage() {
             ? { id: sentReply.id, message: sentReply.message, sender_name: sentReply.sender_name, deleted_at: sentReply.deleted_at }
             : null,
         }])
+        // If this was a thread reply, bump the root's reply count locally.
+        if (d.message.root_id) {
+          const rid: string = d.message.root_id
+          setThreadMeta(prev => {
+            const cur = prev[rid]
+            return {
+              ...prev,
+              [rid]: cur
+                ? { ...cur, reply_count: cur.reply_count + 1, last_reply_at: d.message.created_at, last_reply_sender: d.message.sender_name, unread: false }
+                : { reply_count: 1, last_reply_at: d.message.created_at, last_reply_sender: d.message.sender_name, unread: false },
+            }
+          })
+        }
       }
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Failed to send')
@@ -402,7 +455,36 @@ export default function TeamWorkspacePage() {
       // slice keeps the per-message cap intact.
       if (files.length) setPendingFiles(prev => [...files, ...prev].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
     } finally { setSending(false); inputRef.current?.focus() }
-  }, [text, pendingFiles, selectedId, sending, uploading, replyTo, editing, isRecording, stopRecording])
+  }, [text, pendingFiles, selectedId, sending, uploading, replyTo, editing, openRootId, isRecording, stopRecording])
+
+  // Open a Slack thread pane on a root message: mark it read (per-thread), clear
+  // its local unread dot, and default the composer to reply to the root.
+  const openThread = useCallback((rootId: string) => {
+    setOpenRootId(rootId)
+    setReplyTo(null)
+    setThreadMeta(prev => prev[rootId] ? { ...prev, [rootId]: { ...prev[rootId], unread: false } } : prev)
+    const tid = selectedIdRef.current
+    if (tid) {
+      fetch(`/api/team/threads/${tid}/thread-read`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId }),
+      }).catch(() => {})
+    }
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
+
+  const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
+
+  // Deep link to a specific thread pane: /team-chat?thread=<ch>&root=<rootId>.
+  // One-shot (a ref guard) so it doesn't re-open on every poll refresh.
+  const deepLinkRoot = searchParams.get('root')
+  const deepRootDoneRef = useRef(false)
+  useEffect(() => {
+    if (!deepLinkRoot || deepRootDoneRef.current) return
+    if (selectedId === deepLinkThread && messages.some(m => m.id === deepLinkRoot)) {
+      deepRootDoneRef.current = true
+      openThread(deepLinkRoot)
+    }
+  }, [deepLinkRoot, deepLinkThread, selectedId, messages, openThread])
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     setReactFor(null)
@@ -870,27 +952,89 @@ export default function TeamWorkspacePage() {
             )}
 
             <WorkerDropZone onFiles={addPendingFiles} disabled={sending || uploading || !!editing} label="Drop to attach" className="flex-1 flex flex-col min-h-0">
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
-              {loadingMsgs ? (
-                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>
-              ) : messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2">
-                  <MessageSquare className="h-9 w-9" /><p className="text-sm">No messages yet.</p>
+            {/* Messages + optional Slack-style thread pane */}
+            <div className="flex-1 flex min-h-0">
+              {/* Channel stream (roots only in threaded channels) — hidden on
+                  mobile while a thread pane is open */}
+              <div className={cn('flex-1 overflow-y-auto px-4 py-4 space-y-1', isThreadedChannel && openRootId && 'hidden md:block')}>
+                {loadingMsgs ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>
+                ) : streamMessages.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2">
+                    <MessageSquare className="h-9 w-9" /><p className="text-sm">No messages yet.</p>
+                  </div>
+                ) : (
+                  streamMessages.map(m => {
+                    const meta = isThreadedChannel ? threadMeta[m.id] : undefined
+                    return (
+                      <div key={m.id}>
+                        <MessageRow m={m} isMe={m.sender_id === currentUserId} isClaude={m.sender_id === CLAUDE_SENDER_UUID}
+                          canDelete={m.sender_id === currentUserId || isAdmin} currentUserId={currentUserId}
+                          onReply={() => { if (isThreadedChannel) { openThread(m.root_id ?? m.id) } else { setReplyTo(m); inputRef.current?.focus() } }}
+                          onEdit={() => { setEditing(m); setText(m.message); inputRef.current?.focus() }}
+                          onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
+                          onReact={emoji => toggleReaction(m.id, emoji)}
+                          reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)} />
+                        {meta && meta.reply_count > 0 && (
+                          <button onClick={() => openThread(m.id)} className="ml-11 mb-1 flex items-center gap-2 text-xs font-medium text-blue-600 hover:underline">
+                            <MessageSquare className="h-3.5 w-3.5" />
+                            {meta.reply_count} {meta.reply_count === 1 ? 'reply' : 'replies'}
+                            <span className="text-zinc-400 font-normal">· last reply {format(new Date(meta.last_reply_at), 'MMM d, HH:mm')}</span>
+                            {meta.unread && <span className="w-2 h-2 rounded-full bg-blue-500" />}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })
+                )}
+                <div ref={bottomRef} />
+              </div>
+
+              {/* Thread pane: right column on desktop, full-width on mobile. Lives
+                  entirely inside Team Workspace (no navigation). */}
+              {isThreadedChannel && openRootId && (
+                <div className="flex-1 md:flex-none md:w-96 md:border-l border-zinc-200 flex flex-col min-h-0 bg-white">
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
+                    <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><MessageSquare className="h-4 w-4" /> Thread</span>
+                    <button onClick={closeThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+                    {paneRoot ? (
+                      <MessageRow m={paneRoot} isMe={paneRoot.sender_id === currentUserId} isClaude={paneRoot.sender_id === CLAUDE_SENDER_UUID}
+                        canDelete={paneRoot.sender_id === currentUserId || isAdmin} currentUserId={currentUserId}
+                        onReply={() => { setReplyTo(paneRoot); inputRef.current?.focus() }}
+                        onEdit={() => { setEditing(paneRoot); setText(paneRoot.message); inputRef.current?.focus() }}
+                        onDelete={() => deleteMsg(paneRoot)} onPin={() => togglePin(paneRoot)}
+                        onReact={emoji => toggleReaction(paneRoot.id, emoji)}
+                        reactOpen={reactFor === paneRoot.id} setReactOpen={open => setReactFor(open ? paneRoot.id : null)} />
+                    ) : (
+                      <div className="text-xs text-zinc-400 py-4 text-center">This thread&apos;s original message isn&apos;t loaded.</div>
+                    )}
+                    {paneReplies.length > 0 && (
+                      <div className="text-[11px] text-zinc-400 border-b border-zinc-100 pb-1 mb-1">{paneReplies.length} {paneReplies.length === 1 ? 'reply' : 'replies'}</div>
+                    )}
+                    {paneReplies.map(m => (
+                      <MessageRow key={m.id} m={m} isMe={m.sender_id === currentUserId} isClaude={m.sender_id === CLAUDE_SENDER_UUID}
+                        canDelete={m.sender_id === currentUserId || isAdmin} currentUserId={currentUserId}
+                        onReply={() => { setReplyTo(m); inputRef.current?.focus() }}
+                        onEdit={() => { setEditing(m); setText(m.message); inputRef.current?.focus() }}
+                        onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
+                        onReact={emoji => toggleReaction(m.id, emoji)}
+                        reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)} />
+                    ))}
+                  </div>
                 </div>
-              ) : (
-                messages.map(m => (
-                  <MessageRow key={m.id} m={m} isMe={m.sender_id === currentUserId} isClaude={m.sender_id === CLAUDE_SENDER_UUID}
-                    canDelete={m.sender_id === currentUserId || isAdmin} currentUserId={currentUserId}
-                    onReply={() => { setReplyTo(m); inputRef.current?.focus() }}
-                    onEdit={() => { setEditing(m); setText(m.message); inputRef.current?.focus() }}
-                    onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
-                    onReact={emoji => toggleReaction(m.id, emoji)}
-                    reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)} />
-                ))
               )}
-              <div ref={bottomRef} />
             </div>
+
+            {/* Thread-reply mode: the shared composer posts into the open thread */}
+            {isThreadedChannel && openRootId && !replyTo && !editing && (
+              <div className="shrink-0 px-4 py-2 border-t border-zinc-100 bg-blue-50 flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-blue-500 shrink-0" />
+                <p className="flex-1 min-w-0 text-[11px] font-semibold text-blue-700 truncate">Replying in thread{paneRoot ? ` — ${paneRoot.sender_name}: ${paneRoot.message.slice(0, 50)}` : ''}</p>
+                <button onClick={closeThread} className="p-1 rounded-full text-blue-400 hover:bg-blue-100"><X className="h-3.5 w-3.5" /></button>
+              </div>
+            )}
 
             {/* Reply / edit bar */}
             {(replyTo || editing) && (
@@ -966,7 +1110,7 @@ export default function TeamWorkspacePage() {
                       }
                       if (e.key === 'Escape' && commandQuery !== null) setCommandQuery(null)
                     }}
-                    placeholder={editing ? 'Edit message…' : isRecording ? 'Recording…' : `Message ${selected.thread_type === 'channel' ? '#' + (selected.channel_slug ?? '') : selected.thread_type === 'dm' ? dmLabel(selected) : selected.label}… (@ to mention · @claude for AI · / for commands)`}
+                    placeholder={editing ? 'Edit message…' : isRecording ? 'Recording…' : (isThreadedChannel && openRootId) ? 'Reply in thread…' : `Message ${selected.thread_type === 'channel' ? '#' + (selected.channel_slug ?? '') : selected.thread_type === 'dm' ? dmLabel(selected) : selected.label}… (@ to mention · @claude for AI · / for commands)`}
                     rows={1} className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none resize-none max-h-[240px] placeholder:text-zinc-400" />
                 </div>
                 {sending || uploading ? (

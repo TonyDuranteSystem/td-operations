@@ -30,16 +30,19 @@ export async function GET(
     return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
   }
 
+  // Load the NEWEST 500 (desc + limit), then flip to oldest→newest for display.
+  // (The old code ordered ascending + limit, which returned the OLDEST 500 and
+  // dropped the current conversation on long-lived channels.)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rawMessages } = await (supabaseAdmin as any)
     .from('internal_messages')
     .select('*')
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(500)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messages = (rawMessages ?? []) as any[]
+  const messages = ((rawMessages ?? []) as any[]).reverse()
 
   // Reply previews.
   const replyIds = Array.from(new Set(messages.filter(m => m.reply_to_id).map(m => m.reply_to_id)))
@@ -59,6 +62,33 @@ export async function GET(
     reply_to_preview: m.reply_to_id ? (parentMap.get(m.reply_to_id) ?? null) : null,
   }))
 
+  // Per-root thread metadata (Slack threads): reply counts + last reply + this
+  // caller's unread-replies signal. Computed over ALL replies in the thread
+  // (narrow projection, not the loaded window) so counts are accurate even when
+  // the window is capped.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: replyRows } = await (supabaseAdmin as any)
+    .from('internal_messages')
+    .select('root_id, created_at, sender_id, sender_name')
+    .eq('thread_id', threadId)
+    .not('root_id', 'is', null)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+  const rootIds = Array.from(new Set(((replyRows ?? []) as { root_id: string }[]).map(r => r.root_id)))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let rootReads: any[] = []
+  if (rootIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabaseAdmin as any)
+      .from('internal_root_reads')
+      .select('root_message_id, last_read_at')
+      .eq('user_id', user.id)
+      .in('root_message_id', rootIds)
+    rootReads = data ?? []
+  }
+  const { computeThreadMeta } = await import('@/lib/team/thread-meta')
+  const threadMeta = computeThreadMeta((replyRows ?? []), rootReads, user.id)
+
   // Advance the caller's read pointer (per-user unread model).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabaseAdmin as any)
@@ -71,6 +101,7 @@ export async function GET(
   return NextResponse.json({
     thread,
     messages: enriched,
+    thread_meta: threadMeta,
     current_user_id: user.id,
     current_user_name: getUserDisplayName(user),
     is_admin: isAdmin(user),
