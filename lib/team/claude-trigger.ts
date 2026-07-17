@@ -296,6 +296,37 @@ export async function processClaudeReply(params: {
 
   await bumpThreadActivity(threadId)
 
+  // PERMANENT MEMORY (council redo WS1.4): record this @claude exchange in
+  // agent_messages so the assistant actually REMEMBERS this thread beyond the
+  // last-12 window — buildThreadContext ("CONVERSATION SO FAR") and the
+  // recall_thread tool both read agent_messages by thread_id, which was ALWAYS
+  // EMPTY for team threads (a tool that lied to the model). We store the RAW
+  // prompt + reply (never the enriched userBody, which already contains the
+  // last-12 recap — storing that would nest recap-in-recap on the next turn).
+  // recipient='worker' keeps it isolated from the Slack/Hermes crons (they
+  // claim recipient='claude'); status='done' so it never engages the CRM
+  // per-thread in-flight lock. Best-effort — never blocks the reply.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any).from('agent_messages').insert({
+      sender: 'crm',
+      recipient: 'worker',
+      subject: clientName || 'Team chat (@claude)',
+      body: prompt.message,
+      reply,
+      status: 'done',
+      thread_id: threadId,
+      context_json: {
+        source: 'crm-worker',
+        surface: 'team-chat',
+        user_message: prompt.message,
+        ...(clientKey ? { client_key: clientKey } : {}),
+      },
+    })
+  } catch (err) {
+    console.warn('[team-claude] memory write failed (reply still delivered):', err)
+  }
+
   // Slack parity: Slack posts the answer as a NEW message so the phone gets a
   // push. In Team Chat the answer replaces the placeholder (no insert → no push
   // path), so push the asker explicitly. Best-effort.
