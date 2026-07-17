@@ -175,6 +175,21 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'search_conversations',
+    description: 'Search the CRM conversation LOG — the recorded history of what we told a client and how they responded, across channels (email, WhatsApp, phone, portal). Use this to answer "what did we tell this client last time?" / "what was discussed about X?". Filter by account, contact, free-text (topic or client message), and date range.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Filter by account UUID.' },
+        contact_id: { type: 'string', description: 'Filter by contact UUID.' },
+        query: { type: 'string', description: 'Free-text search within topic or the client message.' },
+        date_from: { type: 'string', description: 'From date (YYYY-MM-DD).' },
+        date_to: { type: 'string', description: 'To date (YYYY-MM-DD).' },
+        limit: { type: 'number', description: 'Max results (default 20).' },
+      },
+    },
+  },
+  {
     name: 'create_task',
     description: 'Create a new CRM task for the team.',
     parameters: {
@@ -610,6 +625,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_leads': return await searchLeads(params)
       case 'search_deals': return await searchDeals(params)
       case 'search_portal_messages': return await searchPortalMessages(params)
+      case 'search_conversations': return await searchConversations(params)
       case 'create_task': return await createTask(params)
       case 'send_email': return await sendEmail(params)
       case 'get_dashboard_stats': return await getDashboardStats()
@@ -898,6 +914,40 @@ async function searchPortalMessages(p: any) {
     : `Found ${result.length} messages across all clients`
 
   return JSON.stringify({ summary, messages: result })
+}
+
+// Search the CRM conversation LOG (the "what did we tell this client" history).
+// Read-only; mirrors the MCP conv_search filters. WS2.3 (council).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function searchConversations(p: any) {
+  let q = supabaseAdmin
+    .from('conversations')
+    .select('id, date, channel, topic, category, client_message, response_sent, status, handled_by, direction, account_id, accounts(company_name)')
+    .order('date', { ascending: false })
+    .limit(Math.min(Number(p.limit) || 20, 100))
+
+  if (p.account_id) q = q.eq('account_id', p.account_id)
+  if (p.contact_id) q = q.eq('contact_id', p.contact_id)
+  if (p.query) q = q.or(`topic.ilike.%${p.query}%,client_message.ilike.%${p.query}%`)
+  if (p.date_from) q = q.gte('date', `${p.date_from}T00:00:00`)
+  if (p.date_to) q = q.lte('date', `${p.date_to}T23:59:59`)
+
+  const { data, error } = await q
+  if (error) return JSON.stringify({ error: error.message })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = (data ?? []).map((c: any) => ({
+    date: c.date,
+    channel: c.channel,
+    topic: c.topic,
+    category: c.category,
+    account: (c.accounts as any)?.company_name ?? c.account_id,
+    handled_by: c.handled_by,
+    status: c.status,
+    client_message: c.client_message,
+    response_sent: c.response_sent,
+  }))
+  return JSON.stringify({ summary: `Found ${result.length} logged conversations`, conversations: result })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

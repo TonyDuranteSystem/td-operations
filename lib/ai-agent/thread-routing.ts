@@ -66,6 +66,7 @@ export const CRM_READ_TOOL_NAMES = [
   "search_tax_returns",
   "search_deadlines",
   "search_portal_messages",
+  "search_conversations", // CRM conversation log (council WS2.3)
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",
