@@ -39,12 +39,23 @@ export interface TeamMsg {
   attachment_url: string | null
   attachment_name: string | null
   reply_to_id: string | null
+  /** Slack thread root: NULL = this message IS a root (or a plain top-level
+   *  message with no replies); set = this is a reply belonging to that thread. */
+  root_id: string | null
   reply_to_preview: ReplyPreview | null
   reactions: Reaction[] | null
   card: TeamCardData | null
   mentions: string[] | null
   deleted_at: string | null
   deleted_by: string | null
+}
+
+/** Per-root Slack-thread metadata, keyed by root message id (from GET thread_meta). */
+export interface ThreadMeta {
+  reply_count: number
+  last_reply_at: string
+  last_reply_sender: string
+  unread: boolean
 }
 
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'
