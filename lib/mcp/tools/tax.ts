@@ -10,6 +10,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, findTaxFolder, findOrCreateYearFolder as _findOrCreateYearFolder, downloadFileBinary } from "@/lib/google-drive"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
+import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 
 export function registerTaxTools(server: McpServer) {
@@ -856,12 +857,32 @@ export function registerTaxTools(server: McpServer) {
 
         for (const ext of extensions) {
           try {
+            // Read first: the chain advance below needs the row's account +
+            // current status, and status is only moved forward from
+            // pre-wizard states (never dragged back from Data Received etc.).
+            const { data: trRow, error: selError } = await supabaseAdmin
+              .from("tax_returns")
+              .select("id, account_id, status")
+              .eq("id", ext.tax_return_id)
+              .eq("tax_year", tax_year)
+              .maybeSingle()
+            if (selError || !trRow) {
+              errors.push(`${ext.tax_return_id}: ${selError?.message || "not found for that tax year"}`)
+              failed++
+              continue
+            }
+
+            const PRE_EXTENSION_STATUSES = ["Payment Pending", "Not Invoiced", "Paid - Not Started"]
             const { error } = await supabaseAdmin
               .from("tax_returns")
               .update({
                 extension_filed: true,
                 extension_confirmed_date: new Date().toISOString().slice(0, 10),
                 extension_submission_id: ext.submission_id,
+                // The extension IS a stage of the renewal chain (Antonio,
+                // 2026-07-17) — recording it must move the record through
+                // "Extension Filed", not just stamp the fields.
+                ...(PRE_EXTENSION_STATUSES.includes(trRow.status as string) ? { status: "Extension Filed" } : {}),
               })
               .eq("id", ext.tax_return_id)
               .eq("tax_year", tax_year)
@@ -871,6 +892,35 @@ export function registerTaxTools(server: McpServer) {
               failed++
             } else {
               updated++
+              // Advance the Tax Return SD chain to "Extension Filed" — only
+              // from the January waiting stages; later stages are untouched
+              // (advanceStageIfAt skips when the gate doesn't match).
+              if (trRow.account_id) {
+                try {
+                  const { data: sd } = await supabaseAdmin
+                    .from("service_deliveries")
+                    .select("id")
+                    .eq("account_id", trRow.account_id)
+                    .eq("service_type", "Tax Return")
+                    .in("status", ["active", "on_hold"])
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
+                  if (sd) {
+                    await advanceStageIfAt({
+                      delivery_id: sd.id,
+                      if_current_stage: ["1st Installment Paid", "Paid - Awaiting Data"],
+                      target_stage: "Extension Filed",
+                      actor: "tax-extension-update",
+                      notes: `Extension filed for ${tax_year} (confirmation ${ext.submission_id})`,
+                      skip_tasks: true,
+                    })
+                  }
+                } catch {
+                  // Chain advance is best-effort — the extension fields are
+                  // already recorded; a stage hiccup must not fail the batch.
+                }
+              }
             }
           } catch (e) {
             errors.push(`${ext.tax_return_id}: ${e instanceof Error ? e.message : String(e)}`)

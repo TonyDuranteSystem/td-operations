@@ -21,6 +21,8 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { ensureTaxReturnRecord } from "@/lib/tax/ensure-tax-return"
+import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
@@ -29,6 +31,47 @@ import { parsePartnerDeal, shouldPayRenewal } from "@/lib/partners/partner-deal"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
+}
+
+/**
+ * Urgent staff task for tax-tracking gaps the payment chain cannot resolve
+ * itself (missing formation date; late-born record needing extension
+ * verification). Title-deduped so a handler re-run never duplicates it.
+ */
+async function createTaxTrackingAlertTask(args: {
+  accountId: string
+  companyName: string
+  title: string
+  description: string
+}): Promise<{ ok: boolean; detail: string }> {
+  const { data: existing } = await supabaseAdmin
+    .from("tasks")
+    .select("id")
+    .eq("account_id", args.accountId)
+    .eq("task_title", args.title)
+    .limit(1)
+    .maybeSingle()
+  if (existing) return { ok: true, detail: "alert task already exists" }
+
+  // Raw insert (not dbWriteSafe) so a failure is REPORTED in the step log —
+  // a silently-lost alert defeats the alert's purpose.
+  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 tasks.insert; extract to lib/operations/task per dev_task fda76fd3
+  const { error } = await supabaseAdmin
+    .from("tasks")
+    .insert({
+      task_title: args.title,
+      description: args.description,
+      assigned_to: defaultTaskAssignee(),
+      priority: "Urgent",
+      // 'Filing' — 'Tax' is NOT a task_category enum value (verified 2026-07-17;
+      // the old accountant task used it and failed silently for months).
+      category: "Filing" as never,
+      status: "To Do",
+      account_id: args.accountId,
+      created_by: "System",
+    } as never)
+  if (error) return { ok: false, detail: `alert task insert failed: ${error.message}` }
+  return { ok: true, detail: "alert task created" }
 }
 
 /**
@@ -207,7 +250,7 @@ export async function onFirstInstallmentPaid(
     steps.push({ step: "ar_sd", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
-  // ─── 4. Create Tax Return SD ───
+  // ─── 4. Create Tax Return SD + ENSURE the season record ───
   try {
     const taxYear = year - 1 // Filing for previous year
 
@@ -217,6 +260,33 @@ export async function onFirstInstallmentPaid(
     if (formationYear && formationYear > taxYear) {
       steps.push({ step: "tax_sd", status: "skipped", detail: `Company formed ${account.formation_date} — did not exist in ${taxYear}` })
     } else {
+
+    // 4a. ENSURE THE tax_returns RECORD — FIRST, and INDEPENDENT of the SD
+    // branch below (council 2026-07-17): the old inline insert only ran in
+    // the SD-creating branch AND had been failing silently since inception
+    // (missing NOT NULL company_name/deadline, swallowed by this try/catch).
+    // The record is what the season's extension batch and the wizard
+    // eligibility gate key off — it must exist from the January payment.
+    const ensured = await ensureTaxReturnRecord({
+      accountId,
+      companyName: account.company_name,
+      taxYear,
+      status: "Paid - Not Started",
+      memberStructure: account.member_structure,
+      entityType: account.entity_type,
+      formationDate: account.formation_date,
+      paid: true,
+    })
+    steps.push({ step: "tax_return_record", status: ensured.action === "error" ? "error" : "ok", detail: `${ensured.action}${ensured.detail ? ` — ${ensured.detail}` : ""}` })
+    if (ensured.action === "skipped_no_formation_date") {
+      const alert = await createTaxTrackingAlertTask({
+        accountId,
+        companyName: account.company_name,
+        title: `[MISSING] Formation date — ${account.company_name}: ${taxYear} tax season NOT tracked`,
+        description: `1st installment ${year} paid, but the account has NO formation date, so the ${taxYear} tax record was NOT auto-created (fail-closed rule).\nSet the formation date on the account, then create the ${taxYear} tax return record manually.`,
+      })
+      steps.push({ step: "tax_record_alert", status: alert.ok ? "ok" : "error", detail: alert.detail })
+    }
 
     const { data: existingTr } = await supabaseAdmin
       .from("service_deliveries")
@@ -251,32 +321,10 @@ export async function onFirstInstallmentPaid(
 
       steps.push({ step: "tax_sd", status: "ok", detail: `Created: ${newSd.id}${paused ? " (on_hold — tax season paused)" : ""} (tax year ${taxYear})` })
 
-      // Also create/update tax_returns record
-      const { data: existingTrRecord } = await supabaseAdmin
-        .from("tax_returns")
-        .select("id")
-        .eq("account_id", accountId)
-        .eq("tax_year", taxYear)
-        .limit(1)
-
-      if (!existingTrRecord?.length) {
-        let returnType = "SMLLC"
-        if (account.member_structure === "multi_member") returnType = "MMLLC"
-        else if ((account.entity_type || "").toUpperCase().includes("CORP")) returnType = "Corp"
-
-        await dbWrite(
-          supabaseAdmin.from("tax_returns").insert({
-            account_id: accountId,
-            tax_year: taxYear,
-            return_type: returnType as never,
-            status: "Paid - Not Started",
-            paid: true,
-            paid_date: new Date().toISOString().split("T")[0],
-          } as never),
-          "tax_returns.insert"
-        )
-        steps.push({ step: "tax_return_record", status: "ok", detail: `Created for ${taxYear} (${returnType})` })
-      }
+      // Record creation moved to step 4a (ensureTaxReturnRecord) — it now
+      // runs in BOTH branches and before/independent of createSD. The old
+      // inline insert here had NEVER succeeded: it omitted the NOT NULL
+      // company_name + deadline columns and the violation was swallowed.
     }
     } // close formation_date guard
   } catch (e) {
@@ -372,7 +420,10 @@ export async function onSecondInstallmentPaid(
 
   const { data: account } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, partner_id, partner_deal, formation_date")
+    // member_structure + entity_type feed the record ensure below (council
+    // 2026-07-17: without them a missing-record MMLLC would be created SMLLC
+    // with the wrong deadline cohort).
+    .select("id, company_name, partner_id, partner_deal, formation_date, member_structure, entity_type")
     .eq("id", accountId)
     .single()
 
@@ -383,11 +434,11 @@ export async function onSecondInstallmentPaid(
 
   const taxYear = year - 1
 
-  // ─── 1. Update tax_returns: gate lifted ───
+  // ─── 1. Ensure + update tax_returns: gate lifted ───
   try {
     const { data: tr } = await supabaseAdmin
       .from("tax_returns")
-      .select("id, status, sent_to_accountant")
+      .select("id, status, sent_to_accountant, notes")
       .eq("account_id", accountId)
       .eq("tax_year", taxYear)
       .maybeSingle()
@@ -396,13 +447,15 @@ export async function onSecondInstallmentPaid(
       if (tr.sent_to_accountant) {
         steps.push({ step: "tax_gate", status: "skipped", detail: "Already sent to accountant" })
       } else {
-        // Gate lifted — ready to send to accountant
+        // Gate lifted — ready to send to accountant. Notes APPEND (council:
+        // the old wholesale replace erased staff notes on the record).
+        const gateLine = `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for accountant.`
         await dbWrite(
           supabaseAdmin
             .from("tax_returns")
             .update({
               status: tr.status === "Data Received" ? "Data Received" : tr.status,
-              notes: `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for accountant.`,
+              notes: tr.notes ? `${tr.notes}\n${gateLine}` : gateLine,
               updated_at: new Date().toISOString(),
             })
             .eq("id", tr.id),
@@ -412,10 +465,64 @@ export async function onSecondInstallmentPaid(
         steps.push({ step: "tax_gate", status: "ok", detail: `Gate lifted for ${account.company_name} (${taxYear})` })
       }
     } else {
-      steps.push({ step: "tax_gate", status: "skipped", detail: `No tax_returns record for ${taxYear}` })
+      // MISSING RECORD — the gap class (dev job e6136a5e): the old code
+      // logged a skip here while step 2 still advanced the SD, leaving a
+      // fully-paid client with an open wizard stage but no eligibility
+      // token. Create the record now, in the state this payment earns.
+      const ensured = await ensureTaxReturnRecord({
+        accountId,
+        companyName: account.company_name,
+        taxYear,
+        status: "Wizard Available",
+        memberStructure: account.member_structure,
+        entityType: account.entity_type,
+        formationDate: account.formation_date,
+        paid: true,
+      })
+      steps.push({ step: "tax_gate", status: ensured.action === "error" ? "error" : "ok", detail: `Record was missing — ensure: ${ensured.action}${ensured.detail ? ` (${ensured.detail})` : ""}` })
+
+      if (ensured.action === "skipped_no_formation_date") {
+        const alert = await createTaxTrackingAlertTask({
+          accountId,
+          companyName: account.company_name,
+          title: `[MISSING] Formation date — ${account.company_name}: ${taxYear} tax season NOT tracked`,
+          description: `2nd installment ${year} paid, but the account has NO formation date, so the ${taxYear} tax record was NOT auto-created (fail-closed rule).\nSet the formation date, create the ${taxYear} tax return record, and verify the client's wizard opens.`,
+        })
+        steps.push({ step: "tax_record_alert", status: alert.ok ? "ok" : "error", detail: alert.detail })
+      } else if (ensured.action === "created" && ensured.bornAfterDeadline) {
+        // The season's extension batch works off tax_returns rows — a row
+        // born after the nominal deadline could not have been in the batch.
+        // Extensions are filed for ALL companies (Antonio's rule), but for
+        // THIS company that must be verified, not assumed.
+        const alert = await createTaxTrackingAlertTask({
+          accountId,
+          companyName: account.company_name,
+          title: `[VERIFY] Extension — ${account.company_name} (${taxYear}): record created after the deadline`,
+          description: `The ${taxYear} tax record was auto-created at 2nd-installment payment, AFTER the nominal filing deadline.\nThis company was invisible to the season's extension batch. Verify its extension was filed; if yes, mark it on the record (extension filed + confirmation id) so the client's deadline shows September/October instead of overdue.`,
+        })
+        steps.push({ step: "tax_record_alert", status: alert.ok ? "ok" : "error", detail: `late-born record — ${alert.detail}` })
+      }
     }
   } catch (e) {
     steps.push({ step: "tax_gate", status: "error", detail: e instanceof Error ? e.message : String(e) })
+  }
+
+  // ─── 1b. Tax-season pause reactivation — BEFORE the SD advance ───
+  // Council 2026-07-17 (was step 2b, AFTER the advance): the advance below
+  // only matches status='active', so an SD parked on_hold by the season
+  // pause was reactivated too late and stayed at "1st Installment Paid"
+  // forever — a fully-paid client with a permanently closed wizard.
+  try {
+    const reactivation = await reactivateOnHoldTaxReturns(accountId)
+    if (reactivation.reactivated > 0) {
+      steps.push({ step: "tax_reactivation", status: "ok", detail: `Flipped ${reactivation.reactivated} SD${reactivation.reactivated === 1 ? "" : "s"} on_hold -> active` })
+    } else if (reactivation.scanned > 0) {
+      steps.push({ step: "tax_reactivation", status: "skipped", detail: `${reactivation.scanned} on_hold SD(s) but 2nd installment not matched` })
+    } else {
+      steps.push({ step: "tax_reactivation", status: "skipped", detail: "no on_hold Tax Return SD for this account" })
+    }
+  } catch (e) {
+    steps.push({ step: "tax_reactivation", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   // ─── 2. Advance Tax Return SD to its wizard stage ───
@@ -476,26 +583,18 @@ export async function onSecondInstallmentPaid(
           })
         }
       }
+    } else {
+      // Council 2026-07-17: this silence used to be total — a paid client
+      // with no active Tax Return SD got a record (step 1) no SD ever
+      // opens. Loud step so staff can see the wizard is blocked.
+      steps.push({
+        step: "tax_sd_advance",
+        status: "error",
+        detail: "No ACTIVE Tax Return SD — 2nd installment paid but nothing to advance; the client's wizard stays closed until an SD exists",
+      })
     }
   } catch (e) {
     steps.push({ step: "tax_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
-  }
-
-  // ─── 2b. Tax-season pause reactivation ───
-  // If this account has an on_hold Tax Return SD (tax_season_paused parked
-  // it here), flip it back to active now that the 2nd installment is
-  // confirmed. Safe no-op when the SD isn't on_hold.
-  try {
-    const reactivation = await reactivateOnHoldTaxReturns(accountId)
-    if (reactivation.reactivated > 0) {
-      steps.push({ step: "tax_reactivation", status: "ok", detail: `Flipped ${reactivation.reactivated} SD${reactivation.reactivated === 1 ? "" : "s"} on_hold -> active` })
-    } else if (reactivation.scanned > 0) {
-      steps.push({ step: "tax_reactivation", status: "skipped", detail: `${reactivation.scanned} on_hold SD(s) but 2nd installment not matched` })
-    } else {
-      steps.push({ step: "tax_reactivation", status: "skipped", detail: "no on_hold Tax Return SD for this account" })
-    }
-  } catch (e) {
-    steps.push({ step: "tax_reactivation", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   // ─── 3. Email team ───
@@ -556,7 +655,11 @@ export async function onSecondInstallmentPaid(
             description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to the accountant for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
             assigned_to: "Luca",
             priority: "High",
-            category: "Tax" as never,
+            // 'Filing' — 'Tax' is NOT a task_category enum value; this insert
+            // (via dbWriteSafe) had been failing SILENTLY, so the "[READY]
+            // Send to Accountant" task never actually existed. Same silent-
+            // failure class as the record insert this fix closes. 2026-07-17.
+            category: "Filing" as never,
             status: "To Do",
             account_id: accountId,
             created_by: "System",

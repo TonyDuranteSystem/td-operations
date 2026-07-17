@@ -946,7 +946,12 @@ export function registerCrmTools(server: McpServer) {
                 .single()
 
               if (acct?.account_type === "Client") {
-                const year = new Date().getFullYear()
+                // Renewal year from the PAYMENT ROW, not wall-clock (council
+                // 2026-07-17): marking a prior-year installment Paid in
+                // January would otherwise fire the handlers for the wrong
+                // season and ensure a tax record the client never paid for.
+                const paymentYear = (data as Record<string, unknown>).year as number | null | undefined
+                const year = paymentYear ?? new Date().getFullYear()
 
                 if (installment === "Installment 1 (Jan)") {
                   const { onFirstInstallmentPaid } = await import("@/lib/installment-handler")
