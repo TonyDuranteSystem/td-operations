@@ -343,6 +343,27 @@ export async function POST(req: NextRequest) {
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
+  // PER-THREAD IN-FLIGHT LOCK (2026-07-17 council WS0): two staff (or two quick
+  // messages) on the SAME worker thread would each insert a 'processing' row and
+  // run concurrently — interleaving one conversation and letting the
+  // thread-summary write clobber blind. A partial unique index
+  // (uq_worker_inflight_per_thread, migration 20260717-2000) allows ONE in-flight
+  // worker turn per thread; a second insert hits 23505 and we return "busy".
+  // First, recover a crashed turn: no cron reclaims recipient='worker' rows, so a
+  // turn that died mid-run would otherwise block the thread forever — sweep any
+  // in-flight row on THIS thread older than 5 minutes to 'failed'.
+  try {
+    await db
+      .from("agent_messages")
+      .update({ status: "failed", updated_at: new Date().toISOString() })
+      .eq("thread_id", threadId)
+      .eq("recipient", "worker")
+      .eq("status", "processing")
+      .lt("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+  } catch (err) {
+    console.warn("[worker-chat] stale in-flight sweep failed (non-fatal):", err)
+  }
+
   let rowId: string | null = null
   {
     // sender/recipient use the agent_message_party enum ('crm' added by
@@ -373,6 +394,16 @@ export async function POST(req: NextRequest) {
       .select("id")
       .single()
     if (insertError) {
+      // A unique violation on the per-thread partial index = another worker turn
+      // is already in flight on THIS thread. Do NOT run a concurrent turn (it
+      // would interleave the conversation + clobber the summary) — tell the panel
+      // to wait. Any OTHER insert error degrades to a memoryless turn as before.
+      if ((insertError as { code?: string }).code === "23505") {
+        return NextResponse.json(
+          { error: "The assistant is still working on the previous message in this conversation. Give it a moment and try again." },
+          { status: 409 },
+        )
+      }
       // supabase-js reports errors in the result, it does not throw — log
       // loudly, degrade to a memoryless turn rather than blocking the reply.
       console.error("[worker-chat] agent_messages insert failed (memory degraded):", insertError)

@@ -1115,6 +1115,87 @@ export function stripDraftMarkdown(text: string): string {
 }
 
 /**
+ * Idempotency marker for a client-facing worker send (2026-07-17 council WS0).
+ * A stuck worker turn is recovered + re-run by the Slack cron, re-sending the
+ * same message/email. This records a one-time marker keyed on the originating
+ * message + kind + recipient + content; a re-run hits the DB unique index and
+ * this returns false (skip the send). Best-effort: if the marker table isn't
+ * there yet (migration not applied) or any non-unique error occurs, returns
+ * true (send proceeds — degrades to the prior behavior). Returns FALSE ONLY on
+ * a real duplicate (unique violation 23505).
+ */
+export async function claimWorkerSend(
+  sourceMessageId: string | null | undefined,
+  kind: string,
+  target: string,
+  content: string,
+): Promise<boolean> {
+  if (!sourceMessageId) return true // no originating row → can't dedup; allow
+  try {
+    const contentHash = createHash("sha1").update(content).digest("hex").slice(0, 16)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any
+    const { error } = await db.from("worker_send_markers").insert({
+      source_message_id: sourceMessageId,
+      kind,
+      target: target || "",
+      content_hash: contentHash,
+    })
+    if (!error) return true
+    if ((error as { code?: string }).code === "23505") return false // real duplicate
+    return true // table missing / other error → don't block a legitimate send
+  } catch {
+    return true
+  }
+}
+
+/** One account_contacts link, for choosing which member an account-scoped
+ * portal message belongs to. */
+export interface AccountContactLink {
+  contact_id: string | null
+  role?: string | null
+  ownership_pct?: number | null
+  is_primary?: boolean | null
+}
+
+/**
+ * Pick the RIGHT member for an account-scoped portal send (MMLLC fix,
+ * 2026-07-17 council WS0). Before this, the send took `.limit(1)` with NO
+ * ordering — an arbitrary member decided both the thread the message lands in
+ * AND who got the email. Deterministic priority: explicit primary → an
+ * owner/sole-member role → highest ownership → stable-first as a last resort.
+ * Pure + exported for unit tests. Returns { contactId, ambiguous } — ambiguous
+ * = we fell through to last-resort (multiple members, no owner signal) so the
+ * caller can log it.
+ */
+export function pickPrimaryContactId(
+  links: AccountContactLink[],
+): { contactId: string | null; ambiguous: boolean } {
+  const withContact = links.filter((l) => typeof l.contact_id === "string" && l.contact_id)
+  if (withContact.length === 0) return { contactId: null, ambiguous: false }
+  if (withContact.length === 1) return { contactId: withContact[0].contact_id, ambiguous: false }
+
+  const isOwnerRole = (role?: string | null) => {
+    const r = (role ?? "").trim().toLowerCase()
+    return r === "owner" || r === "sole member" || r === "sole_member"
+  }
+  const ranked = [...withContact].sort((a, b) => {
+    // 1) explicit primary flag
+    if (!!a.is_primary !== !!b.is_primary) return a.is_primary ? -1 : 1
+    // 2) owner-ish role
+    if (isOwnerRole(a.role) !== isOwnerRole(b.role)) return isOwnerRole(a.role) ? -1 : 1
+    // 3) highest ownership_pct (nulls last)
+    const ap = typeof a.ownership_pct === "number" ? a.ownership_pct : -1
+    const bp = typeof b.ownership_pct === "number" ? b.ownership_pct : -1
+    if (ap !== bp) return bp - ap
+    return 0
+  })
+  const top = ranked[0]
+  const hasSignal = !!top.is_primary || isOwnerRole(top.role) || typeof top.ownership_pct === "number"
+  return { contactId: top.contact_id, ambiguous: !hasSignal }
+}
+
+/**
  * LANGUAGE GUARD (Adam Marra incident, 2026-07-17) — deterministic floor under
  * the prompt's "client drafts in the client's CRM language" rule, which has now
  * failed twice (Gritti 2026-06-21 → R109; Marra 2026-07-17). Refuses ONLY the
@@ -1181,7 +1262,7 @@ export async function sendPortalMessageFromWorker(input: {
   account_id?: unknown
   contact_id?: unknown
   message?: unknown
-}, actor?: string): Promise<string> {
+}, actor?: string, sourceMessageId?: string | null): Promise<string> {
   const accountId =
     typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
   const contactId =
@@ -1201,17 +1282,24 @@ export async function sendPortalMessageFromWorker(input: {
   const db = supabaseAdmin as any
 
   // Resolve contact_id from the account when only the account was given, so the
-  // message lands in the client's contact-scoped thread. Mirrors the MCP tool —
-  // do NOT filter by is_primary (only 1 row in the DB has it set).
+  // message lands in the client's contact-scoped thread. Portal chat is
+  // contact-scoped, so this id decides who sees the message. Pick the OWNER /
+  // primary member deterministically — never an arbitrary `.limit(1)` (MMLLC
+  // fix, 2026-07-17 council WS0: a random member was getting a co-owner's
+  // message + notification).
   let resolvedContactId = contactId
   if (!resolvedContactId && accountId) {
-    const { data: link } = await db
+    const { data: links } = await db
       .from("account_contacts")
-      .select("contact_id")
+      .select("contact_id, role, ownership_pct, is_primary")
       .eq("account_id", accountId)
-      .limit(1)
-      .maybeSingle()
-    resolvedContactId = link?.contact_id ?? null
+    const picked = pickPrimaryContactId((links ?? []) as AccountContactLink[])
+    resolvedContactId = picked.contactId
+    if (picked.ambiguous) {
+      console.warn(
+        `[worker portal-send] account ${accountId} has multiple members and no owner/primary signal — delivered to ${resolvedContactId} (deterministic first). Set is_primary/role to fix routing.`,
+      )
+    }
   }
 
   // Dedup guard (best-effort): skip if an identical admin message to the same
@@ -1232,6 +1320,14 @@ export async function sendPortalMessageFromWorker(input: {
     }
   } catch {
     // ignore — proceed with the send
+  }
+
+  // Cross-run idempotency (survives the 2-min window): if this exact send was
+  // already made by this originating turn, a cron re-run must NOT re-post it.
+  const target = accountId ?? resolvedContactId ?? ""
+  const okToSend = await claimWorkerSend(sourceMessageId, "portal_message", target, message)
+  if (!okToSend) {
+    return "✅ Already sent (this turn was re-run) — no duplicate posted."
   }
 
   const { data: msg, error } = await db
@@ -1975,7 +2071,7 @@ export async function executeWorkerTool(
         return PORTAL_LANGUAGE_REFUSAL
       }
     }
-    return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined)
+    return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined, sourceMessageId ?? null)
   }
   if (name === "team_chat_send") {
     // Staff-only internal team-chat send AS Claude (gated at the tool-list level
