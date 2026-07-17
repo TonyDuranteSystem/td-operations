@@ -86,6 +86,9 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // The CRM conversation LOG — "what did we tell this client last time?"
   // (council WS2.3). Read-only.
   "search_conversations",
+  // Paperwork status: offers / lease / OA / e-sign / formation wizard in one
+  // labeled read (council WS3.2) — the worker used to guess these via raw SQL.
+  "get_client_paperwork",
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",

@@ -175,6 +175,17 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'get_client_paperwork',
+    description: 'Get the STATUS of a client\'s paperwork in one labeled read: offers (sent/viewed/signed), the office lease, the operating agreement (OA), any e-signature requests, and formation-wizard progress. Use this to answer "did they sign the offer/lease/OA?", "what e-sign is pending?", or "where is their formation wizard stuck?". Provide account_id (LLC) and/or contact_id (person).',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account (LLC) UUID.' },
+        contact_id: { type: 'string', description: 'Contact (person) UUID.' },
+      },
+    },
+  },
+  {
     name: 'search_conversations',
     description: 'Search the CRM conversation LOG — the recorded history of what we told a client and how they responded, across channels (email, WhatsApp, phone, portal). Use this to answer "what did we tell this client last time?" / "what was discussed about X?". Filter by account, contact, free-text (topic or client message), and date range.',
     parameters: {
@@ -626,6 +637,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_deals': return await searchDeals(params)
       case 'search_portal_messages': return await searchPortalMessages(params)
       case 'search_conversations': return await searchConversations(params)
+      case 'get_client_paperwork': return await getClientPaperwork(params)
       case 'create_task': return await createTask(params)
       case 'send_email': return await sendEmail(params)
       case 'get_dashboard_stats': return await getDashboardStats()
@@ -948,6 +960,44 @@ async function searchConversations(p: any) {
     response_sent: c.response_sent,
   }))
   return JSON.stringify({ summary: `Found ${result.length} logged conversations`, conversations: result })
+}
+
+// Labeled paperwork-status read across offers / lease / OA / e-sign / wizard.
+// Read-only; the worker previously had to guess at these tables via raw SQL, or
+// substituted lead/deal proxies for offers. WS3.2 (council).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getClientPaperwork(p: any) {
+  const accountId = typeof p.account_id === 'string' && p.account_id ? p.account_id : null
+  const contactId = typeof p.contact_id === 'string' && p.contact_id ? p.contact_id : null
+  if (!accountId && !contactId) {
+    return JSON.stringify({ error: 'Provide account_id and/or contact_id.' })
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scoped = (q: any) => (accountId ? q.eq('account_id', accountId) : q.eq('contact_id', contactId))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safe = async (fn: () => Promise<any>) => { try { return (await fn()).data ?? [] } catch { return [] } }
+
+  const offers = await safe(() => scoped(
+    supabaseAdmin.from('offers').select('client_name, contract_type, status, offer_date, viewed_at, expires_at').order('offer_date', { ascending: false }).limit(10)
+  ))
+  const leases = await safe(() => scoped(
+    supabaseAdmin.from('lease_agreements').select('suite_number, premises_address, status, viewed_at, signed_at, created_at').order('created_at', { ascending: false }).limit(5)
+  ))
+  const oas = await safe(() => scoped(
+    supabaseAdmin.from('oa_agreements').select('company_name, entity_type, status, signed_count, total_signers, signed_at, created_at').order('created_at', { ascending: false }).limit(5)
+  ))
+  const signatures = await safe(() => scoped(
+    supabaseAdmin.from('signature_requests').select('document_name, status, signed_at, created_at').order('created_at', { ascending: false }).limit(10)
+  ))
+  const wizards = await safe(() => scoped(
+    supabaseAdmin.from('wizard_progress').select('wizard_type, current_step, status, updated_at').order('updated_at', { ascending: false }).limit(5)
+  ))
+
+  return JSON.stringify({
+    scope: accountId ? { account_id: accountId } : { contact_id: contactId },
+    offers, leases, operating_agreements: oas, signature_requests: signatures, formation_wizards: wizards,
+    note: 'Statuses are as recorded in the CRM. "signed_at" set = signed. For OA, signed_count/total_signers shows multi-member progress.',
+  })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
