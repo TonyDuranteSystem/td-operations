@@ -2565,6 +2565,12 @@ export interface CallWorkerOptions {
    */
   apiKeyOverride?: string
   /**
+   * Per-call model override (WS5). Falls back to env WORKER_MODEL, then the
+   * default (current model). Lets ONE surface trial a different model without
+   * touching the others. The dashboard agent's model is separate (providers.ts).
+   */
+  model?: string
+  /**
    * CRM-panel send safety + attribution (Inbox / Portal Chats worker). The Slack
    * path never sets these, so its behaviour is unchanged.
    * - sendActor: WHO triggered the send (e.g. "crm-inbox:luca@tonydurante.us").
@@ -2731,6 +2737,22 @@ export function resolveWorkerApiKey(override?: string): string {
   return key
 }
 
+/**
+ * The worker's model. Env-overridable default (WS5) so a model trial is a config
+ * change, not a code edit, and a per-call `modelOverride` lets ONE surface (e.g.
+ * Portal Chats) run a different model without touching the others. Default is the
+ * current model — no behavior change until the env or a caller sets otherwise.
+ * NOTE: this is the WORKER only; the dashboard agent's model lives in providers.ts
+ * and is deliberately out of scope.
+ */
+export const WORKER_MODEL_DEFAULT = "claude-sonnet-4-6"
+export function resolveWorkerModel(override?: string | null): string {
+  const o = (override ?? "").trim()
+  if (o) return o
+  const env = (process.env.WORKER_MODEL ?? "").trim()
+  return env || WORKER_MODEL_DEFAULT
+}
+
 export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
@@ -2741,10 +2763,14 @@ export async function runWorkerLoop(
   serverTools?: Array<Record<string, unknown>>,
   apiKeyOverride?: string,
   sendContext?: WorkerSendContext,
+  modelOverride?: string | null,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   // Dedicated-key override (Slack worker) with fallback to the shared key. Covers
   // both fetch sites below — they read this same apiKey.
   const apiKey = resolveWorkerApiKey(apiKeyOverride)
+  // Resolved once — both fetch sites (main loop + exhaustion synthesis) use it,
+  // so a per-call model stays consistent within one request.
+  const model = resolveWorkerModel(modelOverride)
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
@@ -2784,15 +2810,16 @@ export async function runWorkerLoop(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model,
         max_tokens: 16384,
         // Prompt caching: the system prompt + tool definitions are the large, stable
         // prefix re-sent on EVERY tool-use iteration of this loop (a dig-in question
         // can be ~10 iterations). A cache_control breakpoint on the system block caches
         // tools + system together (tools render before system), so iterations 2..N — and
         // repeat calls within the 5-min TTL — read that prefix at ~0.1x instead of full
-        // price. Verify via usage.cache_read_input_tokens. (Model is fixed sonnet-4-6, so
-        // the cache is never invalidated by a model switch.)
+        // price. Verify via usage.cache_read_input_tokens. (Cache is keyed per model, so
+        // a per-surface model override splits the cache per model — a cost note, not a
+        // correctness issue; the model is resolved ONCE per call so it never changes mid-loop.)
         system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
         tools: claudeTools,
         messages: currentMessages,
@@ -2892,7 +2919,7 @@ export async function runWorkerLoop(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model,
           max_tokens: 16384,
           system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
           // No tools → the model is forced to produce a text answer.
@@ -3225,7 +3252,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       }
     : undefined
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext)
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext, opts.model ?? null)
 
   if (threadId) {
     try {
