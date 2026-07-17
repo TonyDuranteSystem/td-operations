@@ -58,6 +58,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // out (auto_advance:false) when a separate action owns the advance — e.g. the
     // Tax Return "Tax Return Prepared" stage, where "Send for Signature" advances.
     const autoAdvance: boolean = body.auto_advance !== false
+    // Optional filing policy from the stage_layout document_upload component:
+    //   folder — target Drive subfolder NAME (e.g. "1. Company"); absent = root.
+    //   rename — filename template (e.g. "EIN Official – {company_name}"); the
+    //            original extension is preserved, missing token → original name.
+    // Both absent = today's behavior (account root folder, uploaded filename).
+    const targetSubfolder: string | null =
+      typeof body.folder === 'string' && body.folder.trim() ? body.folder.trim() : null
+    const renameTemplate: string | null =
+      typeof body.rename === 'string' && body.rename.trim() ? body.rename.trim() : null
 
     if (!storagePath || !fileName) {
       return NextResponse.json(
@@ -110,7 +119,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buffer = Buffer.from(rawContent)
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    // 3. Decide where the canonical copy lives.
+    const {
+      extractDriveFolderId,
+      resolveContactLinkedDriveFolder,
+      deriveEffectiveFileName,
+      resolveSubfolderId,
+    } = await import('@/lib/flows/flow-drive-folder')
+
+    // 3a. Fetch the account's naming fields UNCONDITIONALLY (not gated on
+    //     SANDBOX_MODE), so the rename applies to documents.file_name on EVERY
+    //     path — production-Drive, production-storage-fallback, AND sandbox
+    //     (where Drive is mocked but the documents row is still written and is
+    //     the only thing QA can verify). We also reuse this row for the Drive
+    //     folder below.
+    let accountRow:
+      | { drive_folder_id?: string | null; gdrive_folder_url?: string | null; company_name?: string | null; entity_type?: string | null }
+      | null = null
+    if (accountId) {
+      const { data } = await supabaseAdmin
+        .from('accounts')
+        .select('drive_folder_id, gdrive_folder_url, company_name, entity_type')
+        .eq('id', accountId)
+        .single()
+      accountRow = data
+    }
+
+    // Effective (possibly renamed) file name — used for BOTH the Drive file and
+    // the documents row. Falls back to the uploaded name when no template is set
+    // or a token can't be resolved.
+    const effectiveName = deriveEffectiveFileName(renameTemplate, fileName, {
+      company_name: accountRow?.company_name ?? undefined,
+      entity_type: accountRow?.entity_type ?? undefined,
+    })
+
+    // 3b. Decide where the canonical copy lives.
     //    Production, account-scoped SD: the account's Drive folder (400 if the
     //    account has none — staff must link one first).
     //    Production, contact-scoped SD (ITIN, in-flight formation): borrow the
@@ -124,14 +166,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //    identically, so the flow works end-to-end in sandbox.
     let driveFolderId: string | null = null
     if (process.env.SANDBOX_MODE !== '1') {
-      const { extractDriveFolderId, resolveContactLinkedDriveFolder } = await import('@/lib/flows/flow-drive-folder')
       if (accountId) {
-        const { data: account } = await supabaseAdmin
-          .from('accounts')
-          .select('drive_folder_id, gdrive_folder_url')
-          .eq('id', accountId)
-          .single()
-        driveFolderId = extractDriveFolderId(account)
+        driveFolderId = extractDriveFolderId(accountRow)
         if (!driveFolderId) {
           return NextResponse.json(
             { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
@@ -143,6 +179,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
     const useStorageFallback = !driveFolderId
+
+    // 3c. When the stage requests a named subfolder (e.g. "1. Company"), resolve
+    //     it within the account's Drive folder. Not found / listing failure →
+    //     file into the account root (never block the upload) but LOG it so a
+    //     misfiled document is visible to us.
+    let uploadTargetFolderId = driveFolderId
+    if (driveFolderId && targetSubfolder) {
+      const { id: subId, matched } = await resolveSubfolderId(driveFolderId, targetSubfolder)
+      if (matched && subId) {
+        uploadTargetFolderId = subId
+      } else {
+        console.warn(
+          `[flow-upload-document] subfolder "${targetSubfolder}" not found under ${driveFolderId} — filing into the account root instead (SD ${serviceDeliveryId})`,
+        )
+      }
+    }
 
     let docFileId: string
     let docLink: string
@@ -159,11 +211,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
       docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
     } else {
-      // Production: copy the file into the resolved Drive folder.
-      const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-      const driveFile = (await uploadBinaryToDrive(fileName, buffer, fileMime, driveFolderId)) as {
-        id: string
-        name: string
+      // Production: copy the file into the resolved Drive folder/subfolder.
+      // When we've renamed to a canonical, deterministic name, OVERWRITE any
+      // existing same-named file (upsert) so a re-upload/correction replaces it
+      // instead of dropping a second identical "EIN Official – X.pdf" into the
+      // folder. Un-renamed uploads keep the historical blind-create behavior
+      // (varied filenames, no accidental overwrite).
+      const targetFolderId = uploadTargetFolderId as string
+      let driveFile: { id: string; name: string }
+      if (renameTemplate) {
+        const { uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
+        driveFile = await uploadBinaryToDriveUpsert(effectiveName, buffer, fileMime, targetFolderId)
+      } else {
+        const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+        driveFile = (await uploadBinaryToDrive(effectiveName, buffer, fileMime, targetFolderId)) as {
+          id: string
+          name: string
+        }
       }
       docFileId = driveFile.id
       docLink = `https://drive.google.com/file/d/${driveFile.id}/view`
@@ -183,7 +247,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let docRegisterWarning: string | null = null
     if (!existingDoc?.length) {
       const docRow = {
-        file_name: fileName,
+        file_name: effectiveName,
         drive_file_id: docFileId,
         drive_link: docLink,
         mime_type: fileMime,
@@ -238,8 +302,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       record_id: docFileId,
       account_id: accountId ?? undefined,
       service_delivery_id: serviceDeliveryId,
-      summary: `Flow document uploaded: ${fileName}`,
-      details: { file_name: fileName, service_delivery_id: serviceDeliveryId, flow_stage: flowStage },
+      summary: `Flow document uploaded: ${effectiveName}`,
+      details: {
+        file_name: effectiveName,
+        original_file_name: fileName,
+        service_delivery_id: serviceDeliveryId,
+        flow_stage: flowStage,
+      },
     })
 
     // 6b. ITIN approval letter: OCR → stamp contact ITIN fields → notify the
@@ -303,7 +372,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // Staff-facing summary: what the ITIN finalize actually did (or why not).
-    let detail = `${fileName} uploaded`
+    let detail = `${effectiveName} uploaded`
     if (docRegisterWarning) {
       detail += ` — ⚠️ ${docRegisterWarning}`
     }
