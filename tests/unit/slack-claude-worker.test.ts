@@ -185,7 +185,11 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // buried in a SELF-SERVE parenthetical and failed twice (Gritti, Marra); it is
     // now first-class where drafts are written, with a deterministic server guard
     // (shouldRefusePortalDraftLanguage) as the real floor. Council-approved.)
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11900)
+    // → 12200 (2026-07-17, council redo WS1: ASK-BEFORE-YOU-SAVE memory model
+    // (Antonio's D1) — the worker offers "Want me to save this to memory?" and
+    // saves only on confirmation, replacing silent auto-save; the MEMORY block
+    // now spells out the ask + the client auto-scoping.)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(12200)
   })
 
   it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {

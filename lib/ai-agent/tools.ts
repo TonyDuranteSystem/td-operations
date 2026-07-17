@@ -1905,15 +1905,24 @@ async function decisionMemoryRecallTool(p: any) {
   })
 }
 
-/** Called by providers.ts before the tool loop — injects global memories into the system prompt. */
+/** Called by providers.ts before the tool loop — injects global memories into the system prompt.
+ * Capped (2026-07-17 council WS0/WS1 hygiene): this concatenated EVERY global
+ * agent_memory row into every dashboard prompt with no bound — unbounded growth
+ * directly inflates every call. Take the most-recent N and cap total length. */
+const GLOBAL_MEMORY_MAX_ROWS = 40
+const GLOBAL_MEMORY_MAX_CHARS = 6000
 export async function loadGlobalMemories(): Promise<string> {
   const { data } = await supabaseAdmin
     .from('agent_memory')
     .select('key, content')
     .eq('scope', 'global')
     .order('updated_at', { ascending: false })
+    .limit(GLOBAL_MEMORY_MAX_ROWS)
   if (!data?.length) return ''
-  const lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
+  let lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
+  if (lines.length > GLOBAL_MEMORY_MAX_CHARS) {
+    lines = lines.slice(0, GLOBAL_MEMORY_MAX_CHARS) + '\n- …(older memories truncated)'
+  }
   return `\n\n## REMEMBERED FROM PREVIOUS SESSIONS\n${lines}`
 }
 
