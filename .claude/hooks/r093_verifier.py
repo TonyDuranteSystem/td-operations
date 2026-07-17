@@ -317,7 +317,9 @@ def main():
         "pick one. For an 'ungrounded' flag, either cite the real source of the "
         "fact or look it up before asserting it. Do not simply restate your "
         "previous answer; fix the specific claims above and tell the user what "
-        "changed."
+        "changed. Put source references (file paths, table.column, commits) in "
+        "a short 'Technical details' footer; keep the reply body in plain "
+        "English (R095)."
     )
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(0)

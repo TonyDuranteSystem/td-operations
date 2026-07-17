@@ -26,8 +26,38 @@ import {
   parseMilestones,
 } from "@/lib/dev-tracker/milestones"
 import { loadStageSetForType } from "@/lib/dev-tracker/load-stage-set"
+import {
+  generatePlainFields,
+  isSubstantiveTrackerChange,
+  isValidDueDate,
+  progressTail,
+  type JobSnapshot,
+  type PlainFields,
+} from "@/lib/dev-tracker/plain-summary"
+import { isSafeInternalUrl } from "@/lib/dev-tracker/board"
 
 const TRACKER_AUTHOR = "Claude"
+
+const DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Patch ONLY the three plain columns (+ generation stamp) after the durable
+ * write already landed — the council's ordering contract (plain-summary.ts).
+ * Best-effort: a patch failure never fails the tool call.
+ */
+async function patchPlainFields(id: string, ai: PlainFields): Promise<boolean> {
+  const { error } = await db
+    .from("dev_tasks")
+    .update({
+      summary_plain: ai.summary_plain,
+      business_impact: ai.business_impact,
+      simple_next_step: ai.simple_next_step,
+      plain_generated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+  if (error) console.error("[dev-tasks] plain-fields patch failed:", error.message)
+  return !error
+}
 
 // dev_tasks carries tracker columns not yet in the generated types (prod
 // migrates later). Alias past the typed query builder.
@@ -53,7 +83,7 @@ export function registerDevTaskTools(server: McpServer) {
     {
       title: z.string().describe("Task title"),
       description: z.string().optional().describe("TECHNICAL request/detail for the coding session (verbatim where possible)"),
-      summary_plain: z.string().optional().describe("PLAIN-ENGLISH one/two-line summary for Antonio — what this is and where it stands, no jargon. Shown at the top of the card."),
+      summary_plain: z.string().optional().describe("PLAIN-ENGLISH draft summary for Antonio — used as a HINT: the AI summarizer writes the final card text from the full record (your draft survives only if the AI is unavailable)."),
       type: z.enum(["feature", "bugfix", "refactor", "cleanup", "docs", "infra"])
         .default("feature").describe("Task type (default: feature). Determines the stage lifecycle."),
       priority: z.enum(["critical", "high", "medium", "low"])
@@ -62,8 +92,11 @@ export function registerDevTaskTools(server: McpServer) {
         .describe("Board channel slug (td-dev|td-bug|td-support…). Validated against the real channel list."),
       parent_id: z.string().uuid().optional()
         .describe("Parent job UUID — set when this is a child bug/task spun off from another job."),
+      owner: z.string().optional().describe("Who owns this job (shown on the card), e.g. Antonio / Claude / Luca."),
+      due_date: z.string().regex(DUE_DATE_RE).optional().describe("Due date YYYY-MM-DD (shown on the card, red when overdue)."),
+      origin_url: z.string().optional().describe("In-app back-link to where this job came from (e.g. /inbox?thread=… or /portal-chats?…)."),
     },
-    async ({ title, description, summary_plain, type, priority, channel, parent_id }) => {
+    async ({ title, description, summary_plain, type, priority, channel, parent_id, owner, due_date, origin_url }) => {
       try {
         if (channel) {
           const v = await validateChannel(channel)
@@ -84,10 +117,20 @@ export function registerDevTaskTools(server: McpServer) {
           }
         }
 
+        if (due_date && !isValidDueDate(due_date)) {
+          return { content: [{ type: "text" as const, text: `❌ "${due_date}" is not a real calendar date (YYYY-MM-DD).` }] }
+        }
+        if (origin_url && !isSafeInternalUrl(origin_url)) {
+          return { content: [{ type: "text" as const, text: `❌ origin_url must be an in-app relative path (starts with "/", not "//" or a full URL).` }] }
+        }
+
         const now = new Date().toISOString()
         const set = await loadStageSetForType(db, type)
         const startStage = set.stages[0]?.key || "requested"
 
+        // Durable write FIRST (council ordering contract): the job must exist
+        // in sub-second time regardless of AI weather. Plain fields start from
+        // the caller's draft and are AI-patched right after.
         const { data, error } = await db
           .from("dev_tasks")
           .insert({
@@ -99,6 +142,9 @@ export function registerDevTaskTools(server: McpServer) {
             status: deriveStatusForSet(set, startStage),
             channel: channel || null,
             parent_task_id: parent_id || null,
+            owner: owner || null,
+            due_date: due_date || null,
+            origin_url: origin_url || null,
             milestones: initialMilestones(now, TRACKER_AUTHOR, startStage),
           })
           .select("id, title, type, priority, status, channel")
@@ -106,10 +152,29 @@ export function registerDevTaskTools(server: McpServer) {
 
         if (error) throw error
 
+        // AI patch phase — best-effort, never fails the create.
+        const snapshot: JobSnapshot = {
+          title,
+          type,
+          priority,
+          channel: channel || null,
+          stageLabel: labelForStage(set, startStage),
+          description: description || null,
+          findings: null,
+          plan: null,
+          decisions: null,
+          blockers: null,
+          callerSummary: summary_plain || null,
+          progressTail: [],
+        }
+        const ai = await generatePlainFields(snapshot)
+        const patched = ai ? await patchPlainFields(data.id, ai) : false
+
+        const aiNote = patched ? "🧠 Plain-English card fields written by AI." : "⚠️ AI summary unavailable — card carries the caller-provided summary only (refreshes on the next substantive update)."
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Dev job created\n• Title: ${data.title}\n• Type: ${data.type} | Priority: ${data.priority} | Channel: ${data.channel || "—"}${parent_id ? " | child of " + parent_id : ""}\n• Lifecycle: ${set.label} | Stage: ${labelForStage(set, startStage)} | Lane: ${data.status}\n• ID: ${data.id}`,
+            text: `✅ Dev job created\n• Title: ${data.title}\n• Type: ${data.type} | Priority: ${data.priority} | Channel: ${data.channel || "—"}${parent_id ? " | child of " + parent_id : ""}\n• Lifecycle: ${set.label} | Stage: ${labelForStage(set, startStage)} | Lane: ${data.status}\n• ${aiNote}\n• ID: ${data.id}`,
           }],
         }
       } catch (err: unknown) {
@@ -187,7 +252,7 @@ export function registerDevTaskTools(server: McpServer) {
       status: z.enum(["backlog", "todo", "in_progress", "blocked", "done", "cancelled"])
         .optional().describe("Explicit lane override (wins over derived). Use for blocked/cancelled."),
       channel: z.string().optional().describe("Move the job to this board channel (validated)."),
-      summary_plain: z.string().optional().describe("PLAIN-ENGLISH summary for Antonio (replaces existing). Update it whenever you change the technical detail so the two never drift."),
+      summary_plain: z.string().optional().describe("PLAIN-ENGLISH draft summary for Antonio — used as a HINT: on any substantive change the AI summarizer writes the final card text from the full record (your draft survives only if the AI is unavailable)."),
       findings: z.string().optional().describe("Audit/investigation findings (replaces existing)."),
       plan: z.string().optional().describe("The approved plan, frozen (replaces existing)."),
       blockers: z.string().optional().describe("Current blockers (replaces existing)"),
@@ -203,12 +268,19 @@ export function registerDevTaskTools(server: McpServer) {
       related_files: z.array(z.string()).optional().describe("Related file paths"),
       knowledge_ref: z.string().optional().describe("WHERE this job's lasting knowledge was written down — a living system doc (e.g. 'docs/systems/dev-tracker.md'), a KB article id, or a sysdoc slug. The board points to the doc, it never copies it (docs/KB stay the single source of truth). Set this when finishing a job so closing the card never loses what it taught."),
       knowledge_status: z.enum(["captured", "chore"]).optional().describe("'captured' = a pointer is recorded in knowledge_ref; 'chore' = pure mechanical work, nothing worth documenting. Set one when moving a job to done."),
+      owner: z.string().optional().describe("Who owns this job (shown on the card), e.g. Antonio / Claude / Luca."),
+      due_date: z.string().regex(DUE_DATE_RE).nullable().optional().describe("Due date YYYY-MM-DD (null clears it)."),
+      origin_url: z.string().optional().describe("In-app back-link to where this job came from."),
     },
-    async ({ id, milestone, milestone_note, postponed, status, channel, summary_plain, findings, plan, blockers, decisions, progress_entry, title, description, priority, related_files, knowledge_ref, knowledge_status }) => {
+    async ({ id, milestone, milestone_note, postponed, status, channel, summary_plain, findings, plan, blockers, decisions, progress_entry, title, description, priority, related_files, knowledge_ref, knowledge_status, owner, due_date, origin_url }) => {
       try {
         const now = new Date().toISOString()
 
-        const { data: job } = await db.from("dev_tasks").select("type, milestones, progress_log, knowledge_status").eq("id", id).single()
+        const { data: job } = await db
+          .from("dev_tasks")
+          .select("title, description, type, priority, status, channel, milestones, progress_log, findings, plan, decisions, blockers, summary_plain, knowledge_status")
+          .eq("id", id)
+          .single()
         if (!job) return { content: [{ type: "text" as const, text: `❌ Job ${id} not found.` }] }
         const set = await loadStageSetForType(db, job.type)
         const prevMs = parseMilestones(job.milestones)
@@ -231,6 +303,20 @@ export function registerDevTaskTools(server: McpServer) {
         if (related_files) updates.related_files = related_files
         if (knowledge_ref !== undefined) updates.knowledge_ref = knowledge_ref.trim() || null
         if (knowledge_status !== undefined) updates.knowledge_status = knowledge_status
+        if (owner !== undefined) updates.owner = owner.trim() || null
+        if (due_date !== undefined) {
+          if (due_date && !isValidDueDate(due_date)) {
+            return { content: [{ type: "text" as const, text: `❌ "${due_date}" is not a real calendar date (YYYY-MM-DD).` }] }
+          }
+          updates.due_date = due_date
+        }
+        if (origin_url !== undefined) {
+          const trimmed = origin_url.trim()
+          if (trimmed && !isSafeInternalUrl(trimmed)) {
+            return { content: [{ type: "text" as const, text: `❌ origin_url must be an in-app relative path (starts with "/", not "//" or a full URL).` }] }
+          }
+          updates.origin_url = trimmed || null
+        }
 
         // Milestone advance → derive the lane from the job's stage set.
         let derivedStatus: string | undefined
@@ -262,6 +348,9 @@ export function registerDevTaskTools(server: McpServer) {
           updates.progress_log = JSON.stringify(log)
         }
 
+        // Durable write FIRST (council ordering contract) — the long AI await
+        // must never sit inside the read-modify-write window (3-machine race)
+        // or delay the save a session depends on before compaction.
         const { data, error } = await db
           .from("dev_tasks")
           .update(updates)
@@ -270,6 +359,32 @@ export function registerDevTaskTools(server: McpServer) {
           .single()
 
         if (error) throw error
+
+        // AI patch phase — regenerate the plain-English card fields whenever
+        // the job's STORY changed (milestone, progress, narrative fields,
+        // done), from the MERGED record (updates over the stored row).
+        // Best-effort: failure keeps the caller-provided/existing values.
+        let aiRefreshed = false
+        if (isSubstantiveTrackerChange({ milestone, progress_entry, title, description, findings, plan, decisions, blockers, summary_plain, postponed, finalStatus })) {
+          const merged = <T,>(u: T | undefined, prev: T): T => (u !== undefined ? u : prev)
+          const stageKey = milestone || prevMs?.current || set.stages[0]?.key
+          const snapshot: JobSnapshot = {
+            title: merged(title, job.title),
+            type: job.type,
+            priority: merged(priority, job.priority),
+            channel: merged(channel, job.channel),
+            stageLabel: stageKey ? labelForStage(set, stageKey) : null,
+            description: merged(description, job.description),
+            findings: merged(findings, job.findings),
+            plan: merged(plan, job.plan),
+            decisions: merged(decisions, job.decisions),
+            blockers: merged(blockers, job.blockers),
+            callerSummary: merged(summary_plain, job.summary_plain),
+            progressTail: progressTail((updates.progress_log as string | undefined) ?? job.progress_log),
+          }
+          const ai = await generatePlainFields(snapshot)
+          if (ai) aiRefreshed = await patchPlainFields(id, ai)
+        }
         const ms = parseMilestones(data.milestones)
         const stageLabel = ms ? labelForStage(set, ms.current) : "—"
 
@@ -283,7 +398,7 @@ export function registerDevTaskTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Job updated: ${data.title}\n• Lane: ${data.status} | Milestone: ${stageLabel} | Channel: ${data.channel || "—"} | Priority: ${data.priority}\n• ID: ${data.id}${nudge}`,
+            text: `✅ Job updated: ${data.title}\n• Lane: ${data.status} | Milestone: ${stageLabel} | Channel: ${data.channel || "—"} | Priority: ${data.priority}${aiRefreshed ? "\n• 🧠 Plain-English card fields refreshed by AI." : ""}\n• ID: ${data.id}${nudge}`,
           }],
         }
       } catch (err: unknown) {

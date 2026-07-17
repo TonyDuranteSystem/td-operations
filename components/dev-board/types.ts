@@ -7,6 +7,12 @@ export interface DevJob {
   channel: string | null
   milestones: unknown
   summary_plain: string | null
+  business_impact: string | null
+  simple_next_step: string | null
+  owner: string | null
+  due_date: string | null
+  origin_url: string | null
+  related_files: string[] | null
   description: string | null
   findings: string | null
   plan: string | null
