@@ -858,8 +858,8 @@ export const SEARCH_SOPS_TOOL: ToolDef = {
 export const READ_DRIVE_FILE_TOOL: ToolDef = {
   name: "read_drive_file",
   description: [
-    "Read the TEXT content of a Google Drive file by id (plain text, CSV, Google Docs/Sheets exported as text). Get the id from drive_search / drive_list_folder first.",
-    "NOTE: PDFs and images can NOT be read here (they need OCR, which is currently disabled) — for those, report that the file is a PDF/image and can't be read as text.",
+    "Read the TEXT content of a Google Drive file by id: plain text, CSV, Google Docs/Sheets, AND the text layer of PDFs / Word / Excel documents. Get the id from drive_search / drive_list_folder first.",
+    "NOTE: a scanned/image-only PDF (no text layer) and plain images can't be read here (no OCR) — the tool will tell you when that's the case.",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -1075,14 +1075,35 @@ export async function searchSopsForWorker(params: Record<string, unknown>): Prom
 export async function readDriveFileForWorker(params: Record<string, unknown>): Promise<string> {
   const fileId = typeof params.file_id === "string" ? params.file_id.trim() : ""
   if (!fileId) return "file_id is required (find it with drive_search / drive_list_folder)."
+  const cap = (s: string) => (s.length > DOC_RESULT_CAP ? `${s.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : s)
   try {
+    // 1) Text export path (Google Docs/Sheets/Slides + plain text).
     const { downloadFileContent } = await import("@/lib/google-drive")
     const content = await downloadFileContent(fileId)
-    if (!content || !content.trim()) return `File ${fileId} has no readable text (it may be a PDF/image — OCR is currently disabled — or an empty file).`
-    return content.length > DOC_RESULT_CAP ? `${content.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : content
+    if (content && content.trim()) return cap(content)
+
+    // 2) Binary path — read PDF/Office text (WS3.3, council): most client
+    // documents in Drive are PDFs, which downloadFileContent returns empty for.
+    // The same extractor the worker already uses for chat/email attachments
+    // pulls the text layer (pdf-parse for PDF, exceljs/mammoth for xlsx/docx).
+    const { downloadFileBinary } = await import("@/lib/google-drive")
+    const { classifySlackFile, extractTextFromBuffer } = await import("@/lib/ai-agent/slack-file-reader")
+    const bin = await downloadFileBinary(fileId)
+    const kind = classifySlackFile(bin.mimeType, bin.fileName)
+    if (kind === "image") {
+      return `File ${fileId} ("${bin.fileName}") is an image — I can't read text from it here (no OCR on Drive reads).`
+    }
+    if (kind === "unsupported") {
+      return `File ${fileId} ("${bin.fileName}", ${bin.mimeType}) isn't a readable text/PDF/Office type.`
+    }
+    const text = await extractTextFromBuffer(bin.buffer, kind)
+    if (!text || !text.trim()) {
+      return `File ${fileId} ("${bin.fileName}") has no extractable text — likely a scanned/image-only ${kind.toUpperCase()} (no text layer).`
+    }
+    return cap(text)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return `Couldn't read file ${fileId}: ${msg}. (PDFs/images need OCR, which is currently disabled — report the file type instead.)`
+    return `Couldn't read file ${fileId}: ${msg}.`
   }
 }
 
