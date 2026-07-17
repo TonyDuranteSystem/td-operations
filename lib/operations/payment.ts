@@ -107,7 +107,7 @@ export async function confirmPayment(
 
   const { data: payment, error: payErr } = await supabaseAdmin
     .from("payments")
-    .select("id, account_id, installment, status, portal_invoice_id")
+    .select("id, account_id, installment, status, portal_invoice_id, year")
     .eq("id", params.payment_id)
     .single()
 
@@ -179,7 +179,11 @@ export async function confirmPayment(
     payment.account_id &&
     payment.installment
   ) {
-    const year = new Date(paid_date).getFullYear()
+    // Renewal year comes from the PAYMENT ROW, not the calendar (council
+    // 2026-07-17): a 2026 installment paid/reconciled in January 2027 must
+    // fire for renewal year 2026 (tax year 2025) — paid-date year would
+    // create/ensure a tax record for a season the client never paid.
+    const year = payment.year ?? new Date(paid_date).getFullYear()
     const { data: acct } = await supabaseAdmin
       .from("accounts")
       .select("account_type")
