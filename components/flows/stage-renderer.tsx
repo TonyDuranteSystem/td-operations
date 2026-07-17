@@ -57,6 +57,8 @@ function renderComponent(
           serviceDeliveryId={serviceDelivery.id}
           flowStage={serviceDelivery.stage}
           autoAdvance={component.autoAdvance}
+          folder={component.folder}
+          rename={component.rename}
         />
       )
     case 'external_link':

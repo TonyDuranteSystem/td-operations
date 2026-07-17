@@ -51,6 +51,16 @@ export interface StageComponent {
   /** document_upload: whether the upload auto-advances the SD (default true).
    *  Set false when an explicit action (e.g. signature_send) owns the advance. */
   autoAdvance?: boolean
+  /** document_upload: target Drive subfolder NAME (e.g. "1. Company"). When set
+   *  and the account has a Drive folder, the file is filed into that subfolder
+   *  (matched case/space-insensitively); if the subfolder can't be found the
+   *  upload falls back to the account root folder (never fails). Absent = root. */
+  folder?: string
+  /** document_upload: filename template with `{token}` interpolation against
+   *  the account (e.g. "EIN Official – {company_name}"). The original file
+   *  extension is preserved. If any token is missing the original filename is
+   *  kept. Absent = keep the uploaded filename. */
+  rename?: string
 }
 
 /** Narrow one raw action entry into a StageAction, or null if unusable. */
@@ -84,7 +94,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? comp.label : undefined,
@@ -93,6 +103,8 @@ export function parseStageLayout(value: unknown): StageLayout | null {
         ? comp.actions.map(parseStageAction).filter((a): a is StageAction => a !== null)
         : undefined,
       autoAdvance: typeof rawComp.autoAdvance === 'boolean' ? rawComp.autoAdvance : undefined,
+      folder: typeof rawComp.folder === 'string' ? rawComp.folder : undefined,
+      rename: typeof rawComp.rename === 'string' ? rawComp.rename : undefined,
     })
   }
   return {
