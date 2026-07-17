@@ -340,9 +340,10 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
   name: "send_portal_message",
   description: [
     "Send a message to a client in their PORTAL CHAT (portal.tonydurante.us). This is the client's in-portal messaging — it is NOT an email.",
-    "Use this to deliver a reply to a client AFTER Antonio has explicitly approved the draft in THIS Slack thread (he said 'send it', 'go', 'send', or similar). Show the draft first, wait for his OK, then call this ONCE.",
-    "Provide account_id for an LLC-related message, OR contact_id for a person without an LLC (at least one is required). The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
-    "Do NOT call this speculatively, without an explicit approval in the thread, or for a team-only note (clients see portal chat).",
+    "Use this to deliver a reply to a client AFTER the staff member has explicitly approved the draft in THIS conversation ('send it', 'go', 'send', or similar). Show the draft first, wait for their OK, then call this ONCE.",
+    "LANGUAGE: write the message in the CLIENT'S CRM language (contacts.language) — an Italian client gets an Italian message, automatically. A server-side check refuses a clearly-English draft to an Italian-language client.",
+    "Recipient: some surfaces fix the recipient to the open client (pass only the message there). Otherwise provide account_id for an LLC-related message, OR contact_id for a person without an LLC. The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
+    "Do NOT call this speculatively, without an explicit approval in the conversation, or for a team-only note (clients see portal chat).",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -1114,6 +1115,60 @@ export function stripDraftMarkdown(text: string): string {
 }
 
 /**
+ * LANGUAGE GUARD (Adam Marra incident, 2026-07-17) — deterministic floor under
+ * the prompt's "client drafts in the client's CRM language" rule, which has now
+ * failed twice (Gritti 2026-06-21 → R109; Marra 2026-07-17). Refuses ONLY the
+ * high-confidence bad case: client language on file is Italian AND the draft is
+ * confidently English. Everything uncertain fails OPEN (null contact, blank
+ * language, short/mixed drafts, multi-contact accounts with ambiguous owner).
+ * Exported for unit tests. Never throws — a lookup error allows the send.
+ */
+export async function shouldRefusePortalDraftLanguage(input: {
+  account_id?: string | null
+  contact_id?: string | null
+  message: string
+}): Promise<boolean> {
+  try {
+    const { isItalian } = await import("@/lib/locale")
+    const { detectDraftLanguage } = await import("@/lib/ai-agent/draft-language")
+    if (detectDraftLanguage(input.message) !== "en") return false
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any
+    let contactId = input.contact_id ?? null
+    if (!contactId && input.account_id) {
+      // Ambiguity rule: on a multi-contact account the "owner" resolution is
+      // arbitrary — skip the guard rather than judge against the wrong member.
+      const { data: links } = await db
+        .from("account_contacts")
+        .select("contact_id")
+        .eq("account_id", input.account_id)
+        .limit(2)
+      if (!links || links.length !== 1) return false
+      contactId = links[0]?.contact_id ?? null
+    }
+    if (!contactId) return false
+
+    const { data: contact } = await db
+      .from("contacts")
+      .select("language")
+      .eq("id", contactId)
+      .maybeSingle()
+    return isItalian(contact?.language)
+  } catch {
+    return false // fail-open: a guard error must never block a legitimate send
+  }
+}
+
+/** Refusal shown to the model when the language guard fires. Names ONLY the two
+ * real exits (no confirm affordance exists in v1 — never promise one). */
+export const PORTAL_LANGUAGE_REFUSAL =
+  "⛔ NOT SENT — language check: this client's language on file is Italian, but the draft is in English. " +
+  "Sending is now DISABLED for the rest of this turn. Do NOT translate and resend on your own. " +
+  "End your reply by presenting a NEW Italian draft for the staff member to approve; " +
+  "if they truly want the English text sent, they can send it themselves from the normal chat composer."
+
+/**
  * Send a portal chat message on behalf of the Slack worker. Mirrors the MCP
  * portal_chat_send tool (insert into portal_messages as admin + fire the client
  * notification/email), with one extra guard: because this is an un-gated,
@@ -1195,6 +1250,22 @@ export async function sendPortalMessageFromWorker(input: {
   if (error) return `❌ Failed to send portal message: ${error.message ?? "unknown error"}`
   if (!msg) return "❌ Portal message insert returned no row."
 
+  // Resolve the recipient's display name for the confirmation, so staff always
+  // see WHO the message went to (on the unpinned Slack path a model-resolved id
+  // could silently be the wrong client — the name makes that visible).
+  let recipientName: string | null = null
+  try {
+    if (accountId) {
+      const { data: acct } = await db.from("accounts").select("company_name").eq("id", accountId).maybeSingle()
+      recipientName = acct?.company_name ?? null
+    } else if (resolvedContactId) {
+      const { data: c } = await db.from("contacts").select("full_name").eq("id", resolvedContactId).maybeSingle()
+      recipientName = c?.full_name ?? null
+    }
+  } catch {
+    // display-only; never fail the send over it
+  }
+
   // Audit trail (fire-and-forget, never throws).
   logAction({
     actor: actor ?? "claude.slack",
@@ -1229,7 +1300,7 @@ export async function sendPortalMessageFromWorker(input: {
     // notification wiring failure never fails the send
   }
 
-  return `✅ Portal message sent to the client. id=${msg.id} at ${msg.created_at}`
+  return `✅ Portal message sent to ${recipientName ?? "the client"}. id=${msg.id} at ${msg.created_at}`
 }
 
 /**
@@ -1876,6 +1947,34 @@ export async function executeWorkerTool(
       pin && (pin.account_id || pin.contact_id)
         ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
         : params
+    // LANGUAGE GUARD + SEND LATCH — pinned (CRM Portal Chats) surface only for
+    // v1: Slack has no composer escape hatch, so it keeps prompt-rule-only
+    // behaviour for now. Once refused, sending stays off for the whole turn so
+    // the model cannot ship a self-translated draft the staff never reviewed.
+    if (pin && (pin.account_id || pin.contact_id) && sendContext) {
+      if (sendContext.portalSendLatched) {
+        return PORTAL_LANGUAGE_REFUSAL
+      }
+      const refuse = await shouldRefusePortalDraftLanguage({
+        account_id: (portalParams as { account_id?: string }).account_id ?? null,
+        contact_id: (portalParams as { contact_id?: string }).contact_id ?? null,
+        message: typeof (portalParams as { message?: unknown }).message === "string"
+          ? stripDraftMarkdown(((portalParams as { message?: string }).message ?? "").trim())
+          : "",
+      })
+      if (refuse) {
+        sendContext.portalSendLatched = true
+        // Refusal audit — lets us tune the detector on real refusals before
+        // ever considering a "send anyway" affordance.
+        logAction({
+          actor: sendContext.actor ?? "claude.worker",
+          action_type: "update",
+          table_name: "portal_messages",
+          summary: "REFUSED portal send (language guard): English draft for Italian-language client — new draft required.",
+        })
+        return PORTAL_LANGUAGE_REFUSAL
+      }
+    }
     return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined)
   }
   if (name === "team_chat_send") {
@@ -1924,8 +2023,13 @@ export async function executeWorkerTool(
   // memory_save — knowledge-only write (decision_memory), not a business
   // mutation; delegated to the shared executeTool implementation. memory_recall
   // is in the read-only allow-list and falls through to executeTool below.
+  // On client-scoped surfaces the canonical client key is injected SERVER-SIDE
+  // so the lesson is recallable for this client later (the save side never
+  // wrote a client key before — lessons were unscoped and per-client recall
+  // could never find them). A model-supplied client_key is overridden.
   if (name === "memory_save") {
-    return executeTool(name, params)
+    const key = sendContext?.memoryClientKey
+    return executeTool(name, key ? { ...params, client_key: key } : params)
   }
   // Read-only repo-source tools — dispatched directly (not via executeTool;
   // they're not AGENT_TOOLS). Repo-scoped + env/secrets/deps blocked in
@@ -2381,6 +2485,21 @@ export interface PinnedEmailAttachment {
 export interface WorkerSendContext {
   actor?: string | null
   pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
+  /**
+   * SEND LATCH (mutable, set by the executor): after the language guard refuses
+   * a portal send, further send_portal_message calls in the SAME worker turn are
+   * refused too. Without this, the model — still holding the staff's just-given
+   * "send it" — would translate the draft itself and send text the staff never
+   * reviewed. The turn must instead end with a NEW draft for approval.
+   */
+  portalSendLatched?: boolean
+  /**
+   * Canonical per-client memory namespace ("account:<id>" | "contact:<id>") for
+   * memory_save on client-scoped surfaces, injected server-side so lessons the
+   * worker saves are recallable for THIS client later. The model never supplies
+   * it; a model-supplied client_key is overridden.
+   */
+  memoryClientKey?: string | null
   pinnedEmailAttachments?: PinnedEmailAttachment[] | null
   /** undefined = unpinned; array (even empty) = only these addresses may be emailed. */
   pinnedEmailRecipients?: string[]
@@ -2939,7 +3058,10 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     opts.pinnedPortalRecipient ||
     opts.pinnedEmailAttachments?.length ||
     opts.pinnedEmailRecipients !== undefined ||
-    opts.emailSendPrep
+    opts.emailSendPrep ||
+    // Client-scoped calls carry the canonical memory namespace so memory_save
+    // writes client-recallable lessons (the save side wrote NO key before).
+    opts.clientKey
   const capturedOffThreadAttempts: string[] = []
   const sendContext: WorkerSendContext | undefined = hasPin
     ? {
@@ -2947,6 +3069,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
         pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
         pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
         capturedOffThreadAttempts,
+        memoryClientKey: opts.clientKey ?? null,
         ...(opts.pinnedEmailRecipients !== undefined
           ? { pinnedEmailRecipients: opts.pinnedEmailRecipients }
           : {}),

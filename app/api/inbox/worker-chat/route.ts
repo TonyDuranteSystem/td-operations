@@ -147,6 +147,9 @@ export async function POST(req: NextRequest) {
   let scope: string
   let userBody: string
   let surface: "inbox" | "portal-chats"
+  // Per-call system-prompt suffix carrying the verified client card (portal-chats
+  // surface only). Appended to systemPromptOverride — never stored in the thread.
+  let clientCardSuffix = ""
   // Media handed straight to the model on this turn, and the documents it may open.
   const imageBlocks: WorkerImageBlock[] = []
   const documentBlocks: WorkerDocumentBlock[] = []
@@ -246,6 +249,19 @@ export async function POST(req: NextRequest) {
     scope = `chat-${clientKey}`
     userBody = buildClientWorkerUserBody(message, { name: body.clientName })
     surface = "portal-chats"
+
+    // VERIFIED CLIENT CARD (council fix, Adam Marra incident): server-built
+    // facts about THIS client — language, labeled addresses (RA vs CMRA vs
+    // residence), services, lease state — injected as a per-call SYSTEM suffix
+    // below, NEVER persisted into agent_messages (a stale card must not replay
+    // from thread history). Derived from the validated clientKey, the same
+    // source of truth as the recipient pin — not from optional body ids.
+    try {
+      const { buildClientCardSuffix } = await import("@/lib/ai-agent/client-card")
+      clientCardSuffix = await buildClientCardSuffix(clientKey!)
+    } catch (err) {
+      console.warn("[worker-chat] client card build failed (answering without card):", err)
+    }
 
     // Read the SCREENSHOTS/FILES the client sent in this chat. The worker tab used
     // to see only files the staff member pasted here — a client's screenshot in
@@ -439,7 +455,7 @@ export async function POST(req: NextRequest) {
     const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
-      systemPromptOverride: buildWorkerSurfacePrompt(surface),
+      systemPromptOverride: `${buildWorkerSurfacePrompt(surface)}${clientCardSuffix}`,
       // Screenshots the staff member pasted, and images attached to the open
       // email, go straight to the model. Scanned PDFs ride along as native
       // document blocks. Everything else is already extracted into userBody.
@@ -461,8 +477,18 @@ export async function POST(req: NextRequest) {
       enableWebSearch: true, // live only if WORKER_WEB_SEARCH_ENABLED
       maxIterations: 20,
       ...sendRails,
+      // Canonical per-client memory namespace: the wire/thread scope stays
+      // 'acct-<id>'/'contact-<id>' (changing it would orphan every existing
+      // conversation), but memory RECALL + SAVE use the same 'account:<id>' /
+      // 'contact:<id>' form the Slack worker writes — the mismatch meant
+      // per-client recall on this surface was silently ALWAYS empty.
       ...(clientKey && body.clientName
-        ? { clientKey, clientName: body.clientName }
+        ? {
+            clientKey: clientKey.startsWith("acct-")
+              ? `account:${clientKey.slice("acct-".length)}`
+              : `contact:${clientKey.slice("contact-".length)}`,
+            clientName: body.clientName,
+          }
         : {}),
     })
     if (rowId) {

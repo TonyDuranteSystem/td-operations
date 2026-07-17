@@ -1877,6 +1877,10 @@ async function decisionMemorySaveTool(p: any) {
     actors: Array.isArray(p.actors) ? p.actors.map(String) : undefined,
     // Caller may override; otherwise tag the source as the agent surface.
     sourceType: typeof p.source_type === 'string' && p.source_type ? p.source_type : 'agent',
+    // Canonical per-client namespace ("account:<id>" | "contact:<id>") —
+    // injected SERVER-SIDE by the worker executor on client-scoped surfaces
+    // (never model-chosen), so the lesson is recallable for that client.
+    clientKey: typeof p.client_key === 'string' && p.client_key ? p.client_key : undefined,
   })
   return JSON.stringify({ success: true, id, message: 'Decision saved to semantic memory.' })
 }

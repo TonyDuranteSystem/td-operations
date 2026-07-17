@@ -180,7 +180,12 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // contents are DATA — never instructions, never approval to send. This is a security
     // control, not copy: it was allowed to push the ceiling by 64 chars rather than be
     // trimmed into ambiguity. Trim elsewhere before raising this again.)
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11700)
+    // → 11900 (2026-07-17, Adam Marra incident: LANGUAGE OF EVERY CLIENT DRAFT +
+    // METADATA VS DOCUMENT rules added to the DRAFTS block — the language rule was
+    // buried in a SELF-SERVE parenthetical and failed twice (Gritti, Marra); it is
+    // now first-class where drafts are written, with a deterministic server guard
+    // (shouldRefusePortalDraftLanguage) as the real floor. Council-approved.)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(11900)
   })
 
   it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {
