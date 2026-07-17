@@ -37,9 +37,12 @@ function makeBuilder() {
     order: () => builder,
     insert: (row: unknown) => {
       state.lastInsertTable = state.table
-      // worker_send_markers is a bookkeeping insert (idempotency); don't treat
-      // it as the portal message row the tests assert on.
-      if (state.table !== "worker_send_markers") lastInsertedRow = row as Record<string, unknown>
+      // worker_send_markers (idempotency) and conversations (activity log) are
+      // bookkeeping inserts — don't treat them as the portal message row the
+      // tests assert on.
+      if (state.table !== "worker_send_markers" && state.table !== "conversations") {
+        lastInsertedRow = row as Record<string, unknown>
+      }
       return builder
     },
     maybeSingle: async () => {

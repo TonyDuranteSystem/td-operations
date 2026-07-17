@@ -1427,6 +1427,27 @@ export async function sendPortalMessageFromWorker(input: {
     // notification wiring failure never fails the send
   }
 
+  // CONVERSATION LOG (WS2.3 write side, council): record this outbound message in
+  // the CRM conversation log so "what did we tell this client?" is answerable and
+  // the log fills from the CRM, not just Slack tagged threads. A client portal
+  // message IS legitimate client activity (not internal chatter), so it belongs
+  // here. Logs the CLEAN message (not any enriched body). Best-effort.
+  try {
+    await db.from("conversations").insert({
+      account_id: accountId,
+      contact_id: resolvedContactId,
+      date: new Date().toISOString(),
+      channel: "Portal",
+      direction: "Outbound",
+      status: "Sent",
+      handled_by: actor ? "TD Team" : "Claude",
+      response_sent: message,
+      topic: "Portal chat",
+    })
+  } catch {
+    // logging failure never affects the delivered message
+  }
+
   return `✅ Portal message sent to ${recipientName ?? "the client"}. id=${msg.id} at ${msg.created_at}`
 }
 
