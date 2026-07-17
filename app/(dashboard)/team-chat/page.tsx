@@ -17,7 +17,8 @@ import EmojiPicker from 'emoji-picker-react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
-import { uploadTeamAttachment } from '@/lib/team/attachment'
+import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
+import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
 import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg } from './types'
@@ -86,6 +87,9 @@ export default function TeamWorkspacePage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  // Mirror of pendingFiles for the file-intake cap math (avoids a stale closure
+  // when drop/paste/paperclip fire in quick succession).
+  const pendingFilesRef = useRef<File[]>([])
   const emojiRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
@@ -301,6 +305,35 @@ export default function TeamWorkspacePage() {
     requestAnimationFrame(() => el?.focus())
   }
 
+  // Keep the ref in sync so file-intake reads the live staged list.
+  useEffect(() => { pendingFilesRef.current = pendingFiles }, [pendingFiles])
+
+  // Single intake path for the paperclip, drag-drop, and paste. Validates + caps
+  // at add-time and tells the user what was rejected or dropped (never fails
+  // silently), then stages the survivors. The final slice is a concurrency
+  // safety net so two near-simultaneous batches can't exceed the cap.
+  const addPendingFiles = useCallback((incoming: File[]) => {
+    if (!incoming.length) return
+    const { accepted, rejected, overflow } = prepareChatFiles(incoming, pendingFilesRef.current.length)
+    if (rejected.length) toast.error(`Couldn't attach ${rejected.join(', ')} — programs, scripts, and empty items aren't allowed.`)
+    if (overflow > 0) toast.error(`Only ${CHAT_ATTACHMENT_MAX_COUNT} files per message — ${overflow} not added.`)
+    if (accepted.length) setPendingFiles(prev => [...prev, ...accepted].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
+  }, [])
+
+  // Paste a screenshot/file into the composer. Only intercept when the clipboard
+  // actually carries files AND no real text — otherwise a normal (or spreadsheet)
+  // text paste would be swallowed.
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (sending || uploading || editing) return
+    const dt = e.clipboardData
+    const files = Array.from(dt?.files ?? [])
+    if (!files.length) return
+    const hasText = Array.from(dt?.types ?? []).some(t => t === 'text/plain' || t === 'text/html')
+    if (hasText) return
+    e.preventDefault()
+    addPendingFiles(files)
+  }, [sending, uploading, editing, addPendingFiles])
+
   const handleSend = useCallback(async () => {
     const msg = text.trim()
     // Slash-command parity with Slack: "/client" opens the native New
@@ -364,6 +397,10 @@ export default function TeamWorkspacePage() {
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Failed to send')
       setText(sentText); setReplyTo(sentReply)
+      // Keep the staged files so the send can be retried. Merge (not overwrite)
+      // in case the user staged another file during the in-flight upload; the
+      // slice keeps the per-message cap intact.
+      if (files.length) setPendingFiles(prev => [...files, ...prev].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
     } finally { setSending(false); inputRef.current?.focus() }
   }, [text, pendingFiles, selectedId, sending, uploading, replyTo, editing, isRecording, stopRecording])
 
@@ -832,6 +869,7 @@ export default function TeamWorkspacePage() {
               </div>
             )}
 
+            <WorkerDropZone onFiles={addPendingFiles} disabled={sending || uploading || !!editing} label="Drop to attach" className="flex-1 flex flex-col min-h-0">
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
               {loadingMsgs ? (
@@ -918,8 +956,9 @@ export default function TeamWorkspacePage() {
                   <button onClick={() => fileRef.current?.click()} disabled={uploading} className={cn('p-2 rounded-full shrink-0', pendingFiles.length ? 'text-blue-600 bg-blue-100' : 'text-zinc-400 hover:bg-zinc-100')}>
                     {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
                   </button>
-                  <input ref={fileRef} type="file" multiple onChange={e => { setPendingFiles(p => [...p, ...Array.from(e.target.files ?? [])].slice(0, 5)); e.target.value = '' }} className="hidden" />
+                  <input ref={fileRef} type="file" multiple onChange={e => { addPendingFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} className="hidden" />
                   <textarea ref={inputRef} value={text} onChange={e => onTextChange(e.target.value)}
+                    onPaste={handlePaste}
                     onKeyDown={e => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         if (commandCandidates.length > 0) { e.preventDefault(); runCommand(commandCandidates[0]); return }
@@ -941,6 +980,7 @@ export default function TeamWorkspacePage() {
                 ) : null}
               </div>
             </div>
+            </WorkerDropZone>
           </>
         )}
       </div>

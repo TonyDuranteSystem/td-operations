@@ -17,6 +17,8 @@ interface WorkerDropZoneProps {
   onFiles: (files: File[]) => void
   disabled?: boolean
   className?: string
+  /** Overlay copy shown while dragging. Defaults to the worker-panel wording. */
+  label?: string
   children: React.ReactNode
 }
 
@@ -25,7 +27,7 @@ function isFileDrag(e: React.DragEvent): boolean {
   return Array.from(e.dataTransfer?.types ?? []).includes('Files')
 }
 
-export function WorkerDropZone({ onFiles, disabled, className, children }: WorkerDropZoneProps) {
+export function WorkerDropZone({ onFiles, disabled, className, label, children }: WorkerDropZoneProps) {
   const [dragging, setDragging] = useState(false)
   // dragenter/dragleave fire for every child element the cursor crosses. Counting
   // them is the only reliable way to know when the cursor has truly left the panel
@@ -89,7 +91,7 @@ export function WorkerDropZone({ onFiles, disabled, className, children }: Worke
         <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-400 bg-violet-50/90 pointer-events-none">
           <div className="flex flex-col items-center gap-2 text-violet-700">
             <Upload className="h-7 w-7" />
-            <p className="text-sm font-medium">Drop the file for the worker to read</p>
+            <p className="text-sm font-medium">{label ?? 'Drop the file for the worker to read'}</p>
           </div>
         </div>
       )}
