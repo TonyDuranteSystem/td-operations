@@ -175,6 +175,32 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'get_client_paperwork',
+    description: 'Get the STATUS of a client\'s paperwork in one labeled read: offers (sent/viewed/signed), the office lease, the operating agreement (OA), any e-signature requests, and formation-wizard progress. Use this to answer "did they sign the offer/lease/OA?", "what e-sign is pending?", or "where is their formation wizard stuck?". Provide account_id (LLC) and/or contact_id (person).',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account (LLC) UUID.' },
+        contact_id: { type: 'string', description: 'Contact (person) UUID.' },
+      },
+    },
+  },
+  {
+    name: 'search_conversations',
+    description: 'Search the CRM conversation LOG — the recorded history of what we told a client and how they responded, across channels (email, WhatsApp, phone, portal). Use this to answer "what did we tell this client last time?" / "what was discussed about X?". Filter by account, contact, free-text (topic or client message), and date range.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Filter by account UUID.' },
+        contact_id: { type: 'string', description: 'Filter by contact UUID.' },
+        query: { type: 'string', description: 'Free-text search within topic or the client message.' },
+        date_from: { type: 'string', description: 'From date (YYYY-MM-DD).' },
+        date_to: { type: 'string', description: 'To date (YYYY-MM-DD).' },
+        limit: { type: 'number', description: 'Max results (default 20).' },
+      },
+    },
+  },
+  {
     name: 'create_task',
     description: 'Create a new CRM task for the team.',
     parameters: {
@@ -610,6 +636,8 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_leads': return await searchLeads(params)
       case 'search_deals': return await searchDeals(params)
       case 'search_portal_messages': return await searchPortalMessages(params)
+      case 'search_conversations': return await searchConversations(params)
+      case 'get_client_paperwork': return await getClientPaperwork(params)
       case 'create_task': return await createTask(params)
       case 'send_email': return await sendEmail(params)
       case 'get_dashboard_stats': return await getDashboardStats()
@@ -898,6 +926,78 @@ async function searchPortalMessages(p: any) {
     : `Found ${result.length} messages across all clients`
 
   return JSON.stringify({ summary, messages: result })
+}
+
+// Search the CRM conversation LOG (the "what did we tell this client" history).
+// Read-only; mirrors the MCP conv_search filters. WS2.3 (council).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function searchConversations(p: any) {
+  let q = supabaseAdmin
+    .from('conversations')
+    .select('id, date, channel, topic, category, client_message, response_sent, status, handled_by, direction, account_id, accounts(company_name)')
+    .order('date', { ascending: false })
+    .limit(Math.min(Number(p.limit) || 20, 100))
+
+  if (p.account_id) q = q.eq('account_id', p.account_id)
+  if (p.contact_id) q = q.eq('contact_id', p.contact_id)
+  if (p.query) q = q.or(`topic.ilike.%${p.query}%,client_message.ilike.%${p.query}%`)
+  if (p.date_from) q = q.gte('date', `${p.date_from}T00:00:00`)
+  if (p.date_to) q = q.lte('date', `${p.date_to}T23:59:59`)
+
+  const { data, error } = await q
+  if (error) return JSON.stringify({ error: error.message })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = (data ?? []).map((c: any) => ({
+    date: c.date,
+    channel: c.channel,
+    topic: c.topic,
+    category: c.category,
+    account: (c.accounts as any)?.company_name ?? c.account_id,
+    handled_by: c.handled_by,
+    status: c.status,
+    client_message: c.client_message,
+    response_sent: c.response_sent,
+  }))
+  return JSON.stringify({ summary: `Found ${result.length} logged conversations`, conversations: result })
+}
+
+// Labeled paperwork-status read across offers / lease / OA / e-sign / wizard.
+// Read-only; the worker previously had to guess at these tables via raw SQL, or
+// substituted lead/deal proxies for offers. WS3.2 (council).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getClientPaperwork(p: any) {
+  const accountId = typeof p.account_id === 'string' && p.account_id ? p.account_id : null
+  const contactId = typeof p.contact_id === 'string' && p.contact_id ? p.contact_id : null
+  if (!accountId && !contactId) {
+    return JSON.stringify({ error: 'Provide account_id and/or contact_id.' })
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scoped = (q: any) => (accountId ? q.eq('account_id', accountId) : q.eq('contact_id', contactId))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safe = async (fn: () => Promise<any>) => { try { return (await fn()).data ?? [] } catch { return [] } }
+
+  const offers = await safe(() => scoped(
+    supabaseAdmin.from('offers').select('client_name, contract_type, status, offer_date, viewed_at, expires_at').order('offer_date', { ascending: false }).limit(10)
+  ))
+  const leases = await safe(() => scoped(
+    supabaseAdmin.from('lease_agreements').select('suite_number, premises_address, status, viewed_at, signed_at, created_at').order('created_at', { ascending: false }).limit(5)
+  ))
+  const oas = await safe(() => scoped(
+    supabaseAdmin.from('oa_agreements').select('company_name, entity_type, status, signed_count, total_signers, signed_at, created_at').order('created_at', { ascending: false }).limit(5)
+  ))
+  const signatures = await safe(() => scoped(
+    supabaseAdmin.from('signature_requests').select('document_name, status, signed_at, created_at').order('created_at', { ascending: false }).limit(10)
+  ))
+  const wizards = await safe(() => scoped(
+    supabaseAdmin.from('wizard_progress').select('wizard_type, current_step, status, updated_at').order('updated_at', { ascending: false }).limit(5)
+  ))
+
+  return JSON.stringify({
+    scope: accountId ? { account_id: accountId } : { contact_id: contactId },
+    offers, leases, operating_agreements: oas, signature_requests: signatures, formation_wizards: wizards,
+    note: 'Statuses are as recorded in the CRM. "signed_at" set = signed. For OA, signed_count/total_signers shows multi-member progress.',
+  })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1877,6 +1977,10 @@ async function decisionMemorySaveTool(p: any) {
     actors: Array.isArray(p.actors) ? p.actors.map(String) : undefined,
     // Caller may override; otherwise tag the source as the agent surface.
     sourceType: typeof p.source_type === 'string' && p.source_type ? p.source_type : 'agent',
+    // Canonical per-client namespace ("account:<id>" | "contact:<id>") —
+    // injected SERVER-SIDE by the worker executor on client-scoped surfaces
+    // (never model-chosen), so the lesson is recallable for that client.
+    clientKey: typeof p.client_key === 'string' && p.client_key ? p.client_key : undefined,
   })
   return JSON.stringify({ success: true, id, message: 'Decision saved to semantic memory.' })
 }
@@ -1901,15 +2005,24 @@ async function decisionMemoryRecallTool(p: any) {
   })
 }
 
-/** Called by providers.ts before the tool loop — injects global memories into the system prompt. */
+/** Called by providers.ts before the tool loop — injects global memories into the system prompt.
+ * Capped (2026-07-17 council WS0/WS1 hygiene): this concatenated EVERY global
+ * agent_memory row into every dashboard prompt with no bound — unbounded growth
+ * directly inflates every call. Take the most-recent N and cap total length. */
+const GLOBAL_MEMORY_MAX_ROWS = 40
+const GLOBAL_MEMORY_MAX_CHARS = 6000
 export async function loadGlobalMemories(): Promise<string> {
   const { data } = await supabaseAdmin
     .from('agent_memory')
     .select('key, content')
     .eq('scope', 'global')
     .order('updated_at', { ascending: false })
+    .limit(GLOBAL_MEMORY_MAX_ROWS)
   if (!data?.length) return ''
-  const lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
+  let lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
+  if (lines.length > GLOBAL_MEMORY_MAX_CHARS) {
+    lines = lines.slice(0, GLOBAL_MEMORY_MAX_CHARS) + '\n- …(older memories truncated)'
+  }
   return `\n\n## REMEMBERED FROM PREVIOUS SESSIONS\n${lines}`
 }
 

@@ -70,6 +70,10 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // CRM read tools
   "search_accounts",
   "get_account_detail",
+  // Full client snapshot (account + contacts + services + payments + tasks +
+  // recent messages + deadlines) in one labeled read — was AGENT-only; the
+  // worker had to re-assemble it from many calls (council WS3.1).
+  "get_client_360",
   "search_contacts",
   "search_services",
   "search_payments",
@@ -79,6 +83,12 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "search_tax_returns",
   "search_deadlines",
   "search_portal_messages",
+  // The CRM conversation LOG — "what did we tell this client last time?"
+  // (council WS2.3). Read-only.
+  "search_conversations",
+  // Paperwork status: offers / lease / OA / e-sign / formation wizard in one
+  // labeled read (council WS3.2) — the worker used to guess these via raw SQL.
+  "get_client_paperwork",
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",
@@ -340,9 +350,10 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
   name: "send_portal_message",
   description: [
     "Send a message to a client in their PORTAL CHAT (portal.tonydurante.us). This is the client's in-portal messaging — it is NOT an email.",
-    "Use this to deliver a reply to a client AFTER Antonio has explicitly approved the draft in THIS Slack thread (he said 'send it', 'go', 'send', or similar). Show the draft first, wait for his OK, then call this ONCE.",
-    "Provide account_id for an LLC-related message, OR contact_id for a person without an LLC (at least one is required). The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
-    "Do NOT call this speculatively, without an explicit approval in the thread, or for a team-only note (clients see portal chat).",
+    "Use this to deliver a reply to a client AFTER the staff member has explicitly approved the draft in THIS conversation ('send it', 'go', 'send', or similar). Show the draft first, wait for their OK, then call this ONCE.",
+    "LANGUAGE: write the message in the CLIENT'S CRM language (contacts.language) — an Italian client gets an Italian message, automatically. A server-side check refuses a clearly-English draft to an Italian-language client.",
+    "Recipient: some surfaces fix the recipient to the open client (pass only the message there). Otherwise provide account_id for an LLC-related message, OR contact_id for a person without an LLC. The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
+    "Do NOT call this speculatively, without an explicit approval in the conversation, or for a team-only note (clients see portal chat).",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -853,8 +864,8 @@ export const SEARCH_SOPS_TOOL: ToolDef = {
 export const READ_DRIVE_FILE_TOOL: ToolDef = {
   name: "read_drive_file",
   description: [
-    "Read the TEXT content of a Google Drive file by id (plain text, CSV, Google Docs/Sheets exported as text). Get the id from drive_search / drive_list_folder first.",
-    "NOTE: PDFs and images can NOT be read here (they need OCR, which is currently disabled) — for those, report that the file is a PDF/image and can't be read as text.",
+    "Read the TEXT content of a Google Drive file by id: plain text, CSV, Google Docs/Sheets, AND the text layer of PDFs / Word / Excel documents. Get the id from drive_search / drive_list_folder first.",
+    "NOTE: a scanned/image-only PDF (no text layer) and plain images can't be read here (no OCR) — the tool will tell you when that's the case.",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -1070,14 +1081,35 @@ export async function searchSopsForWorker(params: Record<string, unknown>): Prom
 export async function readDriveFileForWorker(params: Record<string, unknown>): Promise<string> {
   const fileId = typeof params.file_id === "string" ? params.file_id.trim() : ""
   if (!fileId) return "file_id is required (find it with drive_search / drive_list_folder)."
+  const cap = (s: string) => (s.length > DOC_RESULT_CAP ? `${s.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : s)
   try {
+    // 1) Text export path (Google Docs/Sheets/Slides + plain text).
     const { downloadFileContent } = await import("@/lib/google-drive")
     const content = await downloadFileContent(fileId)
-    if (!content || !content.trim()) return `File ${fileId} has no readable text (it may be a PDF/image — OCR is currently disabled — or an empty file).`
-    return content.length > DOC_RESULT_CAP ? `${content.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : content
+    if (content && content.trim()) return cap(content)
+
+    // 2) Binary path — read PDF/Office text (WS3.3, council): most client
+    // documents in Drive are PDFs, which downloadFileContent returns empty for.
+    // The same extractor the worker already uses for chat/email attachments
+    // pulls the text layer (pdf-parse for PDF, exceljs/mammoth for xlsx/docx).
+    const { downloadFileBinary } = await import("@/lib/google-drive")
+    const { classifySlackFile, extractTextFromBuffer } = await import("@/lib/ai-agent/slack-file-reader")
+    const bin = await downloadFileBinary(fileId)
+    const kind = classifySlackFile(bin.mimeType, bin.fileName)
+    if (kind === "image") {
+      return `File ${fileId} ("${bin.fileName}") is an image — I can't read text from it here (no OCR on Drive reads).`
+    }
+    if (kind === "unsupported") {
+      return `File ${fileId} ("${bin.fileName}", ${bin.mimeType}) isn't a readable text/PDF/Office type.`
+    }
+    const text = await extractTextFromBuffer(bin.buffer, kind)
+    if (!text || !text.trim()) {
+      return `File ${fileId} ("${bin.fileName}") has no extractable text — likely a scanned/image-only ${kind.toUpperCase()} (no text layer).`
+    }
+    return cap(text)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return `Couldn't read file ${fileId}: ${msg}. (PDFs/images need OCR, which is currently disabled — report the file type instead.)`
+    return `Couldn't read file ${fileId}: ${msg}.`
   }
 }
 
@@ -1114,6 +1146,141 @@ export function stripDraftMarkdown(text: string): string {
 }
 
 /**
+ * Idempotency marker for a client-facing worker send (2026-07-17 council WS0).
+ * A stuck worker turn is recovered + re-run by the Slack cron, re-sending the
+ * same message/email. This records a one-time marker keyed on the originating
+ * message + kind + recipient + content; a re-run hits the DB unique index and
+ * this returns false (skip the send). Best-effort: if the marker table isn't
+ * there yet (migration not applied) or any non-unique error occurs, returns
+ * true (send proceeds — degrades to the prior behavior). Returns FALSE ONLY on
+ * a real duplicate (unique violation 23505).
+ */
+export async function claimWorkerSend(
+  sourceMessageId: string | null | undefined,
+  kind: string,
+  target: string,
+  content: string,
+): Promise<boolean> {
+  if (!sourceMessageId) return true // no originating row → can't dedup; allow
+  try {
+    const contentHash = createHash("sha1").update(content).digest("hex").slice(0, 16)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any
+    const { error } = await db.from("worker_send_markers").insert({
+      source_message_id: sourceMessageId,
+      kind,
+      target: target || "",
+      content_hash: contentHash,
+    })
+    if (!error) return true
+    if ((error as { code?: string }).code === "23505") return false // real duplicate
+    return true // table missing / other error → don't block a legitimate send
+  } catch {
+    return true
+  }
+}
+
+/** One account_contacts link, for choosing which member an account-scoped
+ * portal message belongs to. */
+export interface AccountContactLink {
+  contact_id: string | null
+  role?: string | null
+  ownership_pct?: number | null
+  is_primary?: boolean | null
+}
+
+/**
+ * Pick the RIGHT member for an account-scoped portal send (MMLLC fix,
+ * 2026-07-17 council WS0). Before this, the send took `.limit(1)` with NO
+ * ordering — an arbitrary member decided both the thread the message lands in
+ * AND who got the email. Deterministic priority: explicit primary → an
+ * owner/sole-member role → highest ownership → stable-first as a last resort.
+ * Pure + exported for unit tests. Returns { contactId, ambiguous } — ambiguous
+ * = we fell through to last-resort (multiple members, no owner signal) so the
+ * caller can log it.
+ */
+export function pickPrimaryContactId(
+  links: AccountContactLink[],
+): { contactId: string | null; ambiguous: boolean } {
+  const withContact = links.filter((l) => typeof l.contact_id === "string" && l.contact_id)
+  if (withContact.length === 0) return { contactId: null, ambiguous: false }
+  if (withContact.length === 1) return { contactId: withContact[0].contact_id, ambiguous: false }
+
+  const isOwnerRole = (role?: string | null) => {
+    const r = (role ?? "").trim().toLowerCase()
+    return r === "owner" || r === "sole member" || r === "sole_member"
+  }
+  const ranked = [...withContact].sort((a, b) => {
+    // 1) explicit primary flag
+    if (!!a.is_primary !== !!b.is_primary) return a.is_primary ? -1 : 1
+    // 2) owner-ish role
+    if (isOwnerRole(a.role) !== isOwnerRole(b.role)) return isOwnerRole(a.role) ? -1 : 1
+    // 3) highest ownership_pct (nulls last)
+    const ap = typeof a.ownership_pct === "number" ? a.ownership_pct : -1
+    const bp = typeof b.ownership_pct === "number" ? b.ownership_pct : -1
+    if (ap !== bp) return bp - ap
+    return 0
+  })
+  const top = ranked[0]
+  const hasSignal = !!top.is_primary || isOwnerRole(top.role) || typeof top.ownership_pct === "number"
+  return { contactId: top.contact_id, ambiguous: !hasSignal }
+}
+
+/**
+ * LANGUAGE GUARD (Adam Marra incident, 2026-07-17) — deterministic floor under
+ * the prompt's "client drafts in the client's CRM language" rule, which has now
+ * failed twice (Gritti 2026-06-21 → R109; Marra 2026-07-17). Refuses ONLY the
+ * high-confidence bad case: client language on file is Italian AND the draft is
+ * confidently English. Everything uncertain fails OPEN (null contact, blank
+ * language, short/mixed drafts, multi-contact accounts with ambiguous owner).
+ * Exported for unit tests. Never throws — a lookup error allows the send.
+ */
+export async function shouldRefusePortalDraftLanguage(input: {
+  account_id?: string | null
+  contact_id?: string | null
+  message: string
+}): Promise<boolean> {
+  try {
+    const { isItalian } = await import("@/lib/locale")
+    const { detectDraftLanguage } = await import("@/lib/ai-agent/draft-language")
+    if (detectDraftLanguage(input.message) !== "en") return false
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = supabaseAdmin as any
+    let contactId = input.contact_id ?? null
+    if (!contactId && input.account_id) {
+      // Ambiguity rule: on a multi-contact account the "owner" resolution is
+      // arbitrary — skip the guard rather than judge against the wrong member.
+      const { data: links } = await db
+        .from("account_contacts")
+        .select("contact_id")
+        .eq("account_id", input.account_id)
+        .limit(2)
+      if (!links || links.length !== 1) return false
+      contactId = links[0]?.contact_id ?? null
+    }
+    if (!contactId) return false
+
+    const { data: contact } = await db
+      .from("contacts")
+      .select("language")
+      .eq("id", contactId)
+      .maybeSingle()
+    return isItalian(contact?.language)
+  } catch {
+    return false // fail-open: a guard error must never block a legitimate send
+  }
+}
+
+/** Refusal shown to the model when the language guard fires. Names ONLY the two
+ * real exits (no confirm affordance exists in v1 — never promise one). */
+export const PORTAL_LANGUAGE_REFUSAL =
+  "⛔ NOT SENT — language check: this client's language on file is Italian, but the draft is in English. " +
+  "Sending is now DISABLED for the rest of this turn. Do NOT translate and resend on your own. " +
+  "End your reply by presenting a NEW Italian draft for the staff member to approve; " +
+  "if they truly want the English text sent, they can send it themselves from the normal chat composer."
+
+/**
  * Send a portal chat message on behalf of the Slack worker. Mirrors the MCP
  * portal_chat_send tool (insert into portal_messages as admin + fire the client
  * notification/email), with one extra guard: because this is an un-gated,
@@ -1126,7 +1293,7 @@ export async function sendPortalMessageFromWorker(input: {
   account_id?: unknown
   contact_id?: unknown
   message?: unknown
-}, actor?: string): Promise<string> {
+}, actor?: string, sourceMessageId?: string | null): Promise<string> {
   const accountId =
     typeof input.account_id === "string" && input.account_id.length > 0 ? input.account_id : null
   const contactId =
@@ -1146,17 +1313,24 @@ export async function sendPortalMessageFromWorker(input: {
   const db = supabaseAdmin as any
 
   // Resolve contact_id from the account when only the account was given, so the
-  // message lands in the client's contact-scoped thread. Mirrors the MCP tool —
-  // do NOT filter by is_primary (only 1 row in the DB has it set).
+  // message lands in the client's contact-scoped thread. Portal chat is
+  // contact-scoped, so this id decides who sees the message. Pick the OWNER /
+  // primary member deterministically — never an arbitrary `.limit(1)` (MMLLC
+  // fix, 2026-07-17 council WS0: a random member was getting a co-owner's
+  // message + notification).
   let resolvedContactId = contactId
   if (!resolvedContactId && accountId) {
-    const { data: link } = await db
+    const { data: links } = await db
       .from("account_contacts")
-      .select("contact_id")
+      .select("contact_id, role, ownership_pct, is_primary")
       .eq("account_id", accountId)
-      .limit(1)
-      .maybeSingle()
-    resolvedContactId = link?.contact_id ?? null
+    const picked = pickPrimaryContactId((links ?? []) as AccountContactLink[])
+    resolvedContactId = picked.contactId
+    if (picked.ambiguous) {
+      console.warn(
+        `[worker portal-send] account ${accountId} has multiple members and no owner/primary signal — delivered to ${resolvedContactId} (deterministic first). Set is_primary/role to fix routing.`,
+      )
+    }
   }
 
   // Dedup guard (best-effort): skip if an identical admin message to the same
@@ -1179,6 +1353,14 @@ export async function sendPortalMessageFromWorker(input: {
     // ignore — proceed with the send
   }
 
+  // Cross-run idempotency (survives the 2-min window): if this exact send was
+  // already made by this originating turn, a cron re-run must NOT re-post it.
+  const target = accountId ?? resolvedContactId ?? ""
+  const okToSend = await claimWorkerSend(sourceMessageId, "portal_message", target, message)
+  if (!okToSend) {
+    return "✅ Already sent (this turn was re-run) — no duplicate posted."
+  }
+
   const { data: msg, error } = await db
     .from("portal_messages")
     .insert({
@@ -1194,6 +1376,22 @@ export async function sendPortalMessageFromWorker(input: {
 
   if (error) return `❌ Failed to send portal message: ${error.message ?? "unknown error"}`
   if (!msg) return "❌ Portal message insert returned no row."
+
+  // Resolve the recipient's display name for the confirmation, so staff always
+  // see WHO the message went to (on the unpinned Slack path a model-resolved id
+  // could silently be the wrong client — the name makes that visible).
+  let recipientName: string | null = null
+  try {
+    if (accountId) {
+      const { data: acct } = await db.from("accounts").select("company_name").eq("id", accountId).maybeSingle()
+      recipientName = acct?.company_name ?? null
+    } else if (resolvedContactId) {
+      const { data: c } = await db.from("contacts").select("full_name").eq("id", resolvedContactId).maybeSingle()
+      recipientName = c?.full_name ?? null
+    }
+  } catch {
+    // display-only; never fail the send over it
+  }
 
   // Audit trail (fire-and-forget, never throws).
   logAction({
@@ -1229,7 +1427,28 @@ export async function sendPortalMessageFromWorker(input: {
     // notification wiring failure never fails the send
   }
 
-  return `✅ Portal message sent to the client. id=${msg.id} at ${msg.created_at}`
+  // CONVERSATION LOG (WS2.3 write side, council): record this outbound message in
+  // the CRM conversation log so "what did we tell this client?" is answerable and
+  // the log fills from the CRM, not just Slack tagged threads. A client portal
+  // message IS legitimate client activity (not internal chatter), so it belongs
+  // here. Logs the CLEAN message (not any enriched body). Best-effort.
+  try {
+    await db.from("conversations").insert({
+      account_id: accountId,
+      contact_id: resolvedContactId,
+      date: new Date().toISOString(),
+      channel: "Portal",
+      direction: "Outbound",
+      status: "Sent",
+      handled_by: actor ? "TD Team" : "Claude",
+      response_sent: message,
+      topic: "Portal chat",
+    })
+  } catch {
+    // logging failure never affects the delivered message
+  }
+
+  return `✅ Portal message sent to ${recipientName ?? "the client"}. id=${msg.id} at ${msg.created_at}`
 }
 
 /**
@@ -1876,7 +2095,35 @@ export async function executeWorkerTool(
       pin && (pin.account_id || pin.contact_id)
         ? { ...params, account_id: pin.account_id ?? undefined, contact_id: pin.contact_id ?? undefined }
         : params
-    return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined)
+    // LANGUAGE GUARD + SEND LATCH — pinned (CRM Portal Chats) surface only for
+    // v1: Slack has no composer escape hatch, so it keeps prompt-rule-only
+    // behaviour for now. Once refused, sending stays off for the whole turn so
+    // the model cannot ship a self-translated draft the staff never reviewed.
+    if (pin && (pin.account_id || pin.contact_id) && sendContext) {
+      if (sendContext.portalSendLatched) {
+        return PORTAL_LANGUAGE_REFUSAL
+      }
+      const refuse = await shouldRefusePortalDraftLanguage({
+        account_id: (portalParams as { account_id?: string }).account_id ?? null,
+        contact_id: (portalParams as { contact_id?: string }).contact_id ?? null,
+        message: typeof (portalParams as { message?: unknown }).message === "string"
+          ? stripDraftMarkdown(((portalParams as { message?: string }).message ?? "").trim())
+          : "",
+      })
+      if (refuse) {
+        sendContext.portalSendLatched = true
+        // Refusal audit — lets us tune the detector on real refusals before
+        // ever considering a "send anyway" affordance.
+        logAction({
+          actor: sendContext.actor ?? "claude.worker",
+          action_type: "update",
+          table_name: "portal_messages",
+          summary: "REFUSED portal send (language guard): English draft for Italian-language client — new draft required.",
+        })
+        return PORTAL_LANGUAGE_REFUSAL
+      }
+    }
+    return sendPortalMessageFromWorker(portalParams, sendContext?.actor ?? undefined, sourceMessageId ?? null)
   }
   if (name === "team_chat_send") {
     // Staff-only internal team-chat send AS Claude (gated at the tool-list level
@@ -1924,8 +2171,13 @@ export async function executeWorkerTool(
   // memory_save — knowledge-only write (decision_memory), not a business
   // mutation; delegated to the shared executeTool implementation. memory_recall
   // is in the read-only allow-list and falls through to executeTool below.
+  // On client-scoped surfaces the canonical client key is injected SERVER-SIDE
+  // so the lesson is recallable for this client later (the save side never
+  // wrote a client key before — lessons were unscoped and per-client recall
+  // could never find them). A model-supplied client_key is overridden.
   if (name === "memory_save") {
-    return executeTool(name, params)
+    const key = sendContext?.memoryClientKey
+    return executeTool(name, key ? { ...params, client_key: key } : params)
   }
   // Read-only repo-source tools — dispatched directly (not via executeTool;
   // they're not AGENT_TOOLS). Repo-scoped + env/secrets/deps blocked in
@@ -2313,6 +2565,12 @@ export interface CallWorkerOptions {
    */
   apiKeyOverride?: string
   /**
+   * Per-call model override (WS5). Falls back to env WORKER_MODEL, then the
+   * default (current model). Lets ONE surface trial a different model without
+   * touching the others. The dashboard agent's model is separate (providers.ts).
+   */
+  model?: string
+  /**
    * CRM-panel send safety + attribution (Inbox / Portal Chats worker). The Slack
    * path never sets these, so its behaviour is unchanged.
    * - sendActor: WHO triggered the send (e.g. "crm-inbox:luca@tonydurante.us").
@@ -2381,6 +2639,21 @@ export interface PinnedEmailAttachment {
 export interface WorkerSendContext {
   actor?: string | null
   pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
+  /**
+   * SEND LATCH (mutable, set by the executor): after the language guard refuses
+   * a portal send, further send_portal_message calls in the SAME worker turn are
+   * refused too. Without this, the model — still holding the staff's just-given
+   * "send it" — would translate the draft itself and send text the staff never
+   * reviewed. The turn must instead end with a NEW draft for approval.
+   */
+  portalSendLatched?: boolean
+  /**
+   * Canonical per-client memory namespace ("account:<id>" | "contact:<id>") for
+   * memory_save on client-scoped surfaces, injected server-side so lessons the
+   * worker saves are recallable for THIS client later. The model never supplies
+   * it; a model-supplied client_key is overridden.
+   */
+  memoryClientKey?: string | null
   pinnedEmailAttachments?: PinnedEmailAttachment[] | null
   /** undefined = unpinned; array (even empty) = only these addresses may be emailed. */
   pinnedEmailRecipients?: string[]
@@ -2464,6 +2737,22 @@ export function resolveWorkerApiKey(override?: string): string {
   return key
 }
 
+/**
+ * The worker's model. Env-overridable default (WS5) so a model trial is a config
+ * change, not a code edit, and a per-call `modelOverride` lets ONE surface (e.g.
+ * Portal Chats) run a different model without touching the others. Default is the
+ * current model — no behavior change until the env or a caller sets otherwise.
+ * NOTE: this is the WORKER only; the dashboard agent's model lives in providers.ts
+ * and is deliberately out of scope.
+ */
+export const WORKER_MODEL_DEFAULT = "claude-sonnet-4-6"
+export function resolveWorkerModel(override?: string | null): string {
+  const o = (override ?? "").trim()
+  if (o) return o
+  const env = (process.env.WORKER_MODEL ?? "").trim()
+  return env || WORKER_MODEL_DEFAULT
+}
+
 export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
@@ -2474,10 +2763,14 @@ export async function runWorkerLoop(
   serverTools?: Array<Record<string, unknown>>,
   apiKeyOverride?: string,
   sendContext?: WorkerSendContext,
+  modelOverride?: string | null,
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
   // Dedicated-key override (Slack worker) with fallback to the shared key. Covers
   // both fetch sites below — they read this same apiKey.
   const apiKey = resolveWorkerApiKey(apiKeyOverride)
+  // Resolved once — both fetch sites (main loop + exhaustion synthesis) use it,
+  // so a per-call model stays consistent within one request.
+  const model = resolveWorkerModel(modelOverride)
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
@@ -2517,15 +2810,16 @@ export async function runWorkerLoop(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model,
         max_tokens: 16384,
         // Prompt caching: the system prompt + tool definitions are the large, stable
         // prefix re-sent on EVERY tool-use iteration of this loop (a dig-in question
         // can be ~10 iterations). A cache_control breakpoint on the system block caches
         // tools + system together (tools render before system), so iterations 2..N — and
         // repeat calls within the 5-min TTL — read that prefix at ~0.1x instead of full
-        // price. Verify via usage.cache_read_input_tokens. (Model is fixed sonnet-4-6, so
-        // the cache is never invalidated by a model switch.)
+        // price. Verify via usage.cache_read_input_tokens. (Cache is keyed per model, so
+        // a per-surface model override splits the cache per model — a cost note, not a
+        // correctness issue; the model is resolved ONCE per call so it never changes mid-loop.)
         system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
         tools: claudeTools,
         messages: currentMessages,
@@ -2625,7 +2919,7 @@ export async function runWorkerLoop(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model,
           max_tokens: 16384,
           system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
           // No tools → the model is forced to produce a text answer.
@@ -2761,7 +3055,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     try {
       const existing = await getThreadSummary(threadId)
       threadType = existing ? normalizeThreadType(existing.thread_type) : DEFAULT_THREAD_TYPE
-      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION)
+      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION, null, opts.clientKey ?? null)
       rowEnsured = true
 
       tools = getToolsForThreadType(threadType)
@@ -2920,7 +3214,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // Slack-only (enableThreadRecall) so the Hermes research worker never triggers it
   // (R108). Best-effort: "" on missing key / un-applied migration / any error.
   if (opts.enableThreadRecall) {
-    systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId)}`
+    systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId, opts.clientKey ?? null)}`
   }
 
   // Slack-only web research (Anthropic server tools). Gated by the option AND the env
@@ -2939,7 +3233,10 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     opts.pinnedPortalRecipient ||
     opts.pinnedEmailAttachments?.length ||
     opts.pinnedEmailRecipients !== undefined ||
-    opts.emailSendPrep
+    opts.emailSendPrep ||
+    // Client-scoped calls carry the canonical memory namespace so memory_save
+    // writes client-recallable lessons (the save side wrote NO key before).
+    opts.clientKey
   const capturedOffThreadAttempts: string[] = []
   const sendContext: WorkerSendContext | undefined = hasPin
     ? {
@@ -2947,6 +3244,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
         pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
         pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
         capturedOffThreadAttempts,
+        memoryClientKey: opts.clientKey ?? null,
         ...(opts.pinnedEmailRecipients !== undefined
           ? { pinnedEmailRecipients: opts.pinnedEmailRecipients }
           : {}),
@@ -2954,11 +3252,11 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       }
     : undefined
 
-  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext)
+  const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext, opts.model ?? null)
 
   if (threadId) {
     try {
-      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION)
+      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION, null, opts.clientKey ?? null)
       const proposed = result.toolsUsed.includes("propose_action")
       const outcome = result.reachedMaxLoops
         ? "incomplete"

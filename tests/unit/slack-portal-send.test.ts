@@ -15,14 +15,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 // with mutable state stand in for: account_contacts lookup (maybeSingle),
 // portal_messages dedup select (maybeSingle), portal_messages insert (single).
 let responses: {
-  accountContacts?: { contact_id: string } | null
+  accountContacts?: Array<{ contact_id: string; role?: string | null; ownership_pct?: number | null; is_primary?: boolean | null }>
   dedup?: { id: string; created_at: string } | null
   insert?: { data: { id: string; created_at: string } | null; error: { message: string } | null }
+  markerError?: { code?: string } | null
 }
 let lastInsertedRow: Record<string, unknown> | null = null
 
 function makeBuilder() {
-  const state = { table: "" as string }
+  const state = { table: "" as string, lastInsertTable: "" as string }
   const builder: Record<string, (...args: unknown[]) => unknown> = {
     from: (t: unknown) => {
       state.table = String(t)
@@ -31,18 +32,38 @@ function makeBuilder() {
     select: () => builder,
     eq: () => builder,
     gte: () => builder,
+    lt: () => builder,
     limit: () => builder,
+    order: () => builder,
     insert: (row: unknown) => {
-      lastInsertedRow = row as Record<string, unknown>
+      state.lastInsertTable = state.table
+      // worker_send_markers (idempotency) and conversations (activity log) are
+      // bookkeeping inserts — don't treat them as the portal message row the
+      // tests assert on.
+      if (state.table !== "worker_send_markers" && state.table !== "conversations") {
+        lastInsertedRow = row as Record<string, unknown>
+      }
       return builder
     },
     maybeSingle: async () => {
-      if (state.table === "account_contacts") return { data: responses.accountContacts ?? null }
       if (state.table === "portal_messages") return { data: responses.dedup ?? null }
+      // accounts/contacts recipient-name lookups
       return { data: null }
     },
     single: async () =>
       responses.insert ?? { data: { id: "msg-1", created_at: "2026-06-13T00:00:00Z" }, error: null },
+    // Directly-awaited chains: the account_contacts member fetch (array of
+    // links) and the worker_send_markers idempotency insert ({error}).
+    then: (resolve: (v: unknown) => void) => {
+      if (state.lastInsertTable === "worker_send_markers") {
+        state.lastInsertTable = ""
+        return Promise.resolve({ error: responses.markerError ?? null }).then(resolve)
+      }
+      if (state.table === "account_contacts") {
+        return Promise.resolve({ data: responses.accountContacts ?? [] }).then(resolve)
+      }
+      return Promise.resolve({ data: null, error: null }).then(resolve)
+    },
   }
   return builder
 }
@@ -90,7 +111,7 @@ describe("sendPortalMessageFromWorker", () => {
   })
 
   it("account_id only: resolves the linked contact and stamps the message as admin", async () => {
-    responses.accountContacts = { contact_id: "cnt-9" }
+    responses.accountContacts = [{ contact_id: "cnt-9" }]
     const r = await sendPortalMessageFromWorker({ account_id: "acc-1", message: "Hello there" })
     expect(r).toContain("✅ Portal message sent")
     expect(lastInsertedRow).toMatchObject({
@@ -161,7 +182,7 @@ describe("CRM Portal Chats panel — send attribution + recipient pin", () => {
   })
 
   it("HARD-PINS the recipient: a model-supplied contact_id is overridden by the panel's client", async () => {
-    responses.accountContacts = { contact_id: "cnt-PINNED" }
+    responses.accountContacts = [{ contact_id: "cnt-PINNED" }]
     // Model tries to message a DIFFERENT client; the pin forces the open account.
     const r = await executeWorkerTool(
       "send_portal_message",

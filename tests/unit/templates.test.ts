@@ -185,3 +185,38 @@ describe("searchTemplates", () => {
     expect(out).toEqual([])
   })
 })
+
+// ── approved_responses source + hard language filter (WS2.2) ─────────────────
+describe("approved_responses source + language filter", () => {
+  it("surfaces an approved reply as a grounding candidate", async () => {
+    h.tables.approved_responses = [
+      { title: "Banking welcome", category: "banking", service_type: "banking", language: "English", response_text: "Welcome to your new banking setup." },
+    ]
+    const out = await searchTemplates({ query: "banking" })
+    expect(out.some((t) => t.source === "approved" && t.template_name === "Banking welcome")).toBe(true)
+  })
+
+  it("HARD language filter: drops a different-language reply, keeps matching + language-agnostic", async () => {
+    h.tables.approved_responses = [
+      { title: "EN reply", category: "banking", service_type: "banking", language: "English", response_text: "english banking reply" },
+      { title: "IT reply", category: "banking", service_type: "banking", language: "Italian", response_text: "risposta banking italiana" },
+      { title: "Neutral reply", category: "banking", service_type: "banking", language: null, response_text: "neutral banking reply" },
+    ]
+    const out = await searchTemplates({ query: "banking", language: "Italian" })
+    const names = out.map((t) => t.template_name)
+    expect(names).toContain("IT reply")
+    expect(names).toContain("Neutral reply")
+    expect(names).not.toContain("EN reply")
+  })
+
+  it("no language pref → all languages eligible (no filter)", async () => {
+    h.tables.approved_responses = [
+      { title: "EN reply", category: "banking", service_type: "banking", language: "English", response_text: "english banking reply" },
+      { title: "IT reply", category: "banking", service_type: "banking", language: "Italian", response_text: "risposta banking italiana" },
+    ]
+    const out = await searchTemplates({ query: "banking" })
+    const names = out.map((t) => t.template_name)
+    expect(names).toContain("EN reply")
+    expect(names).toContain("IT reply")
+  })
+})

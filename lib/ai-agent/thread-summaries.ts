@@ -69,6 +69,7 @@ export async function createThreadSummary(
   title?: string | null,
   promptVersion?: string | null,
   accountsAffected?: string[] | null,
+  clientKey?: string | null,
 ): Promise<ThreadSummary | null> {
   if (!threadId || typeof threadId !== "string") return null
   const threadType: ThreadType = normalizeThreadType(type)
@@ -88,6 +89,12 @@ export async function createThreadSummary(
       prompt_version: typeof promptVersion === "string" && promptVersion.length > 0 ? promptVersion : null,
       // WP2: entities this thread concerns (account_id / contact_id from thread_create).
       accounts_affected: cleanedAccounts.length > 0 ? cleanedAccounts : null,
+      // WS4.1: canonical client scope ("account:<id>"/"contact:<id>", or null for a
+      // non-client thread) — the filter that keeps cross-thread recall from
+      // surfacing one client's history in another client's conversation. Column
+      // added by migration 20260717-2100; the insert tolerates its absence (the
+      // whole semantic layer ships dark until that migration + the flag are on).
+      ...(typeof clientKey === "string" && clientKey ? { client_key: clientKey } : {}),
     })
     .select(SELECT_COLS)
     .single()

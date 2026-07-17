@@ -147,6 +147,15 @@ export async function POST(req: NextRequest) {
   let scope: string
   let userBody: string
   let surface: "inbox" | "portal-chats"
+  // Per-call system-prompt suffix carrying the verified client card (portal-chats
+  // surface only). Appended to systemPromptOverride — never stored in the thread.
+  let clientCardSuffix = ""
+  // APPROVED-COPY GROUNDING (council WS2): the Slack + Team-Chat + suggest surfaces
+  // ground drafts in approved templates, but the two CRM worker panels — where
+  // staff actually work — never did. Match the staff's ask against the approved
+  // template libraries and inject them (best-effort, "" on no match). The template
+  // body is labeled copy-not-instructions inside formatTemplatesForPrompt.
+  let templatesSuffix = ""
   // Media handed straight to the model on this turn, and the documents it may open.
   const imageBlocks: WorkerImageBlock[] = []
   const documentBlocks: WorkerDocumentBlock[] = []
@@ -247,6 +256,19 @@ export async function POST(req: NextRequest) {
     userBody = buildClientWorkerUserBody(message, { name: body.clientName })
     surface = "portal-chats"
 
+    // VERIFIED CLIENT CARD (council fix, Adam Marra incident): server-built
+    // facts about THIS client — language, labeled addresses (RA vs CMRA vs
+    // residence), services, lease state — injected as a per-call SYSTEM suffix
+    // below, NEVER persisted into agent_messages (a stale card must not replay
+    // from thread history). Derived from the validated clientKey, the same
+    // source of truth as the recipient pin — not from optional body ids.
+    try {
+      const { buildClientCardSuffix } = await import("@/lib/ai-agent/client-card")
+      clientCardSuffix = await buildClientCardSuffix(clientKey!)
+    } catch (err) {
+      console.warn("[worker-chat] client card build failed (answering without card):", err)
+    }
+
     // Read the SCREENSHOTS/FILES the client sent in this chat. The worker tab used
     // to see only files the staff member pasted here — a client's screenshot in
     // the conversation had no path (read_portal_attachment refuses images). Images
@@ -327,6 +349,27 @@ export async function POST(req: NextRequest) {
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
+  // PER-THREAD IN-FLIGHT LOCK (2026-07-17 council WS0): two staff (or two quick
+  // messages) on the SAME worker thread would each insert a 'processing' row and
+  // run concurrently — interleaving one conversation and letting the
+  // thread-summary write clobber blind. A partial unique index
+  // (uq_worker_inflight_per_thread, migration 20260717-2000) allows ONE in-flight
+  // worker turn per thread; a second insert hits 23505 and we return "busy".
+  // First, recover a crashed turn: no cron reclaims recipient='worker' rows, so a
+  // turn that died mid-run would otherwise block the thread forever — sweep any
+  // in-flight row on THIS thread older than 5 minutes to 'failed'.
+  try {
+    await db
+      .from("agent_messages")
+      .update({ status: "failed", updated_at: new Date().toISOString() })
+      .eq("thread_id", threadId)
+      .eq("recipient", "worker")
+      .eq("status", "processing")
+      .lt("created_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+  } catch (err) {
+    console.warn("[worker-chat] stale in-flight sweep failed (non-fatal):", err)
+  }
+
   let rowId: string | null = null
   {
     // sender/recipient use the agent_message_party enum ('crm' added by
@@ -357,6 +400,16 @@ export async function POST(req: NextRequest) {
       .select("id")
       .single()
     if (insertError) {
+      // A unique violation on the per-thread partial index = another worker turn
+      // is already in flight on THIS thread. Do NOT run a concurrent turn (it
+      // would interleave the conversation + clobber the summary) — tell the panel
+      // to wait. Any OTHER insert error degrades to a memoryless turn as before.
+      if ((insertError as { code?: string }).code === "23505") {
+        return NextResponse.json(
+          { error: "The assistant is still working on the previous message in this conversation. Give it a moment and try again." },
+          { status: 409 },
+        )
+      }
       // supabase-js reports errors in the result, it does not throw — log
       // loudly, degrade to a memoryless turn rather than blocking the reply.
       console.error("[worker-chat] agent_messages insert failed (memory degraded):", insertError)
@@ -435,11 +488,23 @@ export async function POST(req: NextRequest) {
     for (const r of existing ?? []) priorPendingIds.add(r.id)
   }
 
+  // Load approved-template grounding for the staff member's ask (best-effort;
+  // "" on no match, so the prompt is unchanged when nothing fits). Same helper
+  // the Slack/Team/suggest surfaces use.
+  try {
+    const { loadRelevantTemplates, formatTemplatesForPrompt } = await import("@/lib/ai-agent/templates")
+    const relevant = await loadRelevantTemplates(message, { limit: 3 })
+    const block = formatTemplatesForPrompt(relevant)
+    if (block) templatesSuffix = `\n\n${block}`
+  } catch (err) {
+    console.warn("[worker-chat] template grounding load failed (non-fatal):", err)
+  }
+
   try {
     const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
-      systemPromptOverride: buildWorkerSurfacePrompt(surface),
+      systemPromptOverride: `${buildWorkerSurfacePrompt(surface)}${clientCardSuffix}${templatesSuffix}`,
       // Screenshots the staff member pasted, and images attached to the open
       // email, go straight to the model. Scanned PDFs ride along as native
       // document blocks. Everything else is already extracted into userBody.
@@ -461,8 +526,18 @@ export async function POST(req: NextRequest) {
       enableWebSearch: true, // live only if WORKER_WEB_SEARCH_ENABLED
       maxIterations: 20,
       ...sendRails,
+      // Canonical per-client memory namespace: the wire/thread scope stays
+      // 'acct-<id>'/'contact-<id>' (changing it would orphan every existing
+      // conversation), but memory RECALL + SAVE use the same 'account:<id>' /
+      // 'contact:<id>' form the Slack worker writes — the mismatch meant
+      // per-client recall on this surface was silently ALWAYS empty.
       ...(clientKey && body.clientName
-        ? { clientKey, clientName: body.clientName }
+        ? {
+            clientKey: clientKey.startsWith("acct-")
+              ? `account:${clientKey.slice("acct-".length)}`
+              : `contact:${clientKey.slice("contact-".length)}`,
+            clientName: body.clientName,
+          }
         : {}),
     })
     if (rowId) {

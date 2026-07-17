@@ -31,6 +31,7 @@ vi.mock("@/lib/supabase-admin", () => {
   const COLS = [
     "thread_id", "thread_type", "created_at", "resolved_at", "title", "outcome",
     "files_changed", "tasks_created", "accounts_affected", "summary_text", "tags", "prompt_version",
+    "client_key",
   ]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fill = (row: any) => {
@@ -230,6 +231,14 @@ describe("createThreadSummary (idempotent)", () => {
     expect(withAccts?.accounts_affected).toEqual(["acc-1", "contact-2"])
     const without = await createThreadSummary("t-acc2", "investigation", "title")
     expect(without?.accounts_affected).toBeNull()
+  })
+
+  it("stores the client scope for cross-thread recall isolation (WS4.1)", async () => {
+    await createThreadSummary("t-ck", "client_audit", "title", null, null, "account:acct-9")
+    expect((h.store[0] as Record<string, unknown>).client_key).toBe("account:acct-9")
+    // No clientKey → the column is null (a non-client thread).
+    await createThreadSummary("t-ck2", "investigation", "title")
+    expect((h.store[1] as Record<string, unknown>).client_key).toBeNull()
   })
 
   it("drops empty entries from accounts_affected; all-empty → null", async () => {
