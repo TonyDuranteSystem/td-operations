@@ -122,6 +122,11 @@ async function recoverStaleClaims(): Promise<number> {
       updated_at: new Date().toISOString(),
     })
     .eq("status", "processing")
+    // NEVER touch Slack-sourced rows — those are the Slack worker cron's, which
+    // runs its OWN stale-recovery. The Slack pipeline posts the answer back to
+    // Slack; this research worker does not, so recovering a Slack row here (and
+    // then claiming it in the scan) silently swallows Antonio's Slack question.
+    .neq("sender", "slack")
     .lt("claimed_at", cutoff)
     .select("id")
 
@@ -232,6 +237,12 @@ async function runScan(): Promise<{ recovered: number; processed: number; result
     .select("id")
     .eq("recipient", "claude")
     .eq("status", "pending")
+    // Exclude Slack-sourced rows: they belong to the Slack worker cron, which
+    // answers back INTO Slack. This research worker replies only in the DB, so
+    // claiming a Slack row here loses Antonio's question. (Slack rows are the
+    // only recipient='claude' rows with sender='slack'; Hermes rows use the
+    // hermes/antonio party.) Mirrors the Slack cron's own source scoping.
+    .neq("sender", "slack")
     .gt("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
     .order("created_at", { ascending: true })
     .limit(SCAN_BATCH)

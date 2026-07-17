@@ -45,6 +45,7 @@ import {
   SLACK_MAX_FILE_BYTES,
 } from "@/lib/ai-agent/slack-claude"
 import { getInternalBaseUrl } from "@/lib/mcp/tools/agent-messages"
+import { isSlackStaff, slackStaffName } from "@/lib/ai-agent/slack-staff"
 
 // Claude bot user ID — used to filter out self-messages (loop protection)
 const CLAUDE_BOT_USER_ID = "U0B9S675WTT"
@@ -270,10 +271,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // in the deploy report). When someone reacts with 🧠, persist the reacted
   // message as an explicit decision memory.
   if (event.type === "reaction_added" && event.reaction === "brain") {
-    // Ignore the bot reacting to itself (loop / accidental self-mark).
-    if (event.user === CLAUDE_BOT_USER_ID) {
-      return NextResponse.json({ ok: true })
+    // STAFF ONLY (2026-07-17 council fix): 🧠 writes to global decision-memory,
+    // which is auto-recalled into every worker/dashboard prompt. Before this,
+    // only the Claude bot was excluded — so any channel member (a guest, a
+    // client in a shared channel) could poison the memory, and every save was
+    // hardcoded-attributed to Antonio. Gate on the staff allow-list and
+    // attribute to the ACTUAL reactor.
+    if (!isSlackStaff(event.user)) {
+      return NextResponse.json({ ok: true, skipped: "not_staff" })
     }
+    const savedByName = slackStaffName(event.user) ?? "TD Team"
     const token = process.env.SLACK_BOT_TOKEN_CLAUDE
     const itemChannel: string = event.item?.channel ?? ""
     const itemTs: string = event.item?.ts ?? ""
@@ -313,11 +320,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     try {
       const { saveDecisionMemory } = await import("@/lib/ai-agent/decision-memory")
       await saveDecisionMemory({
-        situation: "Explicitly marked important by Antonio via 🧠 reaction in Slack",
+        situation: `Explicitly marked important by ${savedByName} via 🧠 reaction in Slack`,
         decision,
         sourceType: "slack_reaction",
         sourceRef,
-        actors: ["antonio"],
+        actors: [savedByName.toLowerCase()],
         tags: ["explicit_save"],
       })
     } catch (err) {
