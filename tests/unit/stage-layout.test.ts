@@ -19,6 +19,33 @@ describe('parseStageLayout', () => {
     expect(layout!.description).toBe('File the extension')
   })
 
+  it('carries the document_upload folder + rename fields through the parser', () => {
+    // Whitelist guard: parseStageLayout rebuilds each component from a fixed key
+    // set, so any field it does not explicitly read is dropped. The EIN-letter
+    // filing policy (folder + rename) MUST survive DB → renderer.
+    const layout = parseStageLayout({
+      components: [
+        {
+          type: 'document_upload',
+          label: 'Upload EIN Letter (CP 575)',
+          folder: '1. Company',
+          rename: 'EIN Official – {company_name}',
+        },
+      ],
+    })
+    expect(layout!.components[0]).toMatchObject({
+      type: 'document_upload',
+      folder: '1. Company',
+      rename: 'EIN Official – {company_name}',
+    })
+  })
+
+  it('leaves folder/rename undefined when absent (no regression to other uploads)', () => {
+    const layout = parseStageLayout({ components: [{ type: 'document_upload', label: 'Upload Articles' }] })
+    expect(layout!.components[0].folder).toBeUndefined()
+    expect(layout!.components[0].rename).toBeUndefined()
+  })
+
   it('drops unknown component types but keeps valid ones', () => {
     const layout = parseStageLayout({ components: [{ type: 'info_panel' }, { type: 'bogus_widget' }] })
     expect(layout!.components.map((c) => c.type)).toEqual(['info_panel'])

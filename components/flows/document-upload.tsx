@@ -21,6 +21,14 @@ interface DocumentUploadProps {
   /** Whether uploading auto-advances the SD (default true). Set false when a
    *  separate action (e.g. Send for Signature) owns the stage advance. */
   autoAdvance?: boolean
+  /** Target Drive subfolder name from stage_layout (e.g. "1. Company"). The
+   *  server files the upload there, falling back to the account root folder if
+   *  the subfolder can't be resolved. Absent = account root (today's behavior). */
+  folder?: string
+  /** Filename template from stage_layout (e.g. "EIN Official – {company_name}").
+   *  The server interpolates it against the account and preserves the original
+   *  extension. Absent = keep the uploaded filename. */
+  rename?: string
 }
 
 /**
@@ -41,7 +49,7 @@ interface DocumentUploadProps {
  *      switch this to a multipart/FormData body or the 4.5MB limit returns.
  * Surfaces the server's real error on failure (R099) — never a generic toast.
  */
-export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance }: DocumentUploadProps) {
+export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance, folder, rename }: DocumentUploadProps) {
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -116,6 +124,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         mime_type: fileType || 'application/pdf',
         flow_stage: flowStage,
         auto_advance: autoAdvance === false ? false : undefined,
+        ...(folder ? { folder } : {}),
+        ...(rename ? { rename } : {}),
         ...(confirmedDate ? { formation_date: confirmedDate } : {}),
       }),
     })
