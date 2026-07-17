@@ -150,6 +150,12 @@ export async function POST(req: NextRequest) {
   // Per-call system-prompt suffix carrying the verified client card (portal-chats
   // surface only). Appended to systemPromptOverride — never stored in the thread.
   let clientCardSuffix = ""
+  // APPROVED-COPY GROUNDING (council WS2): the Slack + Team-Chat + suggest surfaces
+  // ground drafts in approved templates, but the two CRM worker panels — where
+  // staff actually work — never did. Match the staff's ask against the approved
+  // template libraries and inject them (best-effort, "" on no match). The template
+  // body is labeled copy-not-instructions inside formatTemplatesForPrompt.
+  let templatesSuffix = ""
   // Media handed straight to the model on this turn, and the documents it may open.
   const imageBlocks: WorkerImageBlock[] = []
   const documentBlocks: WorkerDocumentBlock[] = []
@@ -482,11 +488,23 @@ export async function POST(req: NextRequest) {
     for (const r of existing ?? []) priorPendingIds.add(r.id)
   }
 
+  // Load approved-template grounding for the staff member's ask (best-effort;
+  // "" on no match, so the prompt is unchanged when nothing fits). Same helper
+  // the Slack/Team/suggest surfaces use.
+  try {
+    const { loadRelevantTemplates, formatTemplatesForPrompt } = await import("@/lib/ai-agent/templates")
+    const relevant = await loadRelevantTemplates(message, { limit: 3 })
+    const block = formatTemplatesForPrompt(relevant)
+    if (block) templatesSuffix = `\n\n${block}`
+  } catch (err) {
+    console.warn("[worker-chat] template grounding load failed (non-fatal):", err)
+  }
+
   try {
     const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
-      systemPromptOverride: `${buildWorkerSurfacePrompt(surface)}${clientCardSuffix}`,
+      systemPromptOverride: `${buildWorkerSurfacePrompt(surface)}${clientCardSuffix}${templatesSuffix}`,
       // Screenshots the staff member pasted, and images attached to the open
       // email, go straight to the model. Scanned PDFs ride along as native
       // document blocks. Everything else is already extracted into userBody.
