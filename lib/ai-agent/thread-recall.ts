@@ -109,16 +109,20 @@ export async function embedThreadSummary(threadId: string): Promise<boolean> {
 export async function recallRelatedThreads(
   query: string,
   excludeThreadId: string | null,
-  opts: { threshold?: number; count?: number } = {},
+  opts: { threshold?: number; count?: number; clientKey?: string | null } = {},
 ): Promise<RelatedThreadMatch[]> {
   if (!query?.trim() || !semanticRecallEnabled()) return []
   try {
     const embedding = await generateEmbedding(query)
+    // filter_client_key enforces client isolation (WS4.1): in a client context
+    // only that client's + global threads are recallable; in a non-client
+    // context only global ones — a different client's history can never surface.
     const { data, error } = await db().rpc("match_thread_summaries", {
       query_embedding: embedding as unknown as string,
       match_threshold: opts.threshold ?? RELATED_THREADS_THRESHOLD,
       match_count: opts.count ?? RELATED_THREADS_COUNT,
       exclude_thread_id: excludeThreadId ?? null,
+      filter_client_key: opts.clientKey ?? null,
     })
     if (error) return []
     return (data ?? []) as RelatedThreadMatch[]
@@ -153,7 +157,11 @@ export function formatRelatedThreadsSuffix(matches: RelatedThreadMatch[]): strin
  * past threads, format them into a prompt suffix. Best-effort "" on anything. This
  * is what callWorker prepends (Slack-only, gated by enableThreadRecall).
  */
-export async function buildRelatedThreadsSuffix(query: string, excludeThreadId: string | null): Promise<string> {
-  const matches = await recallRelatedThreads(query, excludeThreadId)
+export async function buildRelatedThreadsSuffix(
+  query: string,
+  excludeThreadId: string | null,
+  clientKey?: string | null,
+): Promise<string> {
+  const matches = await recallRelatedThreads(query, excludeThreadId, { clientKey: clientKey ?? null })
   return formatRelatedThreadsSuffix(matches)
 }

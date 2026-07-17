@@ -3028,7 +3028,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     try {
       const existing = await getThreadSummary(threadId)
       threadType = existing ? normalizeThreadType(existing.thread_type) : DEFAULT_THREAD_TYPE
-      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION)
+      if (!existing) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION, null, opts.clientKey ?? null)
       rowEnsured = true
 
       tools = getToolsForThreadType(threadType)
@@ -3187,7 +3187,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // Slack-only (enableThreadRecall) so the Hermes research worker never triggers it
   // (R108). Best-effort: "" on missing key / un-applied migration / any error.
   if (opts.enableThreadRecall) {
-    systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId)}`
+    systemPrompt = `${systemPrompt}${await buildRelatedThreadsSuffix(userBody, threadId, opts.clientKey ?? null)}`
   }
 
   // Slack-only web research (Anthropic server tools). Gated by the option AND the env
@@ -3229,7 +3229,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
 
   if (threadId) {
     try {
-      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION)
+      if (!rowEnsured) await createThreadSummary(threadId, threadType, deriveThreadTitle(userBody), WORKER_PROMPT_VERSION, null, opts.clientKey ?? null)
       const proposed = result.toolsUsed.includes("propose_action")
       const outcome = result.reachedMaxLoops
         ? "incomplete"
