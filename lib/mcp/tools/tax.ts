@@ -901,15 +901,19 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_send_to_accountant",
-    `Send all tax return documents to the accountant for preparation. Gathers all required documents from Drive for a given account + tax_year: Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior year return, and bank statements. Use dry_run=true FIRST to review the document package before sending. With dry_run=false, sends one email with all attachments and updates tax_returns status. Idempotent: skips if already sent unless force_resend=true. Prerequisites: tax form must be completed, documents must be in Drive 3.Tax/{year}/ folder. Use tax_search first to find the tax return. ALWAYS run with dry_run=true first, get Antonio's approval, then run again with dry_run=false.`,
+    `Send all tax return documents to the accountant for preparation. Gathers all required documents from Drive for a given account + tax_year: Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior year return, and bank statements. Use dry_run=true FIRST to review the document package before sending. With dry_run=false, sends one email with all attachments and updates tax_returns status. Idempotent: skips if already sent unless force_resend=true (that flag overrides ONLY the idempotency check — it never bypasses the document checks). Every attached document must provably belong to its tax year (by name, or by sitting in the year folder) — the tool refuses to attach another year's file, refuses to guess when several match (pass pnl_file_id / organizer_file_id to choose), and refuses outright if the P&L is missing on an entity that files one (pass no_pnl_reason only if the company genuinely has no books). Prerequisites: tax form must be completed, documents must be in Drive 3.Tax/{year}/ folder. Use tax_search first to find the tax return. ALWAYS run with dry_run=true first, get Antonio's approval, then run again with dry_run=false.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
       dry_run: z.boolean().optional().default(true).describe("REQUIRED: true (default) = preview documents without sending. false = actually send email and update CRM. ALWAYS preview first."),
       accountant_email: z.string().email().optional().default("tax@adasglobus.com").describe("Accountant email (default: tax@adasglobus.com)"),
-      force_resend: z.boolean().optional().default(false).describe("Override idempotency check to re-send"),
+      force_resend: z.boolean().optional().default(false).describe("Override the idempotency check ONLY (re-send a year already sent). Does NOT bypass document checks."),
+      send_incomplete: z.boolean().optional().default(false).describe("Send even though optional documents are missing. Never bypasses a missing P&L on an entity that requires one — use no_pnl_reason for that."),
+      pnl_file_id: z.string().optional().describe("Drive file id of the P&L to attach. Needed to send when several files provably belong to the year — the tool refuses to guess which numbers get filed. Naming a file whose year cannot be proven is allowed but is recorded as your explicit choice."),
+      organizer_file_id: z.string().optional().describe("Drive file id of the Tax Organizer to attach, when several provably belong to the year."),
+      no_pnl_reason: z.string().optional().describe("Why this P&L-filing entity has no P&L (e.g. 'dormant — no transactions in 2025'). Required to send without one; recorded in the audit log."),
     },
-    async ({ account_id, tax_year, dry_run, accountant_email, force_resend }) => {
+    async ({ account_id, tax_year, dry_run, accountant_email, force_resend, send_incomplete, pnl_file_id, organizer_file_id, no_pnl_reason }) => {
       try {
         const isDryRun = dry_run !== false // default true
         const toEmail = accountant_email || "tax@adasglobus.com"
@@ -961,86 +965,337 @@ export function registerTaxTools(server: McpServer) {
         if (!taxFolderId) return { content: [{ type: "text" as const, text: "❌ No '3. Tax' folder found in Drive" }] }
 
         // Find year subfolder
-        const yearListing = (await listFolder(taxFolderId, 100)) as { files?: { id: string; name: string; mimeType: string }[] }
+        const yearListing = (await listFolder(taxFolderId, 100)) as { files?: { id: string; name: string; mimeType: string; modifiedTime?: string }[]; nextPageToken?: string }
         const yearFolder = yearListing.files?.find(f => f.name === String(tax_year) && f.mimeType === "application/vnd.google-apps.folder")
         const priorYearFolder = yearListing.files?.find(f => f.name === String(tax_year - 1) && f.mimeType === "application/vnd.google-apps.folder")
 
         interface DriveFile { id: string; name: string; mimeType: string; category: string }
         const foundFiles: DriveFile[] = []
         const missing: string[] = []
+        // Files that matched but could not be disambiguated — surfaced, never picked silently.
+        const ambiguous: string[] = []
 
         // Search both year subfolder AND Tax root (files may be in either location)
-        const searchFolders: { id: string; files?: { id: string; name: string; mimeType: string }[] }[] = []
+        const searchFolders: { id: string; files?: { id: string; name: string; mimeType: string; modifiedTime?: string }[] }[] = []
 
-        // Year subfolder (if exists)
+        // Year subfolder (if exists). Track its file ids so a year-foldered file
+        // outranks a loose one in the Tax root when both match.
+        const yearFolderFileIds = new Set<string>()
+        // name → when the year-folder copy of that name was last changed.
+        const yearFolderModifiedByName = new Map<string, string>()
+        let yearListingTruncated = false
         if (yearFolder) {
-          const yearFiles = (await listFolder(yearFolder.id, 100)) as { files?: { id: string; name: string; mimeType: string }[] }
+          const yearFiles = (await listFolder(yearFolder.id, 100)) as { files?: { id: string; name: string; mimeType: string; modifiedTime?: string }[]; nextPageToken?: string }
           searchFolders.push({ id: yearFolder.id, files: yearFiles.files })
+          for (const f of (yearFiles.files || [])) {
+            yearFolderFileIds.add(f.id)
+            // Folders are not documents — a root FILE must not be mistaken for a
+            // legacy copy of a year-folder SUBFOLDER that happens to share a name.
+            if (f.mimeType !== "application/vnd.google-apps.folder") {
+              yearFolderModifiedByName.set(f.name, f.modifiedTime ?? "")
+            }
+          }
+          yearListingTruncated = Boolean(yearFiles.nextPageToken)
         }
-        // Tax root folder (always search — files may not be in a year subfolder)
-        const rootFiles = (yearListing.files || []).filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+        // Tax root folder (always search — files may not be in a year subfolder).
+        //
+        // A root file whose name ALSO exists in the year subfolder — and which the
+        // year-folder copy is demonstrably NEWER than — is a superseded leftover,
+        // and is ignored rather than treated as a rival candidate. The confirmed
+        // workbook used to be archived flat into the Tax root and is now archived
+        // into the year folder; the upsert only replaces same-named files within
+        // ONE folder, so every client who attested before this shipped keeps an
+        // orphaned root twin with a BYTE-IDENTICAL NAME. Treating both as
+        // candidates made them indistinguishable in the "which of these is it?"
+        // prompt — two identical lines — and choosing the stale one filed
+        // superseded numbers with no warning.
+        //
+        // The dates are COMPARED, never assumed: other paths still write to the
+        // Tax root (a submission with no pinned year), so a root twin can be the
+        // NEWER one. When it is, both stay in — which surfaces as an ambiguity and
+        // stops the send, rather than silently dropping the corrected file.
+        const { pickFileForYear, belongsToYear, matchesCategory, decideSendGate, isSupersededRootCopy } = await import("@/lib/tax/pick-tax-file")
+        const isSuperseded = (f: { id: string; name: string; mimeType: string; modifiedTime?: string }) =>
+          isSupersededRootCopy(f, yearFolderModifiedByName)
+        const nonFolderRootFiles = (yearListing.files || []).filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+        const rootFiles = nonFolderRootFiles.filter(f => !isSuperseded(f))
+        const supersededRootCopies = nonFolderRootFiles
+          .filter(isSuperseded)
+          .map(f => `"${f.name}" (Tax root copy last changed ${f.modifiedTime?.slice(0, 10) || "unknown"}; the ${tax_year} folder's copy is newer)`)
         searchFolders.push({ id: taxFolderId, files: rootFiles })
 
         // Flatten all files from both locations (deduplicate by ID)
-        const allSearchFiles: { id: string; name: string; mimeType: string }[] = []
+        const allSearchFiles: { id: string; name: string; mimeType: string; modifiedTime?: string }[] = []
         for (const folder of searchFolders) {
           for (const f of (folder.files || [])) {
             if (!allSearchFiles.some(existing => existing.id === f.id)) allSearchFiles.push(f)
           }
         }
 
+        // `listFolder` does not paginate, so a fuller folder comes back partial.
+        // Everything below reasons about "every file that could be this year's" —
+        // including the check that refuses to send when TWO files match. On a
+        // partial listing that check would pass by accident, which is worse than
+        // no check at all. Drive tells us it truncated by returning a page token;
+        // trust that rather than counting rows (a folder of exactly 100 files is
+        // complete, and a short page can still have more behind it).
+        const truncated = [
+          yearListing.nextPageToken ? "the '3. Tax' folder" : null,
+          yearListingTruncated ? `the ${tax_year} subfolder` : null,
+        ].filter(Boolean)
+        if (truncated.length > 0) {
+          return { content: [{ type: "text" as const, text: [
+            `❌ Cannot send ${account.company_name} (${tax_year}): ${truncated.join(" and ")} holds more files than this tool can list in one go.`,
+            "",
+            `It must see every file to be sure it is attaching the right year's — on a partial listing it could miss a second P&L and send the wrong one without noticing.`,
+            `Tidy the folder (move old files into their year subfolders) and try again.`,
+          ].join("\n") }] }
+        }
+
+        // Every document must PROVABLY belong to this tax year before it can be
+        // attached. Council 2026-07-17 (blocker): these were picked by name pattern
+        // alone — first regex match, Drive-order dependent — across the year
+        // subfolder AND the Tax root, with no year check. For a client with two
+        // years of books that meant last year's organizer or P&L could be emailed
+        // and filed as this year's return. See lib/tax/pick-tax-file.ts for the rule.
+        const yearOpts = { yearFolderFileIds, companyName: account.company_name as string | undefined }
+        const isPdf = (f: { name: string; mimeType?: string }) => /pdf/i.test(f.mimeType || "") || /\.pdf$/i.test(f.name)
+
+        // Notes that are informational only — printed, never a reason to stop.
+        const notes: string[] = []
+        // A P&L-shaped file whose year we could not read, sitting beside the one
+        // we picked. Blocks the send (see decideSendGate) — it may be the correction.
+        const pnlConflicts: string[] = []
+        if (supersededRootCopies.length > 0) {
+          notes.push(`Ignored ${supersededRootCopies.length} superseded copy/copies left loose in the Tax root: ${supersededRootCopies.join(", ")}`)
+        }
+        // Files an operator deliberately named whose year we could not prove.
+        const overrides: string[] = []
+
+        /**
+         * Resolve an explicitly named file id. Naming a file is a real human
+         * decision, so a file whose YEAR can't be proven is accepted — and
+         * recorded. But a file that isn't a document of that kind at all (the
+         * organizer's id pasted into pnl_file_id — both ids are printed in the
+         * same message) is a mistake, not a decision: refuse it.
+         */
+        const resolveChosen = (fileId: string, category: string, shape: { namePattern: RegExp; typeMatches: (f: { id: string; name: string; mimeType?: string }) => boolean }) => {
+          // Searched against the UNFILTERED listing: if an operator deliberately
+          // names a file we shadowed as a superseded root copy, they know
+          // something we don't — "that file doesn't exist" would be a lie.
+          const inCandidates = allSearchFiles.find(f => f.id === fileId)
+          const chosen = inCandidates ?? nonFolderRootFiles.find(f => f.id === fileId)
+          if (!chosen) return { file: null, error: `is not a file in this client's Tax folder or ${tax_year} subfolder` }
+          if (!matchesCategory(chosen, { ...shape, companyName: yearOpts.companyName })) {
+            return { file: null, error: `is "${chosen.name}" — that is not a ${category}. Check you copied the right id.` }
+          }
+          if (!belongsToYear(chosen, tax_year, yearOpts)) {
+            overrides.push(`${category}: "${chosen.name}" (id ${chosen.id}) — you named this file yourself; nothing in its name proves it is the ${tax_year} one.`)
+          }
+          if (!inCandidates) {
+            // Only reachable via the fallback above: this is a file we set aside as
+            // a superseded Tax-root copy. Overriding that is a real decision and
+            // must not be silent just because the file's YEAR happens to be provable.
+            overrides.push(`${category}: "${chosen.name}" (id ${chosen.id}) — you named the older Tax-root copy, which the ${tax_year} folder has a newer version of.`)
+          }
+          return { file: chosen, error: null }
+        }
+
         // Tax Organizer PDF
-        const taxOrganizerPdf = allSearchFiles.find(f => /tax.?data|tax.?organizer|complete.?data/i.test(f.name) && /pdf/i.test(f.mimeType || f.name))
-        if (taxOrganizerPdf) {
-          foundFiles.push({ ...taxOrganizerPdf, category: "Tax Organizer" })
+        const ORGANIZER_SHAPE = { namePattern: /tax.?data|tax.?organizer|complete.?data/i, typeMatches: isPdf }
+        const organizerPick = pickFileForYear(allSearchFiles, tax_year, { ...yearOpts, ...ORGANIZER_SHAPE })
+        if (organizerPick.conflictNote) notes.push(`Tax Organizer — ${organizerPick.conflictNote}`)
+        let organizerFile = organizerPick.file
+        if (organizer_file_id) {
+          const r = resolveChosen(organizer_file_id, "Tax Organizer", ORGANIZER_SHAPE)
+          if (!r.file) return { content: [{ type: "text" as const, text: `❌ organizer_file_id ${organizer_file_id} ${r.error}` }] }
+          organizerFile = r.file
+        }
+        if (organizerFile) {
+          foundFiles.push({ ...organizerFile, mimeType: organizerFile.mimeType ?? "", category: "Tax Organizer" })
+          // Naming the file IS the resolution — the question is answered.
+          if (organizerPick.ambiguityNote && !organizer_file_id) {
+            ambiguous.push(`Tax Organizer — ${organizerPick.ambiguityNote} Pass organizer_file_id to choose.`)
+          }
         } else {
-          missing.push("Tax Organizer PDF")
+          missing.push(
+            organizerPick.conflictNote
+              ? `Tax Organizer PDF for ${tax_year} — ${organizerPick.conflictNote}`
+              : `Tax Organizer PDF for ${tax_year} (none found that provably belongs to ${tax_year})`,
+          )
         }
 
-        // P&L Excel
+        // P&L Excel — the numbers that get filed. A wrong-year pick here files
+        // wrong numbers with the IRS, so a missing P&L is a HARD stop that no
+        // flag bypasses (see the validate step below).
+        let pnlMissing = false
+        // Only true when we actually sent WITHOUT a P&L on this reason — the
+        // audit log must not record "the company was dormant" on a send that
+        // carried a P&L (an operator can pass both params).
+        let noPnlDeclared = false
+        // Never silently ignore an explicit instruction: these entities file no
+        // P&L, so the params cannot do what the operator is asking for.
+        if (!needsPnl && (pnl_file_id || no_pnl_reason)) {
+          return { content: [{ type: "text" as const, text: `❌ ${account.company_name} is a ${entityType}, and this tool does not attach a P&L to a ${returnType} package — so ${pnl_file_id ? "pnl_file_id" : "no_pnl_reason"} would have no effect. Re-run without it, or correct the entity type if this company should be filing a P&L.` }] }
+        }
         if (needsPnl) {
-          const pnlExcel = allSearchFiles.find(f => /p&l|pnl|profit.?loss/i.test(f.name) && /spreadsheet|xlsx/i.test(f.mimeType || f.name))
-          if (pnlExcel) {
-            foundFiles.push({ ...pnlExcel, category: "P&L + Balance Sheet" })
+          const PNL_SHAPE = {
+            namePattern: /p&l|pnl|profit.?loss/i,
+            typeMatches: (f: { name: string; mimeType?: string }) => /spreadsheet|excel/i.test(f.mimeType || "") || /\.xlsx?$/i.test(f.name),
+          }
+          const pick = pickFileForYear(allSearchFiles, tax_year, { ...yearOpts, ...PNL_SHAPE })
+          let chosen = pick.file
+          if (pnl_file_id) {
+            const r = resolveChosen(pnl_file_id, "P&L", PNL_SHAPE)
+            if (!r.file) return { content: [{ type: "text" as const, text: `❌ pnl_file_id ${pnl_file_id} ${r.error}` }] }
+            chosen = r.file
+          }
+          if (pick.conflictNote) {
+            // If a P&L was picked while another P&L-shaped file couldn't be read,
+            // that other file may well be the CORRECTED one — it is the MORE
+            // suspicious of the two, since renaming a file with a revision date is
+            // exactly how a correction gets made. Printing that as a footnote and
+            // sending anyway is the theatre this whole change exists to stop, so
+            // it blocks the send until a human names the file. Naming any file by
+            // id settles the question.
+            if (chosen && !pnl_file_id) {
+              pnlConflicts.push(`P&L — attaching "${chosen.name}", but ${pick.conflictNote} If one of those is the corrected P&L, pass pnl_file_id to use it instead; if none of them is, pass pnl_file_id=${chosen.id} to confirm this one.`)
+            } else {
+              notes.push(`P&L — ${pick.conflictNote}`)
+            }
+          }
+          if (chosen) {
+            foundFiles.push({ ...chosen, mimeType: chosen.mimeType ?? "", category: "P&L + Balance Sheet" })
+            if (pick.ambiguityNote && !pnl_file_id) ambiguous.push(`P&L — ${pick.ambiguityNote} Pass pnl_file_id to choose.`)
+          } else if (no_pnl_reason && pick.candidates.length === 0 && !pick.conflictNote) {
+            // "Dormant" means there are no books at all. If P&L-shaped files DO
+            // exist and we merely couldn't read their year, the honest answer is
+            // "name the file", not "declare the company dormant". A genuinely
+            // dormant or first-year company still files an informational return,
+            // so that case is allowed — with the reason recorded.
+            noPnlDeclared = true
+            overrides.push(`P&L: none attached — ${no_pnl_reason}`)
           } else {
-            missing.push("P&L Excel")
+            pnlMissing = true
+            missing.push(
+              pick.conflictNote
+                ? `P&L Excel for ${tax_year} — ${pick.conflictNote}`
+                : `P&L Excel for ${tax_year} (none found that provably belongs to ${tax_year} — refusing to attach another year's P&L)`,
+            )
           }
         }
 
-        // Bank statements
+        // Bank statements — supporting docs, but a wrong-year statement is still
+        // wrong. Only attach the ones that provably belong to this year; say out
+        // loud which ones were left out rather than dropping them silently.
+        const excludedStatements: string[] = []
         if (needsPnl) {
-          const stmtPattern = /wise|mercury|relay|statement|bank|estratto/i
-          const stmts = allSearchFiles.filter(f => stmtPattern.test(f.name) && /pdf|csv/i.test(f.mimeType || f.name))
+          // Matched on the residue: a client called "Relay Ltd" or "Mercury LLC"
+          // must not have every PDF it owns read as a bank statement.
+          const stmts = allSearchFiles.filter(f => matchesCategory(f, {
+            ...yearOpts,
+            namePattern: /wise|mercury|relay|statement|bank|estratto/i,
+            typeMatches: c => /pdf|csv/i.test(c.mimeType || "") || /\.(pdf|csv)$/i.test(c.name),
+          }))
           for (const s of stmts) {
-            if (!foundFiles.some(ff => ff.id === s.id)) foundFiles.push({ ...s, category: "Bank Statement" })
+            if (foundFiles.some(ff => ff.id === s.id)) continue
+            if (belongsToYear(s, tax_year, yearOpts)) foundFiles.push({ ...s, category: "Bank Statement" })
+            else excludedStatements.push(s.name)
           }
         }
 
-        // Prior year return
+        // Prior year return. Its year is proven by the folder it sits in, but it
+        // still goes through the same picker: a first-regex-match would happily
+        // attach "2024 return DRAFT (not filed).pdf" over the filed one, because
+        // Drive lists by name and "DRAFT" sorts first.
         if (priorYearFolder) {
-          const priorFiles = (await listFolder(priorYearFolder.id, 50)) as { files?: { id: string; name: string; mimeType: string }[] }
-          const priorReturn = priorFiles.files?.find(f => /return|1065|1120|5472|filed/i.test(f.name) && /pdf/i.test(f.mimeType || f.name))
-          if (priorReturn) {
-            foundFiles.push({ ...priorReturn, category: "Prior Year Return" })
+          const priorFiles = (await listFolder(priorYearFolder.id, 50)) as { files?: { id: string; name: string; mimeType: string; modifiedTime?: string }[]; nextPageToken?: string }
+          const priorIds = new Set((priorFiles.files || []).map(f => f.id))
+          const priorPick = pickFileForYear(priorFiles.files || [], tax_year - 1, {
+            companyName: yearOpts.companyName,
+            yearFolderFileIds: priorIds, // everything here is proven by location
+            namePattern: /return|1065|1120|5472|filed/i,
+            typeMatches: isPdf,
+          })
+          if (priorPick.file) {
+            foundFiles.push({ ...priorPick.file, mimeType: priorPick.file.mimeType ?? "", category: "Prior Year Return" })
+            if (priorPick.ambiguityNote) notes.push(`Prior Year Return — ${priorPick.ambiguityNote}`)
+          }
+          if (priorPick.conflictNote) notes.push(`Prior Year Return — ${priorPick.conflictNote}`)
+          if (priorFiles.nextPageToken) {
+            notes.push(`Prior Year Return — the ${tax_year - 1} folder holds more files than can be listed at once, so ${priorPick.file ? "a better match may have been missed" : "no prior return was found"}.`)
           }
           // Not a hard requirement — prior year might not exist for first-year LLCs
         }
 
         // ── 5. Validate ──
-        if (missing.length > 0 && !force_resend) {
+        // Council 2026-07-17: force_resend is an IDEMPOTENCY override (re-send a
+        // year already sent) and nothing more. It used to switch the document
+        // checks off too — which meant the checks were disabled for precisely the
+        // sends that need them most: the corrected re-sends. send_incomplete is
+        // now the separate, explicit opt-out for optional documents, and a missing
+        // P&L is a hard stop that neither flag bypasses. The decision itself is a
+        // pure function (decideSendGate) so the rules that stop a wrong filing are
+        // unit-tested; only the wording lives here.
+        const gate = decideSendGate({ pnlMissing, ambiguous, pnlConflicts, missing, sendIncomplete: send_incomplete, isDryRun, foundCount: foundFiles.length })
+        const blockedBy = gate.allow ? null : gate.reason
+        if (blockedBy === "no_pnl") {
+          const lines = [
+            `❌ Cannot send ${account.company_name} (${tax_year}): no P&L that provably belongs to ${tax_year}.`,
+            "",
+            ...missing.map(m => `   ❌ ${m}`),
+            ...(notes.length > 0 ? ["", `Files found but NOT used — check none of these was the one you meant:`, ...notes.map(n => `   • ${n}`)] : []),
+            ...([...ambiguous, ...pnlConflicts].length > 0 ? ["", `Also unresolved:`, ...[...ambiguous, ...pnlConflicts].map(a => `   • ${a}`)] : []),
+            "",
+            `This entity (${entityType}) files a ${returnType}, which needs the P&L — sending without it, or with another year's, would file the wrong numbers.`,
+            "",
+            `Ways forward:`,
+            `   • Upload the ${tax_year} workbook to Drive 3.Tax/${tax_year}/, or have the client re-confirm the financials in the portal.`,
+            `   • pnl_file_id=<Drive id> — name the exact file (any ids found are listed above).`,
+            `   • no_pnl_reason="..." — if the company genuinely has no books for ${tax_year} (dormant / first year), say so and it will be sent without a P&L and recorded.`,
+          ]
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        // An unresolved ambiguity must stop the send, not ride along as a footnote
+        // in the output after the email is already gone.
+        if (blockedBy === "ambiguous") {
+          const lines = [
+            `❌ Cannot send ${account.company_name} (${tax_year}): more than one file could be the right one, and this tool will not guess which numbers get filed.`,
+            "",
+            ...ambiguous.map(a => `   • ${a}`),
+            "",
+            `Re-run with dry_run=true to review, name the file (pnl_file_id / organizer_file_id — the ids are in the notes above), or clean up the duplicates in Drive.`,
+          ]
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        if (blockedBy === "pnl_conflict") {
+          const lines = [
+            `❌ Cannot send ${account.company_name} (${tax_year}): there is another P&L-shaped file whose year can't be read, and it may be the one that should be filed.`,
+            "",
+            ...pnlConflicts.map(c => `   • ${c}`),
+            "",
+            `A file named like "PnL 2024 (revised 2025-01-30)" mentions two years, so nothing in its name says which year it is for — but that is also exactly how a corrected P&L usually gets named. Name the file you mean with pnl_file_id.`,
+          ]
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        if (blockedBy === "missing_docs") {
           const lines = [
             `⚠️ Missing documents for ${account.company_name} (${tax_year}):`,
             ...missing.map(m => `   ❌ ${m}`),
             "",
             `Found ${foundFiles.length} documents:`,
             ...foundFiles.map(f => `   ✅ ${f.category}: ${f.name}`),
+            ...(ambiguous.length > 0 ? ["", `⚠️ Several files matched — confirm the right one:`, ...ambiguous.map(a => `   • ${a}`)] : []),
             "",
-            "Upload missing documents to Drive first, or use force_resend=true to send anyway.",
+            "Upload the missing documents to Drive first, or use send_incomplete=true to send anyway.",
           ]
           return { content: [{ type: "text" as const, text: lines.join("\n") }] }
         }
 
-        if (foundFiles.length === 0) {
+        if (blockedBy === "no_documents") {
           return { content: [{ type: "text" as const, text: `❌ No documents found in Drive for ${account.company_name} (${tax_year}). Upload documents first.` }] }
         }
 
@@ -1064,15 +1319,47 @@ export function registerTaxTools(server: McpServer) {
           if (missing.length > 0) {
             lines.push("", `⚠️ Missing (optional):`, ...missing.map(m => `   • ${m}`))
           }
-          lines.push(
-            "",
-            `✅ Ready to send. Run again with dry_run=false to send the email.`,
-          )
+          if (excludedStatements.length > 0) {
+            lines.push("", `ℹ️ Statements left out (do not provably belong to ${tax_year}):`, ...excludedStatements.map(s => `   • ${s}`))
+          }
+          if (notes.length > 0) {
+            lines.push("", `⚠️ Files found but NOT used — check none of these was the one you meant:`, ...notes.map(n => `   • ${n}`))
+          }
+          if (overrides.length > 0) {
+            lines.push("", `⚠️ YOUR EXPLICIT CHOICES — check these before sending:`, ...overrides.map(o => `   • ${o}`))
+          }
+          const nativeGoogleDocs = foundFiles.filter(f => /vnd\.google-apps\./i.test(f.mimeType || ""))
+          if (nativeGoogleDocs.length > 0) {
+            lines.push("", `⚠️ These are Google-native files and CANNOT be attached — re-upload them as real .xlsx/.pdf first:`, ...nativeGoogleDocs.map(f => `   • ${f.category}: ${f.name}`))
+          }
+          const blocking = [...ambiguous, ...pnlConflicts]
+          if (blocking.length > 0) {
+            lines.push(
+              "",
+              `⚠️ More than one file could be the right one — the send is BLOCKED until this is resolved:`,
+              ...blocking.map(a => `   • ${a}`),
+              "",
+              `Name the file you mean (pnl_file_id / organizer_file_id — the ids are in the lines above), or clean up the duplicates in Drive.`,
+            )
+          } else if (notes.length > 0 || overrides.length > 0 || nativeGoogleDocs.length > 0) {
+            // Never print a bare "ready to send" over a warning — that is exactly
+            // how someone clicks past the one line that mattered.
+            lines.push("", `⚠️ Read the warnings above first. If they are right, run again with dry_run=false to send.`)
+          } else {
+            lines.push("", `✅ Ready to send. Run again with dry_run=false to send the email.`)
+          }
           return { content: [{ type: "text" as const, text: lines.join("\n") }] }
         }
 
         // ── 6. Download all files and build MIME email ──
+        // Council 2026-07-17: a failed download used to be swallowed while the
+        // email body and the summary were both built from the files we MEANT to
+        // attach — so the accountant could receive a mail listing a P&L that
+        // wasn't there, and the tool reported success. The email now describes
+        // only what actually attached, and losing a required document is fatal.
         const attachments: { filename: string; content: string; content_type: string }[] = []
+        const attachedFiles: DriveFile[] = []
+        const failedDownloads: string[] = []
         for (const file of foundFiles) {
           try {
             const { buffer, mimeType, fileName } = await downloadFileBinary(file.id)
@@ -1081,9 +1368,21 @@ export function registerTaxTools(server: McpServer) {
               content: buffer.toString("base64"),
               content_type: mimeType || "application/octet-stream",
             })
+            attachedFiles.push(file)
           } catch (dlErr) {
-            // Skip files that fail to download
+            failedDownloads.push(`${file.category}: ${file.name} — ${dlErr instanceof Error ? dlErr.message : String(dlErr)}`)
           }
+        }
+
+        const lostRequired = failedDownloads.filter(f => /^(P&L \+ Balance Sheet|Tax Organizer):/.test(f))
+        if (lostRequired.length > 0) {
+          return { content: [{ type: "text" as const, text: [
+            `❌ Nothing sent for ${account.company_name} (${tax_year}) — a required document could not be downloaded from Drive:`,
+            "",
+            ...lostRequired.map(f => `   • ${f}`),
+            "",
+            `(A Google-native Sheet/Doc cannot be downloaded as a file — re-upload it as a real .xlsx/.pdf.)`,
+          ].join("\n") }] }
         }
 
         if (attachments.length === 0) {
@@ -1091,7 +1390,8 @@ export function registerTaxTools(server: McpServer) {
         }
 
         const emailSubject = `${account.company_name} - ${contactName} - ${account.ein_number || "NO EIN"} - ${returnType}`
-        const docList = foundFiles.map(f => `<li>${f.category}: ${f.name}</li>`).join("")
+        // Describe what is actually attached, not what we hoped to attach.
+        const docList = attachedFiles.map(f => `<li>${f.category}: ${f.name}</li>`).join("")
         const htmlBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">
 <p>Please find attached the tax return documents for preparation.</p>
 <table style="border-collapse:collapse;margin:12px 0">
@@ -1108,7 +1408,7 @@ export function registerTaxTools(server: McpServer) {
 <p style="font-size:12px;color:#6b7280">Sent by Tony Durante LLC CRM</p>
 </div>`
 
-        const plainText = `Tax return documents for ${account.company_name} (${tax_year})\nEIN: ${account.ein_number}\nEntity: ${entityType}\nReturn: Form ${returnType}\n\nDocuments: ${foundFiles.map(f => f.name).join(", ")}`
+        const plainText = `Tax return documents for ${account.company_name} (${tax_year})\nEIN: ${account.ein_number}\nEntity: ${entityType}\nReturn: Form ${returnType}\n\nDocuments: ${attachedFiles.map(f => f.name).join(", ")}`
 
         // Build MIME with attachments
         const outerBoundary = `boundary_${Date.now()}`
@@ -1201,7 +1501,21 @@ export function registerTaxTools(server: McpServer) {
           record_id: taxReturn.id,
           account_id,
           summary: `Tax documents sent to accountant for ${account.company_name} (${tax_year})`,
-          details: { files: foundFiles.map(f => f.name), entity_type: entityType, email: toEmail },
+          details: {
+            // Ids, not just names: two files can share a name byte-for-byte (a
+            // legacy Tax-root copy and its replacement), and the audit trail of an
+            // IRS filing has to be able to say WHICH file's numbers went.
+            files: attachedFiles.map(f => `${f.name} [${f.id}]`),
+            entity_type: entityType,
+            email: toEmail,
+            // No `ambiguous` here by design: an unresolved ambiguity never reaches
+            // a send — it returns above. Logging it would only ever log nothing.
+            ...(overrides.length > 0 ? { operator_overrides: overrides } : {}),
+            ...(noPnlDeclared ? { no_pnl_reason } : {}),
+            ...(notes.length > 0 ? { files_found_but_not_used: notes } : {}),
+            ...(failedDownloads.length > 0 ? { failed_downloads: failedDownloads } : {}),
+            ...(excludedStatements.length > 0 ? { excluded_statements: excludedStatements } : {}),
+          },
         })
 
         // ── 9. Return summary ──
@@ -1212,13 +1526,17 @@ export function registerTaxTools(server: McpServer) {
           `📋 Subject: ${emailSubject}`,
           "",
           `📎 Documents attached (${attachments.length}):`,
-          ...foundFiles.map(f => `   • ${f.category}: ${f.name}`),
+          ...attachedFiles.map(f => `   • ${f.category}: ${f.name}`),
           "",
           `📝 CRM Updates:`,
           `   • tax_returns: status → "Sent to Accountant", accountant_status → "Sent - Pending"`,
           sd ? `   • Service delivery: stage → "Sent to be filed"` : `   • No active service delivery found`,
           "",
           missing.length > 0 ? `⚠️ Missing (sent anyway): ${missing.join(", ")}` : "",
+          overrides.length > 0 ? `⚠️ Sent on your explicit choice: ${overrides.join("; ")}` : "",
+          failedDownloads.length > 0 ? `⚠️ Could not download (NOT attached, NOT listed in the email): ${failedDownloads.join("; ")}` : "",
+          excludedStatements.length > 0 ? `ℹ️ Statements left out (do not provably belong to ${tax_year}): ${excludedStatements.join(", ")}` : "",
+          notes.length > 0 ? `⚠️ Files found but NOT used — check none of these was the one you meant: ${notes.join("; ")}` : "",
         ].filter(Boolean)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

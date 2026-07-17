@@ -199,7 +199,13 @@ export async function listFolder(folderId: string, maxResults = 50) {
     q,
     driveId: SHARED_DRIVE_ID(),
     corpora: "drive",
-    fields: "files(id,name,mimeType,size,createdTime,modifiedTime,webViewLink,thumbnailLink,iconLink)",
+    // nextPageToken is requested so callers can TELL whether the listing was
+    // truncated. Without it in the fields mask Drive omits it entirely, and a
+    // caller cannot distinguish "exactly N files" from "N of many" — which
+    // silently breaks any caller that reasons about the complete set of files
+    // in a folder (see lib/mcp/tools/tax.ts, where a missed second P&L would
+    // mean filing the wrong numbers).
+    fields: "nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,webViewLink,thumbnailLink,iconLink)",
     pageSize: String(Math.min(maxResults, 100)),
     orderBy: "folder,name",
   })
@@ -869,13 +875,23 @@ export async function findTaxFolder(driveFolderId: string): Promise<string | nul
  * Returns the year folder ID.
  */
 export async function findOrCreateYearFolder(taxFolderId: string, year: number): Promise<string> {
-  const listing = (await listFolder(taxFolderId)) as {
+  const listing = (await listFolder(taxFolderId, 100)) as {
     files?: { id: string; name: string; mimeType: string }[]
+    nextPageToken?: string
   }
   const yearFolder = listing.files?.find(
     f => f.name === String(year) && f.mimeType === "application/vnd.google-apps.folder"
   )
   if (yearFolder) return yearFolder.id
+  // Creating a SECOND year folder is durable corruption: the writer would archive
+  // into the invisible twin while every reader resolves the other, so the client's
+  // confirmed workbook becomes unfindable. On a truncated listing we cannot know
+  // the folder doesn't already exist — refuse rather than create a duplicate.
+  if (listing.nextPageToken) {
+    throw new Error(
+      `Cannot resolve the ${year} folder: '3. Tax' holds more files than can be listed at once, so an existing ${year} folder may be hidden. Tidy the folder before archiving, or a duplicate ${year} folder would be created.`,
+    )
+  }
   const created = await createFolder(taxFolderId, String(year))
   return created.id
 }
