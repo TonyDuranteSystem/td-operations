@@ -9,6 +9,7 @@ import {
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
   MessageSquare, Bot, Building2, Slack, ExternalLink,
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
+  Bell, BellOff,
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
@@ -152,6 +153,11 @@ export default function TeamWorkspacePage() {
       const r = await fetch(`/api/team/threads/${threadId}`)
       if (!r.ok) throw new Error('Failed')
       const d = await r.json()
+      // Ignore a stale response: if the user switched threads while this was in
+      // flight (e.g. deep-link auto-selects general then jumps to the channel),
+      // this response is for a thread we're no longer viewing — applying it would
+      // show the wrong channel's messages/threads.
+      if (selectedIdRef.current && threadId !== selectedIdRef.current) return
       // On a silent poll, only replace if something actually changed (avoids
       // clobbering local optimistic state / re-render churn).
       setMessages(prev => {
@@ -256,6 +262,13 @@ export default function TeamWorkspacePage() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const row = (payload.new ?? payload.old) as any
         if (row?.thread_id === selectedIdRef.current) loadMessages(selectedIdRef.current!, { silent: true })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_root_follows' }, (payload) => {
+        // A follow/unfollow (by me on another device, or affecting my view) →
+        // refresh so bells + the followed-unread dot stay in sync.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const row = (payload.new ?? payload.old) as any
+        if (row?.user_id === currentUserIdRef.current && selectedIdRef.current) loadMessages(selectedIdRef.current, { silent: true })
       })
       .subscribe()
     return () => { if (debounce) clearTimeout(debounce); supabase.removeChannel(channel) }
@@ -503,6 +516,23 @@ export default function TeamWorkspacePage() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not update the thread.')
       loadMessages(tid, { silent: true }) // reconcile from the server on failure
+    }
+  }, [loadMessages])
+
+  // Follow / unfollow a thread (per-person). Presence = following; unfollow truly
+  // stops the pings. Never touches read state.
+  const setThreadFollow = useCallback(async (rootId: string, follow: boolean) => {
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, following: follow } : t))
+    const tid = selectedIdRef.current
+    if (!tid) return
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/thread-follow`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId, follow }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not update follow.') }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not update follow.')
+      loadMessages(tid, { silent: true })
     }
   }, [loadMessages])
 
@@ -956,7 +986,7 @@ export default function TeamWorkspacePage() {
                   title="Manage this channel's threads by status"
                 >
                   <ListIcon className="h-3.5 w-3.5" /> Threads
-                  {threadsList.some(t => t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                  {threadsList.some(t => t.following && t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
                 </button>
               )}
               {selected.thread_type === 'discussion' && (
@@ -1019,11 +1049,11 @@ export default function TeamWorkspacePage() {
                           onReact={emoji => toggleReaction(m.id, emoji)}
                           reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)} />
                         {meta && meta.reply_count > 0 && (
-                          <button onClick={() => openThread(m.id)} className="ml-11 mb-1 flex items-center gap-2 text-xs font-medium text-blue-600 hover:underline">
+                          <button onClick={() => openThread(m.id)} className={cn('ml-11 mb-1 flex items-center gap-2 text-xs text-blue-600 hover:underline', meta.unread ? 'font-bold' : 'font-medium')}>
+                            {meta.unread && <span className="w-2 h-2 rounded-full bg-blue-500" />}
                             <MessageSquare className="h-3.5 w-3.5" />
                             {meta.reply_count} {meta.reply_count === 1 ? 'reply' : 'replies'}
                             <span className="text-zinc-400 font-normal">· last reply {format(new Date(meta.last_reply_at), 'MMM d, HH:mm')}</span>
-                            {meta.unread && <span className="w-2 h-2 rounded-full bg-blue-500" />}
                           </button>
                         )}
                       </div>
@@ -1040,6 +1070,14 @@ export default function TeamWorkspacePage() {
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
                     <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><MessageSquare className="h-4 w-4" /> Thread</span>
                     <div className="flex items-center gap-2">
+                      {/* Follow bell — follow/unfollow this thread from inside it. */}
+                      {(() => { const ti = threadsList.find(t => t.root_id === openRootId); const following = ti?.following ?? false; return (
+                        <button onClick={() => { if (openRootId) setThreadFollow(openRootId, !following) }}
+                          className={cn('p-1 rounded-full', following ? 'text-blue-600 hover:bg-blue-50' : 'text-zinc-400 hover:bg-zinc-100')}
+                          title={following ? 'Following — click to unfollow' : 'Follow this thread'}>
+                          {following ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+                        </button>
+                      ) })()}
                       {/* Status control — set Working / Pending / Done from inside the thread. */}
                       <div className="relative">
                         <button onClick={() => setPaneStatusMenu(v => !v)}
@@ -1200,6 +1238,7 @@ export default function TeamWorkspacePage() {
                   onOpen={(rid) => { setShowThreadsPanel(false); openThread(rid) }}
                   onSetStatus={(rid, status) => setThreadState(rid, { status })}
                   onSetAssignee={(rid, aid) => setThreadState(rid, { assignee_id: aid })}
+                  onSetFollow={(rid, f) => setThreadFollow(rid, f)}
                 />
               </div>
             )}
@@ -1215,7 +1254,16 @@ export default function TeamWorkspacePage() {
   )
 }
 
-function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetStatus, onSetAssignee }: {
+const THREAD_STAGE_FILTERS: { key: string; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'new', label: 'New' },
+  { key: 'todo', label: 'Open' },
+  { key: 'in_progress', label: 'Working' },
+  { key: 'waiting', label: 'Pending' },
+  { key: 'handled', label: 'Done' },
+]
+
+function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow }: {
   channelName: string
   threads: ThreadListItem[]
   members: TeamMember[]
@@ -1223,28 +1271,47 @@ function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetSta
   onOpen: (rootId: string) => void
   onSetStatus: (rootId: string, status: TeamWorkStatus) => void
   onSetAssignee: (rootId: string, assigneeId: string | null) => void
+  onSetFollow: (rootId: string, follow: boolean) => void
 }) {
-  const [hideDone, setHideDone] = useState(false)
+  const [stage, setStage] = useState<string>('all')
+  const [followingOnly, setFollowingOnly] = useState(false)
   const [menu, setMenu] = useState<string | null>(null)
-  const sorted = sortPanelThreads(threads, hideDone)
+  // Stage filter: 'all' = everything, 'new' = unread only, a status = that status
+  // OR unread (a new reply is NEVER hidden by the filter). Plus a Following-only view.
+  const filtered = sortPanelThreads(threads, false).filter(t => {
+    if (followingOnly && !t.following) return false
+    if (stage === 'all') return true
+    if (stage === 'new') return t.unread
+    return t.status === stage || t.unread
+  })
   const nameFor = (id: string | null) => (id ? (members.find(m => m.id === id)?.name ?? 'Unknown') : null)
 
   return (
     <>
       <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
         <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><ListIcon className="h-4 w-4" /> Threads in #{channelName}</span>
-        <div className="flex items-center gap-3">
-          <label className="text-[11px] text-zinc-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={hideDone} onChange={e => setHideDone(e.target.checked)} /> Hide done</label>
-          <button onClick={onClose} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Back to messages"><X className="h-4 w-4" /></button>
-        </div>
+        <button onClick={onClose} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Back to messages"><X className="h-4 w-4" /></button>
+      </div>
+      {/* Filter bar */}
+      <div className="shrink-0 flex items-center gap-1.5 px-3 py-2 border-b border-zinc-100 overflow-x-auto">
+        {THREAD_STAGE_FILTERS.map(f => (
+          <button key={f.key} onClick={() => setStage(f.key)}
+            className={cn('text-[11px] px-2.5 py-1 rounded-full border whitespace-nowrap', stage === f.key ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}>
+            {f.label}
+          </button>
+        ))}
+        <button onClick={() => setFollowingOnly(v => !v)}
+          className={cn('ml-auto text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 whitespace-nowrap', followingOnly ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}>
+          <Bell className="h-3 w-3" /> Following
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-1.5" onClick={() => setMenu(null)}>
-        {sorted.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2"><MessageSquare className="h-9 w-9" /><p className="text-sm">No threads yet. Reply on a message to start one.</p></div>
-        ) : sorted.map(t => {
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2"><MessageSquare className="h-9 w-9" /><p className="text-sm">No threads here. Reply on a message to start one.</p></div>
+        ) : filtered.map(t => {
           const assignee = nameFor(t.assignee_id)
           return (
-            <div key={t.root_id} className="flex items-center gap-2 rounded-lg border border-zinc-200 hover:border-zinc-300 bg-white px-2.5 py-2">
+            <div key={t.root_id} className={cn('flex items-center gap-2 rounded-lg border bg-white px-2.5 py-2', t.unread ? 'border-blue-200' : 'border-zinc-200 hover:border-zinc-300')}>
               <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setMenu(menu === `${t.root_id}:s` ? null : `${t.root_id}:s`)}
                   className={cn('text-[10px] font-medium px-2 py-0.5 rounded-full border', TEAM_STATUS_COLORS[t.status].pill)}>
@@ -1260,11 +1327,19 @@ function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetSta
                   </div>
                 )}
               </div>
+              {/* Unread thread = bold title + a blue dot for instant identification. */}
               <button onClick={() => onOpen(t.root_id)} className="flex-1 min-w-0 text-left">
-                <p className="text-sm text-zinc-800 truncate">{t.title}</p>
+                <p className={cn('text-sm truncate flex items-center gap-1.5', t.unread ? 'font-semibold text-zinc-900' : 'text-zinc-800')}>
+                  {t.unread && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}{t.title}
+                </p>
                 <p className="text-[11px] text-zinc-400 truncate">{t.sender_name ? `${t.sender_name} · ` : ''}{t.reply_count} {t.reply_count === 1 ? 'reply' : 'replies'}{t.last_reply_at ? ` · ${format(new Date(t.last_reply_at), 'MMM d, HH:mm')}` : ''}</p>
               </button>
-              {t.unread && <span className="shrink-0 text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded-full px-1.5 py-0.5">New</span>}
+              {/* Follow bell */}
+              <button onClick={e => { e.stopPropagation(); onSetFollow(t.root_id, !t.following) }}
+                className={cn('shrink-0 p-1 rounded-full', t.following ? 'text-blue-600 hover:bg-blue-50' : 'text-zinc-300 hover:text-zinc-500 hover:bg-zinc-100')}
+                title={t.following ? 'Following — click to unfollow' : 'Follow this thread'}>
+                {t.following ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
+              </button>
               <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setMenu(menu === `${t.root_id}:a` ? null : `${t.root_id}:a`)} className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-200 text-zinc-500 hover:bg-zinc-50">
                   {assignee ? assignee.split(' ')[0] : '+ Assign'}
