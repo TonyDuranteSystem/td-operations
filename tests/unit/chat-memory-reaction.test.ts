@@ -36,6 +36,7 @@ import {
   isBrainEmoji,
   deriveClientKey,
   saveChatMessageAsMemory,
+  saveMarkedMessageAsMemory,
   messageFingerprint,
 } from "@/lib/ai-agent/chat-memory-reaction"
 
@@ -126,5 +127,52 @@ describe("saveChatMessageAsMemory", () => {
     })
     expect(ok).toBe(false)
     expect(saveDecisionMemory).not.toHaveBeenCalled()
+  })
+})
+
+describe("saveMarkedMessageAsMemory — reports WHY it didn't save (Worker-tab 🧠)", () => {
+  it("saves a worker reply globally and namespaces its source ref", async () => {
+    const res = await saveMarkedMessageAsMemory({
+      messageText: "For this client we always wire before filing",
+      savedByName: "Antonio",
+      surface: "worker",
+      messageId: "am-1",
+    })
+    expect(res).toEqual({ saved: true })
+    const arg = saveDecisionMemory.mock.calls[0][0] as Record<string, unknown>
+    expect(arg.sourceRef).toBe("worker:am-1")
+    expect(arg.clientKey).toBeUndefined() // global
+  })
+
+  it("reports already_saved instead of silently doing nothing", async () => {
+    existingRows = [{ id: "already" }]
+    const res = await saveMarkedMessageAsMemory({
+      messageText: "x y z long enough", savedByName: "Antonio", surface: "worker", messageId: "am-2",
+    })
+    expect(res).toEqual({ saved: false, reason: "already_saved" })
+    expect(saveDecisionMemory).not.toHaveBeenCalled()
+  })
+
+  it("reports nothing_general when the distiller finds no reusable rule", async () => {
+    distillMarkedMessage.mockResolvedValue(null)
+    const res = await saveMarkedMessageAsMemory({
+      messageText: "client-specific aside", savedByName: "Antonio", surface: "worker", messageId: "am-3",
+    })
+    expect(res).toEqual({ saved: false, reason: "nothing_general" })
+  })
+
+  it("reports empty for a blank message", async () => {
+    const res = await saveMarkedMessageAsMemory({
+      messageText: "   ", savedByName: "Antonio", surface: "worker", messageId: "am-4",
+    })
+    expect(res).toEqual({ saved: false, reason: "empty" })
+  })
+
+  it("reports error (never throws) when the save blows up", async () => {
+    saveDecisionMemory.mockRejectedValueOnce(new Error("db down"))
+    const res = await saveMarkedMessageAsMemory({
+      messageText: "a rule worth keeping", savedByName: "Antonio", surface: "worker", messageId: "am-5",
+    })
+    expect(res).toEqual({ saved: false, reason: "error" })
   })
 })

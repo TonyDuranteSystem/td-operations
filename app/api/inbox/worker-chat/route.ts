@@ -69,12 +69,16 @@ export async function GET(req: NextRequest) {
     .limit(60)
 
   const turns = ((data ?? []) as Array<{
+    id: string
     body: string
     reply: string | null
     status: string
     context_json: unknown
     created_at: string
   }>).map((r) => ({
+    // Row id travels with the turn so the panel's 🧠 button can reference THIS
+    // reply; the server re-reads its text by id (never trusts client-sent text).
+    id: r.id,
     user: displayUserMessage(r.body, r.context_json),
     worker: r.status === "failed" ? null : r.reply,
     created_at: r.created_at,
@@ -531,12 +535,16 @@ export async function POST(req: NextRequest) {
       // conversation), but memory RECALL + SAVE use the same 'account:<id>' /
       // 'contact:<id>' form the Slack worker writes — the mismatch meant
       // per-client recall on this surface was silently ALWAYS empty.
-      ...(clientKey && body.clientName
+      // Gate on the KEY only (council fix 2026-07-18, dev job a6c3d75b): the panel
+      // sends clientName only on the first message of a session, so requiring it
+      // here meant per-client recall silently stopped after turn 1. The name is
+      // cosmetic; the key is what scopes the memory.
+      ...(clientKey
         ? {
             clientKey: clientKey.startsWith("acct-")
               ? `account:${clientKey.slice("acct-".length)}`
               : `contact:${clientKey.slice("contact-".length)}`,
-            clientName: body.clientName,
+            ...(body.clientName ? { clientName: body.clientName } : {}),
           }
         : {}),
     })
@@ -625,7 +633,9 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-    return NextResponse.json({ reply, threadId, pendingSend, preparedSend })
+    // messageId lets the panel offer 🧠 on the reply it just received (same id the
+    // GET history returns), without a refetch.
+    return NextResponse.json({ reply, threadId, pendingSend, preparedSend, messageId: rowId })
   } catch (error) {
     if (rowId) {
       await db

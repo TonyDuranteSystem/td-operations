@@ -34,23 +34,34 @@ export function deriveClientKey(
   return null
 }
 
+/** Why a 🧠 save didn't write, so the UI can say something true (R099). */
+export type MarkedSaveReason = "empty" | "already_saved" | "nothing_general" | "error"
+
+export interface MarkedSaveResult {
+  saved: boolean
+  reason?: MarkedSaveReason
+}
+
 /**
- * Save a chat message as an explicit decision memory. Best-effort — never
- * throws (a memory-write failure must never break the reaction toggle).
- * Idempotent per (source_ref, source_type): re-reacting / a retry won't
- * double-save. Returns true if a new memory was written.
+ * Core 🧠 save: distill a marked message into a GENERAL, client-free rule and
+ * store it globally. Best-effort — never throws. Idempotent per
+ * (source_ref, source_type), so re-reacting / a retry won't double-save.
+ * Reports WHY when it doesn't save, so a caller with a UI can tell the user.
+ *
+ * `surface` only namespaces the source ref: "team" / "portal" are chat messages;
+ * "worker" is a reply from the staff↔worker panel (Business Brain, dev job 203cda1a).
  */
-export async function saveChatMessageAsMemory(input: {
+export async function saveMarkedMessageAsMemory(input: {
   messageText: string
   savedByName: string
-  surface: "team" | "portal"
+  surface: "team" | "portal" | "worker"
   messageId: string
   accountId?: string | null
   contactId?: string | null
-}): Promise<boolean> {
+}): Promise<MarkedSaveResult> {
   try {
     const decision = (input.messageText ?? "").trim()
-    if (!decision) return false
+    if (!decision) return { saved: false, reason: "empty" }
 
     const sourceType = "crm_reaction"
     const sourceRef = `${input.surface}:${input.messageId}`
@@ -63,7 +74,7 @@ export async function saveChatMessageAsMemory(input: {
       .eq("source_ref", sourceRef)
       .eq("source_type", sourceType)
       .limit(1)
-    if (existing?.length) return false
+    if (existing?.length) return { saved: false, reason: "already_saved" }
 
     // 🧠 = make it GLOBAL (Antonio 2026-07-17), even from a client's Portal chat.
     // Distill the marked message into a general, client-free rule (strips
@@ -73,7 +84,7 @@ export async function saveChatMessageAsMemory(input: {
     // shared brain. Fails closed: nothing general survives → no save.
     const { distillMarkedMessage } = await import("@/lib/ai-agent/lesson-capture")
     const lesson = await distillMarkedMessage(decision)
-    if (!lesson) return false
+    if (!lesson) return { saved: false, reason: "nothing_general" }
     await saveDecisionMemory({
       situation: lesson.situation,
       decision: lesson.decision,
@@ -84,11 +95,28 @@ export async function saveChatMessageAsMemory(input: {
       tags: ["explicit_save"],
       // GLOBAL — no clientKey.
     })
-    return true
+    return { saved: true }
   } catch (err) {
     console.warn("[chat-memory-reaction] 🧠 save failed (non-fatal):", err)
-    return false
+    return { saved: false, reason: "error" }
   }
+}
+
+/**
+ * Boolean wrapper kept for the two existing 🧠 reaction routes (team + portal),
+ * whose call sites test truthiness — returning the result object directly there
+ * would always be truthy and silently report every failure as success.
+ */
+export async function saveChatMessageAsMemory(input: {
+  messageText: string
+  savedByName: string
+  surface: "team" | "portal"
+  messageId: string
+  accountId?: string | null
+  contactId?: string | null
+}): Promise<boolean> {
+  const res = await saveMarkedMessageAsMemory(input)
+  return res.saved
 }
 
 /** SHA-1 fingerprint of the message text — reserved for a future content-level
