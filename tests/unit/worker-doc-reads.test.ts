@@ -13,6 +13,9 @@ import {
   searchSopsForWorker,
   readDriveFileForWorker,
   readPortalAttachmentForWorker,
+  formatStoredExtraction,
+  explainDriveReadFailure,
+  STORED_OCR_TEXT_CAP,
 } from '@/lib/ai-agent/worker-tools'
 
 const DOC_TOOL_NAMES = ['search_sysdocs', 'read_sysdoc', 'search_sops', 'read_drive_file', 'read_portal_attachment']
@@ -118,5 +121,110 @@ describe('read_portal_attachment security guard', () => {
   it('executeWorkerTool refuses it when not offered (no availableNames)', async () => {
     const res = await executeWorkerTool('read_portal_attachment', { url: 'https://ydzipybqeebtpcvsbtvs.supabase.co/x.pdf' })
     expect(res).toContain('not permitted')
+  })
+})
+
+describe('formatStoredExtraction', () => {
+  const base = { file_name: 'Return 2023.pdf', ocr_page_count: 35, processed_at: '2026-03-04T10:11:12Z' }
+
+  it('labels the text as STORED, not a live read, so it is never reported as fresh', () => {
+    const out = formatStoredExtraction({ ...base, ocr_text: 'Schedule K-1 line 21' })
+    expect(out).toContain('Stored extracted text')
+    expect(out).toContain('not a fresh read')
+    expect(out).toContain('Schedule K-1 line 21')
+  })
+
+  it('surfaces page count and extraction date in the header', () => {
+    const out = formatStoredExtraction({ ...base, ocr_text: 'body' })
+    expect(out).toContain('35 page(s)')
+    expect(out).toContain('2026-03-04')
+    // date only — no time component leaking into worker prose
+    expect(out).not.toContain('10:11:12')
+  })
+
+  it('returns null when there is no usable stored text', () => {
+    expect(formatStoredExtraction({ ...base, ocr_text: null })).toBeNull()
+    expect(formatStoredExtraction({ ...base, ocr_text: '' })).toBeNull()
+    expect(formatStoredExtraction({ ...base, ocr_text: '   \n\t ' })).toBeNull()
+  })
+
+  it('flags a STORE-TIME cut as incomplete and says re-reading will not recover it', () => {
+    // Text saved at exactly the store cap was truncated at processing time.
+    const out = formatStoredExtraction({ ...base, ocr_text: 'x'.repeat(STORED_OCR_TEXT_CAP) })
+    expect(out).toContain('INCOMPLETE')
+    expect(out).toContain('will NOT recover')
+    // The tax-return failure mode this exists to prevent: the missing tail
+    // must not be reportable as "absent from the document".
+    expect(out).toContain('not report the missing part as absent')
+  })
+
+  it('does NOT flag incompleteness for text comfortably under the store cap', () => {
+    const out = formatStoredExtraction({ ...base, ocr_text: 'y'.repeat(STORED_OCR_TEXT_CAP - 1) })
+    expect(out).not.toContain('INCOMPLETE')
+  })
+
+  it('boundary: one char under the cap is complete, exactly at the cap is not', () => {
+    const under = formatStoredExtraction({ ...base, ocr_text: 'z'.repeat(STORED_OCR_TEXT_CAP - 1) })
+    const at = formatStoredExtraction({ ...base, ocr_text: 'z'.repeat(STORED_OCR_TEXT_CAP) })
+    expect(under).not.toContain('INCOMPLETE')
+    expect(at).toContain('INCOMPLETE')
+  })
+
+  it('display-time truncation is reported separately from a store-time cut', () => {
+    // Under the store cap (complete on the row) but longer than the display cap.
+    const out = formatStoredExtraction({ ...base, ocr_text: 'w'.repeat(500) }, 100)
+    expect(out).toContain('showing 100')
+    expect(out).toContain('of 500 stored')
+    expect(out).not.toContain('INCOMPLETE') // the tail is still on the row
+  })
+
+  it('survives a missing file name and page count without emitting "null"', () => {
+    const out = formatStoredExtraction({
+      file_name: null,
+      ocr_page_count: null,
+      processed_at: null,
+      ocr_text: 'body',
+    })
+    expect(out).toContain('this file')
+    expect(out).not.toContain('null')
+  })
+})
+
+describe('explainDriveReadFailure', () => {
+  it('maps the size limit', () => {
+    expect(explainDriveReadFailure('File too large for inline processing: 22.4MB (max 15MB)'))
+      .toContain('over the 15MB limit')
+  })
+
+  it('maps missing files and permission failures distinctly', () => {
+    expect(explainDriveReadFailure('Drive metadata 404: Not Found')).toContain('no file with that id')
+    expect(explainDriveReadFailure('Drive download 403: Forbidden')).toContain("can't open that file")
+  })
+
+  it('maps the page-limit rejection', () => {
+    expect(
+      explainDriveReadFailure('Document AI error 400: Document pages in non-imageless mode exceed the limit: 15 got 35'),
+    ).toContain('more pages than the scanner accepts')
+  })
+
+  it('does NOT mislabel an unrelated failure as a page-limit problem', () => {
+    // The council's specific warning: a corrupt/encrypted file must not be
+    // reported as "too many pages" — that sends staff down the wrong path.
+    const out = explainDriveReadFailure('Document AI error 400: unsupported encoding / corrupt document stream')
+    expect(out).toBe('the file couldn\'t be read')
+    expect(out).not.toContain('pages')
+  })
+
+  it('never echoes the raw upstream body back to the caller', () => {
+    const raw = 'Document AI error 400: {"error":{"message":"internal project 796202564410 detail"}}'
+    const out = explainDriveReadFailure(raw)
+    expect(out).not.toContain('796202564410')
+    expect(out).not.toContain('Document AI')
+  })
+
+  it('handles empty/garbage input without throwing', () => {
+    expect(explainDriveReadFailure('')).toBe('the file couldn\'t be read')
+    // @ts-expect-error defensive non-string path
+    expect(explainDriveReadFailure(undefined)).toBe('the file couldn\'t be read')
   })
 })
