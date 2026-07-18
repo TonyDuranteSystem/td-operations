@@ -36,5 +36,24 @@ export async function GET() {
     (id) => nameById.get(id),
   )
 
+  // Slack threads the caller FOLLOWS that have unread replies — same signal that
+  // lights the dot, so clicking it always shows what caused it. Deep-links
+  // straight to that thread's pane. Best-effort: never break the list.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: followed } = await (supabaseAdmin as any)
+      .rpc('list_followed_unread_threads', { p_user_id: user.id })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const f of ((followed ?? []) as any[])) {
+      items.push({
+        id: f.root_message_id,
+        kind: 'thread',
+        label: `#${f.thread_label} · ${String(f.title ?? '').slice(0, 60)}`,
+        count: Number(f.unread_count) || 1,
+        url: `/team-chat?thread=${f.thread_id}&root=${f.root_message_id}`,
+      })
+    }
+  } catch { /* non-critical */ }
+
   return NextResponse.json({ items })
 }
