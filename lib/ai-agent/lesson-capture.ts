@@ -48,15 +48,17 @@ export interface CaptureLessonParams {
 }
 
 export type CaptureSkipReason =
-  | "no_client_scope"
   | "message_too_short"
   | "no_prior_reply"
   | "no_lesson"
+  | "scrub_empty"
   | "error"
 
 export interface CaptureLessonResult {
   saved: boolean
   memoryId?: string
+  /** Scope the lesson was written at (only present when saved). */
+  scope?: "client" | "global"
   skipReason?: CaptureSkipReason
 }
 
@@ -120,11 +122,65 @@ export async function extractLesson(
 }
 
 /**
- * Capture a lesson from one turn and save it CLIENT-SCOPED. Best-effort: never
- * throws — a memory-write failure must never break the surface that called it.
+ * D1-SAFETY scrub: rewrite a lesson as a GENERAL, client-free rule before any
+ * GLOBAL write (no-client auto-capture, 🧠, promote-to-global). Strips client
+ * names / company names / people / amounts / account numbers so a shared lesson
+ * never carries one client's private fact (council BLOCKER-2; Antonio's "🧠 must
+ * go through the name-scrubbing review"). CLIENT-SCOPED writes never call this —
+ * they stay private to that client, raw.
  *
- * Guards (in order): substance → prior reply present → CLIENT SCOPE REQUIRED →
- * a real lesson was extracted. Missing client scope is a hard suppress (D1).
+ * Best-effort: on any extractor/parse failure returns null so the caller can
+ * decide (we FAIL CLOSED — a global write is skipped rather than written unscrubbed).
+ */
+export async function generalizeForGlobal(
+  lesson: { situation: string; decision: string; reasoning?: string },
+  callFn: typeof callAI = callAI,
+): Promise<{ situation: string; decision: string; reasoning?: string } | null> {
+  try {
+    const { text } = await callFn({
+      systemPrompt:
+        "Rewrite this business lesson as a GENERAL rule that applies to ANY client. " +
+        "REMOVE every client-specific detail: company names, people's names, dollar amounts, " +
+        "account/EIN/ID numbers, addresses, dates tied to one client. Keep the reusable " +
+        "principle and the reasoning. If after removing specifics nothing reusable remains, " +
+        'return {"empty": true}. Return ONLY JSON: ' +
+        '{"situation":"...","decision":"...","reasoning":"..."} or {"empty": true}. JSON only.',
+      userPrompt: `SITUATION:\n${lesson.situation}\n\nDECISION:\n${lesson.decision}\n\nREASONING:\n${lesson.reasoning ?? ""}`,
+      maxTokens: 400,
+      temperature: 0,
+      model: "sonnet",
+    })
+    const cleaned = text.replace(/```json\s*/gi, "").replace(/```/g, "").trim()
+    const match = cleaned.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    let parsed: { situation?: string; decision?: string; reasoning?: string; empty?: boolean }
+    try {
+      parsed = JSON.parse(match[0])
+    } catch {
+      return null
+    }
+    if (parsed.empty || !parsed.situation?.trim() || !parsed.decision?.trim()) return null
+    return {
+      situation: parsed.situation.trim(),
+      decision: parsed.decision.trim(),
+      reasoning: parsed.reasoning?.trim() || undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Capture a lesson from one turn and save it. Best-effort: never throws — a
+ * memory-write failure must never break the surface that called it.
+ *
+ * Scope (D1, Antonio 2026-07-17):
+ *  - clientKey present → CLIENT-SCOPED, raw text (stays private to that client).
+ *  - clientKey absent  → GLOBAL, but SCRUBBED first (generalizeForGlobal) so no
+ *    named client's fact reaches the shared brain. Fails closed: if the scrub
+ *    can't produce a client-free rule, the global write is skipped.
+ *
+ * Guards (in order): substance → prior reply present → a real lesson extracted.
  */
 export async function captureLessonFromTurn(
   params: CaptureLessonParams,
@@ -139,19 +195,30 @@ export async function captureLessonFromTurn(
 
   if (staffMessage.length < MIN_MESSAGE_LEN) return { saved: false, skipReason: "message_too_short" }
   if (!priorReply) return { saved: false, skipReason: "no_prior_reply" }
-  // D1: auto-capture never globalizes. No client scope => do not save (a global
-  // write here is exactly the private-fact leak the P1 wall guards against).
-  if (!clientKey) return { saved: false, skipReason: "no_client_scope" }
 
   try {
     const lesson = await extractLesson(priorReply, staffMessage, callFn)
     if (!lesson) return { saved: false, skipReason: "no_lesson" }
 
+    let situation = lesson.situation!.trim()
+    let decision = lesson.lesson!.trim()
+    let reasoning = lesson.reasoning?.trim() || undefined
+
+    // GLOBAL write (no client in context) → scrub to a client-free general rule
+    // first. Fail closed: if nothing reusable survives the scrub, skip the save.
+    if (!clientKey) {
+      const scrubbed = await generalizeForGlobal({ situation, decision, reasoning }, callFn)
+      if (!scrubbed) return { saved: false, skipReason: "scrub_empty" }
+      situation = scrubbed.situation
+      decision = scrubbed.decision
+      reasoning = scrubbed.reasoning
+    }
+
     const mode: CaptureMode = params.mode ?? "correction"
     const memoryId = await saveFn({
-      situation: lesson.situation!.slice(0, 500),
-      decision: lesson.lesson!.slice(0, 1000),
-      reasoning: lesson.reasoning?.trim() ? lesson.reasoning.slice(0, 1000) : undefined,
+      situation: situation.slice(0, 500),
+      decision: decision.slice(0, 1000),
+      reasoning: reasoning ? reasoning.slice(0, 1000) : undefined,
       botSaid: priorReply.slice(0, 300),
       correctionType: mode === "correction" ? "auto_detected" : "confirmed",
       domain: lesson.domain?.trim() || undefined,
@@ -159,9 +226,9 @@ export async function captureLessonFromTurn(
       sourceRef: params.sourceRef,
       actors: params.actors ?? ["antonio", "claude"],
       tags: [mode === "correction" ? "auto_correction" : "explicit_save"],
-      clientKey,
+      clientKey: clientKey || null,
     })
-    return { saved: true, memoryId }
+    return { saved: true, memoryId, scope: clientKey ? "client" : "global" }
   } catch (err) {
     console.warn(`[lesson-capture] capture failed on ${params.surface} (non-fatal):`, err)
     return { saved: false, skipReason: "error" }

@@ -8,11 +8,18 @@
  */
 
 import { describe, it, expect, vi } from "vitest"
-import { captureLessonFromTurn, extractLesson } from "@/lib/ai-agent/lesson-capture"
+import { captureLessonFromTurn, extractLesson, generalizeForGlobal } from "@/lib/ai-agent/lesson-capture"
 
-/** A callAI stub returning a fixed JSON payload. */
+/** A callAI stub returning a fixed JSON payload for every call. */
 function fakeCall(payload: unknown): any {
   return vi.fn().mockResolvedValue({ text: JSON.stringify(payload) })
+}
+
+/** A callAI stub returning a different payload per successive call (extract, then scrub). */
+function sequencedCall(...payloads: unknown[]): any {
+  const fn = vi.fn()
+  for (const p of payloads) fn.mockResolvedValueOnce({ text: JSON.stringify(p) })
+  return fn
 }
 
 const GOOD_LESSON = {
@@ -20,6 +27,13 @@ const GOOD_LESSON = {
   lesson: "Tell them 2-3 weeks after documents are in",
   reasoning: "That is our real turnaround once the state filing is submitted",
   domain: "formation",
+}
+
+/** What generalizeForGlobal emits — note `decision` (not `lesson`) + client-free. */
+const SCRUBBED = {
+  situation: "A client asks how long formation takes",
+  decision: "Say 2-3 weeks after documents are in",
+  reasoning: "Standard turnaround once the state filing is submitted",
 }
 
 describe("extractLesson", () => {
@@ -56,21 +70,59 @@ describe("extractLesson", () => {
   })
 })
 
+describe("generalizeForGlobal — scrub before any global write", () => {
+  it("returns the client-free rewrite", async () => {
+    const got = await generalizeForGlobal(
+      { situation: "Acme LLC asked about timing", decision: "Told Acme 2-3 weeks", reasoning: "state filing" },
+      fakeCall(SCRUBBED),
+    )
+    expect(got).not.toBeNull()
+    expect(got!.decision).toBe("Say 2-3 weeks after documents are in")
+  })
+
+  it("returns null when nothing reusable survives the scrub (empty)", async () => {
+    expect(
+      await generalizeForGlobal({ situation: "s", decision: "d" }, fakeCall({ empty: true })),
+    ).toBeNull()
+  })
+
+  it("returns null on unparseable output or throw (fail closed)", async () => {
+    expect(await generalizeForGlobal({ situation: "s", decision: "d" }, fakeCall("nope" as any))).toBeNull()
+    const boom = vi.fn().mockRejectedValue(new Error("down"))
+    expect(await generalizeForGlobal({ situation: "s", decision: "d" }, boom)).toBeNull()
+  })
+})
+
 describe("captureLessonFromTurn — D1 guards", () => {
   const baseSave = () => vi.fn().mockResolvedValue("mem-id-1")
 
-  it("SUPPRESSES when there is no client scope (never writes global)", async () => {
+  it("saves GLOBAL but SCRUBBED when there is no client scope (Antonio: keep auto-saving globally)", async () => {
     const saveFn = baseSave()
-    const callFn = fakeCall(GOOD_LESSON)
+    // extract → GOOD_LESSON, then scrub → SCRUBBED (client-free)
+    const callFn = sequencedCall(GOOD_LESSON, SCRUBBED)
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: null, surface: "slack" },
       { callFn, saveFn },
     )
+    expect(res.saved).toBe(true)
+    expect(res.scope).toBe("global")
+    const arg = saveFn.mock.calls[0][0]
+    expect(arg.clientKey).toBeNull()
+    // the SCRUBBED text was written, not the raw extracted lesson
+    expect(arg.decision).toBe("Say 2-3 weeks after documents are in")
+    expect(callFn).toHaveBeenCalledTimes(2) // extract + scrub
+  })
+
+  it("FAILS CLOSED: a global write whose scrub yields nothing reusable is skipped", async () => {
+    const saveFn = baseSave()
+    const callFn = sequencedCall(GOOD_LESSON, { empty: true })
+    const res = await captureLessonFromTurn(
+      { staffMessage: "just a general aside with a client name in it", priorReply: "prior", clientKey: null, surface: "team_chat" },
+      { callFn, saveFn },
+    )
     expect(res.saved).toBe(false)
-    expect(res.skipReason).toBe("no_client_scope")
+    expect(res.skipReason).toBe("scrub_empty")
     expect(saveFn).not.toHaveBeenCalled()
-    // and the model is never even consulted once we know we can't scope it
-    expect(callFn).not.toHaveBeenCalled()
   })
 
   it("saves CLIENT-SCOPED with reasoning when a clientKey is present", async () => {
