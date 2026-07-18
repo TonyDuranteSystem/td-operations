@@ -349,6 +349,7 @@ export async function processClaudeReply(params: {
         staffMessage: prompt.message,
         priorReply,
         clientKey,
+        clientName,
         surface: 'team_chat',
         sourceRef: `team:${threadId}:${promptMessageId}`,
         actors: ['antonio', 'claude'],

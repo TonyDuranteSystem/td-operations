@@ -581,6 +581,7 @@ export async function POST(req: NextRequest) {
             staffMessage: message,
             priorReply,
             clientKey: memoryClientKey,
+            clientName: body.clientName ?? null,
             surface: surface === "portal-chats" ? "portal_chat" : "inbox",
             sourceRef: `${surface}:${threadId}`,
             actors: ["antonio", "claude"],
