@@ -32,7 +32,7 @@ import {
 } from "@/lib/ai-agent/slack-approval"
 import { createThreadSummary } from "@/lib/ai-agent/thread-summaries"
 import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
-import { callAI } from "@/lib/portal/ai-provider"
+import { captureLessonFromTurn } from "@/lib/ai-agent/lesson-capture"
 
 /**
  * Slack context for the event currently being processed. Set by
@@ -1578,76 +1578,34 @@ export async function fetchSlackMessageText(channelId: string, ts: string): Prom
 // ---------------------------------------------------------------------------
 
 /**
- * When Antonio's latest message reads like a correction of a prior bot proposal,
- * persist it as a decision memory so the lesson is recalled next time a similar
- * situation comes up. Rather than regex-matching trigger phrases, we ask Haiku to
- * read the prior bot turn + Antonio's message and extract the durable business
- * lesson (or decide there is none). This catches corrections phrased in ways no
- * keyword list anticipates, and lets the model — not us — distinguish a real
- * lesson from idle chat. Best-effort and fully non-fatal: any failure (missing
- * key, AI error, parse error, insert error) is swallowed with a warn so it can
- * never break the Slack/Hermes reply path.
+ * When Antonio's latest message reads like a correction of a prior worker reply,
+ * persist the lesson so it's recalled next time a similar situation comes up.
  *
- * Mapping onto saveDecisionMemory: the extracted `lesson` → the decision;
- * `botSaid` (the prior bot turn being corrected) → bot_said; the extracted
- * `situation` → the embedded situation used for recall; `domain` → the bucket.
- *
- * Note: saveDecisionMemory uses the camelCase param shape (botSaid/correctionType/
- * sourceType/sourceRef) — verified against lib/ai-agent/decision-memory.ts.
+ * Thin adapter over the shared Business Brain capture helper (captureLessonFromTurn,
+ * dev job 203cda1a): the extraction, the client-scoped-vs-global scope decision, and
+ * the global-write scrub all live there — this just maps the Slack/Hermes call shape.
+ * Inputs are the staff message + the prior worker reply ONLY (never enriched/fenced
+ * context — the Adam-Marra fix). Pass `clientKey` when the thread is tied to a client
+ * so the lesson is saved private to that client; omit it for a general thread (saved
+ * global + scrubbed). Best-effort; the helper never throws.
  */
 export async function detectAndSaveCorrection(params: {
-  situation: string
   currentMessage: string
   botSaid: string
   sourceType: string
   sourceRef: string
+  clientKey?: string | null
   actors?: string[]
 }): Promise<void> {
-  const { situation, currentMessage, botSaid, sourceType, sourceRef } = params
-
-  // A bare "no" is too ambiguous to be a useful lesson; require some substance.
-  if (!currentMessage || currentMessage.trim().length < 15) return
-  // Nothing to correct if there's no prior bot proposal in context.
-  if (!botSaid?.trim()) return
-
-  try {
-    // Ask Sonnet to extract the business lesson (JSON-only). Policy: Sonnet/Opus
-    // only across all AI features — no Haiku, no GPT.
-    const { text } = await callAI({
-      systemPrompt:
-        "Antonio (CEO of Tony Durante LLC) may be correcting a prior bot proposal. " +
-        "Extract the durable, reusable business lesson from his message. " +
-        'Return ONLY JSON: {"situation": "...", "lesson": "...", "domain": "..."} when there is a real, reusable lesson, ' +
-        'or {"no_lesson": true} when the message is not a correction or carries no reusable lesson. No prose, JSON only.',
-      userPrompt: `PRIOR BOT PROPOSAL:\n${botSaid.slice(0, 1000)}\n\nTHREAD CONTEXT:\n${(situation || "").slice(-1500)}\n\nANTONIO'S MESSAGE:\n${currentMessage.trim()}`,
-      maxTokens: 300,
-      temperature: 0,
-      model: "sonnet",
-    })
-
-    // Tolerant parse: strip code fences and grab the first {...} block.
-    let parsed: { situation?: string; lesson?: string; domain?: string; no_lesson?: boolean } | null = null
-    const match = text.replace(/```json\s*/gi, "").replace(/```/g, "").trim().match(/\{[\s\S]*\}/)
-    if (match) {
-      try { parsed = JSON.parse(match[0]) } catch { parsed = null }
-    }
-    if (!parsed || parsed.no_lesson || !parsed.situation || !parsed.lesson) return
-
-    const { saveDecisionMemory } = await import("./decision-memory")
-    await saveDecisionMemory({
-      situation: parsed.situation.slice(0, 500),
-      decision: parsed.lesson.slice(0, 1000),
-      botSaid: botSaid.slice(0, 300),
-      correctionType: "auto_detected",
-      domain: parsed.domain || undefined,
-      sourceType,
-      sourceRef,
-      actors: params.actors ?? ["antonio", "claude"],
-      tags: ["auto_correction"],
-    })
-  } catch (err) {
-    console.warn("[slack-claude] auto-save correction failed (non-fatal):", err)
-  }
+  await captureLessonFromTurn({
+    staffMessage: params.currentMessage,
+    priorReply: params.botSaid,
+    clientKey: params.clientKey ?? null,
+    surface: params.sourceType,
+    sourceRef: params.sourceRef,
+    actors: params.actors,
+    mode: "correction",
+  })
 }
 
 /**
@@ -2377,11 +2335,11 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
       const priorBotSaid = priorRows?.[0]?.reply as string | undefined
       if (priorBotSaid) {
         await detectAndSaveCorrection({
-          situation: enrichedBody,
           currentMessage: row.body,
           botSaid: priorBotSaid,
           sourceType: "slack",
           sourceRef: `${channelId}:${replyThreadTs ?? row.id}`,
+          clientKey, // client-scoped when the Slack thread is tied to a client; else global+scrubbed
           actors: ["antonio", "claude"],
         })
       }
