@@ -23,7 +23,7 @@ import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { sortPanelThreads } from '@/lib/team/thread-meta'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
-import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem } from './types'
+import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem, BoardThread } from './types'
 
 const AVATAR_COLORS = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-orange-500', 'bg-rose-500', 'bg-cyan-500', 'bg-amber-500', 'bg-indigo-500']
 const QUICK_EMOJIS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂', '🎉']
@@ -94,6 +94,9 @@ export default function TeamWorkspacePage() {
   const [threadsList, setThreadsList] = useState<ThreadListItem[]>([])
   const [showThreadsPanel, setShowThreadsPanel] = useState(false)
   const [paneStatusMenu, setPaneStatusMenu] = useState(false)
+  // Board = every thread across every channel.
+  const [allThreads, setAllThreads] = useState<BoardThread[]>([])
+  const [showNewThread, setShowNewThread] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -107,6 +110,9 @@ export default function TeamWorkspacePage() {
   // Refs so the once-subscribed realtime handler reads live values.
   const currentUserIdRef = useRef<string | null>(null)
   const openRootIdRef = useRef<string | null>(null)
+  const messagesRef = useRef<TeamMsg[]>([])
+  // A thread the user asked to open from the Board, waiting for its channel to load.
+  const pendingOpenRef = useRef<{ threadId: string; rootId: string } | null>(null)
 
   const { isRecording, isTranscribing, startRecording, stopRecording, isSupported: voiceSupported } =
     useVoiceInput({ language: 'en-US', onTranscript: t => setText(p => p ? `${p} ${t}` : t), onError: m => toast.error(m) })
@@ -114,6 +120,7 @@ export default function TeamWorkspacePage() {
   const selected = useMemo(() => threads.find(t => t.id === selectedId) ?? null, [threads, selectedId])
   currentUserIdRef.current = currentUserId
   openRootIdRef.current = openRootId
+  messagesRef.current = messages
 
   // Slack threads are a channel/general feature; DMs and client discussions keep
   // the flat inline layout (and their @claude continuation) unchanged.
@@ -165,6 +172,18 @@ export default function TeamWorkspacePage() {
           const a = prev[prev.length - 1]?.id, b = d.messages[d.messages.length - 1]?.id
           if (prev.length === d.messages.length && a === b) return prev
         }
+        // Keep an OPEN thread alive across refreshes: a thread opened from the
+        // Board can be older than the newest-500 window, so a plain replace would
+        // empty the pane a few seconds after opening it.
+        const openRoot = openRootIdRef.current
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const next = d.messages as any[]
+        if (openRoot && !next.some(m => m.id === openRoot)) {
+          const keep = prev.filter(m => m.id === openRoot || m.root_id === openRoot)
+          if (keep.length) {
+            return [...keep, ...next].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+          }
+        }
         return d.messages
       })
       setThreadMeta(d.thread_meta ?? {})
@@ -210,8 +229,14 @@ export default function TeamWorkspacePage() {
   // push notifications and the "New conversation" channel card).
   const searchParams = useSearchParams()
   const deepLinkThread = searchParams.get('thread')
+  // ONE-SHOT: apply the URL's thread once. Re-asserting it on every threads
+  // refresh would fight any later channel switch — e.g. opening a thread from
+  // the Board would snap straight back to the deep-linked channel.
+  const deepThreadDoneRef = useRef(false)
   useEffect(() => {
+    if (deepThreadDoneRef.current) return
     if (deepLinkThread && threads.some(t => t.id === deepLinkThread)) {
+      deepThreadDoneRef.current = true
       setSelectedId(deepLinkThread)
     }
   }, [deepLinkThread, threads])
@@ -502,11 +527,13 @@ export default function TeamWorkspacePage() {
   const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
 
   // Set a thread's management status and/or assignee (Threads panel + pane).
-  const setThreadState = useCallback(async (rootId: string, patch: { status?: TeamWorkStatus; assignee_id?: string | null }) => {
+  const setThreadState = useCallback(async (rootId: string, patch: { status?: TeamWorkStatus; assignee_id?: string | null }, channelId?: string) => {
     // Optimistic local update.
     setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } : t))
+    setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } : t))
     setThreadMeta(prev => prev[rootId] ? { ...prev, [rootId]: { ...prev[rootId], ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } } : prev)
-    const tid = selectedIdRef.current
+    // Target the thread's OWN channel (Board rows come from other channels).
+    const tid = channelId ?? selectedIdRef.current
     if (!tid) return
     try {
       const r = await fetch(`/api/team/threads/${tid}/thread-state`, {
@@ -519,11 +546,59 @@ export default function TeamWorkspacePage() {
     }
   }, [loadMessages])
 
-  // Follow / unfollow a thread (per-person). Presence = following; unfollow truly
-  // stops the pings. Never touches read state.
-  const setThreadFollow = useCallback(async (rootId: string, follow: boolean) => {
-    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, following: follow } : t))
+  // Deliberately start a thread in this channel (the "+ New thread" button).
+  // The thread gets its own title and is registered immediately, so it shows in
+  // the lists straight away — no waiting for someone to reply.
+  const createThread = useCallback(async (title: string, note: string) => {
     const tid = selectedIdRef.current
+    if (!tid) return
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/new-thread`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, body: note }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not create the thread.') }
+      const d = await r.json()
+      setShowNewThread(false)
+      await loadMessages(tid)
+      if (d.root_id) openThread(d.root_id)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not create the thread.')
+    }
+  }, [loadMessages, openThread])
+
+  // Every thread across every channel (the Board).
+  const loadAllThreads = useCallback(async () => {
+    try {
+      const r = await fetch('/api/team/all-threads')
+      if (!r.ok) return
+      const d = await r.json()
+      setAllThreads(d.threads ?? [])
+    } catch { /* board just stays as-is */ }
+  }, [])
+
+  // The Board is cross-channel — load it whenever it's shown.
+  useEffect(() => { if (view === 'board') loadAllThreads() }, [view, loadAllThreads])
+
+  // Open a thread that may live in ANOTHER channel (clicked on the Board).
+  // Switching channel resets the pane, so the request is parked in a ref and
+  // replayed once that channel's messages have loaded.
+  const openThreadInChannel = useCallback((threadId: string, rootId: string) => {
+    setView('list')
+    if (selectedIdRef.current === threadId) {
+      pendingOpenRef.current = { threadId, rootId }
+    } else {
+      pendingOpenRef.current = { threadId, rootId }
+      setSelectedId(threadId)
+    }
+  }, [])
+
+  // Follow / unfollow a thread (per-person). Presence = following; unfollow truly
+  // stops the pings. Never touches read state. `channelId` targets the thread's
+  // OWN channel — the Board shows threads from channels you aren't viewing.
+  const setThreadFollow = useCallback(async (rootId: string, follow: boolean, channelId?: string) => {
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, following: follow } : t))
+    setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, following: follow } : t))
+    const tid = channelId ?? selectedIdRef.current
     if (!tid) return
     try {
       const r = await fetch(`/api/team/threads/${tid}/thread-follow`, {
@@ -535,6 +610,39 @@ export default function TeamWorkspacePage() {
       loadMessages(tid, { silent: true })
     }
   }, [loadMessages])
+
+  // Replay a Board click: once the thread's channel has loaded, open its pane —
+  // fetching that one thread on demand when its opening message is older than the
+  // loaded window (otherwise the pane would render empty).
+  useEffect(() => {
+    const p = pendingOpenRef.current
+    if (!p || p.threadId !== selectedId || loadingMsgs) return
+    if (messages.some(m => m.id === p.rootId)) {
+      pendingOpenRef.current = null
+      openThread(p.rootId)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetch(`/api/team/threads/${p.threadId}/thread-messages?root=${p.rootId}`)
+        if (!r.ok) throw new Error('failed')
+        const d = await r.json()
+        if (cancelled) return
+        setMessages(prev => {
+          const seen = new Set(prev.map(m => m.id))
+          const add = ((d.messages ?? []) as TeamMsg[]).filter(m => !seen.has(m.id))
+          return [...prev, ...add].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+        })
+        pendingOpenRef.current = null
+        openThread(p.rootId)
+      } catch {
+        pendingOpenRef.current = null
+        toast.error("Couldn't open that thread.")
+      }
+    })()
+    return () => { cancelled = true }
+  }, [selectedId, messages, loadingMsgs, openThread])
 
   // Deep link to a specific thread pane: /team-chat?thread=<ch>&root=<rootId>.
   // One-shot (a ref guard) so it doesn't re-open on every poll refresh.
@@ -620,13 +728,8 @@ export default function TeamWorkspacePage() {
     if (d.reused) toast.info('Opened the existing conversation for this client + topic.')
   }
 
-  const setWorkStatus = useCallback(async (threadId: string, status: TeamWorkStatus) => {
-    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, work_status: status } : t))
-    const r = await fetch(`/api/team/threads/${threadId}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ work_status: status }),
-    })
-    if (!r.ok) { toast.error('Failed to update status'); loadThreads() }
-  }, [loadThreads])
+  // (The whole-conversation kanban status setter was retired with the old board —
+  // the Board now tracks THREADS. The PATCH endpoint remains for any future use.)
 
   const moveToChannel = useCallback(async (threadId: string, channelId: string | null) => {
     setMenuThreadId(null)
@@ -723,8 +826,9 @@ export default function TeamWorkspacePage() {
           <span className="text-sm font-semibold text-zinc-800">Team Workspace</span>
           <span className="text-[11px] text-zinc-400">drag a card to change its status</span>
         </div>
-        <TeamBoard threads={threads} channels={channels} onStatusChange={setWorkStatus}
-          onOpenThread={(id) => { setView('list'); setSelectedId(id) }} />
+        <TeamBoard threads={allThreads}
+          onStatusChange={(rootId, status, channelId) => setThreadState(rootId, { status }, channelId)}
+          onOpenThread={(threadId, rootId) => openThreadInChannel(threadId, rootId)} />
       </div>
     )
   }
@@ -979,15 +1083,24 @@ export default function TeamWorkspacePage() {
                 {selected.description && <p className="text-[11px] text-zinc-500 truncate">{selected.description}</p>}
               </div>
               {isThreadedChannel && (
-                <button
-                  onClick={() => { setShowThreadsPanel(v => !v); setOpenRootId(null) }}
-                  className={cn('text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5 shrink-0',
-                    showThreadsPanel ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
-                  title="Manage this channel's threads by status"
-                >
-                  <ListIcon className="h-3.5 w-3.5" /> Threads
-                  {threadsList.some(t => t.following && t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setShowNewThread(true)}
+                    className="text-xs px-2.5 py-1 rounded-full border bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50 flex items-center gap-1"
+                    title="Start a new thread on a topic"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> New thread
+                  </button>
+                  <button
+                    onClick={() => { setShowThreadsPanel(v => !v); setOpenRootId(null) }}
+                    className={cn('text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5',
+                      showThreadsPanel ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+                    title="Manage this channel's threads by status"
+                  >
+                    <ListIcon className="h-3.5 w-3.5" /> Threads
+                    {threadsList.some(t => t.following && t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                  </button>
+                </div>
               )}
               {selected.thread_type === 'discussion' && (
                 selected.resolution === 'solved' ? (
@@ -1250,6 +1363,7 @@ export default function TeamWorkspacePage() {
       {showNewChannel && <NewChannelModal onClose={() => setShowNewChannel(false)} onCreate={createChannel} />}
       {showNewDm && <NewDmModal members={members.filter(m => m.id !== currentUserId)} onClose={() => setShowNewDm(false)} onPick={startDm} />}
       {showNewConversation && <NewConversationModal channels={channels} generalThread={generalThread ?? null} onClose={() => setShowNewConversation(false)} onCreate={createConversation} />}
+      {showNewThread && <NewThreadModal channelName={selected ? (selected.channel_slug ?? selected.label) : ''} onClose={() => setShowNewThread(false)} onCreate={createThread} />}
     </div>
   )
 }
@@ -1262,6 +1376,47 @@ const THREAD_STAGE_FILTERS: { key: string; label: string }[] = [
   { key: 'waiting', label: 'Pending' },
   { key: 'handled', label: 'Done' },
 ]
+
+function NewThreadModal({ channelName, onClose, onCreate }: {
+  channelName: string
+  onClose: () => void
+  onCreate: (title: string, note: string) => Promise<void>
+}) {
+  const [title, setTitle] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    if (!title.trim() || busy) return
+    setBusy(true)
+    try { await onCreate(title.trim(), note.trim()) } finally { setBusy(false) }
+  }
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-zinc-900">New thread in #{channelName}</h3>
+          <button onClick={onClose} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+        </div>
+        <label className="block text-[11px] font-semibold text-zinc-500 mb-1">Topic</label>
+        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} maxLength={200}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
+          placeholder="e.g. Problem with Inbox"
+          className="w-full text-sm border border-zinc-200 rounded-lg px-3 py-2 mb-3 focus:outline-none focus:border-zinc-400" />
+        <label className="block text-[11px] font-semibold text-zinc-500 mb-1">First message (optional)</label>
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
+          placeholder="Add detail — screenshots can be dropped in once it's open."
+          className="w-full text-sm border border-zinc-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:border-zinc-400" />
+        <div className="flex justify-end gap-2 mt-3">
+          <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50">Cancel</button>
+          <button onClick={submit} disabled={!title.trim() || busy}
+            className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50 flex items-center gap-1.5">
+            {busy && <Loader2 className="h-3 w-3 animate-spin" />} Start thread
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow }: {
   channelName: string

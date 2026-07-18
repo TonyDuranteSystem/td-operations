@@ -70,7 +70,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existing } = await (supabaseAdmin as any)
     .from('internal_thread_state')
-    .select('status, assignee_id')
+    .select('status, assignee_id, created_as_thread')
     .eq('root_message_id', rootId)
     .maybeSingle()
 
@@ -78,8 +78,11 @@ export async function POST(
   const finalAssignee: string | null = assigneeProvided ? nextAssignee : (existing?.assignee_id ?? null)
 
   const now = new Date().toISOString()
-  // Sparse: default status + no assignee ⇒ no row.
-  if (finalStatus === 'todo' && !finalAssignee) {
+  // Sparse: default status + no assignee ⇒ no row — EXCEPT for a thread that was
+  // deliberately created ("+ New thread"). Its row IS its existence, so deleting
+  // it on a revert-to-Open would make the thread silently disappear from every
+  // list until someone replied (the exact confusion this feature exists to fix).
+  if (finalStatus === 'todo' && !finalAssignee && !existing?.created_as_thread) {
     if (existing) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (supabaseAdmin as any).from('internal_thread_state').delete().eq('root_message_id', rootId)

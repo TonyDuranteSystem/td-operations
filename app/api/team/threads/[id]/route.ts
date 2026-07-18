@@ -95,11 +95,12 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: stateRows } = await (supabaseAdmin as any)
     .from('internal_thread_state')
-    .select('root_message_id, status, assignee_id')
+    .select('root_message_id, status, assignee_id, title, created_as_thread')
     .eq('thread_id', threadId)
-  const stateMap = new Map<string, { status: string; assignee_id: string | null }>()
-  for (const s of (stateRows ?? []) as { root_message_id: string; status: string; assignee_id: string | null }[]) {
-    stateMap.set(s.root_message_id, { status: s.status, assignee_id: s.assignee_id })
+  const stateMap = new Map<string, { status: string; assignee_id: string | null; title: string | null; created_as_thread: boolean }>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const s of (stateRows ?? []) as any[]) {
+    stateMap.set(s.root_message_id, { status: s.status, assignee_id: s.assignee_id, title: s.title ?? null, created_as_thread: !!s.created_as_thread })
   }
   // Which of these threads THIS user follows (presence = following).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -134,18 +135,47 @@ export async function GET(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const r of (rootRows ?? []) as any[]) rootTitleMap.set(r.id, r)
   }
+  // This caller's per-root read pointers for EVERY listed thread (not just the
+  // reply-derived ones) — needed so a brand-new thread with no replies can still
+  // read as unread.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const panelReadMap = new Map<string, string>()
+  if (panelRootIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: prr } = await (supabaseAdmin as any)
+      .from('internal_root_reads')
+      .select('root_message_id, last_read_at')
+      .eq('user_id', user.id)
+      .in('root_message_id', panelRootIds)
+    for (const r of (prr ?? []) as { root_message_id: string; last_read_at: string }[]) {
+      panelReadMap.set(r.root_message_id, r.last_read_at)
+    }
+  }
+
   const threads = panelRootIds.map(rid => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const meta = (threadMeta as any)[rid]
     const st = stateMap.get(rid)
     const root = rootTitleMap.get(rid)
+    // An explicitly-created thread owns its title; a thread derived from a reply
+    // falls back to the opening message (Slack behaviour), tombstone-safe.
+    const title = st?.title
+      ? st.title
+      : root
+        ? (root.deleted_at ? 'Message deleted' : (root.message || '📎 Attachment'))
+        : 'Unavailable'
+    // New for me = an unseen reply from someone else, OR an unseen opening
+    // message from someone else (so a brand-new thread shows bold + dot).
+    const lastRead = panelReadMap.get(rid)
+    const rootUnread = !!root && !root.deleted_at && root.sender_id !== user.id
+      && (!lastRead || String(root.created_at) > lastRead)
     return {
       root_id: rid,
-      title: root ? (root.deleted_at ? 'Message deleted' : (root.message || '📎 Attachment')) : 'Unavailable',
+      title,
       sender_name: root?.sender_name ?? null,
       reply_count: meta?.reply_count ?? 0,
       last_reply_at: meta?.last_reply_at ?? root?.created_at ?? null,
-      unread: meta?.unread ?? false,
+      unread: (meta?.unread ?? false) || rootUnread,
       status: st?.status ?? 'todo',
       assignee_id: st?.assignee_id ?? null,
       following: followSet.has(rid),

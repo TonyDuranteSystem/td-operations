@@ -209,7 +209,7 @@ export interface TeamNotifThreadRow {
 
 export interface TeamNotifItem {
   id: string
-  kind: 'dm' | 'mention' | 'conversation'
+  kind: 'dm' | 'mention' | 'conversation' | 'thread'
   /** Display label: the other person (DM), or the channel/conversation. */
   label: string
   count: number
