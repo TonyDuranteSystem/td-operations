@@ -101,6 +101,13 @@ export async function GET(
   for (const s of (stateRows ?? []) as { root_message_id: string; status: string; assignee_id: string | null }[]) {
     stateMap.set(s.root_message_id, { status: s.status, assignee_id: s.assignee_id })
   }
+  // Which of these threads THIS user follows (presence = following).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: followRows } = await (supabaseAdmin as any)
+    .from('internal_root_follows')
+    .select('root_message_id')
+    .eq('user_id', user.id)
+  const followSet = new Set<string>(((followRows ?? []) as { root_message_id: string }[]).map(f => f.root_message_id))
   // Fold status/assignee into thread_meta (so the in-stream affordance can show
   // a pill too).
   for (const rid of Object.keys(threadMeta)) {
@@ -141,6 +148,7 @@ export async function GET(
       unread: meta?.unread ?? false,
       status: st?.status ?? 'todo',
       assignee_id: st?.assignee_id ?? null,
+      following: followSet.has(rid),
     }
   })
 
