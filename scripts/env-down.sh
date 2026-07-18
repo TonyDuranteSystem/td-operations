@@ -8,6 +8,9 @@
 #
 # After it finishes: RESTART your Claude session so it reloads the sandbox .mcp.json.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib-local-stacks.sh
+. "$SCRIPT_DIR/lib-local-stacks.sh"
 
 WORKTREE="$(pwd)"
 PURGE=0
@@ -17,15 +20,30 @@ NAME="${ARGS[0]:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-' )}"
 STACK_DIR="$HOME/.td-local-stacks/$NAME"
 
 # ---- stop the stack --------------------------------------------------------
-if [ -d "$STACK_DIR/supabase" ]; then
+if [ -d "$STACK_DIR" ]; then
   echo "▶ stopping local stack '$NAME'…"
   if [ "$PURGE" = 1 ]; then
-    ( cd "$STACK_DIR" && supabase stop --no-backup >/dev/null 2>&1 || true )
-    rm -rf "$STACK_DIR"
-    echo "   purged stack dir + volume, slot freed"
+    # ORDER MATTERS. The old code stopped with its failure swallowed and then
+    # deleted the directory regardless — so a stop that silently did nothing
+    # left containers running with their config destroyed, i.e. unmanageable
+    # and unreclaimable forever (incident 2026-07-18, three stacks, ~3 GB).
+    # Now: stop, VERIFY, and only then delete.
+    if stack_force_stop "$NAME" "$STACK_DIR"; then
+      stack_remove_dir_if_stopped "$NAME" "$STACK_DIR" \
+        && echo "   purged stack dir + volumes, slot freed"
+    else
+      echo "   ⚠️  could not confirm the containers stopped — KEEPING the stack" >&2
+      echo "      directory so this stack stays reclaimable. Check Docker/Colima" >&2
+      echo "      is running and re-run, or: bash scripts/worktree-stack-sweep.sh" >&2
+      exit 1
+    fi
   else
     ( cd "$STACK_DIR" && supabase stop >/dev/null 2>&1 || true )
-    echo "   stopped (data kept; re-up is fast). Use --purge to reclaim disk."
+    if [ "$(stack_running_count "$NAME")" -gt 0 ]; then
+      echo "   ⚠️  some containers are still running — run again, or use --purge" >&2
+    else
+      echo "   stopped (data kept; re-up is fast). Use --purge to reclaim disk."
+    fi
   fi
 else
   echo "  (no stack dir for '$NAME' — nothing to stop)"
