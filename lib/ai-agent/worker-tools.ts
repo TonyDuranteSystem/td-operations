@@ -44,6 +44,14 @@ import { sendTelegramApprovalNotification } from "./telegram-notify"
 import { currentApprovalEnv } from "./approval-env"
 import { workerActionsEnabled, WORKER_ACTIONS_OFF_MESSAGE } from "./worker-actions-switch"
 import {
+  assertsAbsence,
+  hasSearchedForAbsence,
+  isCorrection,
+  buildAbsenceNudge,
+  buildCorrectionNudge,
+  looksLikeFailedLookup,
+} from "./answer-guards"
+import {
   readCodebaseFile,
   searchCodebase,
   CODEBASE_READ_DESCRIPTION,
@@ -89,6 +97,11 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Paperwork status: offers / lease / OA / e-sign / formation wizard in one
   // labeled read (council WS3.2) — the worker used to guess these via raw SQL.
   "get_client_paperwork",
+  // The two places the AI Venture Labs answer actually lived (dev job a6c3d75b):
+  // stored documents and the activity history. Before this, NO tool reached either
+  // and the worker was steered away from both.
+  "search_documents",
+  "get_client_history",
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",
@@ -284,7 +297,11 @@ export const RUN_SQL_QUERY_TOOL: ToolDef = {
   name: "run_sql_query",
   description: [
     "Run a READ-ONLY SQL query (SELECT or WITH … SELECT, single statement) to investigate client/business data the search tools cannot reach — e.g. account_contacts links, ss4_applications, service_deliveries, payments, wizard/portal state.",
+    "TWO TABLES PEOPLE FORGET, and they answer most \"when did we do X / where is the file for Y\" questions:",
+    "  • `documents` — every stored file for a client (file_name, document_type_name, flow_stage, created_at, drive_file_id, ocr_text). Receipts, signed forms and confirmations are filed HERE, not on the record they relate to.",
+    "  • `action_log` — the audit trail of what was DONE and WHEN (actor, action_type, summary, details JSONB, account_id, created_at). Faxes, stage advances, uploads, sends and field corrections are all recorded here. NOTE: some rows have a NULL account_id (e.g. a fax sent as a manual upload), so if an account-scoped search finds nothing, ALSO search the summary/details text.",
     "Writes and DDL are rejected. The auth schema and token/password tables are blocked and cannot be read.",
+    "IF YOU ARE UNSURE A TABLE OR COLUMN EXISTS, LOOK IT UP — `SELECT table_name FROM information_schema.tables WHERE table_schema='public'` and the matching columns query are both allowed. NEVER tell the staff member that a table, record or feature \"doesn't exist\" without having checked; that has caused real incidents.",
     "Use this in DIG-IN gear to verify a claim against the real data, and pair it with codebase_read to confirm how a feature behaves. Prefer specific columns + a LIMIT.",
   ].join("\n"),
   parameters: {
@@ -2881,6 +2898,24 @@ export async function runWorkerLoop(
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 
+  // ANSWER-GUARD state (dev job a6c3d75b). Each guard fires at most ONCE per turn,
+  // so the worst case is one extra loop iteration — never a loop, never a block.
+  let absenceLatched = false
+  let correctionLatched = false
+  // Lookups that actually RETURNED something (not an error). This — not the
+  // raw call list — is what counts as proof the worker searched.
+  const succeededTools: string[] = []
+  // The staff member's own words this turn, used to detect a push-back. Derived
+  // once from the user content (which may be a string or a block array).
+  const staffTurnText =
+    typeof userContent === "string"
+      ? userContent
+      : (userContent ?? [])
+          .filter((b): b is { type: "text"; text: string } => (b as { type?: string })?.type === "text")
+          .map((b) => b.text)
+          .join("\n")
+  const staffTurnIsCorrection = isCorrection(staffTurnText)
+
   // Anthropic tool format. Client tools (executed by executeWorkerTool) carry an
   // input_schema; ANTHROPIC SERVER tools (web_search / web_fetch — run on Anthropic's
   // side, returned as server_tool_use + *_tool_result blocks, never as client tool_use)
@@ -2965,6 +3000,45 @@ export async function runWorkerLoop(
     if (toolUseBlocks.length === 0 || data.stop_reason === "end_turn") {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reply = textBlocks.map((b: any) => b.text).join("\n") || ""
+
+      // ── ANSWER GUARDS (dev job a6c3d75b) ────────────────────────────────────
+      // The server checks the ANSWER against the TOOL TRACE before it ships. The
+      // prompt already forbids both of these failures verbatim and was ignored
+      // four times; this is the floor. Each latches ONCE (bounded: one extra
+      // iteration) and NUDGES rather than blocks — a gate that silently ate
+      // replies would be worse than the bug. Fails OPEN on any error.
+      if (reply) {
+        try {
+          // (a) About to say "it's not there" having run ZERO lookups.
+          if (!absenceLatched && assertsAbsence(reply) && !hasSearchedForAbsence(succeededTools)) {
+            absenceLatched = true
+            console.warn("[worker] absence claim with no lookup — forcing a search before replying")
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant", content: data.content },
+              { role: "user", content: buildAbsenceNudge() },
+            ]
+            continue
+          }
+          // (b) The human corrected it and it re-answered without checking anything.
+          //     This is what makes "the database and the screenshot both agree"
+          //     structurally impossible rather than merely forbidden.
+          if (!correctionLatched && staffTurnIsCorrection && succeededTools.length === 0) {
+            correctionLatched = true
+            console.warn("[worker] re-answered a correction with no lookup — forcing a fresh check")
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant", content: data.content },
+              { role: "user", content: buildCorrectionNudge() },
+            ]
+            continue
+          }
+        } catch (err) {
+          // Never let a guard cost the staff member their answer.
+          console.warn("[worker] answer guard failed (allowing the reply):", err)
+        }
+      }
+
       if (reply) return { reply, toolsUsed, reachedMaxLoops: false }
       if (toolUseBlocks.length === 0) {
         return { reply: "(no response generated)", toolsUsed, reachedMaxLoops: false }
@@ -2978,6 +3052,10 @@ export async function runWorkerLoop(
     for (const toolBlock of toolUseBlocks) {
       toolsUsed.push(toolBlock.name)
       const result = await executeWorkerTool(toolBlock.name, toolBlock.input || {}, availableToolNames, sourceMessageId, currentThreadId, sendContext)
+      // Only a lookup that actually CAME BACK counts as proof it searched. The
+      // incident's queries hit invented table names and errored; treating those as
+      // evidence would make the absence guard useless for the case it exists for.
+      if (!looksLikeFailedLookup(result)) succeededTools.push(toolBlock.name)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,

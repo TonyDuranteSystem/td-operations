@@ -175,6 +175,32 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'search_documents',
+    description: 'Search a client\'s STORED DOCUMENTS — the files actually on record for them (signed forms, receipts, confirmations, articles, statements). Receipts and confirmations are filed HERE, not on the record they relate to: a fax receipt, for example, is a document on the account. Returns file name, type, the flow stage it was filed at, when it was created, and whether the file is in Drive. ALWAYS check this before telling anyone a document or a date "is not in the system". Provide account_id and/or contact_id; optionally a name filter.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account (LLC) UUID.' },
+        contact_id: { type: 'string', description: 'Contact (person) UUID.' },
+        name_contains: { type: 'string', description: 'Optional: only files whose name contains this text (e.g. "fax", "SS-4").' },
+        limit: { type: 'number', description: 'Max rows (default 25).' },
+      },
+    },
+  },
+  {
+    name: 'get_client_history',
+    description: 'The ACTIVITY HISTORY for a client — what was actually DONE and WHEN (faxes sent, stage advances, documents uploaded, messages sent, fields corrected), newest first, with who did it. This is the audit trail behind the CRM screens. Use it for any "when did we…", "did we already…", or "who changed this…" question, and ALWAYS before saying an event was not recorded. Optionally filter by a keyword (matched against the summary and the details) — useful because a few entries are recorded without an account attached, e.g. a fax sent as a manual upload.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account (LLC) UUID.' },
+        contact_id: { type: 'string', description: 'Contact (person) UUID.' },
+        contains: { type: 'string', description: 'Optional keyword matched against the summary/details — also finds entries with no account attached (e.g. "fax", the company name).' },
+        limit: { type: 'number', description: 'Max rows (default 30).' },
+      },
+    },
+  },
+  {
     name: 'get_client_paperwork',
     description: 'Get the STATUS of a client\'s paperwork in one labeled read: offers (sent/viewed/signed), the office lease, the operating agreement (OA), any e-signature requests, and formation-wizard progress. Use this to answer "did they sign the offer/lease/OA?", "what e-sign is pending?", or "where is their formation wizard stuck?". Provide account_id (LLC) and/or contact_id (person).',
     parameters: {
@@ -637,6 +663,8 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_deals': return await searchDeals(params)
       case 'search_portal_messages': return await searchPortalMessages(params)
       case 'search_conversations': return await searchConversations(params)
+      case 'search_documents': return await searchDocuments(params)
+      case 'get_client_history': return await getClientHistory(params)
       case 'get_client_paperwork': return await getClientPaperwork(params)
       case 'create_task': return await createTask(params)
       case 'send_email': return await sendEmail(params)
@@ -966,6 +994,154 @@ async function searchConversations(p: any) {
 // Read-only; the worker previously had to guess at these tables via raw SQL, or
 // substituted lead/deal proxies for offers. WS3.2 (council).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+/**
+ * Stored documents for a client (dev job a6c3d75b). THE gap behind the AI Venture
+ * Labs incident: no tool reached `documents` at all, so the fax receipt — which was
+ * sitting right there, in Drive, with its date — was only findable by hand-written
+ * SQL against a table the worker was never told existed.
+ *
+ * Errors surface explicitly. A failed lookup must NEVER read as "no documents".
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function searchDocuments(p: any) {
+  const accountId = typeof p.account_id === 'string' && p.account_id ? p.account_id : null
+  const contactId = typeof p.contact_id === 'string' && p.contact_id ? p.contact_id : null
+  const nameContains = typeof p.name_contains === 'string' && p.name_contains.trim() ? p.name_contains.trim() : null
+  const limit = Math.min(Math.max(Number(p.limit) || 25, 1), 100)
+  if (!accountId && !contactId) {
+    return JSON.stringify({ error: 'Provide account_id and/or contact_id.' })
+  }
+
+  let q = supabaseAdmin
+    .from('documents')
+    .select('file_name, document_type_name, category_name, flow_stage, created_at, drive_file_id, drive_link, portal_visible, ocr_text')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  q = accountId && contactId
+    ? q.or(`account_id.eq.${accountId},contact_id.eq.${contactId}`)
+    : accountId
+      ? q.eq('account_id', accountId)
+      : q.eq('contact_id', contactId)
+  if (nameContains) q = q.ilike('file_name', `%${nameContains}%`)
+
+  const { data, error } = await q
+  if (error) {
+    return JSON.stringify({
+      lookup_failed: true,
+      error: error.message,
+      note: 'This lookup FAILED — that is NOT the same as "no documents exist". Say the lookup failed and try another way (the activity history, Drive, or a direct query).',
+    })
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const documents = (data ?? []).map((d: any) => ({
+    file_name: d.file_name,
+    type: d.document_type_name || d.category_name || null,
+    flow_stage: d.flow_stage,
+    created_at: d.created_at,
+    in_drive: !!d.drive_file_id,
+    drive_link: d.drive_link ?? null,
+    portal_visible: d.portal_visible,
+    // Scanned files often have no extracted text — say so rather than implying empty.
+    has_extracted_text: !!d.ocr_text,
+    text_preview: d.ocr_text ? String(d.ocr_text).slice(0, 500) : null,
+  }))
+
+  return JSON.stringify({
+    scope: { ...(accountId ? { account_id: accountId } : {}), ...(contactId ? { contact_id: contactId } : {}) },
+    ...(nameContains ? { name_contains: nameContains } : {}),
+    count: documents.length,
+    documents,
+    note: documents.length === 0
+      ? 'No documents matched THIS filter. Before saying a file does not exist, retry without name_contains and also check the activity history (get_client_history) — some events are recorded there without a document row.'
+      : 'A document\'s created_at is when it was FILED, which for a receipt/confirmation is effectively when the thing happened. "has_extracted_text: false" means the file is a scan whose text has not been extracted — open it in Drive rather than assuming it is empty.',
+  })
+}
+
+/**
+ * The client's activity history — the audit trail behind the CRM screens
+ * (dev job a6c3d75b). Answers "when did we…", "did we already…", "who changed…".
+ *
+ * `contains` also matches rows with NO account attached: a fax sent as a manual
+ * upload records the company in its summary but leaves account_id null, which is
+ * exactly why an account-scoped search missed the AI Venture Labs fax.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getClientHistory(p: any) {
+  const accountId = typeof p.account_id === 'string' && p.account_id ? p.account_id : null
+  const contactId = typeof p.contact_id === 'string' && p.contact_id ? p.contact_id : null
+  const contains = typeof p.contains === 'string' && p.contains.trim() ? p.contains.trim() : null
+  const limit = Math.min(Math.max(Number(p.limit) || 30, 1), 100)
+  if (!accountId && !contactId && !contains) {
+    return JSON.stringify({ error: 'Provide account_id and/or contact_id, or a `contains` keyword.' })
+  }
+
+  const cols = 'created_at, actor, action_type, summary, details, account_id, contact_id'
+  const runScoped = async () => {
+    if (!accountId && !contactId) return { data: [], error: null }
+    let q = supabaseAdmin.from('action_log').select(cols).order('created_at', { ascending: false }).limit(limit)
+    q = accountId && contactId
+      ? q.or(`account_id.eq.${accountId},contact_id.eq.${contactId}`)
+      : accountId
+        ? q.eq('account_id', accountId)
+        : q.eq('contact_id', contactId)
+    return await q
+  }
+  // Text sweep — deliberately NOT account-scoped, so unattached rows are found.
+  const runContains = async () => {
+    if (!contains) return { data: [], error: null }
+    const safe = contains.replace(/[%,()]/g, ' ')
+    return await supabaseAdmin
+      .from('action_log')
+      .select(cols)
+      .or(`summary.ilike.%${safe}%,details.ilike.%${safe}%`)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+  }
+
+  const [scoped, matched] = await Promise.all([runScoped(), runContains()])
+  const failures: string[] = []
+  if (scoped.error) failures.push(`scoped: ${scoped.error.message}`)
+  if (matched.error) failures.push(`keyword: ${matched.error.message}`)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const seen = new Set<string>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const merge = (rows: any[]) => rows.filter((r) => {
+    const k = `${r.created_at}|${r.action_type}|${r.summary}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  const entries = merge([...(scoped.data ?? []), ...(matched.data ?? [])])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, limit)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((r: any) => ({
+      when: r.created_at,
+      who: r.actor,
+      what: r.action_type,
+      summary: r.summary,
+      details: r.details,
+      unattached: !r.account_id && !r.contact_id,
+    }))
+
+  return JSON.stringify({
+    scope: {
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(contactId ? { contact_id: contactId } : {}),
+      ...(contains ? { contains } : {}),
+    },
+    count: entries.length,
+    entries,
+    ...(failures.length ? { lookup_errors: failures, lookup_failed: true } : {}),
+    note: failures.length
+      ? 'One or more lookups FAILED — that is NOT "nothing happened". Say the lookup failed and try another way.'
+      : 'Newest first. "unattached: true" means the entry carries no client link — those are only found via `contains`, so if an account-scoped search came back empty, retry with a keyword (the company name, "fax", etc.) before concluding it never happened.',
+  })
+}
+
 async function getClientPaperwork(p: any) {
   const accountId = typeof p.account_id === 'string' && p.account_id ? p.account_id : null
   const contactId = typeof p.contact_id === 'string' && p.contact_id ? p.contact_id : null
