@@ -9,7 +9,7 @@ import {
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
   MessageSquare, Bot, Building2, Slack, ExternalLink,
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
-  Bell, BellOff,
+  Bell, BellOff, Archive, ArchiveRestore,
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
@@ -89,6 +89,9 @@ export default function TeamWorkspacePage() {
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; thread_id: string; thread_label: string; message: string; sender_name: string; created_at: string }[] | null>(null)
   const [reactFor, setReactFor] = useState<string | null>(null)
+  // Which message's touch (⋯) menu is open — ONE at a time, like reactFor. Held
+  // per-row it meant row A's full-screen backdrop swallowed the tap on row B.
+  const [touchMenuFor, setTouchMenuFor] = useState<string | null>(null)
   // Slack threads: per-root metadata (reply counts + unread) and the currently
   // open thread pane (a root message id, or null when no pane is open).
   const [threadMeta, setThreadMeta] = useState<Record<string, ThreadMeta>>({})
@@ -101,6 +104,9 @@ export default function TeamWorkspacePage() {
   // Board = every thread across every channel.
   const [allThreads, setAllThreads] = useState<BoardThread[]>([])
   const [showNewThread, setShowNewThread] = useState(false)
+  // Archived threads: hidden from the panel AND the channel stream until the
+  // archive view is switched on (that's what "remove it" has to mean).
+  const [showArchived, setShowArchived] = useState(false)
   // Thread pane width (desktop only — the pane is full-width on mobile).
   // Starts at the default so server and first client render agree; the stored
   // value is applied in an effect after mount.
@@ -121,6 +127,11 @@ export default function TeamWorkspacePage() {
   // Refs so the once-subscribed realtime handler reads live values.
   const currentUserIdRef = useRef<string | null>(null)
   const openRootIdRef = useRef<string | null>(null)
+  // Read by loadMessages so toggling the archive view doesn't rebuild that
+  // callback (it sits in a dozen dependency arrays).
+  const showArchivedRef = useRef(false)
+  // Threads with a delete in flight — guards against a double tap.
+  const deletingRef = useRef<Set<string>>(new Set())
   const messagesRef = useRef<TeamMsg[]>([])
   // A thread the user asked to open from the Board, waiting for its channel to load.
   const pendingOpenRef = useRef<{ threadId: string; rootId: string } | null>(null)
@@ -132,16 +143,22 @@ export default function TeamWorkspacePage() {
   currentUserIdRef.current = currentUserId
   openRootIdRef.current = openRootId
   messagesRef.current = messages
+  showArchivedRef.current = showArchived
 
   // Slack threads are a channel/general feature; DMs and client discussions keep
   // the flat inline layout (and their @claude continuation) unchanged.
   const isThreadedChannel = !!selected && (selected.thread_type === 'channel' || selected.thread_type === 'general')
   // The main channel stream shows ROOTS only (incl. soft-deleted roots as
   // tombstones so their replies stay attached); replies live in the pane.
-  const streamMessages = useMemo(
-    () => (isThreadedChannel ? messages.filter(m => !m.root_id) : messages),
-    [isThreadedChannel, messages],
-  )
+  const streamMessages = useMemo(() => {
+    if (!isThreadedChannel) return messages
+    // An archived thread leaves the channel too — otherwise "removed" still
+    // stares back at you from the stream with its reply count. Derived from the
+    // SAME threads[] the panel reads, so the two can never disagree about what
+    // is hidden.
+    const hidden = showArchived ? null : new Set(threadsList.filter(t => t.archived).map(t => t.root_id))
+    return messages.filter(m => !m.root_id && !(hidden?.has(m.id)))
+  }, [isThreadedChannel, messages, threadsList, showArchived])
   const paneRoot = useMemo(() => (openRootId ? messages.find(m => m.id === openRootId) ?? null : null), [openRootId, messages])
   const paneReplies = useMemo(() => (openRootId ? messages.filter(m => m.root_id === openRootId) : []), [openRootId, messages])
 
@@ -219,7 +236,7 @@ export default function TeamWorkspacePage() {
   const loadMessages = useCallback(async (threadId: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoadingMsgs(true)
     try {
-      const r = await fetch(`/api/team/threads/${threadId}`)
+      const r = await fetch(`/api/team/threads/${threadId}${showArchivedRef.current ? '?include_archived=1' : ''}`)
       if (!r.ok) throw new Error('Failed')
       const d = await r.json()
       // Ignore a stale response: if the user switched threads while this was in
@@ -589,10 +606,13 @@ export default function TeamWorkspacePage() {
   const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
 
   // Set a thread's management status and/or assignee (Threads panel + pane).
-  const setThreadState = useCallback(async (rootId: string, patch: { status?: TeamWorkStatus; assignee_id?: string | null }, channelId?: string) => {
-    // Optimistic local update.
-    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } : t))
-    setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } : t))
+  const setThreadState = useCallback(async (rootId: string, patch: { status?: TeamWorkStatus; assignee_id?: string | null; title?: string | null }, channelId?: string) => {
+    // Optimistic local update. A cleared title falls back to the opening
+    // message, which only the server knows — so on a clear we reconcile from
+    // the reload rather than guessing a title here.
+    const titlePatch = patch.title ? { title: patch.title } : {}
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}), ...titlePatch } : t))
+    setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}), ...titlePatch } : t))
     setThreadMeta(prev => prev[rootId] ? { ...prev, [rootId]: { ...prev[rootId], ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } } : prev)
     // Target the thread's OWN channel (Board rows come from other channels).
     const tid = channelId ?? selectedIdRef.current
@@ -629,17 +649,33 @@ export default function TeamWorkspacePage() {
   }, [loadMessages, openThread])
 
   // Every thread across every channel (the Board).
-  const loadAllThreads = useCallback(async () => {
+  // Failures are SURFACED (R099), not swallowed: an empty board and a broken
+  // board looked identical before, which is exactly how a missing database
+  // change would ship unnoticed.
+  const loadAllThreads = useCallback(async (includeArchived = false) => {
     try {
-      const r = await fetch('/api/team/all-threads')
-      if (!r.ok) return
+      const r = await fetch(`/api/team/all-threads${includeArchived ? '?include_archived=1' : ''}`)
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not load the thread board.') }
       const d = await r.json()
       setAllThreads(d.threads ?? [])
-    } catch { /* board just stays as-is */ }
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not load the thread board.')
+    }
   }, [])
 
-  // The Board is cross-channel — load it whenever it's shown.
-  useEffect(() => { if (view === 'board') loadAllThreads() }, [view, loadAllThreads])
+  // The Board is cross-channel — load it whenever it's shown. ONE archive view
+  // is shared with the Threads panel, so the Board is also where you restore a
+  // thread you archived in a channel you're no longer sitting in.
+  useEffect(() => { if (view === 'board') loadAllThreads(showArchived) }, [view, loadAllThreads, showArchived])
+
+  // Flipping the archive view changes what the SERVER returns, so refetch once.
+  // Deliberately keyed on showArchived alone — adding selectedId/loadMessages
+  // would refire this on every channel switch and message load.
+  useEffect(() => {
+    const tid = selectedIdRef.current
+    if (tid) loadMessages(tid, { silent: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showArchived])
 
   // Open a thread that may live in ANOTHER channel (clicked on the Board).
   // Switching channel resets the pane, so the request is parked in a ref and
@@ -672,6 +708,67 @@ export default function TeamWorkspacePage() {
       loadMessages(tid, { silent: true })
     }
   }, [loadMessages])
+
+  // Rename a thread. Blank clears the name, falling back to the opening message.
+  const renameThread = useCallback(async (rootId: string, title: string, channelId?: string) => {
+    await setThreadState(rootId, { title: title.trim() || null }, channelId)
+    const tid = channelId ?? selectedIdRef.current
+    if (tid) loadMessages(tid, { silent: true })
+    loadAllThreads(showArchivedRef.current)
+  }, [setThreadState, loadMessages, loadAllThreads])
+
+  /**
+   * Archive (hide) a thread or bring it back. Reversible and destroys nothing —
+   * the default way to get a thread off the boards.
+   */
+  const setThreadArchived = useCallback(async (rootId: string, archived: boolean, channelId?: string) => {
+    const tid = channelId ?? selectedIdRef.current
+    if (!tid) return
+    // Drop it from view immediately; close its pane if it was open.
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, archived } : t))
+    setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, archived } : t))
+    if (archived && openRootIdRef.current === rootId) setOpenRootId(null)
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/thread-remove`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId, archived }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not archive the thread.') }
+      toast.success(archived ? 'Thread archived.' : 'Thread restored.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not archive the thread.')
+    }
+    loadMessages(tid, { silent: true })
+    loadAllThreads(showArchivedRef.current)
+  }, [loadMessages, loadAllThreads])
+
+  /**
+   * Delete a thread outright. The server only allows this while you are the
+   * only person who has posted in it — anything else comes back as a refusal
+   * telling you to archive instead, which we surface verbatim (R099).
+   */
+  const deleteThread = useCallback(async (rootId: string, channelId?: string) => {
+    const tid = channelId ?? selectedIdRef.current
+    if (!tid) return
+    // A second tap would hit an already-deleted root and toast "not found"
+    // straight after "Thread deleted."
+    if (deletingRef.current.has(rootId)) return
+    deletingRef.current.add(rootId)
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/thread-remove?root_id=${encodeURIComponent(rootId)}`, { method: 'DELETE' })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not delete the thread.') }
+      if (openRootIdRef.current === rootId) setOpenRootId(null)
+      setThreadsList(prev => prev.filter(t => t.root_id !== rootId))
+      setAllThreads(prev => prev.filter(t => t.root_message_id !== rootId))
+      setMessages(prev => prev.filter(m => m.id !== rootId && m.root_id !== rootId))
+      toast.success('Thread deleted.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not delete the thread.')
+    } finally {
+      deletingRef.current.delete(rootId)
+    }
+    loadMessages(tid, { silent: true })
+    loadAllThreads(showArchivedRef.current)
+  }, [loadMessages, loadAllThreads])
 
   // Replay a Board click: once the thread's channel has loaded, open its pane —
   // fetching that one thread on demand when its opening message is older than the
@@ -890,7 +987,10 @@ export default function TeamWorkspacePage() {
         </div>
         <TeamBoard threads={allThreads}
           onStatusChange={(rootId, status, channelId) => setThreadState(rootId, { status }, channelId)}
-          onOpenThread={(threadId, rootId) => openThreadInChannel(threadId, rootId)} />
+          onOpenThread={(threadId, rootId) => openThreadInChannel(threadId, rootId)}
+          showArchived={showArchived}
+          onToggleArchived={setShowArchived}
+          onRestore={(rootId, channelId) => setThreadArchived(rootId, false, channelId)} />
       </div>
     )
   }
@@ -1222,7 +1322,8 @@ export default function TeamWorkspacePage() {
                           onEdit={() => { setEditing(m); setText(m.message); inputRef.current?.focus() }}
                           onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
                           onReact={emoji => toggleReaction(m.id, emoji)}
-                          reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)} />
+                          reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)}
+                          touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)} />
                         {meta && meta.reply_count > 0 && (
                           <button onClick={() => openThread(m.id)} className={cn('ml-11 mb-1 flex items-center gap-2 text-xs text-blue-600 hover:underline', meta.unread ? 'font-bold' : 'font-medium')}>
                             {meta.unread && <span className="w-2 h-2 rounded-full bg-blue-500" />}
@@ -1257,8 +1358,13 @@ export default function TeamWorkspacePage() {
                   className="flex-1 md:flex-none md:w-[var(--thread-pane-w)] border-zinc-200 flex flex-col min-h-0 bg-white"
                 >
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
-                    <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><MessageSquare className="h-4 w-4" /> Thread</span>
-                    <div className="flex items-center gap-2">
+                    {/* The thread's NAME is the header — renaming it here is the
+                        obvious place to look for it. */}
+                    <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5 min-w-0">
+                      <MessageSquare className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{threadsList.find(t => t.root_id === openRootId)?.title ?? 'Thread'}</span>
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
                       {/* Follow bell — follow/unfollow this thread from inside it. */}
                       {(() => { const ti = threadsList.find(t => t.root_id === openRootId); const following = ti?.following ?? false; return (
                         <button onClick={() => { if (openRootId) setThreadFollow(openRootId, !following) }}
@@ -1285,6 +1391,16 @@ export default function TeamWorkspacePage() {
                           </div>
                         )}
                       </div>
+                      {/* Rename / Archive / Delete — same menu as the panel row. */}
+                      {(() => {
+                        const ti = threadsList.find(t => t.root_id === openRootId)
+                        return ti ? (
+                          <ThreadActionsMenu thread={ti} currentUserId={currentUserId}
+                            onRename={(rid, title) => renameThread(rid, title)}
+                            onArchive={(rid, archived) => setThreadArchived(rid, archived)}
+                            onDelete={rid => deleteThread(rid)} />
+                        ) : null
+                      })()}
                       <button onClick={closeThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
                     </div>
                   </div>
@@ -1296,7 +1412,8 @@ export default function TeamWorkspacePage() {
                         onEdit={() => { setEditing(paneRoot); setText(paneRoot.message); inputRef.current?.focus() }}
                         onDelete={() => deleteMsg(paneRoot)} onPin={() => togglePin(paneRoot)}
                         onReact={emoji => toggleReaction(paneRoot.id, emoji)}
-                        reactOpen={reactFor === paneRoot.id} setReactOpen={open => setReactFor(open ? paneRoot.id : null)} />
+                        reactOpen={reactFor === paneRoot.id} setReactOpen={open => setReactFor(open ? paneRoot.id : null)}
+                        touchMenu={touchMenuFor === paneRoot.id} setTouchMenu={open => setTouchMenuFor(open ? paneRoot.id : null)} />
                     ) : (
                       <div className="text-xs text-zinc-400 py-4 text-center">This thread&apos;s original message isn&apos;t loaded.</div>
                     )}
@@ -1310,7 +1427,8 @@ export default function TeamWorkspacePage() {
                         onEdit={() => { setEditing(m); setText(m.message); inputRef.current?.focus() }}
                         onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
                         onReact={emoji => toggleReaction(m.id, emoji)}
-                        reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)} />
+                        reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)}
+                        touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)} />
                     ))}
                   </div>
                 </div>
@@ -1428,6 +1546,12 @@ export default function TeamWorkspacePage() {
                   onSetStatus={(rid, status) => setThreadState(rid, { status })}
                   onSetAssignee={(rid, aid) => setThreadState(rid, { assignee_id: aid })}
                   onSetFollow={(rid, f) => setThreadFollow(rid, f)}
+                  currentUserId={currentUserId}
+                  showArchived={showArchived}
+                  onToggleArchived={setShowArchived}
+                  onRename={(rid, title) => renameThread(rid, title)}
+                  onArchive={(rid, archived) => setThreadArchived(rid, archived)}
+                  onDelete={rid => deleteThread(rid)}
                 />
               </div>
             )}
@@ -1494,22 +1618,31 @@ function NewThreadModal({ channelName, onClose, onCreate }: {
   )
 }
 
-function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow }: {
+function ThreadsPanel({ channelName, threads, members, currentUserId, showArchived, onToggleArchived, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow, onRename, onArchive, onDelete }: {
   channelName: string
   threads: ThreadListItem[]
   members: TeamMember[]
+  currentUserId: string | null
+  showArchived: boolean
+  onToggleArchived: (show: boolean) => void
   onClose: () => void
   onOpen: (rootId: string) => void
   onSetStatus: (rootId: string, status: TeamWorkStatus) => void
   onSetAssignee: (rootId: string, assigneeId: string | null) => void
   onSetFollow: (rootId: string, follow: boolean) => void
+  onRename: (rootId: string, title: string) => void
+  onArchive: (rootId: string, archived: boolean) => void
+  onDelete: (rootId: string) => void
 }) {
   const [stage, setStage] = useState<string>('all')
   const [followingOnly, setFollowingOnly] = useState(false)
   const [menu, setMenu] = useState<string | null>(null)
   // Stage filter: 'all' = everything, 'new' = unread only, a status = that status
-  // OR unread (a new reply is NEVER hidden by the filter). Plus a Following-only view.
+  // OR unread (a new reply is NEVER hidden by the filter). Plus a Following-only
+  // view. Archived threads are out unless the archive view is on — and then they
+  // are ALL you see, so restoring one is a short list, not a hunt.
   const filtered = sortPanelThreads(threads, false).filter(t => {
+    if (showArchived !== !!t.archived) return false
     if (followingOnly && !t.following) return false
     if (stage === 'all') return true
     if (stage === 'new') return t.unread
@@ -1535,10 +1668,18 @@ function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetSta
           className={cn('ml-auto text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 whitespace-nowrap', followingOnly ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}>
           <Bell className="h-3 w-3" /> Following
         </button>
+        <button onClick={() => onToggleArchived(!showArchived)}
+          className={cn('text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 whitespace-nowrap', showArchived ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+          title={showArchived ? 'Back to active threads' : 'Show archived threads'}>
+          <Archive className="h-3 w-3" /> Archived
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-1.5" onClick={() => setMenu(null)}>
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2"><MessageSquare className="h-9 w-9" /><p className="text-sm">No threads here. Reply on a message to start one.</p></div>
+          <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2">
+            {showArchived ? <><Archive className="h-9 w-9" /><p className="text-sm">No archived threads here.</p></>
+              : <><MessageSquare className="h-9 w-9" /><p className="text-sm">No threads here. Reply on a message to start one.</p></>}
+          </div>
         ) : filtered.map(t => {
           const assignee = nameFor(t.assignee_id)
           return (
@@ -1564,6 +1705,12 @@ function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetSta
                   {t.unread && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}{t.title}
                 </p>
                 <p className="text-[11px] text-zinc-400 truncate">{t.sender_name ? `${t.sender_name} · ` : ''}{t.reply_count} {t.reply_count === 1 ? 'reply' : 'replies'}{t.last_reply_at ? ` · ${format(new Date(t.last_reply_at), 'MMM d, HH:mm')}` : ''}</p>
+                {t.archived && (
+                  <p className="text-[11px] text-amber-600 truncate flex items-center gap-1">
+                    <Archive className="h-3 w-3 shrink-0" />
+                    Archived{t.archived_by ? ` by ${nameFor(t.archived_by) ?? 'someone'}` : ''}{t.archived_at ? ` · ${format(new Date(t.archived_at), 'MMM d, HH:mm')}` : ''}
+                  </p>
+                )}
               </button>
               {/* Follow bell */}
               <button onClick={e => { e.stopPropagation(); onSetFollow(t.root_id, !t.following) }}
@@ -1586,6 +1733,8 @@ function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetSta
                   </div>
                 )}
               </div>
+              <ThreadActionsMenu thread={t} currentUserId={currentUserId}
+                onRename={onRename} onArchive={onArchive} onDelete={onDelete} />
             </div>
           )
         })}
@@ -1683,12 +1832,104 @@ function ThreadRow({ t, selected, onClick, icon, label, resolved }: { t: TeamThr
   )
 }
 
-function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEdit, onDelete, onPin, onReact, reactOpen, setReactOpen }: {
+/**
+ * Rename / Archive / Delete for ONE thread — the same menu in the thread pane
+ * header and on every Threads-panel row, so the two can't drift.
+ *
+ * Delete is only offered to the person who opened the thread AND only while
+ * nobody else has replied; everyone else sees Archive, which hides the thread
+ * reversibly without destroying anyone's words. The server enforces both rules
+ * independently — this is the affordance, not the guard.
+ */
+function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelete, align = 'right' }: {
+  thread: ThreadListItem
+  currentUserId: string | null
+  onRename: (rootId: string, title: string) => void
+  onArchive: (rootId: string, archived: boolean) => void
+  onDelete: (rootId: string) => void
+  align?: 'left' | 'right'
+}) {
+  const [open, setOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [draft, setDraft] = useState(thread.title)
+
+  const deletable = !!currentUserId && thread.root_sender_id === currentUserId && thread.reply_count === 0
+  const close = () => { setOpen(false); setRenaming(false); setConfirmDel(false) }
+
+  return (
+    <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
+      <button onClick={() => { setDraft(thread.title); setOpen(v => !v) }}
+        className="p-2 -m-1 rounded-full text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100" aria-label="Thread actions">
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={close} />
+          <div className={cn('absolute top-full mt-1 z-40 w-56 bg-white border border-zinc-200 rounded-xl shadow-lg py-1', align === 'right' ? 'right-0' : 'left-0')}>
+            {renaming ? (
+              <div className="p-2.5">
+                <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { onRename(thread.root_id, draft); close() } if (e.key === 'Escape') close() }}
+                  placeholder="Thread name"
+                  className="w-full text-sm px-2 py-1.5 border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                <p className="text-[10px] text-zinc-400 mt-1">Leave blank to use the opening message.</p>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => { onRename(thread.root_id, draft); close() }}
+                    className="flex-1 min-h-[36px] text-xs font-medium rounded-lg bg-zinc-800 text-white hover:bg-zinc-900">Save</button>
+                  <button onClick={close} className="flex-1 min-h-[36px] text-xs font-medium rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50">Cancel</button>
+                </div>
+              </div>
+            ) : confirmDel ? (
+              <div className="p-2.5">
+                <p className="text-xs text-zinc-600 mb-2">Delete this thread for everyone? This can&apos;t be undone.</p>
+                <div className="flex gap-2">
+                  <button onClick={() => { onDelete(thread.root_id); close() }}
+                    className="flex-1 min-h-[36px] text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+                  <button onClick={close} className="flex-1 min-h-[36px] text-xs font-medium rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <TouchAction icon={<Pencil className="h-4 w-4" />} label="Rename topic" onClick={() => setRenaming(true)} />
+                {thread.archived ? (
+                  <TouchAction icon={<ArchiveRestore className="h-4 w-4" />} label="Restore thread" onClick={() => { onArchive(thread.root_id, false); close() }} />
+                ) : (
+                  <TouchAction icon={<Archive className="h-4 w-4" />} label="Archive thread" onClick={() => { onArchive(thread.root_id, true); close() }} />
+                )}
+                {deletable && <TouchAction icon={<Trash2 className="h-4 w-4" />} label="Delete thread" danger onClick={() => setConfirmDel(true)} />}
+                {!deletable && (
+                  <p className="px-3 py-2 text-[10px] leading-snug text-zinc-400 border-t border-zinc-100 mt-1">
+                    Archiving hides it and can be undone. Delete is only available on a thread nobody has replied to yet.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** One row in a touch menu — a full-width, ≥44px target (a 22px icon is not tappable). */
+function TouchAction({ icon, label, onClick, danger }: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button onClick={onClick}
+      className={cn('w-full flex items-center gap-3 px-3 min-h-[44px] text-sm text-left active:bg-zinc-100', danger ? 'text-red-600' : 'text-zinc-700')}>
+      {icon}{label}
+    </button>
+  )
+}
+
+function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEdit, onDelete, onPin, onReact, reactOpen, setReactOpen, touchMenu, setTouchMenu }: {
   m: TeamMsg; isMe: boolean; isClaude: boolean; canDelete: boolean; currentUserId: string | null
   onReply: () => void; onEdit: () => void; onDelete: () => void; onPin: () => void; onReact: (e: string) => void
   reactOpen: boolean; setReactOpen: (o: boolean) => void
+  touchMenu: boolean; setTouchMenu: (o: boolean) => void
 }) {
   const isDeleted = !!m.deleted_at
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const attachments = m.attachments?.length ? m.attachments : (m.attachment_url ? [{ url: m.attachment_url, name: m.attachment_name ?? 'file' }] : [])
   const grouped = useMemo(() => {
     const map = new Map<string, { emoji: string; count: number; mine: boolean }>()
@@ -1741,18 +1982,65 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
             )}
           </div>
 
-          {/* Hover actions */}
+          {/* Actions. Desktop keeps the familiar hover row; TOUCH gets an
+              always-visible ⋯ opening a menu with full-size targets — a hover
+              row is unreachable on a phone, and Antonio runs the whole CRM as a
+              ~380px PWA. Delete asks first on both. */}
           {!isDeleted && (
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity relative">
-              <button onClick={() => setReactOpen(!reactOpen)} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="React"><Smile className="h-3.5 w-3.5" /></button>
-              <button onClick={onReply} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Reply"><CornerUpLeft className="h-3.5 w-3.5" /></button>
-              <button onClick={onPin} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title={m.pinned_at ? 'Unpin' : 'Pin'}>{m.pinned_at ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button>
-              {isMe && !isClaude && <button onClick={onEdit} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Edit"><Pencil className="h-3.5 w-3.5" /></button>}
-              {canDelete && <button onClick={onDelete} className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-zinc-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>}
+            <div className="flex items-center gap-0.5 relative">
+              {/* Desktop hover row */}
+              <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => setReactOpen(!reactOpen)} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="React"><Smile className="h-3.5 w-3.5" /></button>
+                <button onClick={onReply} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Reply"><CornerUpLeft className="h-3.5 w-3.5" /></button>
+                <button onClick={onPin} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title={m.pinned_at ? 'Unpin' : 'Pin'}>{m.pinned_at ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button>
+                {isMe && !isClaude && <button onClick={onEdit} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Edit"><Pencil className="h-3.5 w-3.5" /></button>}
+                {canDelete && <button onClick={() => setConfirmDelete(true)} className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-zinc-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>}
+              </div>
+
+              {/* Touch: always-visible ⋯ */}
+              <button onClick={() => setTouchMenu(!touchMenu)}
+                className="md:hidden relative z-40 p-2 -m-0.5 rounded-full text-zinc-400 active:bg-zinc-100" aria-label="Message actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+
               {reactOpen && (
-                <div className="absolute bottom-full mb-1 bg-white border border-zinc-200 rounded-full shadow-lg px-1.5 py-1 flex gap-0.5 z-20">
-                  {QUICK_EMOJIS.map(e => <button key={e} onClick={() => onReact(e)} className="hover:scale-125 transition-transform text-sm">{e}</button>)}
-                </div>
+                <>
+                  {/* Touch has no hover-out, so the picker needs a way to close. */}
+                  <div className="fixed inset-0 z-30" onClick={() => setReactOpen(false)} />
+                  <div className="absolute bottom-full mb-1 bg-white border border-zinc-200 rounded-full shadow-lg px-1.5 py-1 flex gap-0.5 z-40">
+                    {QUICK_EMOJIS.map(e => <button key={e} onClick={() => onReact(e)} className="hover:scale-125 transition-transform text-base p-1">{e}</button>)}
+                  </div>
+                </>
+              )}
+
+              {touchMenu && (
+                <>
+                  {/* Tap-anywhere-to-close backdrop — a phone has no Escape key. */}
+                  <div className="fixed inset-0 z-30 md:hidden" onClick={() => setTouchMenu(false)} />
+                  <div className={cn('absolute bottom-full mb-1 z-40 w-44 bg-white border border-zinc-200 rounded-xl shadow-lg py-1 md:hidden', isMe ? 'left-0' : 'right-0')}>
+                    <TouchAction icon={<Smile className="h-4 w-4" />} label="React" onClick={() => { setTouchMenu(false); setReactOpen(true) }} />
+                    <TouchAction icon={<CornerUpLeft className="h-4 w-4" />} label="Reply" onClick={() => { setTouchMenu(false); onReply() }} />
+                    <TouchAction icon={m.pinned_at ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />} label={m.pinned_at ? 'Unpin' : 'Pin'} onClick={() => { setTouchMenu(false); onPin() }} />
+                    {isMe && !isClaude && <TouchAction icon={<Pencil className="h-4 w-4" />} label="Edit" onClick={() => { setTouchMenu(false); onEdit() }} />}
+                    {canDelete && <TouchAction icon={<Trash2 className="h-4 w-4" />} label="Delete" danger onClick={() => { setTouchMenu(false); setConfirmDelete(true) }} />}
+                  </div>
+                </>
+              )}
+
+              {/* Delete confirmation — destructive and one tap away on both surfaces. */}
+              {confirmDelete && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setConfirmDelete(false)} />
+                  <div className={cn('absolute bottom-full mb-1 z-40 w-52 bg-white border border-zinc-200 rounded-xl shadow-lg p-3', isMe ? 'left-0' : 'right-0')}>
+                    <p className="text-xs text-zinc-600 mb-2">Delete this message?</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setConfirmDelete(false); onDelete() }}
+                        className="flex-1 min-h-[36px] text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+                      <button onClick={() => setConfirmDelete(false)}
+                        className="flex-1 min-h-[36px] text-xs font-medium rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50">Cancel</button>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           )}

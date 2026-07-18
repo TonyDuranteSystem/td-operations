@@ -112,6 +112,23 @@ export async function POST(
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+  // A reply into an ARCHIVED thread brings it back. Without this the message is
+  // accepted, followers are pushed, and yet the thread is hidden from the
+  // channel stream, the Threads panel, the board and the unread dot — i.e. the
+  // reply lands nowhere anyone can see it, which in a chat tool is the worst
+  // possible outcome (council blocker). Activity un-hides; only an explicit
+  // archive hides. Best-effort: never block a successful send.
+  if (rootId) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabaseAdmin as any)
+        .from('internal_thread_state')
+        .update({ archived_at: null, archived_by: null, updated_at: now })
+        .eq('root_message_id', rootId)
+        .not('archived_at', 'is', null)
+    } catch { /* an un-archive failure must not fail the send */ }
+  }
+
   // Bump thread activity so the sidebar re-sorts.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabaseAdmin as any)
