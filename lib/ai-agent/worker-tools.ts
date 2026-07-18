@@ -106,6 +106,8 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Read a SIGNED/scanned document — the CRM stores a drawn signature and no
   // signer name, so the document itself is the only source (dev job a6c3d75b).
   "read_scanned_document",
+  // Read a Slack permalink — web browsing cannot (workspace auth). dev job a6c3d75b
+  "read_slack_link",
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",
@@ -1958,6 +1960,18 @@ export async function executeWorkerTool(
   currentThreadId?: string | null,
   sendContext?: WorkerSendContext,
 ): Promise<string> {
+  // CLIENT SCOPE GATE (council Security blocker, dev job a6c3d75b). On a surface
+  // pinned to ONE client, refuse any lookup that names a DIFFERENT client — this
+  // runs BEFORE dispatch, so it covers every tool including the bridge and raw SQL.
+  // Fails open when the surface isn't client-pinned. Enforcing it in code is the
+  // point: it used to be a sentence in the prompt, sitting next to a live
+  // client-facing send rail.
+  if (sendContext?.clientScope) {
+    const { checkClientScope } = await import("./client-scope")
+    const verdict = checkClientScope(name, params, sendContext.clientScope)
+    if (!verdict.allowed) return `❌ ${verdict.reason}`
+  }
+
   if (name === "start_code_task") {
     // Defense-in-depth: the tool is no longer offered to the model, but if a name
     // leaks the launch must still refuse while the rail is off (2026-07-10).
@@ -2691,6 +2705,13 @@ export interface WorkerSendContext {
    * it; a model-supplied client_key is overridden.
    */
   memoryClientKey?: string | null
+  /**
+   * CLIENT SCOPE (council Security blocker, dev job a6c3d75b): on a surface
+   * pinned to ONE client, refuse any lookup that names a DIFFERENT client.
+   * Before this the limit was prompt text only, next to a live client-facing
+   * send rail. Absent = surface isn't client-pinned (fails open).
+   */
+  clientScope?: import("./client-scope").ClientScope | null
   pinnedEmailAttachments?: PinnedEmailAttachment[] | null
   /** undefined = unpinned; array (even empty) = only these addresses may be emailed. */
   pinnedEmailRecipients?: string[]
