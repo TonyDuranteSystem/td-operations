@@ -85,6 +85,18 @@ export async function GET() {
     if (teamThreadsResult.status === 'fulfilled' && !teamThreadsResult.value.error) {
       teamChat = countTeamNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
+    // Slack-thread signal: threads this user FOLLOWS with unread replies. Its own
+    // count path (follow + unread live at the root-message grain, which
+    // get_team_threads doesn't carry). The sidebar renders teamChat > 0 as a DOT,
+    // so adding here lights it without reconciling counts across the two grains.
+    // Best-effort: never let this break the badges payload.
+    if (userId) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: followed } = await (getDb() as any).rpc('list_followed_unread_threads', { p_user_id: userId })
+        teamChat += (followed ?? []).length
+      } catch { /* non-critical */ }
+    }
 
     // Gmail unread
     const supportUnread = gmailSupportResult.status === 'fulfilled'

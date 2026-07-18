@@ -74,6 +74,20 @@ export interface ThreadListItem {
   following: boolean
 }
 
+/** A thread card on the cross-channel Board (from GET /api/team/all-threads). */
+export interface BoardThread {
+  root_message_id: string
+  thread_id: string
+  channel_label: string
+  title: string
+  status: 'todo' | 'in_progress' | 'waiting' | 'handled'
+  assignee_id: string | null
+  reply_count: number
+  last_activity_at: string | null
+  unread: boolean
+  following: boolean
+}
+
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'
 
 export interface TeamThread {
