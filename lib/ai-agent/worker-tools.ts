@@ -1098,11 +1098,120 @@ export async function searchSopsForWorker(params: Record<string, unknown>): Prom
   return lines.join("\n")
 }
 
-/** read_drive_file handler — text content of a Drive file, capped; PDFs/images unsupported (OCR off). */
+/**
+ * Store-time cap on `documents.ocr_text` (MAX_OCR_TEXT in lib/mcp/tools/doc.ts).
+ * Text saved at exactly this length was CUT when the document was processed —
+ * re-reading the file from Drive will not recover the tail. Say so explicitly:
+ * a silent stop reads as "the document ends here", which for a tax return means
+ * the schedules and K-1s at the BACK look like they don't exist.
+ */
+export const STORED_OCR_TEXT_CAP = 50_000
+
+/** Shape of the stored-extraction row this module reads. */
+export interface StoredExtraction {
+  ocr_text: string | null
+  ocr_page_count: number | null
+  file_name: string | null
+  processed_at: string | null
+}
+
+/**
+ * Render a stored extraction for the worker. PURE (unit-tested) — the DB read
+ * lives in the caller so this stays testable without a database.
+ *
+ * Always labels the text as the STORED extraction with its date, so the model
+ * never reports it as a fresh read of the live file, and flags a store-time cut
+ * separately from a display-time cut — they have different recoveries (the
+ * former is gone until the document is re-processed; the latter is still on the
+ * row). Returns null when there is no usable stored text.
+ */
+export function formatStoredExtraction(
+  row: StoredExtraction,
+  cap: number = DOC_RESULT_CAP,
+): string | null {
+  const text = typeof row.ocr_text === "string" ? row.ocr_text : ""
+  if (!text.trim()) return null
+
+  const header = [
+    `📄 Stored extracted text for "${row.file_name ?? "this file"}"`,
+    row.ocr_page_count ? `${row.ocr_page_count} page(s)` : null,
+    row.processed_at ? `extracted ${row.processed_at.slice(0, 10)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+
+  const notes: string[] = [
+    "(This is the text we saved when the document was processed — not a fresh read of the live file.)",
+  ]
+  if (text.length >= STORED_OCR_TEXT_CAP) {
+    notes.push(
+      `⚠️ INCOMPLETE: this extraction was cut at ${STORED_OCR_TEXT_CAP.toLocaleString()} characters when the document was processed, so the END of the document was never saved. Re-reading the file will NOT recover it. Do not report the missing part as absent from the document — say it was not captured.`,
+    )
+  }
+
+  const body =
+    text.length > cap
+      ? `${text.slice(0, cap)}…(showing ${cap.toLocaleString()} of ${text.length.toLocaleString()} stored chars)`
+      : text
+
+  return [header, ...notes, "", body].join("\n")
+}
+
+/**
+ * Plain-English reason for a Drive/extraction failure. PURE (unit-tested).
+ *
+ * Maps the raw upstream message to a fixed phrase rather than echoing Google's
+ * response body into worker context (council/Security). Deliberately narrow:
+ * an unrecognised failure falls through to a generic phrase instead of being
+ * mislabelled — telling someone "too many pages" when the real cause was a
+ * corrupt or password-protected file sends them down the wrong path.
+ */
+export function explainDriveReadFailure(rawMessage: string): string {
+  const m = (rawMessage || "").toLowerCase()
+  if (m.includes("too large")) return "the file is over the 15MB limit for automatic extraction"
+  if (m.includes("not found") || /\b404\b/.test(m)) return "no file with that id exists on the Shared Drive"
+  if (m.includes("permission") || /\b40[13]\b/.test(m)) return "our service account can't open that file"
+  if (m.includes("exceed the limit") || m.includes("pages exceed")) {
+    return "the document has more pages than the scanner accepts in one pass"
+  }
+  return "the file couldn't be read"
+}
+
+/** Look up the text we already extracted for a Drive file, if we ever processed it. */
+async function fetchStoredExtraction(fileId: string): Promise<StoredExtraction | null> {
+  const { data, error } = await supabaseAdmin
+    .from("documents")
+    .select("ocr_text, ocr_page_count, file_name, processed_at")
+    .eq("drive_file_id", fileId)
+    .not("ocr_text", "is", null)
+    .order("processed_at", { ascending: false })
+    .limit(1)
+  if (error || !data?.length) return null
+  return data[0] as StoredExtraction
+}
+
+/**
+ * read_drive_file handler — text content of a Drive file, capped.
+ *
+ * Ladder: live text export → live text layer (PDF/Office) → STORED extraction.
+ * The stored fallback is what makes a SCANNED document readable here: this path
+ * runs no OCR itself, so before it existed a scanned PDF was simply unreadable
+ * even when we had already extracted and saved its text. Live text always wins
+ * so an edited Google Doc can't be served stale.
+ */
 export async function readDriveFileForWorker(params: Record<string, unknown>): Promise<string> {
   const fileId = typeof params.file_id === "string" ? params.file_id.trim() : ""
   if (!fileId) return "file_id is required (find it with drive_search / drive_list_folder)."
   const cap = (s: string) => (s.length > DOC_RESULT_CAP ? `${s.slice(0, DOC_RESULT_CAP)}…(truncated at ${DOC_RESULT_CAP} chars)` : s)
+
+  /** Stored text + a reason we fell back to it, or the bare reason when nothing is stored. */
+  const storedOr = async (reason: string, recovery: string): Promise<string> => {
+    const row = await fetchStoredExtraction(fileId).catch(() => null)
+    const stored = row ? formatStoredExtraction(row) : null
+    if (stored) return `${reason}\n\n${stored}`
+    return `${reason} ${recovery}`
+  }
+
   try {
     // 1) Text export path (Google Docs/Sheets/Slides + plain text).
     const { downloadFileContent } = await import("@/lib/google-drive")
@@ -1118,19 +1227,33 @@ export async function readDriveFileForWorker(params: Record<string, unknown>): P
     const bin = await downloadFileBinary(fileId)
     const kind = classifySlackFile(bin.mimeType, bin.fileName)
     if (kind === "image") {
-      return `File ${fileId} ("${bin.fileName}") is an image — I can't read text from it here (no OCR on Drive reads).`
+      return storedOr(
+        `File ${fileId} ("${bin.fileName}") is an image, and this tool runs no OCR.`,
+        "We have no saved text for it either — it needs to be processed before its text is readable here.",
+      )
     }
     if (kind === "unsupported") {
-      return `File ${fileId} ("${bin.fileName}", ${bin.mimeType}) isn't a readable text/PDF/Office type.`
+      return storedOr(
+        `File ${fileId} ("${bin.fileName}", ${bin.mimeType}) isn't a readable text/PDF/Office type.`,
+        "We have no saved text for it either.",
+      )
     }
     const text = await extractTextFromBuffer(bin.buffer, kind)
     if (!text || !text.trim()) {
-      return `File ${fileId} ("${bin.fileName}") has no extractable text — likely a scanned/image-only ${kind.toUpperCase()} (no text layer).`
+      return storedOr(
+        `File ${fileId} ("${bin.fileName}") has no text layer — it's a scanned/image-only ${kind.toUpperCase()}, and this tool runs no OCR.`,
+        "We have no saved text for it either — it needs to be processed before its text is readable here.",
+      )
     }
     return cap(text)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return `Couldn't read file ${fileId}: ${msg}.`
+    const raw = err instanceof Error ? err.message : String(err)
+    // Raw upstream text is logged, not returned (council/Security).
+    console.warn(`[read_drive_file] ${fileId} failed:`, raw)
+    return storedOr(
+      `Couldn't read file ${fileId} live — ${explainDriveReadFailure(raw)}.`,
+      "We have no saved text for it either.",
+    )
   }
 }
 
