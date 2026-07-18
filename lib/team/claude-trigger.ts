@@ -332,6 +332,33 @@ export async function processClaudeReply(params: {
     console.warn('[team-claude] memory write failed (reply still delivered):', err)
   }
 
+  // BUSINESS BRAIN capture (dev job 203cda1a): if this staff message corrected the
+  // worker's PRIOR reply in this thread, learn the lesson. Team chat is staff-only,
+  // so this turn is staff by construction. Client-scoped when the thread is linked
+  // to a client; else global + scrubbed (Antonio's policy). Inputs are the RAW staff
+  // message + the prior worker reply ONLY (never userBody — it carries the last-12
+  // recap + fenced files). Best-effort, never blocks the reply.
+  try {
+    const priorReply = (recent ?? []).find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (m: any) => m.sender_id === CLAUDE_SENDER_UUID && m.message && m.message !== THINKING_PLACEHOLDER,
+    )?.message as string | undefined
+    if (priorReply) {
+      const { captureLessonFromTurn } = await import('@/lib/ai-agent/lesson-capture')
+      await captureLessonFromTurn({
+        staffMessage: prompt.message,
+        priorReply,
+        clientKey,
+        surface: 'team_chat',
+        sourceRef: `team:${threadId}:${promptMessageId}`,
+        actors: ['antonio', 'claude'],
+        mode: 'correction',
+      })
+    }
+  } catch (err) {
+    console.warn('[team-claude] brain capture failed (non-fatal):', err)
+  }
+
   // Slack parity: Slack posts the answer as a NEW message so the phone gets a
   // push. In Team Chat the answer replaces the placeholder (no insert → no push
   // path), so push the asker explicitly. Best-effort.
