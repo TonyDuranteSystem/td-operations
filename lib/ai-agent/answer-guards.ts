@@ -134,6 +134,36 @@ export function assertsAbsence(reply: string): boolean {
   return ABSENCE_PATTERNS.some((re) => re.test(text))
 }
 
+
+/**
+ * CAPABILITY REFUSALS — "I can't do this at all", as distinct from "the data isn't
+ * there". This is the second thing worth a #td-worker-bug thread: no correction
+ * Antonio makes can teach the worker a capability it does not have. His live
+ * example (2026-07-18): "I can't access external URLs or Slack links directly — I
+ * don't have a browser or Slack API access." That needed a tool built, not a lesson.
+ *
+ * Deliberately narrow — it must match a refusal of the WORKER'S OWN ability, not a
+ * statement about the business ("the client can't sign until…"). Pure; never throws.
+ */
+const CANNOT_DO_PATTERNS: RegExp[] = [
+  /\bI\s+(?:can\s*n[o']?t|cannot)\s+(?:access|open|read|fetch|browse|reach|view|retrieve|download)\b/i,
+  /\bI\s+do\s*n[o']?t\s+have\s+(?:a\s+)?(?:browser|internet|web|api|slack|access to)\b/i,
+  /\bI(?:\s+am|'m)\s+(?:not\s+able|unable)\s+to\s+(?:access|open|read|fetch|browse|reach)\b/i,
+  /\bno\s+(?:browser|internet access|web access|api access)\b/i,
+  /\bI\s+do\s*n[o']?t\s+have\s+(?:the\s+)?(?:ability|capability|a way)\s+to\b/i,
+  /\bthat'?s\s+not\s+something\s+I\s+can\s+do\b/i,
+]
+
+/**
+ * True when the reply is the worker refusing on its OWN capability — a gap that
+ * only code can close. Pure; never throws.
+ */
+export function assertsCannotDo(reply: string): boolean {
+  const text = (reply ?? "").trim()
+  if (!text) return false
+  return CANNOT_DO_PATTERNS.some((re) => re.test(text))
+}
+
 /** Shapes of a human pushing back on the worker's previous answer. */
 const CORRECTION_PATTERNS: RegExp[] = [
   /\bI\s+do\s*n[o']?t\s+think\b/i,

@@ -50,6 +50,7 @@ import {
   buildAbsenceNudge,
   buildCorrectionNudge,
   looksLikeFailedLookup,
+  assertsCannotDo,
 } from "./answer-guards"
 import {
   readCodebaseFile,
@@ -2568,6 +2569,8 @@ export interface CallWorkerOptions {
    * Kept out of WORKER_TOOLS so the Hermes/Telegram research worker never gets it (R108).
    */
   enableFullToolReach?: boolean
+  /** Which panel this turn came from — labels the #td-worker-bug thread. */
+  surface?: string
   /**
    * Expose the Slack-only WRITE tool tag_client_thread for this call. Set by the
    * Slack worker (processSlackEvent) ONLY for the #td-support channel
@@ -2889,7 +2892,11 @@ export async function runWorkerLoop(
   apiKeyOverride?: string,
   sendContext?: WorkerSendContext,
   modelOverride?: string | null,
-): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean }> {
+): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean
+  /** Walls worth a #td-worker-bug thread (only code can fix these). */
+  wallsHit?: Array<"absence_without_looking" | "cannot_do">
+  /** Lookups that actually returned — shown in the thread as 'already tried'. */
+  succeededTools?: string[] }> {
   // Dedicated-key override (Slack worker) with fallback to the shared key. Covers
   // both fetch sites below — they read this same apiKey.
   const apiKey = resolveWorkerApiKey(apiKeyOverride)
@@ -2908,6 +2915,10 @@ export async function runWorkerLoop(
   // Lookups that actually RETURNED something (not an error). This — not the
   // raw call list — is what counts as proof the worker searched.
   const succeededTools: string[] = []
+  // WALLS worth telling Antonio about in #td-worker-bug — things only CODE can
+  // fix. NOT ordinary corrections: a correction that lands is the system working
+  // (Antonio 2026-07-18: "it's a part of the learning process").
+  const wallsHit: Array<"absence_without_looking" | "cannot_do"> = []
   // The staff member's own words this turn, used to detect a push-back. Derived
   // once from the user content (which may be a string or a block array).
   const staffTurnText =
@@ -3015,6 +3026,7 @@ export async function runWorkerLoop(
           // (a) About to say "it's not there" having run ZERO lookups.
           if (!absenceLatched && assertsAbsence(reply) && !hasSearchedForAbsence(succeededTools)) {
             absenceLatched = true
+            if (!wallsHit.includes("absence_without_looking")) wallsHit.push("absence_without_looking")
             console.warn("[worker] absence claim with no lookup — forcing a search before replying")
             currentMessages = [
               ...currentMessages,
@@ -3042,7 +3054,11 @@ export async function runWorkerLoop(
         }
       }
 
-      if (reply) return { reply, toolsUsed, reachedMaxLoops: false }
+      if (reply) {
+        // A flat "I can't do this" is a capability gap — no correction can teach it.
+        if (assertsCannotDo(reply) && !wallsHit.includes("cannot_do")) wallsHit.push("cannot_do")
+        return { reply, toolsUsed, reachedMaxLoops: false, wallsHit, succeededTools }
+      }
       if (toolUseBlocks.length === 0) {
         return { reply: "(no response generated)", toolsUsed, reachedMaxLoops: false }
       }
@@ -3457,6 +3473,31 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     : undefined
 
   const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext, opts.model ?? null)
+
+  // WALL REPORT → #td-worker-bug (dev job a6c3d75b). Fires ONLY when the worker hit
+  // something CODE must fix: it nearly claimed absence without looking, or it flatly
+  // cannot do the thing. Deliberately NOT on ordinary corrections — Antonio:
+  // "if he got it wrong and I corrected it and he memorized my correction, it
+  // doesn't need to create any kind of thread. It's a part of the learning process."
+  // Fire-and-forget; a reporting failure must never affect the answer.
+  if (result.wallsHit?.length) {
+    void (async () => {
+      try {
+        const { reportWorkerWall } = await import("@/lib/team/worker-bug-report")
+        for (const kind of result.wallsHit ?? []) {
+          await reportWorkerWall({
+            kind,
+            staffMessage: typeof userContent === "string" ? userContent : userBody,
+            reply: result.reply,
+            surface: opts.surface ?? "worker",
+            clientName: opts.clientName ?? null,
+            threadId,
+            toolsTried: result.succeededTools ?? [],
+          })
+        }
+      } catch { /* never break a turn over a report */ }
+    })()
+  }
 
   if (threadId) {
     try {

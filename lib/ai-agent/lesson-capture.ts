@@ -77,6 +77,8 @@ export interface CaptureLessonParams {
   sourceRef?: string
   /** Who was involved. Defaults to ["antonio", "claude"]. */
   actors?: string[]
+  /** Client display name, when known — used only to label the bug-report thread. */
+  clientName?: string | null
   /** correction = replacing a wrong answer (supersede-eligible in P4); additive = ask-to-save/confirm. */
   mode?: CaptureMode
 }
@@ -310,6 +312,7 @@ export async function captureLessonFromTurn(
 
     const mode: CaptureMode = params.mode ?? "correction"
     const scope: "client" | "global" = clientKey ? "client" : "global"
+
 
     // CORRECTION = TRUTH (P4): a genuine correction SUPERSEDES the nearest matching
     // lesson so the wrong answer stops being recalled — instead of appending a
