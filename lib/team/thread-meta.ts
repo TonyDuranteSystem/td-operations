@@ -99,3 +99,31 @@ export function sortPanelThreads<T extends PanelThread>(threads: T[], hideDone: 
       return (b.last_reply_at ?? '').localeCompare(a.last_reply_at ?? '')
     })
 }
+
+/**
+ * Which root messages the channel stream should show.
+ *
+ * An archived thread must leave the CHANNEL, not just the Threads panel —
+ * otherwise "removed" still stares back at you from the stream with its reply
+ * count (Antonio, 2026-07-18, on the shipped build).
+ *
+ * `archivedRootIds` must be the COMPLETE set of archived roots, not one derived
+ * from the panel's thread list: that list drops archived rows when the archive
+ * view is off, so deriving from it hides nothing precisely when hiding matters.
+ * That is the bug this function exists to lock down.
+ *
+ * With the archive view ON the archived roots are shown instead, so they can be
+ * opened and restored.
+ */
+export function filterStreamRoots<T extends { id: string; root_id?: string | null }>(
+  messages: T[],
+  archivedRootIds: string[] | null | undefined,
+  showArchived: boolean,
+): T[] {
+  const archived = new Set(archivedRootIds ?? [])
+  return messages.filter(m => {
+    if (m.root_id) return false                        // replies live in the pane
+    if (showArchived) return true                      // archive view: show everything, so an archived thread can be opened and restored
+    return !archived.has(m.id)
+  })
+}

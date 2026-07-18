@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { isValidWorkStatus } from '@/lib/team/workspace'
+import { resolveThreadTitle, threadStateIsMeaningful } from '@/lib/team/thread-title'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -11,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server'
  * Staff-only. Soft-deleted rows are returned so the UI can render tombstones.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const supabase = createClient()
@@ -93,15 +94,40 @@ export async function GET(
   // Per-thread status/assignee live in their own sparse table; a thread with no
   // row reads as the default 'todo'. "New" stays derived from unread above.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: stateRows } = await (supabaseAdmin as any)
+  const { data: stateRows, error: stateErr } = await (supabaseAdmin as any)
     .from('internal_thread_state')
-    .select('root_message_id, status, assignee_id, title, created_as_thread')
+    .select('root_message_id, status, assignee_id, title, created_as_thread, archived_at, archived_by')
     .eq('thread_id', threadId)
-  const stateMap = new Map<string, { status: string; assignee_id: string | null; title: string | null; created_as_thread: boolean }>()
+  // FAIL LOUDLY. Swallowing this returns 200 with an empty state map, which
+  // silently strips every thread's name, stage, assignee and archive flag — the
+  // workspace looks like it forgot everything, with no error anywhere. That is
+  // exactly how a missing database change would ship unnoticed (council).
+  if (stateErr) {
+    return NextResponse.json(
+      { error: 'Thread details are unavailable — the database may be missing a recent update.' },
+      { status: 500 },
+    )
+  }
+  const stateMap = new Map<string, { status: string; assignee_id: string | null; title: string | null; created_as_thread: boolean; archived_at: string | null; archived_by: string | null }>()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const s of (stateRows ?? []) as any[]) {
-    stateMap.set(s.root_message_id, { status: s.status, assignee_id: s.assignee_id, title: s.title ?? null, created_as_thread: !!s.created_as_thread })
+    stateMap.set(s.root_message_id, { status: s.status, assignee_id: s.assignee_id, title: s.title ?? null, created_as_thread: !!s.created_as_thread, archived_at: s.archived_at ?? null, archived_by: s.archived_by ?? null })
   }
+  // Archived threads are hidden everywhere unless explicitly asked for (the
+  // panel's "Show archived" toggle) — including from the channel stream, so
+  // "remove this thread" actually removes it from view.
+  const includeArchived = request.nextUrl.searchParams.get('include_archived') === '1'
+  // The COMPLETE set of archived roots in this channel — deliberately NOT
+  // derived from `threads[]` below. That list is a FILTERED view (archived rows
+  // are dropped from it unless the archive view is on), so reading the archived
+  // set off it yields an empty set exactly when the stream needs it most, and
+  // the archived thread keeps rendering in the channel. This looked like
+  // duplicated information and was removed once on that reasoning; it is not
+  // duplication — one is a filtered list, this is the full set. Do not fold them
+  // together again.
+  const archivedRootIds = Array.from(stateMap.entries())
+    .filter(([, st]) => !!st.archived_at)
+    .map(([rid]) => rid)
   // Which of these threads THIS user follows (presence = following).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: followRows } = await (supabaseAdmin as any)
@@ -120,17 +146,25 @@ export async function GET(
   }
 
   // Panel list = every root that is a thread (has replies) OR carries a state
-  // row (e.g. flagged before anyone replied). Titles come from a NARROW query by
-  // root id — NEVER the capped message window — so old-but-active threads still
-  // show a title; a soft-deleted root renders a tombstone, never its body.
-  const panelRootIds = Array.from(new Set([...Object.keys(threadMeta), ...Array.from(stateMap.keys())]))
+  // row that MEANS something — named, archived, triaged, assigned, or created on
+  // purpose. Keying on the row merely EXISTING left a restored-or-untriaged row
+  // showing as a phantom thread with no replies (council). Titles come from a
+  // NARROW query by root id — NEVER the capped message window — so old-but-active
+  // threads still show a title; a soft-deleted root renders a tombstone.
+  const meaningfulStateIds = Array.from(stateMap.entries())
+    .filter(([, st]) => threadStateIsMeaningful(st))
+    .map(([rid]) => rid)
+  const panelRootIds = Array.from(new Set([...Object.keys(threadMeta), ...meaningfulStateIds]))
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rootTitleMap = new Map<string, any>()
   if (panelRootIds.length > 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: rootRows } = await (supabaseAdmin as any)
       .from('internal_messages')
-      .select('id, message, sender_name, deleted_at, created_at')
+      // sender_id is REQUIRED here — the "is this new for me" test below compares
+      // it to the caller. Omitting it (the shipped bug) made `sender_id !== user.id`
+      // true for every row, so your OWN new thread showed as unread to you.
+      .select('id, message, sender_id, sender_name, deleted_at, created_at')
       .in('id', panelRootIds)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const r of (rootRows ?? []) as any[]) rootTitleMap.set(r.id, r)
@@ -152,18 +186,18 @@ export async function GET(
     }
   }
 
-  const threads = panelRootIds.map(rid => {
+  const threads = panelRootIds
+    .filter(rid => includeArchived || !stateMap.get(rid)?.archived_at)
+    .map(rid => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const meta = (threadMeta as any)[rid]
     const st = stateMap.get(rid)
     const root = rootTitleMap.get(rid)
-    // An explicitly-created thread owns its title; a thread derived from a reply
-    // falls back to the opening message (Slack behaviour), tombstone-safe.
-    const title = st?.title
-      ? st.title
-      : root
-        ? (root.deleted_at ? 'Message deleted' : (root.message || '📎 Attachment'))
-        : 'Unavailable'
+    // ONE resolver, shared with the SQL lists: a named thread owns its title, a
+    // derived one falls back to the opening message, tombstone-safe.
+    const title = root
+      ? resolveThreadTitle({ stateTitle: st?.title, rootMessage: root.message, rootDeleted: !!root.deleted_at })
+      : (st?.title || 'Unavailable')
     // New for me = an unseen reply from someone else, OR an unseen opening
     // message from someone else (so a brand-new thread shows bold + dot).
     const lastRead = panelReadMap.get(rid)
@@ -179,6 +213,14 @@ export async function GET(
       status: st?.status ?? 'todo',
       assignee_id: st?.assignee_id ?? null,
       following: followSet.has(rid),
+      archived: !!st?.archived_at,
+      // WHO hid it and WHEN — an archive removes a thread from everyone's view,
+      // so the archived list must say who did it (council).
+      archived_at: st?.archived_at ?? null,
+      archived_by: st?.archived_by ?? null,
+      // Who opened it — the UI offers Delete only to that person (and only
+      // while nobody else has replied); everyone else gets Archive.
+      root_sender_id: root?.sender_id ?? null,
     }
   })
 
@@ -196,6 +238,7 @@ export async function GET(
     messages: enriched,
     thread_meta: threadMeta,
     threads,
+    archived_roots: archivedRootIds,
     current_user_id: user.id,
     current_user_name: getUserDisplayName(user),
     is_admin: isAdmin(user),

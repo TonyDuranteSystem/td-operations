@@ -2,17 +2,19 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { isValidWorkStatus } from '@/lib/team/workspace'
+import { normalizeThreadTitle } from '@/lib/team/thread-title'
 import { listTeamMembers } from '@/lib/team/directory'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * POST /api/team/threads/[id]/thread-state
- * Set a thread's management status and/or assignee (the Threads panel).
- * Body: { root_id, status?, assignee_id? } — PARTIAL: only the fields provided
- * change, so setting an assignee never clobbers the status (and vice versa).
- * `assignee_id: null` clears the assignee. Reverting to the default status with
- * no assignee DELETES the row (keeps the table sparse). Staff-only; channels
- * and general only (DMs / client discussions don't have this panel).
+ * Set a thread's status, assignee, and/or name (the Threads panel).
+ * Body: { root_id, status?, assignee_id?, title? } — PARTIAL: only the fields
+ * PROVIDED are written, so setting an assignee never clobbers the status, and a
+ * status change can never blank someone else's rename. `assignee_id: null`
+ * clears the assignee; a blank `title` clears the name (falling back to the
+ * opening message). The row is never deleted — see the note further down.
+ * Staff-only; channels and general only (DMs / client discussions have no panel).
  */
 export async function POST(
   request: NextRequest,
@@ -31,11 +33,19 @@ export async function POST(
 
   const statusProvided = 'status' in body
   const assigneeProvided = 'assignee_id' in body
-  if (!statusProvided && !assigneeProvided) {
+  const titleProvided = 'title' in body
+  if (!statusProvided && !assigneeProvided && !titleProvided) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
   }
   if (statusProvided && !isValidWorkStatus(body.status)) {
     return NextResponse.json({ error: 'invalid status' }, { status: 400 })
+  }
+  // Rename. A blank name CLEARS it (falls back to the opening message).
+  let nextTitle: string | null = null
+  if (titleProvided) {
+    const normalized = normalizeThreadTitle(body.title)
+    if ('error' in normalized) return NextResponse.json({ error: normalized.error }, { status: 400 })
+    nextTitle = normalized.title
   }
   const nextAssignee: string | null = assigneeProvided ? (body.assignee_id ?? null) : undefined as unknown as string | null
 
@@ -66,37 +76,49 @@ export async function POST(
     }
   }
 
-  // Partial merge against the existing row.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: existing } = await (supabaseAdmin as any)
-    .from('internal_thread_state')
-    .select('status, assignee_id, created_as_thread')
-    .eq('root_message_id', rootId)
-    .maybeSingle()
-
-  const finalStatus: string = statusProvided ? body.status : (existing?.status ?? 'todo')
-  const finalAssignee: string | null = assigneeProvided ? nextAssignee : (existing?.assignee_id ?? null)
+  // status is NOT NULL, so an INSERT must carry one. Read the current value ONLY
+  // for that case — every other field is written only when the caller sent it,
+  // so there is nothing else to merge.
+  let finalStatus: string = body.status
+  if (!statusProvided) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existing } = await (supabaseAdmin as any)
+      .from('internal_thread_state')
+      .select('status')
+      .eq('root_message_id', rootId)
+      .maybeSingle()
+    finalStatus = existing?.status ?? 'todo'
+  }
 
   const now = new Date().toISOString()
-  // Sparse: default status + no assignee ⇒ no row — EXCEPT for a thread that was
-  // deliberately created ("+ New thread"). Its row IS its existence, so deleting
-  // it on a revert-to-Open would make the thread silently disappear from every
-  // list until someone replied (the exact confusion this feature exists to fix).
-  if (finalStatus === 'todo' && !finalAssignee && !existing?.created_as_thread) {
-    if (existing) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any).from('internal_thread_state').delete().eq('root_message_id', rootId)
-    }
-    return NextResponse.json({ ok: true, status: 'todo', assignee_id: null })
+  // NO sparse delete. This route used to DELETE the row whenever a thread went
+  // back to Open with no assignee, to keep the table sparse. That habit caused
+  // three separate bugs — a created thread vanishing, a rename reverting, an
+  // archive undoing itself — each patched by adding one more term to a
+  // "don't delete if…" guard that would have kept growing with every new
+  // column, and that a concurrent write could lose a race against anyway.
+  //
+  // Rows are now simply kept. Nothing reads "row exists" as meaning anything:
+  // every list asks whether the row is MEANINGFUL (threadStateIsMeaningful, and
+  // the matching WHERE clause in migration 20260718-1400), so an all-default row
+  // is indistinguishable from no row. One row per touched thread in a two-person
+  // staff chat costs nothing.
+  //
+  // Only the fields the caller actually sent are written, so a status change can
+  // never blank a rename made a moment earlier by someone else.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload: Record<string, any> = {
+    root_message_id: rootId, thread_id: threadId, updated_at: now, updated_by: user.id,
+    // status is NOT NULL, so a first insert must carry one.
+    status: finalStatus,
   }
+  if (assigneeProvided) payload.assignee_id = nextAssignee
+  if (titleProvided) payload.title = nextTitle
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabaseAdmin as any)
     .from('internal_thread_state')
-    .upsert(
-      { root_message_id: rootId, thread_id: threadId, status: finalStatus, assignee_id: finalAssignee, updated_at: now, updated_by: user.id },
-      { onConflict: 'root_message_id' },
-    )
+    .upsert(payload, { onConflict: 'root_message_id' })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true, status: finalStatus, assignee_id: finalAssignee })
+  return NextResponse.json({ ok: true, status: finalStatus, assignee_id: nextAssignee ?? null, title: nextTitle })
 }

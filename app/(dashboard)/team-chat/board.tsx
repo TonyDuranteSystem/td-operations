@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { cn } from '@/lib/utils'
-import { Hash, MessageSquare } from 'lucide-react'
+import { Hash, MessageSquare, Archive, ArchiveRestore } from 'lucide-react'
 import { format } from 'date-fns'
 import { TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { BoardThread } from './types'
@@ -26,10 +26,15 @@ const COLUMN_STYLE: Record<TeamWorkStatus, { top: string; badge: string }> = {
  * showed nothing useful, because the threads inside a channel were never on it.
  * Threads are the grain people actually think in, so the board now tracks those.
  */
-export function TeamBoard({ threads, onStatusChange, onOpenThread }: {
+export function TeamBoard({ threads, onStatusChange, onOpenThread, showArchived, onToggleArchived, onRestore }: {
   threads: BoardThread[]
   onStatusChange: (rootId: string, status: TeamWorkStatus, channelId: string) => void
   onOpenThread: (threadId: string, rootId: string) => void
+  /** Archive view — the cross-channel restore path (a thread archived in one
+   *  channel is otherwise only reachable by going back to that channel). */
+  showArchived: boolean
+  onToggleArchived: (show: boolean) => void
+  onRestore: (rootId: string, channelId: string) => void
 }) {
   const [channelFilter, setChannelFilter] = useState('')
 
@@ -67,7 +72,13 @@ export function TeamBoard({ threads, onStatusChange, onOpenThread }: {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-zinc-200 bg-white">
-        <h2 className="text-sm font-semibold text-zinc-900">All threads</h2>
+        <h2 className="text-sm font-semibold text-zinc-900">{showArchived ? 'Archived threads' : 'All threads'}</h2>
+        <div className="flex items-center gap-2">
+        <button onClick={() => onToggleArchived(!showArchived)}
+          className={cn('text-xs px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5', showArchived ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+          title={showArchived ? 'Back to active threads' : 'Show archived threads'}>
+          <Archive className="h-3.5 w-3.5" /> Archived
+        </button>
         <select
           value={channelFilter}
           onChange={e => setChannelFilter(e.target.value)}
@@ -76,6 +87,7 @@ export function TeamBoard({ threads, onStatusChange, onOpenThread }: {
           <option value="">All channels</option>
           {channels.map(c => <option key={c} value={c}>#{c}</option>)}
         </select>
+        </div>
       </div>
 
       <DragDropContext onDragEnd={handleDragEnd}>
@@ -106,6 +118,13 @@ export function TeamBoard({ threads, onStatusChange, onOpenThread }: {
                                 <span className="text-[10px] text-zinc-500 truncate">{t.channel_label}</span>
                               </div>
                               <p className={cn('text-xs line-clamp-3', t.unread ? 'font-semibold text-zinc-900' : 'text-zinc-700')}>{t.title}</p>
+                              {t.archived && (
+                                <button
+                                  onClick={e => { e.stopPropagation(); onRestore(t.root_message_id, t.thread_id) }}
+                                  className="mt-1.5 w-full min-h-[32px] text-[11px] font-medium rounded-lg border border-amber-200 bg-amber-50 text-amber-700 flex items-center justify-center gap-1.5 hover:bg-amber-100">
+                                  <ArchiveRestore className="h-3.5 w-3.5" /> Restore
+                                </button>
+                              )}
                               <div className="mt-1.5 flex items-center gap-2 text-[10px] text-zinc-400">
                                 <span className="flex items-center gap-1"><MessageSquare className="h-3 w-3" />{t.reply_count}</span>
                                 {t.last_activity_at && <span>{format(new Date(t.last_activity_at), 'MMM d')}</span>}

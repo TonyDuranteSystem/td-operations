@@ -72,6 +72,13 @@ export interface ThreadListItem {
   status: 'todo' | 'in_progress' | 'waiting' | 'handled'
   assignee_id: string | null
   following: boolean
+  /** Hidden from the lists and the stream, reversibly. */
+  archived: boolean
+  /** Who hid it and when — an archive removes it from EVERYONE's view. */
+  archived_at: string | null
+  archived_by: string | null
+  /** Who opened the thread — Delete is offered only to them. */
+  root_sender_id: string | null
 }
 
 /** A thread card on the cross-channel Board (from GET /api/team/all-threads). */
@@ -86,6 +93,8 @@ export interface BoardThread {
   last_activity_at: string | null
   unread: boolean
   following: boolean
+  /** Only ever true when the board explicitly asked for archived threads. */
+  archived?: boolean
 }
 
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'
