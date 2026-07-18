@@ -10,6 +10,13 @@ vi.mock("@/lib/ai-agent/decision-memory", () => ({
   saveDecisionMemory: (...a: unknown[]) => saveDecisionMemory(...a),
 }))
 
+// 🧠 now distills the marked message into a general, client-free lesson (Antonio:
+// "🧠 = make it global"). Mock the distiller so the test stays model-free.
+const distillMarkedMessage = vi.fn()
+vi.mock("@/lib/ai-agent/lesson-capture", () => ({
+  distillMarkedMessage: (...a: unknown[]) => distillMarkedMessage(...a),
+}))
+
 let existingRows: Array<{ id: string }> = []
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
@@ -34,6 +41,13 @@ import {
 
 beforeEach(() => {
   saveDecisionMemory.mockClear()
+  distillMarkedMessage.mockReset()
+  // Default: the distiller produces a clean general lesson.
+  distillMarkedMessage.mockResolvedValue({
+    situation: "When a client should be billed in a specific currency going forward",
+    decision: "Bill that client in the agreed currency from now on",
+    reasoning: "Matches the agreed billing terms",
+  })
   existingRows = []
 })
 
@@ -65,7 +79,7 @@ describe("messageFingerprint", () => {
 })
 
 describe("saveChatMessageAsMemory", () => {
-  it("saves with client scope + real actor + explicit_save tag", async () => {
+  it("distills to a GLOBAL lesson (no clientKey) even from a client's Portal chat", async () => {
     const ok = await saveChatMessageAsMemory({
       messageText: "Bill this client in EUR going forward",
       savedByName: "Luca",
@@ -75,16 +89,16 @@ describe("saveChatMessageAsMemory", () => {
       contactId: "cnt-9",
     })
     expect(ok).toBe(true)
-    expect(saveDecisionMemory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        decision: "Bill this client in EUR going forward",
-        sourceType: "crm_reaction",
-        sourceRef: "portal:m1",
-        actors: ["luca"],
-        tags: ["explicit_save"],
-        clientKey: "account:acct-9",
-      })
-    )
+    // the raw message is passed to the distiller, not saved verbatim
+    expect(distillMarkedMessage).toHaveBeenCalledWith("Bill this client in EUR going forward")
+    const arg = saveDecisionMemory.mock.calls[0][0] as Record<string, unknown>
+    expect(arg.decision).toBe("Bill that client in the agreed currency from now on") // distilled
+    expect(arg.sourceType).toBe("crm_reaction")
+    expect(arg.sourceRef).toBe("portal:m1")
+    expect(arg.actors).toEqual(["luca"])
+    expect(arg.tags).toEqual(["explicit_save"])
+    // GLOBAL — the client scope is intentionally gone (🧠 = make it global)
+    expect(arg.clientKey).toBeUndefined()
   })
 
   it("is idempotent — an already-saved message does not re-save", async () => {
@@ -96,19 +110,21 @@ describe("saveChatMessageAsMemory", () => {
     expect(saveDecisionMemory).not.toHaveBeenCalled()
   })
 
-  it("skips an empty message", async () => {
+  it("skips an empty message before distilling", async () => {
     const ok = await saveChatMessageAsMemory({
       messageText: "   ", savedByName: "Antonio", surface: "team", messageId: "m3",
     })
     expect(ok).toBe(false)
+    expect(distillMarkedMessage).not.toHaveBeenCalled()
     expect(saveDecisionMemory).not.toHaveBeenCalled()
   })
 
-  it("saves global (no clientKey) when the thread has no client", async () => {
-    await saveChatMessageAsMemory({
-      messageText: "internal note worth keeping", savedByName: "Antonio", surface: "team", messageId: "m4",
+  it("FAILS CLOSED — nothing saved when the distiller finds nothing general", async () => {
+    distillMarkedMessage.mockResolvedValue(null)
+    const ok = await saveChatMessageAsMemory({
+      messageText: "just a client-specific aside", savedByName: "Antonio", surface: "team", messageId: "m4",
     })
-    const arg = saveDecisionMemory.mock.calls[0][0] as Record<string, unknown>
-    expect(arg.clientKey).toBeUndefined()
+    expect(ok).toBe(false)
+    expect(saveDecisionMemory).not.toHaveBeenCalled()
   })
 })

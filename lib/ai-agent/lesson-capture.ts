@@ -171,6 +171,55 @@ export async function generalizeForGlobal(
 }
 
 /**
+ * Turn a message a human explicitly marked (🧠 / "make this a rule") into a
+ * GENERAL, client-free lesson for the shared brain. Antonio (2026-07-17): "🧠
+ * means make it global." Strips client specifics (names / companies / amounts /
+ * ids) AND derives a content-based `situation` so the lesson is recalled by
+ * MEANING — unlike the old 🧠 save, which embedded the meta-string "marked
+ * important" and so was effectively unrecallable by content. Fails closed:
+ * returns null if nothing generally reusable survives (caller skips the save).
+ */
+export async function distillMarkedMessage(
+  messageText: string,
+  callFn: typeof callAI = callAI,
+): Promise<{ situation: string; decision: string; reasoning?: string } | null> {
+  const text = (messageText ?? "").trim()
+  if (!text) return null
+  try {
+    const { text: out } = await callFn({
+      systemPrompt:
+        "A staff member marked this message as important, reusable business knowledge. " +
+        "Turn it into a GENERAL rule that applies to ANY client. REMOVE every client-specific " +
+        "detail: company names, people's names, dollar amounts, account/EIN/ID numbers, addresses. " +
+        "Derive a `situation` (when this rule applies), a `decision` (what to do), and short `reasoning`. " +
+        'If nothing generally reusable remains, return {"empty": true}. ' +
+        'Return ONLY JSON: {"situation":"...","decision":"...","reasoning":"..."} or {"empty": true}. JSON only.',
+      userPrompt: `MARKED MESSAGE:\n${text.slice(0, 1500)}`,
+      maxTokens: 400,
+      temperature: 0,
+      model: "sonnet",
+    })
+    const cleaned = out.replace(/```json\s*/gi, "").replace(/```/g, "").trim()
+    const match = cleaned.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    let parsed: { situation?: string; decision?: string; reasoning?: string; empty?: boolean }
+    try {
+      parsed = JSON.parse(match[0])
+    } catch {
+      return null
+    }
+    if (parsed.empty || !parsed.situation?.trim() || !parsed.decision?.trim()) return null
+    return {
+      situation: parsed.situation.trim(),
+      decision: parsed.decision.trim(),
+      reasoning: parsed.reasoning?.trim() || undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Capture a lesson from one turn and save it. Best-effort: never throws — a
  * memory-write failure must never break the surface that called it.
  *

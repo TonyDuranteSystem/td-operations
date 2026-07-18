@@ -318,14 +318,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     try {
+      // 🧠 = make it GLOBAL (Antonio 2026-07-17). Distill the marked message into
+      // a general, client-free rule (strips names/amounts/ids) with a content-based
+      // situation so it's actually recalled by meaning — the old save embedded the
+      // "marked important" meta-string. Fails closed: nothing general → no save.
+      const { distillMarkedMessage } = await import("@/lib/ai-agent/lesson-capture")
+      const lesson = await distillMarkedMessage(decision)
+      if (!lesson) {
+        return NextResponse.json({ ok: true, saved: false, skipped: "nothing_general" })
+      }
       const { saveDecisionMemory } = await import("@/lib/ai-agent/decision-memory")
       await saveDecisionMemory({
-        situation: `Explicitly marked important by ${savedByName} via 🧠 reaction in Slack`,
-        decision,
+        situation: lesson.situation,
+        decision: lesson.decision,
+        reasoning: lesson.reasoning,
         sourceType: "slack_reaction",
         sourceRef,
         actors: [savedByName.toLowerCase()],
         tags: ["explicit_save"],
+        // GLOBAL — no clientKey. The scrub is what keeps a client's private fact
+        // out of the shared brain.
       })
     } catch (err) {
       console.warn("[slack-claude-webhook] brain reaction save failed:", err)

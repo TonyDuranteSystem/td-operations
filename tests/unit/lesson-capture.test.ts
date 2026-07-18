@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest"
-import { captureLessonFromTurn, extractLesson, generalizeForGlobal } from "@/lib/ai-agent/lesson-capture"
+import { captureLessonFromTurn, extractLesson, generalizeForGlobal, distillMarkedMessage } from "@/lib/ai-agent/lesson-capture"
 
 /** A callAI stub returning a fixed JSON payload for every call. */
 function fakeCall(payload: unknown): any {
@@ -90,6 +90,28 @@ describe("generalizeForGlobal — scrub before any global write", () => {
     expect(await generalizeForGlobal({ situation: "s", decision: "d" }, fakeCall("nope" as any))).toBeNull()
     const boom = vi.fn().mockRejectedValue(new Error("down"))
     expect(await generalizeForGlobal({ situation: "s", decision: "d" }, boom)).toBeNull()
+  })
+})
+
+describe("distillMarkedMessage — 🧠 => global client-free lesson", () => {
+  it("returns the general rule distilled from a marked message", async () => {
+    const got = await distillMarkedMessage("For Acme LLC always CC their accountant", fakeCall(SCRUBBED))
+    expect(got).not.toBeNull()
+    expect(got!.situation).toBeTruthy()
+    expect(got!.decision).toBe("Say 2-3 weeks after documents are in")
+  })
+
+  it("returns null on empty input without calling the model", async () => {
+    const call = fakeCall(SCRUBBED)
+    expect(await distillMarkedMessage("   ", call)).toBeNull()
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it("returns null when nothing general survives (empty), or on parse/throw", async () => {
+    expect(await distillMarkedMessage("x", fakeCall({ empty: true }))).toBeNull()
+    expect(await distillMarkedMessage("x", fakeCall("junk" as any))).toBeNull()
+    const boom = vi.fn().mockRejectedValue(new Error("down"))
+    expect(await distillMarkedMessage("x", boom)).toBeNull()
   })
 })
 
