@@ -15,7 +15,9 @@ import {
   ABSENCE_EVIDENCE_TOOLS,
   looksLikeFailedLookup,
   assertsCannotDo,
+  looksLikeIncompleteRead,
 } from "@/lib/ai-agent/answer-guards"
+import { buildCoverage, coverageNote } from "@/lib/docai-windows"
 
 // ── The real incident, word for word ────────────────────────────────────────
 const INCIDENT_REPLY_1 =
@@ -227,5 +229,69 @@ describe("assertsCannotDo — capability gaps that need CODE, not a correction",
     ]) {
       expect(assertsCannotDo(s), s).toBe(false)
     }
+  })
+})
+
+// ── Partial document reads must not count as "it looked" ────────────────────
+// A 35-page scanned tax return is read a 15-page window at a time. That read
+// SUCCEEDS — no error, no lookup_failed — so without an explicit check the
+// absence guard is satisfied by 43% of the document and the worker can say
+// "there is no Schedule C in this return" when Schedule C is on page 22.
+describe("looksLikeIncompleteRead — partial reads are not proof of search", () => {
+  it("flags the real coverage payload of a first-window read", () => {
+    const payload = JSON.stringify({
+      file_name: "2023 Return.pdf",
+      coverage: buildCoverage(35, [1, 15]),
+      text: "Form 1065 ...",
+    })
+    expect(looksLikeIncompleteRead(payload)).toBe(true)
+  })
+
+  it("does NOT flag a complete read", () => {
+    const payload = JSON.stringify({
+      file_name: "EIN Letter.pdf",
+      coverage: buildCoverage(2, [1, 2]),
+      text: "CP 575 ...",
+    })
+    expect(looksLikeIncompleteRead(payload)).toBe(false)
+  })
+
+  it("flags the prose note too, as a belt-and-braces second signal", () => {
+    expect(looksLikeIncompleteRead(coverageNote(buildCoverage(35, [1, 15])))).toBe(true)
+  })
+
+  it("a partial read is NOT also misread as a failed lookup", () => {
+    // It must be excluded as INCOMPLETE, not as an error — a coverage record
+    // carrying an error-shaped key would disarm the failed-lookup guard for
+    // genuinely successful reads.
+    const payload = JSON.stringify({ coverage: buildCoverage(35, [1, 15]), text: "..." })
+    expect(looksLikeFailedLookup(payload)).toBe(false)
+    expect(looksLikeIncompleteRead(payload)).toBe(true)
+  })
+
+  it("ignores empty/garbage input", () => {
+    expect(looksLikeIncompleteRead("")).toBe(false)
+    expect(looksLikeIncompleteRead(null)).toBe(false)
+    expect(looksLikeIncompleteRead(undefined)).toBe(false)
+  })
+
+  it("only inspects the head, so 'complete: false' deep in client text is ignored", () => {
+    const payload = `${JSON.stringify({ coverage: buildCoverage(3, [1, 3]) })}${" ".repeat(700)}"complete": false`
+    expect(looksLikeIncompleteRead(payload)).toBe(false)
+  })
+
+  it("THE SCENARIO: a partial read alone must not satisfy the absence guard", () => {
+    const partial = JSON.stringify({ coverage: buildCoverage(35, [1, 15]), text: "..." })
+    // Simulates the loop's rule at the single choke point in worker-tools.
+    const counts = !looksLikeFailedLookup(partial) && !looksLikeIncompleteRead(partial)
+    expect(counts).toBe(false)
+    expect(hasSearchedForAbsence(counts ? ["read_scanned_document"] : [])).toBe(false)
+  })
+
+  it("a COMPLETE read of the same tool still satisfies the guard", () => {
+    const full = JSON.stringify({ coverage: buildCoverage(9, [1, 9]), text: "..." })
+    const counts = !looksLikeFailedLookup(full) && !looksLikeIncompleteRead(full)
+    expect(counts).toBe(true)
+    expect(hasSearchedForAbsence(["read_scanned_document"])).toBe(true)
   })
 })

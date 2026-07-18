@@ -4,6 +4,15 @@
  * Schema matches actual Supabase tables.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import {
+  parsePageRange,
+  absolutePageToWindowIndex,
+  buildCoverage,
+  coverageNote,
+  DOCAI_SYNC_PAGE_LIMIT,
+  STORED_PAGE_DELIMITER,
+  type PageRange,
+} from '@/lib/docai-windows'
 import { logAction } from '@/lib/mcp/action-log'
 import { staffChatSenderLabel } from '@/lib/portal/chat-sender-name'
 import { saveDecisionMemory, recallDecisionMemory } from './decision-memory'
@@ -189,12 +198,13 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'read_scanned_document',
-    description: 'READ A SCANNED OR IMAGE DOCUMENT — extracts the text from a PDF or image stored in Google Drive (signed forms, fax receipts, IDs, statements). Use this whenever the plain file reader says a file is a scan/image with no text layer, and whenever you need to confirm what a SIGNED document actually says (e.g. whose name is on a signed form) — the CRM often stores only a drawn signature, so the document itself is the only source. Get the drive_file_id from search_documents. Supports PDF, TIFF, GIF, JPEG, PNG, BMP, WEBP, max 15MB. Never tell staff you cannot read a document until you have tried this.',
+    description: 'READ A SCANNED OR IMAGE DOCUMENT — extracts the text from a PDF or image stored in Google Drive (signed forms, fax receipts, IDs, statements). Use this whenever the plain file reader says a file is a scan/image with no text layer, and whenever you need to confirm what a SIGNED document actually says (e.g. whose name is on a signed form) — the CRM often stores only a drawn signature, so the document itself is the only source. Get the drive_file_id from search_documents. Supports PDF, TIFF, GIF, JPEG, PNG, BMP, WEBP. Never tell staff you cannot read a document until you have tried this. LONG DOCUMENTS: a PDF is read at most 15 pages at a time, so on a long document (a filed tax return is typically 30-50 pages) you get PART of it. Every response carries a `coverage` object saying which pages you actually received and which you did not — READ IT. If `coverage.complete` is false you have NOT seen the whole document: never say something is missing from it, and request the remaining pages with `pages` (e.g. "16-30") before concluding anything. In a filed tax return the decisive material — the Schedule K-1s, the capital accounts, the signature page — is at the BACK, so the pages you have not read are usually the ones that answer the question.',
     parameters: {
       type: 'object',
       properties: {
         drive_file_id: { type: 'string', description: 'Google Drive file ID (from search_documents).' },
-        page: { type: 'number', description: 'Optional: only this page (1-based). Omit for the whole document.' },
+        page: { type: 'number', description: 'Optional: a single page (1-based).' },
+        pages: { type: 'string', description: 'Optional: a page range, e.g. "16-30". Max 15 pages per call. Use this to read the rest of a long document.' },
         max_chars: { type: 'number', description: 'Max characters to return (default 8000).' },
       },
       required: ['drive_file_id'],
@@ -1023,41 +1033,101 @@ async function searchConversations(p: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function readScannedDocument(p: any) {
   const fileId = typeof p.drive_file_id === 'string' && p.drive_file_id.trim() ? p.drive_file_id.trim() : null
-  const page = Number.isFinite(Number(p.page)) && Number(p.page) > 0 ? Math.floor(Number(p.page)) : null
   const maxChars = Math.min(Math.max(Number(p.max_chars) || 8000, 500), 20000)
   if (!fileId) {
     return JSON.stringify({ error: 'Provide drive_file_id (get it from search_documents).' })
   }
 
-  try {
-    const { ocrDriveFile } = await import('@/lib/docai')
-    const result = await ocrDriveFile(fileId)
-    const pages: string[] = result.pages ?? []
+  // Page selection. `page` and `pages` are both accepted; `pages` wins when both
+  // are given. An UNREADABLE value is an explicit error, never a silent fall back
+  // to "the first window" — a caller who asked for page 18 and quietly received
+  // page 1 would report the wrong page's contents as that document's.
+  const rawSelector = p.pages ?? p.page
+  const hasSelector = rawSelector !== undefined && rawSelector !== null && rawSelector !== ''
+  const requested = hasSelector ? parsePageRange(rawSelector) : null
+  if (hasSelector && !requested) {
+    return JSON.stringify({
+      error: `Could not read "${String(rawSelector)}" as a page or page range. Use a number (18) or a range ("12-18").`,
+    })
+  }
 
+  try {
+    // 1) Text we already extracted, if this document was ever processed. Free,
+    //    instant, no per-page billing, and — unlike OCR — not subject to any page
+    //    limit. It is stored page-delimited, so it can serve a page request too.
+    const stored = await readStoredDocumentPages(fileId, requested, maxChars)
+    if (stored) return stored
+
+    // 2) Otherwise OCR — windowed, so a document longer than Google's per-call
+    //    page limit is readable at all.
+    const { ocrDriveFile } = await import('@/lib/docai')
+    const result = await ocrDriveFile(fileId, {
+      pages: requested ?? [1, DOCAI_SYNC_PAGE_LIMIT],
+    })
+
+    const pages: string[] = result.pages ?? []
+    const total = result.documentPageCount ?? result.pageCount
+    const windowStart = result.windowStart ?? 1
+
+    if (pages.length === 0) {
+      return JSON.stringify({
+        file_name: result.fileName,
+        document_page_count: total,
+        text: '',
+        note:
+          requested && requested[0] > total
+            ? `That document has ${total} page(s); page ${requested[0]} does not exist.`
+            : 'No text could be extracted. That does NOT mean the document is blank — it may be a low-quality scan. Say so plainly rather than reporting it as empty.',
+      })
+    }
+
+    // The window's pages, addressed by ABSOLUTE page number. Indexing a window's
+    // array with an absolute number returns another page's text and reports
+    // success — the defect three reviewers independently found in the draft.
+    const windowEnd = windowStart + pages.length - 1
     let text: string
-    if (page) {
-      if (page > pages.length) {
+    let firstPage = windowStart
+    let lastPage = windowEnd
+
+    if (requested && requested[0] === requested[1]) {
+      const idx = absolutePageToWindowIndex(requested[0], [windowStart, windowEnd])
+      if (idx === null) {
         return JSON.stringify({
           file_name: result.fileName,
-          page_count: result.pageCount,
-          error: `That document has ${result.pageCount} page(s); page ${page} does not exist.`,
+          document_page_count: total,
+          error: `Page ${requested[0]} could not be read from this document (it has ${total} page(s)).`,
         })
       }
-      text = pages[page - 1] ?? ''
+      text = pages[idx] ?? ''
+      firstPage = requested[0]
+      lastPage = requested[0]
     } else {
       text = pages.join('\n\n')
     }
 
+    // Character truncation shortens the pages actually delivered, so coverage is
+    // computed AFTER it. Reporting "pages 1-15" on a response whose text stopped
+    // inside page 3 invites exactly the reasoning it is meant to prevent.
     const truncated = text.length > maxChars
+    if (truncated && lastPage > firstPage) {
+      const kept = text.slice(0, maxChars)
+      const deliveredPages = kept.split('\n\n').length
+      lastPage = Math.min(lastPage, firstPage + Math.max(0, deliveredPages - 1))
+    }
+
+    const coverage = buildCoverage(total, [firstPage, lastPage])
+
     return JSON.stringify({
       file_name: result.fileName,
-      page_count: result.pageCount,
-      ...(page ? { page } : {}),
+      // Coverage sits near the TOP so the absence guard's head-scan always sees
+      // it — a partial read must never count as a completed search.
+      coverage,
       text: truncated ? text.slice(0, maxChars) : text,
-      ...(truncated ? { truncated: true, note_truncated: `Showing the first ${maxChars} characters. Ask for a specific page to see more.` } : {}),
+      ...(truncated ? { truncated: true } : {}),
       note: text.trim()
         ? 'This is the text extracted from the document itself — the most reliable source for what a signed form actually says.'
-        : 'No text could be extracted. That does NOT mean the document is blank — it may be a low-quality scan. Say so plainly rather than reporting it as empty.',
+        : 'No text could be extracted from these pages. That does NOT mean they are blank — it may be a low-quality scan.',
+      coverage_note: coverageNote(coverage),
     })
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'OCR failed'
@@ -1067,6 +1137,67 @@ async function readScannedDocument(p: any) {
       note: 'Reading the document FAILED — that is NOT the same as the document being empty or absent. Report the failure and, if it matters, ask a person to open the file.',
     })
   }
+}
+
+/**
+ * Serve a document's ALREADY-EXTRACTED text, if we have it.
+ *
+ * The processing pipeline stores page-delimited text on the document row, so
+ * this can satisfy a page or range request with one indexed read: no Drive
+ * download, no Document AI call, no per-page billing, and no page limit.
+ *
+ * Returns null when we have nothing stored, so the caller falls through to OCR.
+ * Note the stored text is itself capped at ingestion, so a long document's tail
+ * may be missing — that shows up honestly as incomplete coverage rather than as
+ * a document that simply ends early.
+ */
+async function readStoredDocumentPages(
+  fileId: string,
+  requested: PageRange | null,
+  maxChars: number,
+): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('documents')
+    .select('file_name, ocr_text, ocr_page_count')
+    .eq('drive_file_id', fileId)
+    .not('ocr_text', 'is', null)
+    .order('processed_at', { ascending: false })
+    .limit(1)
+
+  const row = data?.[0]
+  const storedText = typeof row?.ocr_text === 'string' ? row.ocr_text : ''
+  if (!storedText.trim()) return null
+
+  const storedPages = storedText.split(STORED_PAGE_DELIMITER)
+  const total = row?.ocr_page_count || storedPages.length
+
+  const first = requested ? requested[0] : 1
+  const last = requested ? requested[1] : storedPages.length
+  if (first > storedPages.length) return null // fall through to a live read
+
+  const slice = storedPages.slice(first - 1, Math.min(last, storedPages.length))
+  let text = slice.join('\n\n')
+  let lastPage = first + slice.length - 1
+
+  const truncated = text.length > maxChars
+  if (truncated) {
+    const kept = text.slice(0, maxChars)
+    const delivered = kept.split('\n\n').length
+    lastPage = Math.min(lastPage, first + Math.max(0, delivered - 1))
+    text = kept
+  }
+
+  const coverage = buildCoverage(total, [first, lastPage])
+
+  return JSON.stringify({
+    file_name: row?.file_name ?? null,
+    source: 'stored_extraction',
+    coverage,
+    text,
+    ...(truncated ? { truncated: true } : {}),
+    note: 'This is the text we saved when this document was processed — not a fresh read of the live file.',
+    coverage_note: coverageNote(coverage),
+  })
 }
 
 /**

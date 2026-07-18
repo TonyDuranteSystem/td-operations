@@ -98,6 +98,44 @@ export function looksLikeFailedLookup(result: unknown): boolean {
 }
 
 /**
+ * A PARTIAL read is not evidence of absence either — and unlike a failed lookup,
+ * it arrives looking like a success.
+ *
+ * Google Document AI refuses a document over 15 pages in one call, so a long
+ * scan (a filed tax return, typically 30-50 pages) is read a WINDOW at a time.
+ * Reading pages 1-15 of a 35-page return succeeds cleanly: no error, no
+ * `lookup_failed`. Without this check `hasSearchedForAbsence` would be fully
+ * satisfied by 43% of the document, and the assistant could state "there is no
+ * Schedule C in this return" — with the guard affirmatively confirming it had
+ * looked — when Schedule C is on page 22.
+ *
+ * That is strictly worse than the wholesale failure it replaced: today's failure
+ * is correctly counted as "did not look". So a read that reports incomplete
+ * coverage must NOT count as a completed search.
+ *
+ * Keyed on the machine-readable coverage contract from `lib/docai-windows.ts`
+ * (`"complete": false`), never on prose — the header of this file records what
+ * happens when we rely on the model heeding an instruction.
+ */
+const INCOMPLETE_READ_PATTERNS: RegExp[] = [
+  /"?\bcomplete"?\s*:\s*false\b/i,
+  /\bINCOMPLETE READ\b/,
+  /"?\bpartial_read"?\s*:\s*true\b/i,
+]
+
+/**
+ * True when a tool result reports that it returned only PART of a document.
+ * Pure. Scans the head only, like `looksLikeFailedLookup` — the coverage record
+ * is emitted at the top of the payload precisely so this stays cheap and exact.
+ */
+export function looksLikeIncompleteRead(result: unknown): boolean {
+  const text = typeof result === "string" ? result : String(result ?? "")
+  if (!text.trim()) return false
+  const head = text.slice(0, 600)
+  return INCOMPLETE_READ_PATTERNS.some((re) => re.test(head))
+}
+
+/**
  * Literal shapes of "it isn't there / I can't get it / go look yourself". Built
  * from the REAL incident replies, not invented. Kept narrow enough that ordinary
  * answers don't trip it — and remember a trip only matters when zero lookups ran.
