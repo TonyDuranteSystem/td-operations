@@ -125,6 +125,15 @@ export async function POST(
     .from('internal_thread_reads')
     .upsert({ thread_id: threadId, user_id: user.id, last_read_at: now, updated_at: now }, { onConflict: 'thread_id,user_id' })
 
+  // Auto-follow: replying to a thread follows it (Slack-style) so you get future
+  // pings — with an Unfollow escape hatch. Never touches read state.
+  if (rootId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabaseAdmin as any)
+      .from('internal_root_follows')
+      .upsert({ root_message_id: rootId, user_id: user.id }, { onConflict: 'root_message_id,user_id', ignoreDuplicates: true })
+  }
+
   // Notifications (best-effort, never block the send).
   try {
     const preview = message.slice(0, 120) || (attachments?.length ? `📎 ${attachments[0].name}` : card ? '📇 Shared a card' : 'New message')
@@ -153,16 +162,16 @@ export async function POST(
         })
       }
     } else if (rootId && (thread.thread_type === 'channel' || thread.thread_type === 'general')) {
-      // Slack-style thread reply in a channel: ping only the people IN this
-      // thread (root author + prior repliers), never the whole channel.
+      // Slack-style thread reply in a channel: ping the thread's FOLLOWERS
+      // (single source of truth — replying auto-follows, and Unfollow removes the
+      // row so it truly stops the ping). Never the whole channel.
       const { CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: participants } = await (supabaseAdmin as any)
-        .from('internal_messages')
-        .select('sender_id')
-        .eq('thread_id', threadId)
-        .or(`id.eq.${rootId},root_id.eq.${rootId}`)
-      const ids = (Array.from(new Set((participants ?? []).map((p: { sender_id: string }) => p.sender_id))) as string[])
+      const { data: followers } = await (supabaseAdmin as any)
+        .from('internal_root_follows')
+        .select('user_id')
+        .eq('root_message_id', rootId)
+      const ids = (Array.from(new Set((followers ?? []).map((p: { user_id: string }) => p.user_id))) as string[])
         .filter((uid) => uid && uid !== user.id && uid !== CLAUDE_SENDER_UUID)
       if (ids.length > 0) {
         await sendPushToAdminUsers(ids, {

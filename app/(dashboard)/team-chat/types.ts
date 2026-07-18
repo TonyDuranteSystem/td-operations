@@ -71,6 +71,7 @@ export interface ThreadListItem {
   unread: boolean
   status: 'todo' | 'in_progress' | 'waiting' | 'handled'
   assignee_id: string | null
+  following: boolean
 }
 
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'
