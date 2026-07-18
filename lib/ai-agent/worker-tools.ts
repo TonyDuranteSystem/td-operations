@@ -51,6 +51,7 @@ import {
   buildCorrectionNudge,
   looksLikeFailedLookup,
   assertsCannotDo,
+  looksLikeIncompleteRead,
 } from "./answer-guards"
 import {
   readCodebaseFile,
@@ -3218,7 +3219,16 @@ export async function runWorkerLoop(
       // Only a lookup that actually CAME BACK counts as proof it searched. The
       // incident's queries hit invented table names and errored; treating those as
       // evidence would make the absence guard useless for the case it exists for.
-      if (!looksLikeFailedLookup(result)) succeededTools.push(toolBlock.name)
+      //
+      // A PARTIAL document read doesn't count either, and unlike a failed lookup it
+      // arrives looking like a success: reading pages 1-15 of a 35-page scanned tax
+      // return returns cleanly, so without this the guard would be satisfied by 43%
+      // of the document and the worker could declare something absent from pages it
+      // never saw. Both exclusions, one rule: it counts only if it came back AND it
+      // came back whole.
+      if (!looksLikeFailedLookup(result) && !looksLikeIncompleteRead(result)) {
+        succeededTools.push(toolBlock.name)
+      }
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,

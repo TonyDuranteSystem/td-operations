@@ -21,11 +21,30 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { classifyDocument, classifyByFilename } from "@/lib/classifier"
 import { getFileMetadata, listFolder } from "@/lib/google-drive"
 import { extractTextFromFile } from "@/lib/mcp/tools/classify"
+import { STORED_PAGE_DELIMITER } from "@/lib/docai-windows"
 import { logAction } from "@/lib/mcp/action-log"
 
 // ─── Constants ──────────────────────────────────────────────
 
-const MAX_OCR_TEXT = 50_000 // Truncate stored OCR text
+/**
+ * Cap on stored OCR text per document.
+ *
+ * DECIDED, not inherited (council, 2026-07-18): a dense 35-page tax return runs
+ * to roughly 70k characters, so this cap DOES bite on long documents and the
+ * tail is not saved. Raising it was considered and deliberately deferred, because
+ * the client-document lister currently SELECTs this whole column for every row
+ * just to slice a 500-character preview — raising the cap first would multiply
+ * that over-fetch across every listing.
+ *
+ * What makes the cap safe in the meantime is that it is no longer SILENT: a read
+ * served from storage reports its coverage, so a truncated tail shows up as
+ * "pages 24-35 not read" instead of a document that appears to simply end. The
+ * dangerous version of this cap was the invisible one.
+ *
+ * FOLLOW-UP (do these together, in this order): stop selecting `ocr_text` in the
+ * document lister, THEN raise this cap.
+ */
+const MAX_OCR_TEXT = 50_000
 const BATCH_MAX_FILES = 20
 const BATCH_TIMEOUT_MS = 50_000 // Stop 10s before Vercel 60s limit
 
@@ -106,8 +125,9 @@ export async function processFile(
       if (acc) accountName = acc.company_name
     }
 
-    // 6. Prepare OCR text (truncated)
-    const ocrText = pages.join("\n---PAGE BREAK---\n").slice(0, MAX_OCR_TEXT)
+    // 6. Prepare OCR text (truncated). The delimiter is shared with the readers,
+    //    which split on it to serve a page request straight from storage.
+    const ocrText = pages.join(STORED_PAGE_DELIMITER).slice(0, MAX_OCR_TEXT)
 
     // 7. Auto-resolve contact_id for category 2 (Contacts) docs if not provided
     let resolvedContactId = contactId || null

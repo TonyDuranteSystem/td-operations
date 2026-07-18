@@ -13,6 +13,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { ocrDriveFile } from "@/lib/docai"
+import { DOCAI_SYNC_PAGE_LIMIT } from "@/lib/docai-windows"
 import { classifyDocument, classifyByFilename, RULES } from "@/lib/classifier"
 import { downloadFileContent, getFileMetadata } from "@/lib/google-drive"
 
@@ -33,6 +34,48 @@ interface DriveFileMeta {
  * 2. If it's a text file, download directly (fast).
  * 3. If it's a PDF/image, use Document AI OCR (slower).
  */
+/**
+ * Max windows we will OCR to store one document. 8 x 15 = 120 pages.
+ *
+ * A ceiling, not a target: Document AI bills per page, and without a bound a
+ * single 400-page upload would quietly run up a bill and blow the function's
+ * time budget. Anything longer is stored partially — which the reader reports
+ * honestly as incomplete coverage rather than as a document that just ends.
+ */
+const MAX_STORE_WINDOWS = 8
+
+/**
+ * OCR a long PDF a window at a time and return its pages in order.
+ *
+ * Windows are read SEQUENTIALLY on purpose. Every Document AI caller in this
+ * codebase is sequential, and the client throws on the first non-2xx with no
+ * retry or backoff — so firing windows in parallel would make a shared-project
+ * rate-limit response into a wholesale failure, which is the bug being fixed.
+ *
+ * A window that fails stops the loop rather than being skipped: returning pages
+ * 1-15 and 31-45 with a silent hole in the middle would be indistinguishable
+ * from a complete read of a shorter document.
+ */
+async function ocrLongPdfInWindows(fileId: string): Promise<string[]> {
+  const pages: string[] = []
+  let next = 1
+  let total: number | null = null
+
+  for (let window = 0; window < MAX_STORE_WINDOWS; window++) {
+    const result = await ocrDriveFile(fileId, {
+      pages: [next, next + DOCAI_SYNC_PAGE_LIMIT - 1],
+    })
+    if (total === null) total = result.documentPageCount ?? null
+    if (!result.pages.length) break
+
+    pages.push(...result.pages)
+    next += result.pages.length
+    if (total !== null && next > total) break
+  }
+
+  return pages
+}
+
 export async function extractTextFromFile(
   fileId: string,
 ): Promise<{ pages: string[]; method: "text" | "ocr" | "filename_only"; fileName: string }> {
@@ -61,8 +104,22 @@ export async function extractTextFromFile(
     "image/bmp", "image/webp",
   ]
   if (ocrMimes.includes(meta.mimeType)) {
-    const result = await ocrDriveFile(fileId)
-    return { pages: result.pages, method: "ocr", fileName: meta.name }
+    try {
+      // Fast path, unchanged: one call for the whole document. Everything that
+      // fits Google's per-call page limit — which is the overwhelming majority
+      // of what we file — costs exactly what it always did.
+      const result = await ocrDriveFile(fileId)
+      return { pages: result.pages, method: "ocr", fileName: meta.name }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // A document too long for one call is the ONE failure worth retrying a
+      // different way. Before this, a 35-page scanned return threw here and its
+      // text was never stored at all — so every later read of that document
+      // found nothing saved and had to re-OCR (and failed again the same way).
+      const isPageLimit = /exceed the limit|pages in non-imageless/i.test(msg)
+      if (!isPageLimit || meta.mimeType !== "application/pdf") throw err
+      return { pages: await ocrLongPdfInWindows(fileId), method: "ocr", fileName: meta.name }
+    }
   }
 
   // Unsupported — return filename only for basic classification
