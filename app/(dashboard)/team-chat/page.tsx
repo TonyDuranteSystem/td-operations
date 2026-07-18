@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
-import { sortPanelThreads } from '@/lib/team/thread-meta'
+import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
 import {
   clampThreadPaneWidth, readStoredThreadPaneWidth,
   THREAD_PANE_DEFAULT_WIDTH, THREAD_PANE_WIDTH_KEY,
@@ -107,6 +107,8 @@ export default function TeamWorkspacePage() {
   // Archived threads: hidden from the panel AND the channel stream until the
   // archive view is switched on (that's what "remove it" has to mean).
   const [showArchived, setShowArchived] = useState(false)
+  // The COMPLETE set of archived roots in the open channel (server-supplied).
+  const [archivedRoots, setArchivedRoots] = useState<string[]>([])
   // Thread pane width (desktop only — the pane is full-width on mobile).
   // Starts at the default so server and first client render agree; the stored
   // value is applied in an effect after mount.
@@ -152,13 +154,12 @@ export default function TeamWorkspacePage() {
   // tombstones so their replies stay attached); replies live in the pane.
   const streamMessages = useMemo(() => {
     if (!isThreadedChannel) return messages
-    // An archived thread leaves the channel too — otherwise "removed" still
-    // stares back at you from the stream with its reply count. Derived from the
-    // SAME threads[] the panel reads, so the two can never disagree about what
-    // is hidden.
-    const hidden = showArchived ? null : new Set(threadsList.filter(t => t.archived).map(t => t.root_id))
-    return messages.filter(m => !m.root_id && !(hidden?.has(m.id)))
-  }, [isThreadedChannel, messages, threadsList, showArchived])
+    // Uses the server's COMPLETE archived set, never the panel's thread list —
+    // that list drops archived rows when the archive view is off, so deriving
+    // from it hid nothing exactly when hiding mattered (the bug Antonio hit on
+    // 2026-07-18: archived, still sitting in the channel).
+    return filterStreamRoots(messages, archivedRoots, showArchived)
+  }, [isThreadedChannel, messages, archivedRoots, showArchived])
   const paneRoot = useMemo(() => (openRootId ? messages.find(m => m.id === openRootId) ?? null : null), [openRootId, messages])
   const paneReplies = useMemo(() => (openRootId ? messages.filter(m => m.root_id === openRootId) : []), [openRootId, messages])
 
@@ -267,6 +268,7 @@ export default function TeamWorkspacePage() {
       })
       setThreadMeta(d.thread_meta ?? {})
       setThreadsList(d.threads ?? [])
+      setArchivedRoots(d.archived_roots ?? [])
       // Optimistically clear this thread's unread badge locally.
       setThreads(prev => prev.map(t => t.id === threadId ? { ...t, unread_count: 0 } : t))
     } catch {
@@ -724,7 +726,10 @@ export default function TeamWorkspacePage() {
   const setThreadArchived = useCallback(async (rootId: string, archived: boolean, channelId?: string) => {
     const tid = channelId ?? selectedIdRef.current
     if (!tid) return
-    // Drop it from view immediately; close its pane if it was open.
+    // Drop it from view immediately; close its pane if it was open. The
+    // archived set drives the CHANNEL stream, so it has to move optimistically
+    // too or the thread lingers there until the refetch lands.
+    setArchivedRoots(prev => archived ? Array.from(new Set([...prev, rootId])) : prev.filter(id => id !== rootId))
     setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, archived } : t))
     setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, archived } : t))
     if (archived && openRootIdRef.current === rootId) setOpenRootId(null)
