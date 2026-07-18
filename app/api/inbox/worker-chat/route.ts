@@ -17,6 +17,7 @@ import {
 import { gmailGet, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gmail"
 import { harvestEmailAttachments } from "@/lib/inbox/email-attachments"
 import { collectThreadRecipients } from "@/lib/inbox/email-recipients"
+import { buildClientScope } from "@/lib/ai-agent/client-scope"
 import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
@@ -473,6 +474,14 @@ export async function POST(req: NextRequest) {
       : {
           enableSlackSend: true,
           sendActor: `crm-portal:${actorEmail}`,
+          // Server-enforced client boundary (council Security blocker): on this
+          // panel the worker may only look up the client whose chat is open.
+          clientScope: buildClientScope(
+            clientKey!.startsWith("acct-")
+              ? `account:${clientKey!.slice("acct-".length)}`
+              : `contact:${clientKey!.slice("contact-".length)}`,
+            [body.accountId ?? "", body.contactId ?? ""].filter(Boolean) as string[],
+          ),
           pinnedPortalRecipient: clientKey!.startsWith("acct-")
             ? { account_id: clientKey!.slice("acct-".length) }
             : { contact_id: clientKey!.slice("contact-".length) },
