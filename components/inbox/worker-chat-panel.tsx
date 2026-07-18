@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 import type { InboxConversation } from '@/lib/types'
 
@@ -212,6 +213,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
             Reads CRM, DB &amp; memory — about: {conversation.subject || conversation.name}
           </p>
         </div>
+        <WorkerSettingsGear className="shrink-0" />
         <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100 text-zinc-400" title="Close">
           <X className="h-4 w-4" />
         </button>

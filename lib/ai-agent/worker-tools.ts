@@ -2808,6 +2808,56 @@ export function resolveWorkerModel(override?: string | null): string {
   return env || WORKER_MODEL_DEFAULT
 }
 
+/**
+ * The model chosen from the gear on any worker panel (dev job a6c3d75b). ONE
+ * shared setting: change it on any screen, every surface follows — so the same
+ * question can't get a different answer depending where it was asked.
+ *
+ * Precedence: per-call override → stored setting → env → built-in default. The
+ * stored value is what makes this live (no redeploy); the env stays as the
+ * break-glass and the default guarantees the worker still runs if the store is
+ * unreachable.
+ *
+ * Cached briefly so a multi-step tool loop doesn't hit the settings table on every
+ * turn. A change is picked up within the TTL — seconds, not a deploy.
+ * Best-effort: any failure falls back to the sync resolver rather than erroring.
+ */
+const WORKER_MODEL_CACHE_MS = 30_000
+let workerModelCache: { value: string; at: number } | null = null
+
+/** Drop the cached model (used by the settings route after a write, and by tests). */
+export function clearWorkerModelCache(): void {
+  workerModelCache = null
+}
+
+export async function resolveWorkerModelAsync(override?: string | null): Promise<string> {
+  const o = (override ?? "").trim()
+  if (o) return o
+  const now = Date.now()
+  if (workerModelCache && now - workerModelCache.at < WORKER_MODEL_CACHE_MS) {
+    return workerModelCache.value
+  }
+  try {
+    const [{ getAppSetting }, { isAllowedWorkerModel }] = await Promise.all([
+      import("@/lib/settings"),
+      import("./worker-models"),
+    ])
+    const stored = await getAppSetting<string | null>("worker_model", null)
+    // Validate against the curated list: a stale/retired/typo'd id must never take
+    // the worker down on every surface at once.
+    if (isAllowedWorkerModel(stored)) {
+      const value = stored.trim()
+      workerModelCache = { value, at: now }
+      return value
+    }
+  } catch (err) {
+    console.warn("[worker] model setting unreadable — using env/default:", err)
+  }
+  const fallback = resolveWorkerModel()
+  workerModelCache = { value: fallback, at: now }
+  return fallback
+}
+
 export async function runWorkerLoop(
   userContent: WorkerUserContent,
   tools: ToolDef[],
@@ -2825,7 +2875,9 @@ export async function runWorkerLoop(
   const apiKey = resolveWorkerApiKey(apiKeyOverride)
   // Resolved once — both fetch sites (main loop + exhaustion synthesis) use it,
   // so a per-call model stays consistent within one request.
-  const model = resolveWorkerModel(modelOverride)
+  // Shared model setting (gear on any worker panel) → env → default. Awaited so a
+  // change made in the CRM applies on the next turn, no redeploy.
+  const model = await resolveWorkerModelAsync(modelOverride)
 
   const maxLoops = maxIterations || DEFAULT_MAX_TOOL_LOOPS
 

@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { WorkerMarkdown } from '@/components/chat/worker-markdown'
 import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 
 interface ChatMsg {
@@ -175,6 +176,7 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         <p className="text-xs text-zinc-600 truncate">
           Worker — reads CRM, DB &amp; memory — about: <span className="font-medium">{clientName}</span>
         </p>
+        <WorkerSettingsGear className="ml-auto shrink-0" />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3">

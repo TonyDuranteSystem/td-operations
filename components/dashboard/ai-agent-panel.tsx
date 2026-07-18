@@ -6,6 +6,7 @@ import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles, Paperclip, FileTe
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
+import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 
@@ -276,7 +277,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {/* Provider selector */}
+            {/* Assistant model — the SAME shared setting as every other worker panel. */}
+            <WorkerSettingsGear />
+            {/* Provider selector — legacy engine only; ignored once the sidebar runs
+                the worker (removal tracked as a follow-up). */}
             <select
               value={provider}
               onChange={e => setProvider(e.target.value as Provider)}
