@@ -117,6 +117,17 @@ export async function GET(
   // panel's "Show archived" toggle) — including from the channel stream, so
   // "remove this thread" actually removes it from view.
   const includeArchived = request.nextUrl.searchParams.get('include_archived') === '1'
+  // The COMPLETE set of archived roots in this channel — deliberately NOT
+  // derived from `threads[]` below. That list is a FILTERED view (archived rows
+  // are dropped from it unless the archive view is on), so reading the archived
+  // set off it yields an empty set exactly when the stream needs it most, and
+  // the archived thread keeps rendering in the channel. This looked like
+  // duplicated information and was removed once on that reasoning; it is not
+  // duplication — one is a filtered list, this is the full set. Do not fold them
+  // together again.
+  const archivedRootIds = Array.from(stateMap.entries())
+    .filter(([, st]) => !!st.archived_at)
+    .map(([rid]) => rid)
   // Which of these threads THIS user follows (presence = following).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: followRows } = await (supabaseAdmin as any)
@@ -227,6 +238,7 @@ export async function GET(
     messages: enriched,
     thread_meta: threadMeta,
     threads,
+    archived_roots: archivedRootIds,
     current_user_id: user.id,
     current_user_name: getUserDisplayName(user),
     is_admin: isAdmin(user),

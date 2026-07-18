@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeThreadMeta, sortPanelThreads, type ReplyRow, type RootReadRow, type PanelThread } from '@/lib/team/thread-meta'
+import { computeThreadMeta, sortPanelThreads, type ReplyRow, type RootReadRow, type PanelThread, filterStreamRoots } from '@/lib/team/thread-meta'
 
 const ME = 'user-me'
 const OTHER = 'user-other'
@@ -85,5 +85,40 @@ describe('sortPanelThreads', () => {
       pt('newer', 'in_progress', false, '2026-07-17T12:00:00Z'),
     ], false)
     expect(out[0].root_id).toBe('newer')
+  })
+})
+
+describe('filterStreamRoots', () => {
+  const root = (id: string) => ({ id, root_id: null })
+  const reply = (id: string, rootId: string) => ({ id, root_id: rootId })
+
+  it('drops replies — they belong in the thread pane', () => {
+    const out = filterStreamRoots([root('a'), reply('a1', 'a')], [], false)
+    expect(out.map(m => m.id)).toEqual(['a'])
+  })
+
+  it('hides an archived thread from the channel', () => {
+    const out = filterStreamRoots([root('a'), root('b')], ['b'], false)
+    expect(out.map(m => m.id)).toEqual(['a'])
+  })
+
+  it('shows archived threads again in the archive view, so they can be restored', () => {
+    const out = filterStreamRoots([root('a'), root('b')], ['b'], true)
+    expect(out.map(m => m.id)).toEqual(['a', 'b'])
+  })
+
+  it('hides nothing when nothing is archived', () => {
+    expect(filterStreamRoots([root('a'), root('b')], [], false).map(m => m.id)).toEqual(['a', 'b'])
+    expect(filterStreamRoots([root('a')], null, false).map(m => m.id)).toEqual(['a'])
+    expect(filterStreamRoots([root('a')], undefined, false).map(m => m.id)).toEqual(['a'])
+  })
+
+  // THE REGRESSION: the archived set was derived from the panel's thread list,
+  // which drops archived rows when the archive view is off — so it arrived empty
+  // and the archived thread kept rendering in the channel. Passing an empty set
+  // must therefore be understood as "nothing is archived", and the caller must
+  // pass the COMPLETE set.
+  it('cannot hide anything if handed an empty set — the caller must pass the full set', () => {
+    expect(filterStreamRoots([root('a'), root('b')], [], false).map(m => m.id)).toEqual(['a', 'b'])
   })
 })
