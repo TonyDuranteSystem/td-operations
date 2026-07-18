@@ -122,3 +122,46 @@ describe('filterStreamRoots', () => {
     expect(filterStreamRoots([root('a'), root('b')], [], false).map(m => m.id)).toEqual(['a', 'b'])
   })
 })
+
+describe('computeThreadMeta — hand-marked unread', () => {
+  const ME = 'me'
+  const reply = (rootId: string, sender: string, at: string) =>
+    ({ root_id: rootId, created_at: at, sender_id: sender, sender_name: sender })
+
+  it('reads as unread even when everything has been seen', () => {
+    // My own reply, already read — nothing new, but I marked it unread by hand.
+    const out = computeThreadMeta(
+      [reply('r1', ME, '2026-07-18T10:00:00Z')],
+      [{ root_message_id: 'r1', last_read_at: '2026-07-18T11:00:00Z', manual_unread: true }],
+      ME,
+    )
+    expect(out['r1'].unread).toBe(true)
+  })
+
+  it('is not unread when the flag is off and there is nothing new', () => {
+    const out = computeThreadMeta(
+      [reply('r1', ME, '2026-07-18T10:00:00Z')],
+      [{ root_message_id: 'r1', last_read_at: '2026-07-18T11:00:00Z', manual_unread: false }],
+      ME,
+    )
+    expect(out['r1'].unread).toBe(false)
+  })
+
+  it('still reads as unread from a real new reply, flag or no flag', () => {
+    const out = computeThreadMeta(
+      [reply('r1', 'someone-else', '2026-07-18T12:00:00Z')],
+      [{ root_message_id: 'r1', last_read_at: '2026-07-18T11:00:00Z' }],
+      ME,
+    )
+    expect(out['r1'].unread).toBe(true)
+  })
+
+  it('treats a missing flag as false rather than throwing', () => {
+    const out = computeThreadMeta(
+      [reply('r1', ME, '2026-07-18T10:00:00Z')],
+      [{ root_message_id: 'r1', last_read_at: '2026-07-18T11:00:00Z' }],
+      ME,
+    )
+    expect(out['r1'].unread).toBe(false)
+  })
+})

@@ -20,15 +20,19 @@ export interface ReplyRow {
 export interface RootReadRow {
   root_message_id: string
   last_read_at: string
+  /** The caller marked this thread unread by hand — forces the dot back on even
+   *  with no new replies. Cleared when they next open the thread. */
+  manual_unread?: boolean | null
 }
 
 export interface ThreadMeta {
   reply_count: number
   last_reply_at: string
   last_reply_sender: string
-  /** This user has replies in the thread they haven't seen. Driven by the
-   *  per-root read pointer ONLY — NOT the channel read pointer — so opening the
-   *  channel never silently clears an unopened thread's unread replies. */
+  /** This user has replies in the thread they haven't seen, OR marked it unread
+   *  by hand. Driven by the per-root read pointer ONLY — NOT the channel read
+   *  pointer — so opening the channel never silently clears an unopened
+   *  thread's unread replies. */
   unread: boolean
 }
 
@@ -44,7 +48,11 @@ export function computeThreadMeta(
   currentUserId: string,
 ): Record<string, ThreadMeta> {
   const lastReadByRoot = new Map<string, string>()
-  for (const rr of rootReads) lastReadByRoot.set(rr.root_message_id, rr.last_read_at)
+  const manualUnreadRoots = new Set<string>()
+  for (const rr of rootReads) {
+    lastReadByRoot.set(rr.root_message_id, rr.last_read_at)
+    if (rr.manual_unread) manualUnreadRoots.add(rr.root_message_id)
+  }
 
   interface Acc { reply_count: number; last_reply_at: string; last_reply_sender: string; last_other_at: string | null }
   const acc = new Map<string, Acc>()
@@ -61,7 +69,11 @@ export function computeThreadMeta(
   const out: Record<string, ThreadMeta> = {}
   acc.forEach((a, rootId) => {
     const lastRead = lastReadByRoot.get(rootId)
-    const unread = !!a.last_other_at && (!lastRead || a.last_other_at > lastRead)
+    // A hand-marked thread reads as unread even with no new replies — the same
+    // rule the two SQL lists apply, so the panel, the board and the menu dot
+    // can never disagree about whether a thread is new.
+    const unread = manualUnreadRoots.has(rootId)
+      || (!!a.last_other_at && (!lastRead || a.last_other_at > lastRead))
     out[rootId] = {
       reply_count: a.reply_count,
       last_reply_at: a.last_reply_at,

@@ -79,6 +79,19 @@ export interface ThreadListItem {
   archived_by: string | null
   /** Who opened the thread — Delete is offered only to them. */
   root_sender_id: string | null
+  /** Personal "bring forward" flag — only the caller sees it. */
+  later: boolean
+}
+
+/** A row in the personal "bring forward" list (GET /api/team/later-threads). */
+export interface LaterThread {
+  root_message_id: string
+  thread_id: string
+  channel_label: string
+  title: string
+  status: 'todo' | 'in_progress' | 'waiting' | 'handled'
+  unread: boolean
+  flagged_at: string
 }
 
 /** A thread card on the cross-channel Board (from GET /api/team/all-threads). */
@@ -95,6 +108,8 @@ export interface BoardThread {
   following: boolean
   /** Only ever true when the board explicitly asked for archived threads. */
   archived?: boolean
+  /** Personal "bring forward" flag. */
+  later?: boolean
 }
 
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'

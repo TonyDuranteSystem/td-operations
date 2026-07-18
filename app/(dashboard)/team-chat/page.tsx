@@ -9,7 +9,7 @@ import {
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
   MessageSquare, Bot, Building2, Slack, ExternalLink,
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
-  Bell, BellOff, Archive, ArchiveRestore,
+  Bell, BellOff, Archive, ArchiveRestore, Mail,
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
@@ -27,7 +27,7 @@ import {
 } from '@/lib/team/pane-width'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
-import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem, BoardThread } from './types'
+import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem, BoardThread, LaterThread } from './types'
 
 const AVATAR_COLORS = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-orange-500', 'bg-rose-500', 'bg-cyan-500', 'bg-amber-500', 'bg-indigo-500']
 const QUICK_EMOJIS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂', '🎉']
@@ -109,6 +109,8 @@ export default function TeamWorkspacePage() {
   const [showArchived, setShowArchived] = useState(false)
   // The COMPLETE set of archived roots in the open channel (server-supplied).
   const [archivedRoots, setArchivedRoots] = useState<string[]>([])
+  // Personal "bring forward" list — threads flagged from any channel.
+  const [laterRoots, setLaterRoots] = useState<LaterThread[]>([])
   // Thread pane width (desktop only — the pane is full-width on mobile).
   // Starts at the default so server and first client render agree; the stored
   // value is applied in an effect after mount.
@@ -670,6 +672,7 @@ export default function TeamWorkspacePage() {
   // thread you archived in a channel you're no longer sitting in.
   useEffect(() => { if (view === 'board') loadAllThreads(showArchived) }, [view, loadAllThreads, showArchived])
 
+
   // Flipping the archive view changes what the SERVER returns, so refetch once.
   // Deliberately keyed on showArchived alone — adding selectedId/loadMessages
   // would refire this on every channel switch and message load.
@@ -710,6 +713,64 @@ export default function TeamWorkspacePage() {
       loadMessages(tid, { silent: true })
     }
   }, [loadMessages])
+
+  // The personal "bring forward" list, across every channel.
+  const loadLaterThreads = useCallback(async () => {
+    try {
+      const r = await fetch('/api/team/later-threads')
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not load your Later list.') }
+      const d = await r.json()
+      setLaterRoots(d.threads ?? [])
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not load your Later list.')
+    }
+  }, [])
+
+  // The personal Later list lives in the sidebar, so load it once on mount.
+  useEffect(() => { loadLaterThreads() }, [loadLaterThreads])
+
+  /** Personal "bring forward" — flag a thread onto (or off) your Later list. */
+  const setThreadLater = useCallback(async (rootId: string, later: boolean, channelId?: string) => {
+    const tid = channelId ?? selectedIdRef.current
+    if (!tid) return
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, later } : t))
+    setAllThreads(prev => prev.map(t => t.root_message_id === rootId ? { ...t, later } : t))
+    if (!later) setLaterRoots(prev => prev.filter(l => l.root_message_id !== rootId))
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/thread-later`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId, later }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not update the list.') }
+      toast.success(later ? 'Brought forward.' : 'Removed from Later.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not update the list.')
+    }
+    loadLaterThreads()
+  }, [loadLaterThreads])
+
+  /**
+   * Personal "mark unread". With a message id this is Slack's mark-unread-FROM-
+   * HERE: everything from that message down reads as new again.
+   */
+  const markThreadUnread = useCallback(async (rootId: string, fromMessageId?: string, channelId?: string) => {
+    const tid = channelId ?? selectedIdRef.current
+    if (!tid) return
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, unread: true } : t))
+    setThreadMeta(prev => prev[rootId] ? { ...prev, [rootId]: { ...prev[rootId], unread: true } } : prev)
+    // Close the pane: leaving it open would immediately re-read the thread and
+    // undo the very thing that was just asked for.
+    if (openRootIdRef.current === rootId) setOpenRootId(null)
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/thread-unread`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root_id: rootId, ...(fromMessageId ? { from_message_id: fromMessageId } : {}) }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not mark it unread.') }
+      toast.success('Marked unread.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not mark it unread.')
+    }
+  }, [])
 
   // Rename a thread. Blank clears the name, falling back to the opening message.
   const renameThread = useCallback(async (rootId: string, title: string, channelId?: string) => {
@@ -1069,7 +1130,7 @@ export default function TeamWorkspacePage() {
                 </>
               )}
 
-              {laterThreads.length > 0 && (
+              {(laterThreads.length > 0 || laterRoots.length > 0) && (
                 <>
                   <SectionHeader label="Later" />
                   {laterThreads.map(t => (
@@ -1077,6 +1138,29 @@ export default function TeamWorkspacePage() {
                       icon={<Clock className="h-3.5 w-3.5 text-amber-500" />} label={labelFor(t)}
                       channels={channels} onMove={moveToChannel} onMarkUnread={markUnread} onToggleLater={toggleLater}
                       menuOpen={menuThreadId === 'later-' + t.id} onMenuToggle={o => setMenuThreadId(o ? 'later-' + t.id : null)} />
+                  ))}
+                  {/* Single THREADS brought forward. The Later list deliberately
+                      mixes two grains — whole conversations above, individual
+                      threads here — so every thread row states the channel it
+                      lives in. Mixing grains WITHOUT that label is exactly what
+                      made the Board confusing (2026-07-18). */}
+                  {laterRoots.map(l => (
+                    <button key={'laterRoot-' + l.root_message_id}
+                      onClick={() => openThreadInChannel(l.thread_id, l.root_message_id)}
+                      className="w-full flex items-start gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-zinc-200/60 group">
+                      <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                      <span className="flex-1 min-w-0">
+                        <span className={cn('block text-sm truncate flex items-center gap-1.5', l.unread ? 'font-semibold text-zinc-900' : 'text-zinc-700')}>
+                          {l.unread && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}{l.title}
+                        </span>
+                        <span className="block text-[11px] text-zinc-400 truncate">#{l.channel_label} · {TEAM_WORK_STATUS_LABELS[l.status]}</span>
+                      </span>
+                      <span onClick={e => { e.stopPropagation(); setThreadLater(l.root_message_id, false, l.thread_id) }}
+                        title="Remove from Later"
+                        className="shrink-0 p-1 rounded text-zinc-300 hover:text-zinc-600 opacity-0 group-hover:opacity-100">
+                        <X className="h-3 w-3" />
+                      </span>
+                    </button>
                   ))}
                 </>
               )}
@@ -1328,7 +1412,8 @@ export default function TeamWorkspacePage() {
                           onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
                           onReact={emoji => toggleReaction(m.id, emoji)}
                           reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)}
-                          touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)} />
+                          touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)}
+                        onMarkUnreadFromHere={openRootId ? () => markThreadUnread(openRootId, m.id) : undefined} />
                         {meta && meta.reply_count > 0 && (
                           <button onClick={() => openThread(m.id)} className={cn('ml-11 mb-1 flex items-center gap-2 text-xs text-blue-600 hover:underline', meta.unread ? 'font-bold' : 'font-medium')}>
                             {meta.unread && <span className="w-2 h-2 rounded-full bg-blue-500" />}
@@ -1403,7 +1488,9 @@ export default function TeamWorkspacePage() {
                           <ThreadActionsMenu thread={ti} currentUserId={currentUserId}
                             onRename={(rid, title) => renameThread(rid, title)}
                             onArchive={(rid, archived) => setThreadArchived(rid, archived)}
-                            onDelete={rid => deleteThread(rid)} />
+                            onDelete={rid => deleteThread(rid)}
+                            onLater={(rid, later) => setThreadLater(rid, later)}
+                            onMarkUnread={rid => markThreadUnread(rid)} />
                         ) : null
                       })()}
                       <button onClick={closeThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
@@ -1418,7 +1505,8 @@ export default function TeamWorkspacePage() {
                         onDelete={() => deleteMsg(paneRoot)} onPin={() => togglePin(paneRoot)}
                         onReact={emoji => toggleReaction(paneRoot.id, emoji)}
                         reactOpen={reactFor === paneRoot.id} setReactOpen={open => setReactFor(open ? paneRoot.id : null)}
-                        touchMenu={touchMenuFor === paneRoot.id} setTouchMenu={open => setTouchMenuFor(open ? paneRoot.id : null)} />
+                        touchMenu={touchMenuFor === paneRoot.id} setTouchMenu={open => setTouchMenuFor(open ? paneRoot.id : null)}
+                        onMarkUnreadFromHere={openRootId ? () => markThreadUnread(openRootId, paneRoot.id) : undefined} />
                     ) : (
                       <div className="text-xs text-zinc-400 py-4 text-center">This thread&apos;s original message isn&apos;t loaded.</div>
                     )}
@@ -1433,7 +1521,8 @@ export default function TeamWorkspacePage() {
                         onDelete={() => deleteMsg(m)} onPin={() => togglePin(m)}
                         onReact={emoji => toggleReaction(m.id, emoji)}
                         reactOpen={reactFor === m.id} setReactOpen={open => setReactFor(open ? m.id : null)}
-                        touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)} />
+                        touchMenu={touchMenuFor === m.id} setTouchMenu={open => setTouchMenuFor(open ? m.id : null)}
+                        onMarkUnreadFromHere={openRootId ? () => markThreadUnread(openRootId, m.id) : undefined} />
                     ))}
                   </div>
                 </div>
@@ -1557,6 +1646,8 @@ export default function TeamWorkspacePage() {
                   onRename={(rid, title) => renameThread(rid, title)}
                   onArchive={(rid, archived) => setThreadArchived(rid, archived)}
                   onDelete={rid => deleteThread(rid)}
+                  onLater={(rid, later) => setThreadLater(rid, later)}
+                  onMarkUnread={rid => markThreadUnread(rid)}
                 />
               </div>
             )}
@@ -1623,7 +1714,7 @@ function NewThreadModal({ channelName, onClose, onCreate }: {
   )
 }
 
-function ThreadsPanel({ channelName, threads, members, currentUserId, showArchived, onToggleArchived, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow, onRename, onArchive, onDelete }: {
+function ThreadsPanel({ channelName, threads, members, currentUserId, showArchived, onToggleArchived, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow, onRename, onArchive, onDelete, onLater, onMarkUnread }: {
   channelName: string
   threads: ThreadListItem[]
   members: TeamMember[]
@@ -1638,6 +1729,8 @@ function ThreadsPanel({ channelName, threads, members, currentUserId, showArchiv
   onRename: (rootId: string, title: string) => void
   onArchive: (rootId: string, archived: boolean) => void
   onDelete: (rootId: string) => void
+  onLater: (rootId: string, later: boolean) => void
+  onMarkUnread: (rootId: string) => void
 }) {
   const [stage, setStage] = useState<string>('all')
   const [followingOnly, setFollowingOnly] = useState(false)
@@ -1739,7 +1832,8 @@ function ThreadsPanel({ channelName, threads, members, currentUserId, showArchiv
                 )}
               </div>
               <ThreadActionsMenu thread={t} currentUserId={currentUserId}
-                onRename={onRename} onArchive={onArchive} onDelete={onDelete} />
+                onRename={onRename} onArchive={onArchive} onDelete={onDelete}
+                onLater={onLater} onMarkUnread={onMarkUnread} />
             </div>
           )
         })}
@@ -1846,12 +1940,14 @@ function ThreadRow({ t, selected, onClick, icon, label, resolved }: { t: TeamThr
  * reversibly without destroying anyone's words. The server enforces both rules
  * independently — this is the affordance, not the guard.
  */
-function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelete, align = 'right' }: {
+function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelete, onLater, onMarkUnread, align = 'right' }: {
   thread: ThreadListItem
   currentUserId: string | null
   onRename: (rootId: string, title: string) => void
   onArchive: (rootId: string, archived: boolean) => void
   onDelete: (rootId: string) => void
+  onLater: (rootId: string, later: boolean) => void
+  onMarkUnread: (rootId: string) => void
   align?: 'left' | 'right'
 }) {
   const [open, setOpen] = useState(false)
@@ -1896,6 +1992,13 @@ function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelet
               </div>
             ) : (
               <>
+                {/* Personal markers first — used often, and harmless. */}
+                <TouchAction icon={<Clock className="h-4 w-4" />}
+                  label={thread.later ? 'Remove from Later' : 'Bring forward'}
+                  onClick={() => { onLater(thread.root_id, !thread.later); close() }} />
+                <TouchAction icon={<Mail className="h-4 w-4" />} label="Mark unread"
+                  onClick={() => { onMarkUnread(thread.root_id); close() }} />
+                <div className="my-1 border-t border-zinc-100" />
                 <TouchAction icon={<Pencil className="h-4 w-4" />} label="Rename topic" onClick={() => setRenaming(true)} />
                 {thread.archived ? (
                   <TouchAction icon={<ArchiveRestore className="h-4 w-4" />} label="Restore thread" onClick={() => { onArchive(thread.root_id, false); close() }} />
@@ -1927,11 +2030,14 @@ function TouchAction({ icon, label, onClick, danger }: { icon: React.ReactNode; 
   )
 }
 
-function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEdit, onDelete, onPin, onReact, reactOpen, setReactOpen, touchMenu, setTouchMenu }: {
+function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEdit, onDelete, onPin, onReact, reactOpen, setReactOpen, touchMenu, setTouchMenu, onMarkUnreadFromHere }: {
   m: TeamMsg; isMe: boolean; isClaude: boolean; canDelete: boolean; currentUserId: string | null
   onReply: () => void; onEdit: () => void; onDelete: () => void; onPin: () => void; onReact: (e: string) => void
   reactOpen: boolean; setReactOpen: (o: boolean) => void
   touchMenu: boolean; setTouchMenu: (o: boolean) => void
+  /** Present only inside a thread pane — marks everything from this message
+   *  down as new again (Slack's "mark unread from here"). */
+  onMarkUnreadFromHere?: () => void
 }) {
   const isDeleted = !!m.deleted_at
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -1998,6 +2104,7 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
                 <button onClick={() => setReactOpen(!reactOpen)} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="React"><Smile className="h-3.5 w-3.5" /></button>
                 <button onClick={onReply} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Reply"><CornerUpLeft className="h-3.5 w-3.5" /></button>
                 <button onClick={onPin} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title={m.pinned_at ? 'Unpin' : 'Pin'}>{m.pinned_at ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button>
+                {onMarkUnreadFromHere && <button onClick={onMarkUnreadFromHere} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Mark unread from here"><Mail className="h-3.5 w-3.5" /></button>}
                 {isMe && !isClaude && <button onClick={onEdit} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Edit"><Pencil className="h-3.5 w-3.5" /></button>}
                 {canDelete && <button onClick={() => setConfirmDelete(true)} className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-zinc-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>}
               </div>
@@ -2026,6 +2133,7 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
                     <TouchAction icon={<Smile className="h-4 w-4" />} label="React" onClick={() => { setTouchMenu(false); setReactOpen(true) }} />
                     <TouchAction icon={<CornerUpLeft className="h-4 w-4" />} label="Reply" onClick={() => { setTouchMenu(false); onReply() }} />
                     <TouchAction icon={m.pinned_at ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />} label={m.pinned_at ? 'Unpin' : 'Pin'} onClick={() => { setTouchMenu(false); onPin() }} />
+                    {onMarkUnreadFromHere && <TouchAction icon={<Mail className="h-4 w-4" />} label="Mark unread from here" onClick={() => { setTouchMenu(false); onMarkUnreadFromHere() }} />}
                     {isMe && !isClaude && <TouchAction icon={<Pencil className="h-4 w-4" />} label="Edit" onClick={() => { setTouchMenu(false); onEdit() }} />}
                     {canDelete && <TouchAction icon={<Trash2 className="h-4 w-4" />} label="Delete" danger onClick={() => { setTouchMenu(false); setConfirmDelete(true) }} />}
                   </div>
