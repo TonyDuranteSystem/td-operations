@@ -106,12 +106,24 @@ export function channelSlug(name: string): string {
 export const TEAM_WORK_STATUSES = ['todo', 'in_progress', 'waiting', 'handled'] as const
 export type TeamWorkStatus = (typeof TEAM_WORK_STATUSES)[number]
 
-/** Human labels for the board columns. */
+/**
+ * Human labels for a work status — ONE source, shared by the conversation board
+ * and the per-thread management panel so the two grains never drift into two
+ * vocabularies (council, 2026-07-17).
+ */
 export const TEAM_WORK_STATUS_LABELS: Record<TeamWorkStatus, string> = {
-  todo: 'To do',
-  in_progress: 'In Progress',
-  waiting: 'Waiting',
-  handled: 'Handled',
+  todo: 'Open',
+  in_progress: 'Working',
+  waiting: 'Pending',
+  handled: 'Done',
+}
+
+/** Dot + pill colors for a work status — shared by board, StatusDot, thread pill. */
+export const TEAM_STATUS_COLORS: Record<TeamWorkStatus, { dot: string; pill: string }> = {
+  todo:        { dot: 'bg-zinc-300',    pill: 'bg-zinc-100 text-zinc-600 border-zinc-200' },
+  in_progress: { dot: 'bg-blue-500',    pill: 'bg-blue-50 text-blue-700 border-blue-200' },
+  waiting:     { dot: 'bg-amber-500',   pill: 'bg-amber-50 text-amber-700 border-amber-200' },
+  handled:     { dot: 'bg-emerald-500', pill: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
 }
 
 /** True if the value is a valid work status. */
