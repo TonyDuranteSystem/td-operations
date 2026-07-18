@@ -69,12 +69,16 @@ export async function GET(req: NextRequest) {
     .limit(60)
 
   const turns = ((data ?? []) as Array<{
+    id: string
     body: string
     reply: string | null
     status: string
     context_json: unknown
     created_at: string
   }>).map((r) => ({
+    // Row id travels with the turn so the panel's 🧠 button can reference THIS
+    // reply; the server re-reads its text by id (never trusts client-sent text).
+    id: r.id,
     user: displayUserMessage(r.body, r.context_json),
     worker: r.status === "failed" ? null : r.reply,
     created_at: r.created_at,
@@ -625,7 +629,9 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-    return NextResponse.json({ reply, threadId, pendingSend, preparedSend })
+    // messageId lets the panel offer 🧠 on the reply it just received (same id the
+    // GET history returns), without a refetch.
+    return NextResponse.json({ reply, threadId, pendingSend, preparedSend, messageId: rowId })
   } catch (error) {
     if (rowId) {
       await db
