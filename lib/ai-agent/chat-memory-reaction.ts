@@ -65,15 +65,24 @@ export async function saveChatMessageAsMemory(input: {
       .limit(1)
     if (existing?.length) return false
 
-    const clientKey = deriveClientKey(input.accountId, input.contactId)
+    // 🧠 = make it GLOBAL (Antonio 2026-07-17), even from a client's Portal chat.
+    // Distill the marked message into a general, client-free rule (strips
+    // names/amounts/ids) with a content-based situation so it's recalled by
+    // meaning — the old save embedded the "marked important" meta-string and saved
+    // client-scoped. The scrub is what keeps a client's private fact out of the
+    // shared brain. Fails closed: nothing general survives → no save.
+    const { distillMarkedMessage } = await import("@/lib/ai-agent/lesson-capture")
+    const lesson = await distillMarkedMessage(decision)
+    if (!lesson) return false
     await saveDecisionMemory({
-      situation: `Explicitly marked important by ${input.savedByName} via 🧠 in the CRM ${input.surface === "team" ? "Team chat" : "Portal chat"}`,
-      decision,
+      situation: lesson.situation,
+      decision: lesson.decision,
+      reasoning: lesson.reasoning,
       sourceType,
       sourceRef,
       actors: [input.savedByName.toLowerCase()],
       tags: ["explicit_save"],
-      ...(clientKey ? { clientKey } : {}),
+      // GLOBAL — no clientKey.
     })
     return true
   } catch (err) {

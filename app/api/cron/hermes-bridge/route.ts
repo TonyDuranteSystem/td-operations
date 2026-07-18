@@ -182,7 +182,6 @@ async function processOne(row: AgentMessageRow): Promise<{ id: string; ok: boole
         const priorBotSaid = priorRows?.[0]?.reply as string | undefined
         if (priorBotSaid) {
           await detectAndSaveCorrection({
-            situation: row.body,
             currentMessage: row.body,
             botSaid: priorBotSaid,
             sourceType: "hermes",

@@ -542,6 +542,46 @@ export async function POST(req: NextRequest) {
     })
     if (rowId) {
       await db.from("agent_messages").update({ reply, status: "done" }).eq("id", rowId)
+
+      // BUSINESS BRAIN capture (dev job 203cda1a): if this staff turn corrected the
+      // worker's PRIOR reply, learn the lesson. The panel is staff-authenticated
+      // (auth gate at the top), so every turn here is staff — no actor gating needed.
+      // Portal Chats → client-scoped (private to this client); Inbox has no client
+      // scope wired → global + scrubbed (Antonio's policy; the scrub strips client
+      // specifics). Inputs are the RAW staff message + the prior worker reply ONLY —
+      // never userBody (which carries fenced client content: the Adam-Marra fix).
+      // Best-effort, runs after the reply is saved, never blocks the answer.
+      try {
+        const memoryClientKey = clientKey
+          ? clientKey.startsWith("acct-")
+            ? `account:${clientKey.slice("acct-".length)}`
+            : `contact:${clientKey.slice("contact-".length)}`
+          : null
+        const { data: priorRows } = await db
+          .from("agent_messages")
+          .select("reply")
+          .eq("thread_id", threadId)
+          .eq("status", "done")
+          .not("reply", "is", null)
+          .neq("id", rowId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+        const priorReply = priorRows?.[0]?.reply as string | undefined
+        if (priorReply) {
+          const { captureLessonFromTurn } = await import("@/lib/ai-agent/lesson-capture")
+          await captureLessonFromTurn({
+            staffMessage: message,
+            priorReply,
+            clientKey: memoryClientKey,
+            surface: surface === "portal-chats" ? "portal_chat" : "inbox",
+            sourceRef: `${surface}:${threadId}`,
+            actors: ["antonio", "claude"],
+            mode: "correction",
+          })
+        }
+      } catch (err) {
+        console.warn("[worker-chat] brain capture failed (non-fatal):", err)
+      }
     }
     // (1) Off-thread recipient Confirm (the other feature): surface a
     // server-attested off-thread address for the panel's "Confirm & send" button.

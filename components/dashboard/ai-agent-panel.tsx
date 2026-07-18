@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles, Paperclip, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
+import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 
@@ -42,6 +44,12 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Stable id for THIS conversation (worker-path memory thread). Minted lazily on
+  // first send; a new chat mints a fresh one → fresh worker memory.
+  const conversationIdRef = useRef<string | null>(null)
+  // Live route → per-page client scope for the worker's brain. Read at SEND time
+  // (below), never cached, so navigating between clients can't mis-scope.
+  const pathname = usePathname()
 
   // Voice input
   const handleTranscript = useCallback((text: string) => {
@@ -155,6 +163,10 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
           attachment: attachment
             ? { name: attachment.name, type: attachment.type, base64: attachment.base64 }
             : undefined,
+          // Worker path (when enabled): a stable per-conversation thread + the live
+          // per-page client scope. Ignored by the old provider path.
+          conversationId: (conversationIdRef.current ??= crypto.randomUUID()),
+          clientKey: clientKeyFromPath(pathname),
         }),
       })
 
@@ -164,7 +176,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       }
 
       const data = await res.json()
-      const providerTag = data.provider === 'claude' ? '' : data.provider === 'openai' ? ' _(GPT-4o fallback)_' : ''
+      const providerTag = data.provider === 'claude' || data.provider === 'worker' ? '' : data.provider === 'openai' ? ' _(GPT-4o fallback)_' : ''
       const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
       setMessages(prev => [...prev, { role: 'assistant', content: (data.content || 'No response.') + providerTag + toolInfo }])
     } catch (err) {
@@ -206,6 +218,8 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const clearChat = () => {
     setMessages([])
     setAttachedFile(null)
+    // Start a fresh worker-memory thread for the next conversation.
+    conversationIdRef.current = null
   }
 
   if (!open) return null
