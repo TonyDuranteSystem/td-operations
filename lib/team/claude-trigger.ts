@@ -248,6 +248,7 @@ export async function processClaudeReply(params: {
     const res = await callWorkerWithAttachments(userBody, {
       threadId,
       systemPromptOverride: systemPrompt,
+      surface: 'team_chat',
       apiKeyOverride: process.env.SLACK_WORKER_ANTHROPIC_KEY,
       maxIterations: 20,
       // Files shared in the thread, handed to the model directly (vision for

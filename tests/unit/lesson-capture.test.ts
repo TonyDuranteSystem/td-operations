@@ -36,9 +36,6 @@ const SCRUBBED = {
   reasoning: "Standard turnaround once the state filing is submitted",
 }
 
-// The bug-report thread is a DB write — stub it everywhere so these stay pure.
-const noReport = vi.fn().mockResolvedValue(null)
-
 describe("extractLesson", () => {
   it("parses a well-formed lesson including reasoning", async () => {
     const got = await extractLesson("prior reply", "staff correction here", fakeCall(GOOD_LESSON))
@@ -130,7 +127,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const callFn = sequencedCall(GOOD_LESSON, SCRUBBED)
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: null, surface: "slack" },
-      { callFn, saveFn, reportFn: noReport, recallGlobalFn: noMatch() },
+      { callFn, saveFn, recallGlobalFn: noMatch() },
     )
     expect(res.saved).toBe(true)
     expect(res.scope).toBe("global")
@@ -146,7 +143,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const callFn = sequencedCall(GOOD_LESSON, { empty: true })
     const res = await captureLessonFromTurn(
       { staffMessage: "just a general aside with a client name in it", priorReply: "prior", clientKey: null, surface: "team_chat" },
-      { callFn, saveFn, reportFn: noReport },
+      { callFn, saveFn },
     )
     expect(res.saved).toBe(false)
     expect(res.skipReason).toBe("scrub_empty")
@@ -163,7 +160,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
         surface: "portal_chat",
         sourceRef: "portal:msg-9",
       },
-      { callFn: fakeCall(GOOD_LESSON), saveFn, reportFn: noReport, recallClientFn: noMatch() },
+      { callFn: fakeCall(GOOD_LESSON), saveFn, recallClientFn: noMatch() },
     )
     expect(res.saved).toBe(true)
     expect(res.memoryId).toBe("mem-id-1")
@@ -179,7 +176,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const saveFn = baseSave()
     await captureLessonFromTurn(
       { staffMessage: "save this: we always chase the wire", priorReply: "ok noted", clientKey: "contact:z", surface: "team_chat", mode: "additive" },
-      { callFn: fakeCall(GOOD_LESSON), saveFn, reportFn: noReport },
+      { callFn: fakeCall(GOOD_LESSON), saveFn },
     )
     const arg = saveFn.mock.calls[0][0]
     expect(arg.tags).toContain("explicit_save")
@@ -191,7 +188,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const callFn = fakeCall(GOOD_LESSON)
     const res = await captureLessonFromTurn(
       { staffMessage: "no", priorReply: "something", clientKey: "account:abc", surface: "inbox" },
-      { callFn, saveFn, reportFn: noReport },
+      { callFn, saveFn },
     )
     expect(res.skipReason).toBe("message_too_short")
     expect(callFn).not.toHaveBeenCalled()
@@ -202,7 +199,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const saveFn = baseSave()
     const res = await captureLessonFromTurn(
       { staffMessage: "this is a long enough message to pass", priorReply: "", clientKey: "account:abc", surface: "inbox" },
-      { callFn: fakeCall(GOOD_LESSON), saveFn, reportFn: noReport },
+      { callFn: fakeCall(GOOD_LESSON), saveFn },
     )
     expect(res.skipReason).toBe("no_prior_reply")
     expect(saveFn).not.toHaveBeenCalled()
@@ -212,7 +209,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const saveFn = vi.fn().mockRejectedValue(new Error("db down"))
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat" },
-      { callFn: fakeCall(GOOD_LESSON), saveFn, reportFn: noReport, recallClientFn: noMatch() },
+      { callFn: fakeCall(GOOD_LESSON), saveFn, recallClientFn: noMatch() },
     )
     expect(res.saved).toBe(false)
     expect(res.skipReason).toBe("error")
@@ -222,7 +219,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const saveFn = baseSave()
     const res = await captureLessonFromTurn(
       { staffMessage: "thanks, that is perfect", priorReply: "here is your answer", clientKey: "account:abc", surface: "portal_chat" },
-      { callFn: fakeCall({ no_lesson: true }), saveFn, reportFn: noReport },
+      { callFn: fakeCall({ no_lesson: true }), saveFn },
     )
     expect(res.skipReason).toBe("no_lesson")
     expect(saveFn).not.toHaveBeenCalled()
@@ -247,7 +244,7 @@ describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
     const contradictFn = vi.fn().mockResolvedValue("replacement-1")
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
-      { callFn: GOOD(), saveFn, reportFn: noReport, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
     )
     expect(res.superseded).toBe("old-1")
     expect(res.memoryId).toBe("replacement-1")
@@ -267,7 +264,7 @@ describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
     const saveFn = vi.fn().mockResolvedValue("appended")
     await captureLessonFromTurn(
       { staffMessage: "no, do it the other way please", priorReply: "the first way", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
-      { callFn: GOOD(), saveFn, reportFn: noReport, recallClientFn, recallGlobalFn },
+      { callFn: GOOD(), saveFn, recallClientFn, recallGlobalFn },
     )
     expect(recallClientFn).toHaveBeenCalled()
     expect(recallGlobalFn).not.toHaveBeenCalled() // scope isolation — no cross-scope supersede
@@ -280,7 +277,7 @@ describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
     const contradictFn = vi.fn()
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
-      { callFn: GOOD(), saveFn, reportFn: noReport, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
     )
     expect(contradictFn).not.toHaveBeenCalled()
     expect(res.superseded).toBeUndefined()
@@ -292,7 +289,7 @@ describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
     const contradictFn = vi.fn()
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
-      { callFn: GOOD(), saveFn, reportFn: noReport, recallClientFn: vi.fn().mockResolvedValue([]), contradictFn, recallGlobalFn: vi.fn() },
+      { callFn: GOOD(), saveFn, recallClientFn: vi.fn().mockResolvedValue([]), contradictFn, recallGlobalFn: vi.fn() },
     )
     expect(contradictFn).not.toHaveBeenCalled()
     expect(res.memoryId).toBe("appended")
@@ -304,7 +301,7 @@ describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
     const contradictFn = vi.fn()
     await captureLessonFromTurn(
       { staffMessage: "save this rule for this client please", priorReply: "noted", clientKey: "account:abc", surface: "portal_chat", mode: "additive" },
-      { callFn: GOOD(), saveFn, reportFn: noReport, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
     )
     expect(recallClientFn).not.toHaveBeenCalled()
     expect(contradictFn).not.toHaveBeenCalled()
@@ -317,7 +314,7 @@ describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
     const contradictFn = vi.fn().mockRejectedValue(new Error("supersede boom"))
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
-      { callFn: GOOD(), saveFn, reportFn: noReport, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
     )
     expect(res.saved).toBe(true)
     expect(res.memoryId).toBe("appended")

@@ -509,6 +509,7 @@ export async function POST(req: NextRequest) {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       systemPromptOverride: `${buildWorkerSurfacePrompt(surface)}${clientCardSuffix}${templatesSuffix}`,
+      surface: surface === "portal-chats" ? "portal_chat" : "inbox",
       // Screenshots the staff member pasted, and images attached to the open
       // email, go straight to the model. Scanned PDFs ride along as native
       // document blocks. Everything else is already extracted into userBody.

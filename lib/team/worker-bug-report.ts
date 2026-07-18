@@ -1,30 +1,36 @@
 import 'server-only'
 
 /**
- * WORKER BUG REPORT → a thread in the #td-worker-bug channel (dev job a6c3d75b,
- * Antonio 2026-07-18: "I don't have time to go back and forth from the board to
- * check it. It would be better if in team workspace you create a thread under
- * td-worker-bug").
+ * WORKER *BUG* REPORT → a thread in the #td-worker-bug channel (dev job a6c3d75b,
+ * Antonio 2026-07-18).
  *
- * WHY THIS SHAPE. The system has recorded every correction Antonio makes for
- * months — the correction detector runs on every surface and writes the lesson to
- * memory. Nobody ever read that output, so Antonio stayed the quality check. A
- * weekly digest would still be something he has to remember to open; a thread
- * appearing in a channel he already works in is something he just sees, with the
- * detail inline instead of behind a link. @claude is already in Team Chat, so he
- * can reply "fix this" in the thread and it gets picked up.
+ * WHAT THIS IS NOT. The first version of this fired whenever Antonio corrected the
+ * worker and it learned something. That was WRONG and he rejected it outright:
+ * "if he got it wrong and I corrected it and he memorized my correction, it doesn't
+ * need to create any kind of thread. It's a part of the learning process." He is
+ * right — a correction that lands is the system WORKING. With tens of conversations
+ * a day that channel would have been unusable, and a muted channel is worse than no
+ * channel at all.
  *
- * NOISE IS THE REAL RISK: a channel that pings on every trivial "make it shorter"
- * gets muted, which is worse than no report at all. So this fires ONLY when the
- * correction produced a durable lesson (i.e. the extractor judged there was
- * something reusable to learn) — see the caller. Start strict; loosen if quiet.
+ * WHAT IT IS. A thread appears only when the worker hits a wall that ONLY CODE CAN
+ * FIX — something no correction of Antonio's will ever teach it:
  *
- * Best-effort in every direction: it must never break a worker turn, and it is
- * idempotent per captured lesson so a retry can't double-post.
+ *   • WALL_ABSENCE  — it was about to tell staff something doesn't exist without
+ *     having actually looked. The answer-guard caught it. That means a lookup is
+ *     missing, mis-described, or unreachable — a tooling defect, not a lesson.
+ *   • WALL_CANNOT   — it flatly cannot do something (e.g. "I can't open a Slack
+ *     link — I don't have Slack access"). A capability gap. Antonio can correct it
+ *     a hundred times and it will still be unable.
  *
- * LOOP-SAFETY: the row is inserted directly as the Claude sentinel sender, not
- * through the team send route, so it cannot trigger the @claude responder (which
- * only fires on human-authored messages via that route).
+ * Both are rare by construction. If this channel ever gets busy, that IS the
+ * finding — it means the worker is repeatedly walking into the same missing tool.
+ *
+ * Best-effort in every direction: never breaks a worker turn. Deduped per thread +
+ * kind + day, so the same wall hit repeatedly in one conversation posts once.
+ *
+ * LOOP-SAFETY: inserted directly as the Claude sentinel sender, not through the
+ * team send route, so it cannot trigger the @claude responder (which only fires on
+ * human-authored messages via that route).
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -33,31 +39,30 @@ import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME } from '@/lib/team/workspace'
 /** The channel Antonio nominated. Threads land here, nowhere else. */
 export const WORKER_BUG_CHANNEL = 'td-worker-bug'
 
-export interface WorkerBugReportInput {
-  /** What the staff member had asked (their raw message this turn). */
+/** The only two things worth interrupting him for. */
+export type WorkerWallKind = 'absence_without_looking' | 'cannot_do'
+
+export interface WorkerWallReport {
+  kind: WorkerWallKind
+  /** What the staff member had asked. */
   staffMessage: string
-  /** What the worker had replied, and is now being corrected on. */
-  priorReply: string
-  /** Which surface it happened on, e.g. "portal_chat", "inbox", "team_chat", "slack". */
+  /** The reply that revealed the wall (the draft that was caught, or the refusal). */
+  reply: string
+  /** Surface key, e.g. "portal_chat" | "inbox" | "team_chat" | "slack". */
   surface: string
   /** Client display name, when the turn was about one. */
   clientName?: string | null
-  /** Canonical client scope, when known. */
-  clientKey?: string | null
-  /** The lesson that was learned — used for the title. */
-  lessonSituation: string
-  lessonDecision: string
-  /** The saved memory id — the idempotency key, so a retry can't double-post. */
-  memoryId: string
+  /** Worker thread id — used for de-duplication. */
+  threadId?: string | null
+  /** Lookups that DID run this turn, so the thread shows what it already tried. */
+  toolsTried?: readonly string[]
 }
 
-/** Trim to a single tidy line for a thread title. */
-function titleLine(s: string, max = 140): string {
-  const one = (s ?? '').replace(/\s+/g, ' ').trim()
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one
+function oneLine(s: string, max = 400): string {
+  const t = (s ?? '').replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t
 }
 
-/** Plain-English surface name — Antonio should not read internal keys. */
 function surfaceLabel(surface: string): string {
   switch (surface) {
     case 'portal_chat': return 'Portal Chats'
@@ -65,32 +70,32 @@ function surfaceLabel(surface: string): string {
     case 'team_chat': return 'Team Chat'
     case 'slack': return 'Slack'
     case 'dashboard': return 'CRM assistant'
-    case 'hermes': return 'Hermes bridge'
     default: return surface
   }
 }
 
 /**
- * Post one thread describing a mistake the worker just made and was corrected on.
- * Returns the root message id, or null when nothing was posted (channel missing,
- * already reported, or any failure — all non-fatal).
+ * Post one thread describing a wall the worker hit. Returns the root message id, or
+ * null when nothing was posted (channel missing, already reported today, or any
+ * failure — all non-fatal).
  */
-export async function reportWorkerMistake(input: WorkerBugReportInput): Promise<string | null> {
+export async function reportWorkerWall(input: WorkerWallReport): Promise<string | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any
 
-    // The channel must already exist — never silently create channels.
     const { data: channel } = await db
       .from('internal_threads')
       .select('id')
       .eq('channel_name', WORKER_BUG_CHANNEL)
       .limit(1)
       .maybeSingle()
-    if (!channel?.id) return null
+    if (!channel?.id) return null // never create channels silently
 
-    // Idempotent per captured lesson: a retry of the same turn must not re-post.
-    const marker = `worker-bug:${input.memoryId}`
+    // De-dupe per (thread, kind, day): hitting the same wall three times in one
+    // conversation is ONE problem, not three notifications.
+    const day = new Date().toISOString().slice(0, 10)
+    const marker = `wall:${input.kind}:${input.threadId ?? 'nothread'}:${day}`
     const { data: existing } = await db
       .from('internal_messages')
       .select('id')
@@ -99,28 +104,35 @@ export async function reportWorkerMistake(input: WorkerBugReportInput): Promise<
       .limit(1)
     if (existing?.length) return null
 
-    const who = input.clientName?.trim()
-      ? `${input.clientName.trim()}`
-      : input.clientKey?.trim()
-        ? 'a client'
-        : 'no specific client'
+    const headline =
+      input.kind === 'absence_without_looking'
+        ? 'Nearly said something is not in the system — without looking'
+        : "Couldn't do it at all — capability missing"
 
-    const title = `Worker got it wrong — ${titleLine(input.lessonSituation, 110)}`
+    const why =
+      input.kind === 'absence_without_looking'
+        ? 'A lookup is missing, badly described, or unreachable. No correction can teach this — it needs a tool or a fix.'
+        : 'The worker has no way to do this. Correcting it will not help; the capability has to be built.'
+
+    const tried = (input.toolsTried ?? []).filter(Boolean)
+    const title = `${headline} — ${surfaceLabel(input.surface)}`
+
     const body = [
-      title,
+      `**${headline}**`,
       '',
-      `**Where:** ${surfaceLabel(input.surface)} · **Client:** ${who}`,
+      `**Where:** ${surfaceLabel(input.surface)}${input.clientName ? ` · **Client:** ${input.clientName}` : ''}`,
       '',
-      '**You asked / said**',
-      `> ${titleLine(input.staffMessage, 600)}`,
+      '**Asked**',
+      `> ${oneLine(input.staffMessage)}`,
       '',
-      '**What it had answered**',
-      `> ${titleLine(input.priorReply, 600)}`,
+      '**It was about to say**',
+      `> ${oneLine(input.reply, 600)}`,
       '',
-      '**What it learned**',
-      input.lessonDecision.trim(),
+      tried.length ? `**Already tried:** ${tried.join(', ')}` : '**Already tried:** nothing — it answered without looking',
       '',
-      `_Saved to memory automatically. Reply here with @claude to get it fixed._`,
+      `_${why}_`,
+      '',
+      '@claude — investigate and report what needs building.',
       `<!-- ${marker} -->`,
     ].join('\n')
 
@@ -138,7 +150,6 @@ export async function reportWorkerMistake(input: WorkerBugReportInput): Promise<
       .single()
     if (error || !msg?.id) return null
 
-    // Register it as a real thread with its own title, so it shows in the panel.
     await db
       .from('internal_thread_state')
       .upsert(
@@ -146,7 +157,7 @@ export async function reportWorkerMistake(input: WorkerBugReportInput): Promise<
           root_message_id: msg.id,
           thread_id: channel.id,
           status: 'todo',
-          title: titleLine(title, 200),
+          title: oneLine(title, 200),
           created_as_thread: true,
           updated_at: now,
           updated_by: CLAUDE_SENDER_UUID,

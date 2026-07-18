@@ -14,6 +14,7 @@ import {
   buildCorrectionNudge,
   ABSENCE_EVIDENCE_TOOLS,
   looksLikeFailedLookup,
+  assertsCannotDo,
 } from "@/lib/ai-agent/answer-guards"
 
 // ── The real incident, word for word ────────────────────────────────────────
@@ -195,5 +196,36 @@ describe("reading a scanned document counts as looking", () => {
     expect(assertsAbsence("I don't have access to the signed document.") && !hasSearchedForAbsence([])).toBe(true)
     // but once it has actually read the file, the claim is grounded
     expect(assertsAbsence("I don't have access to the signed document.") && !hasSearchedForAbsence(["read_scanned_document"])).toBe(false)
+  })
+})
+
+describe("assertsCannotDo — capability gaps that need CODE, not a correction", () => {
+  it("flags Antonio's real Slack-link refusal", () => {
+    expect(assertsCannotDo(
+      "I can't access external URLs or Slack links directly — I don't have a browser or Slack API access. " +
+      "Could you paste the message content here? I'll read it and help right away."
+    )).toBe(true)
+  })
+
+  it("flags other capability refusals", () => {
+    for (const s of [
+      "I don't have access to the fax service.",
+      "I'm unable to open that file.",
+      "I don't have the ability to send faxes.",
+      "That's not something I can do.",
+    ]) {
+      expect(assertsCannotDo(s), s).toBe(true)
+    }
+  })
+
+  it("does NOT flag business statements or ordinary answers", () => {
+    for (const s of [
+      "The client can't sign until the OA is countersigned.",
+      "We can't file before the EIN arrives.",
+      "Faxed July 3 — receipt on file.",
+      "",
+    ]) {
+      expect(assertsCannotDo(s), s).toBe(false)
+    }
   })
 })

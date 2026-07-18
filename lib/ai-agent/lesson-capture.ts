@@ -277,12 +277,6 @@ export async function captureLessonFromTurn(
     recallGlobalFn?: typeof recallDecisionMemory
     recallClientFn?: typeof recallClientDecisionMemory
     contradictFn?: typeof contradictMemory
-    /** Posts a thread to #td-worker-bug. Injectable so tests stay DB-free. */
-    reportFn?: (input: {
-      staffMessage: string; priorReply: string; surface: string
-      clientName?: string | null; clientKey?: string | null
-      lessonSituation: string; lessonDecision: string; memoryId: string
-    }) => Promise<unknown>
   } = {},
 ): Promise<CaptureLessonResult> {
   const callFn = deps.callFn ?? callAI
@@ -290,12 +284,6 @@ export async function captureLessonFromTurn(
   const recallGlobalFn = deps.recallGlobalFn ?? recallDecisionMemory
   const recallClientFn = deps.recallClientFn ?? recallClientDecisionMemory
   const contradictFn = deps.contradictFn ?? contradictMemory
-  const reportFn =
-    deps.reportFn ??
-    (async (i: Parameters<NonNullable<typeof deps.reportFn>>[0]) => {
-      const { reportWorkerMistake } = await import("@/lib/team/worker-bug-report")
-      return reportWorkerMistake(i)
-    })
 
   const staffMessage = (params.staffMessage ?? "").trim()
   const priorReply = (params.priorReply ?? "").trim()
@@ -325,27 +313,6 @@ export async function captureLessonFromTurn(
     const mode: CaptureMode = params.mode ?? "correction"
     const scope: "client" | "global" = clientKey ? "client" : "global"
 
-    // REPORT IT WHERE ANTONIO ALREADY WORKS (dev job a6c3d75b). A correction that
-    // produced a durable lesson means the worker got something WRONG — open a
-    // thread in #td-worker-bug so he sees it without going to look. Only on a real
-    // correction, and only when a lesson was actually learned: that is the noise
-    // filter, because a channel that pings on every "make it shorter" gets muted,
-    // which is worse than no report. Fire-and-forget; never affects the answer.
-    const report = (memoryId: string) => {
-      if (mode !== "correction") return
-      void Promise.resolve(
-        reportFn({
-          staffMessage,
-          priorReply,
-          surface: params.surface,
-          clientName: params.clientName ?? null,
-          clientKey: clientKey || null,
-          lessonSituation: situation,
-          lessonDecision: decision,
-          memoryId,
-        }),
-      ).catch(() => { /* reporting must never break a turn */ })
-    }
 
     // CORRECTION = TRUTH (P4): a genuine correction SUPERSEDES the nearest matching
     // lesson so the wrong answer stops being recalled — instead of appending a
@@ -375,7 +342,6 @@ export async function captureLessonFromTurn(
             newSituation: situation.slice(0, 500),
             newReasoning: reasoning ? reasoning.slice(0, 1000) : undefined,
           })
-          report(newId)
           return { saved: true, memoryId: newId, scope, superseded: top.id }
         }
       } catch (err) {
@@ -396,7 +362,6 @@ export async function captureLessonFromTurn(
       tags: [mode === "correction" ? "auto_correction" : "explicit_save"],
       clientKey: clientKey || null,
     })
-    report(memoryId)
     return { saved: true, memoryId, scope }
   } catch (err) {
     console.warn(`[lesson-capture] capture failed on ${params.surface} (non-fatal):`, err)
