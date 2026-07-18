@@ -535,12 +535,16 @@ export async function POST(req: NextRequest) {
       // conversation), but memory RECALL + SAVE use the same 'account:<id>' /
       // 'contact:<id>' form the Slack worker writes — the mismatch meant
       // per-client recall on this surface was silently ALWAYS empty.
-      ...(clientKey && body.clientName
+      // Gate on the KEY only (council fix 2026-07-18, dev job a6c3d75b): the panel
+      // sends clientName only on the first message of a session, so requiring it
+      // here meant per-client recall silently stopped after turn 1. The name is
+      // cosmetic; the key is what scopes the memory.
+      ...(clientKey
         ? {
             clientKey: clientKey.startsWith("acct-")
               ? `account:${clientKey.slice("acct-".length)}`
               : `contact:${clientKey.slice("contact-".length)}`,
-            clientName: body.clientName,
+            ...(body.clientName ? { clientName: body.clientName } : {}),
           }
         : {}),
     })

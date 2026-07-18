@@ -63,8 +63,23 @@ export const READ_TOOLS: ReadonlySet<string> = new Set([
   "classify_document", "classify_text", "doc_compliance_check", "gmail_labels",
 ])
 
-/** Params that escalate an otherwise read/internal tool to EXTERNAL when truthy. */
-const ESCALATING_FLAGS = ["apply_changes", "send_email", "save_to_drive", "send", "email_client", "notify_client"]
+/**
+ * Params that escalate an otherwise read/internal tool to EXTERNAL when truthy.
+ *
+ * COUNCIL FIX (2026-07-18, dev job a6c3d75b): `mark_reviewed` was missing, so
+ * `closure_form_review({ mark_reviewed: true })` classified as READ — the name
+ * segment "review" is a READ verb — and AUTO-RAN an unapproved write (it sets
+ * status/reviewed_at/reviewed_by). Any tool whose write is gated behind a boolean
+ * MUST have that boolean listed here, or the read-verb heuristic silently wins.
+ * Added the observed sibling shapes too (mark_ prefixed flags, plus confirm,
+ * approve, execute, apply, publish, finalize) so the next tool named "…_review"
+ * or "…_status" that mutates on a flag is caught by default rather than by luck.
+ */
+const ESCALATING_FLAGS = [
+  "apply_changes", "send_email", "save_to_drive", "send", "email_client", "notify_client",
+  "mark_reviewed", "mark_complete", "mark_sent", "mark_paid",
+  "confirm", "confirm_resend", "approve", "execute", "apply", "publish", "finalize",
+]
 
 // Verbs matched as whole name SEGMENTS (split on "_"), so "catalog" never matches
 // the "log" write-verb and "crm_search_x" is recognized as a read even though the

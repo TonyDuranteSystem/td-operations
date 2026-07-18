@@ -972,31 +972,63 @@ async function getClientPaperwork(p: any) {
   if (!accountId && !contactId) {
     return JSON.stringify({ error: 'Provide account_id and/or contact_id.' })
   }
+  // COUNCIL FIX (2026-07-18, dev job a6c3d75b) — two false-absence bugs here:
+  //
+  // (1) When BOTH ids were supplied, contact_id was silently DISCARDED. Standalone
+  //     individual offers hang on the contact alone, so "does this person have an
+  //     offer?" answered "no offers" for a real offer. Now: match EITHER id.
+  // (2) A FAILED query was indistinguishable from "none exist" — supabase-js
+  //     reports errors in the result rather than throwing, so a permission error,
+  //     renamed column or timeout returned []. The worker then stated "no offer has
+  //     been sent" with full confidence. This is the same class as the fax incident.
+  //     Now: errors surface as an explicit marker, never as an empty list.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const scoped = (q: any) => (accountId ? q.eq('account_id', accountId) : q.eq('contact_id', contactId))
+  const scoped = (q: any) =>
+    accountId && contactId
+      ? q.or(`account_id.eq.${accountId},contact_id.eq.${contactId}`)
+      : accountId
+        ? q.eq('account_id', accountId)
+        : q.eq('contact_id', contactId)
+  const failures: string[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const safe = async (fn: () => Promise<any>) => { try { return (await fn()).data ?? [] } catch { return [] } }
+  const safe = async (label: string, fn: () => Promise<any>) => {
+    try {
+      const res = await fn()
+      if (res?.error) { failures.push(`${label}: ${res.error.message ?? 'query failed'}`); return null }
+      return res?.data ?? []
+    } catch (err) {
+      failures.push(`${label}: ${err instanceof Error ? err.message : 'query failed'}`)
+      return null
+    }
+  }
 
-  const offers = await safe(() => scoped(
+  const offers = await safe('offers', () => scoped(
     supabaseAdmin.from('offers').select('client_name, contract_type, status, offer_date, viewed_at, expires_at').order('offer_date', { ascending: false }).limit(10)
   ))
-  const leases = await safe(() => scoped(
+  const leases = await safe('lease_agreements', () => scoped(
     supabaseAdmin.from('lease_agreements').select('suite_number, premises_address, status, viewed_at, signed_at, created_at').order('created_at', { ascending: false }).limit(5)
   ))
-  const oas = await safe(() => scoped(
+  const oas = await safe('oa_agreements', () => scoped(
     supabaseAdmin.from('oa_agreements').select('company_name, entity_type, status, signed_count, total_signers, signed_at, created_at').order('created_at', { ascending: false }).limit(5)
   ))
-  const signatures = await safe(() => scoped(
+  const signatures = await safe('signature_requests', () => scoped(
     supabaseAdmin.from('signature_requests').select('document_name, status, signed_at, created_at').order('created_at', { ascending: false }).limit(10)
   ))
-  const wizards = await safe(() => scoped(
+  const wizards = await safe('wizard_progress', () => scoped(
     supabaseAdmin.from('wizard_progress').select('wizard_type, current_step, status, updated_at').order('updated_at', { ascending: false }).limit(5)
   ))
 
   return JSON.stringify({
-    scope: accountId ? { account_id: accountId } : { contact_id: contactId },
+    scope: {
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(contactId ? { contact_id: contactId } : {}),
+    },
     offers, leases, operating_agreements: oas, signature_requests: signatures, formation_wizards: wizards,
-    note: 'Statuses are as recorded in the CRM. "signed_at" set = signed. For OA, signed_count/total_signers shows multi-member progress.',
+    // A null list means the lookup FAILED — it does NOT mean "none exist".
+    ...(failures.length ? { lookup_errors: failures } : {}),
+    note: failures.length
+      ? 'WARNING: one or more lookups FAILED (see lookup_errors) and returned null — null means UNKNOWN, not "none exist". Do NOT tell the staff member none exist for a failed lookup; say the lookup failed and check another way (documents, Drive, the activity log, or a direct query).'
+      : 'Statuses are as recorded in the CRM. "signed_at" set = signed. For OA, signed_count/total_signers shows multi-member progress. This covers offers/lease/OA/signatures/wizards ONLY — it does NOT cover stored documents or the activity log; check those separately before saying something does not exist.',
   })
 }
 

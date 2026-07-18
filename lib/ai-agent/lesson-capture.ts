@@ -6,12 +6,18 @@
  * lesson — situation + decision + the WHY (reasoning) — from a single turn and
  * saves it via saveDecisionMemory.
  *
- * D1 (Antonio, binding): SAVE-BY-DEFAULT, CLIENT-SCOPED. Auto-capture NEVER
- * auto-globalizes — a lesson becomes global ONLY via an explicit human promote
- * (P3), never here. So a capture with NO clientKey is SUPPRESSED (we do not write
- * a global row). This is the code-side guarantee that pairs with the P1 read wall
- * (match_decision_memory returns global-only): private facts can neither be
- * written global by accident nor read cross-client.
+ * D1 (Antonio, 2026-07-17): SAVE-BY-DEFAULT, SCOPE FOLLOWS CONTEXT.
+ *   - client in context  → CLIENT-SCOPED, raw text (private to that client);
+ *   - no client in context → GLOBAL, but SCRUBBED first (generalizeForGlobal
+ *     strips names/amounts/ids and FAILS CLOSED if nothing general survives).
+ * Antonio explicitly chose "keep auto-saving globally when there's no client" over
+ * suppressing; the scrub is the safety reconciliation. This pairs with the P1 read
+ * wall (match_decision_memory returns global-only) so a client's private facts are
+ * never read cross-client.
+ *
+ * (Corrected 2026-07-18 — this header previously claimed a no-clientKey capture was
+ * SUPPRESSED, which the code has never done since the D1 revision. The council
+ * flagged the contradiction; the code below is the contract.)
  *
  * INPUTS ARE THE STAFF MESSAGE + THE PRIOR WORKER REPLY ONLY. We deliberately do
  * NOT feed enriched/fenced client content (attachment text, referenced threads,
