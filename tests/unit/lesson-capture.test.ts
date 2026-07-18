@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest"
-import { captureLessonFromTurn, extractLesson, generalizeForGlobal, distillMarkedMessage } from "@/lib/ai-agent/lesson-capture"
+import { captureLessonFromTurn, extractLesson, generalizeForGlobal, distillMarkedMessage, decisionsConflict } from "@/lib/ai-agent/lesson-capture"
 
 /** A callAI stub returning a fixed JSON payload for every call. */
 function fakeCall(payload: unknown): any {
@@ -117,6 +117,9 @@ describe("distillMarkedMessage — 🧠 => global client-free lesson", () => {
 
 describe("captureLessonFromTurn — D1 guards", () => {
   const baseSave = () => vi.fn().mockResolvedValue("mem-id-1")
+  // No existing lesson matches → the correction path falls through to a plain
+  // append. Injected so these tests never touch the real embedding API.
+  const noMatch = () => vi.fn().mockResolvedValue([])
 
   it("saves GLOBAL but SCRUBBED when there is no client scope (Antonio: keep auto-saving globally)", async () => {
     const saveFn = baseSave()
@@ -124,7 +127,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const callFn = sequencedCall(GOOD_LESSON, SCRUBBED)
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: null, surface: "slack" },
-      { callFn, saveFn },
+      { callFn, saveFn, recallGlobalFn: noMatch() },
     )
     expect(res.saved).toBe(true)
     expect(res.scope).toBe("global")
@@ -157,7 +160,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
         surface: "portal_chat",
         sourceRef: "portal:msg-9",
       },
-      { callFn: fakeCall(GOOD_LESSON), saveFn },
+      { callFn: fakeCall(GOOD_LESSON), saveFn, recallClientFn: noMatch() },
     )
     expect(res.saved).toBe(true)
     expect(res.memoryId).toBe("mem-id-1")
@@ -206,7 +209,7 @@ describe("captureLessonFromTurn — D1 guards", () => {
     const saveFn = vi.fn().mockRejectedValue(new Error("db down"))
     const res = await captureLessonFromTurn(
       { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat" },
-      { callFn: fakeCall(GOOD_LESSON), saveFn },
+      { callFn: fakeCall(GOOD_LESSON), saveFn, recallClientFn: noMatch() },
     )
     expect(res.saved).toBe(false)
     expect(res.skipReason).toBe("error")
@@ -220,5 +223,101 @@ describe("captureLessonFromTurn — D1 guards", () => {
     )
     expect(res.skipReason).toBe("no_lesson")
     expect(saveFn).not.toHaveBeenCalled()
+  })
+})
+
+describe("decisionsConflict", () => {
+  it("ignores casing/whitespace differences (a re-statement is not a conflict)", () => {
+    expect(decisionsConflict("Bill in USD", "  bill   in usd ")).toBe(false)
+  })
+  it("flags a genuinely different answer", () => {
+    expect(decisionsConflict("Bill in USD", "Bill in EUR")).toBe(true)
+  })
+})
+
+describe("captureLessonFromTurn — correction = truth (P4 supersede)", () => {
+  const GOOD = () => vi.fn().mockResolvedValue({ text: JSON.stringify(GOOD_LESSON) })
+
+  it("SUPERSEDES the nearest same-CLIENT lesson when the decision differs", async () => {
+    const saveFn = vi.fn().mockResolvedValue("appended")
+    const recallClientFn = vi.fn().mockResolvedValue([{ id: "old-1", decision: "It takes 6 weeks", situation: "s", similarity: 0.97 }])
+    const contradictFn = vi.fn().mockResolvedValue("replacement-1")
+    const res = await captureLessonFromTurn(
+      { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+    )
+    expect(res.superseded).toBe("old-1")
+    expect(res.memoryId).toBe("replacement-1")
+    expect(res.scope).toBe("client")
+    // carried the fresh situation + reasoning into the replacement
+    expect(contradictFn).toHaveBeenCalledWith(
+      "old-1",
+      expect.stringContaining("2-3 weeks"),
+      expect.objectContaining({ newSituation: expect.any(String), newReasoning: expect.stringContaining("turnaround") }),
+    )
+    expect(saveFn).not.toHaveBeenCalled() // superseded, not appended
+  })
+
+  it("uses the CLIENT scope search for a client capture (never the global one)", async () => {
+    const recallClientFn = vi.fn().mockResolvedValue([])
+    const recallGlobalFn = vi.fn().mockResolvedValue([{ id: "g", decision: "different", situation: "s", similarity: 0.99 }])
+    const saveFn = vi.fn().mockResolvedValue("appended")
+    await captureLessonFromTurn(
+      { staffMessage: "no, do it the other way please", priorReply: "the first way", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
+      { callFn: GOOD(), saveFn, recallClientFn, recallGlobalFn },
+    )
+    expect(recallClientFn).toHaveBeenCalled()
+    expect(recallGlobalFn).not.toHaveBeenCalled() // scope isolation — no cross-scope supersede
+  })
+
+  it("APPENDS (no supersede) when the nearest lesson's decision is the SAME", async () => {
+    const saveFn = vi.fn().mockResolvedValue("appended")
+    // nearest match's decision equals the extracted lesson → a re-statement, not a correction
+    const recallClientFn = vi.fn().mockResolvedValue([{ id: "old-1", decision: GOOD_LESSON.lesson, situation: "s", similarity: 0.99 }])
+    const contradictFn = vi.fn()
+    const res = await captureLessonFromTurn(
+      { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+    )
+    expect(contradictFn).not.toHaveBeenCalled()
+    expect(res.superseded).toBeUndefined()
+    expect(saveFn).toHaveBeenCalled()
+  })
+
+  it("APPENDS when there is no near-enough match", async () => {
+    const saveFn = vi.fn().mockResolvedValue("appended")
+    const contradictFn = vi.fn()
+    const res = await captureLessonFromTurn(
+      { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
+      { callFn: GOOD(), saveFn, recallClientFn: vi.fn().mockResolvedValue([]), contradictFn, recallGlobalFn: vi.fn() },
+    )
+    expect(contradictFn).not.toHaveBeenCalled()
+    expect(res.memoryId).toBe("appended")
+  })
+
+  it("ADDITIVE saves NEVER supersede (and never even search)", async () => {
+    const saveFn = vi.fn().mockResolvedValue("appended")
+    const recallClientFn = vi.fn()
+    const contradictFn = vi.fn()
+    await captureLessonFromTurn(
+      { staffMessage: "save this rule for this client please", priorReply: "noted", clientKey: "account:abc", surface: "portal_chat", mode: "additive" },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+    )
+    expect(recallClientFn).not.toHaveBeenCalled()
+    expect(contradictFn).not.toHaveBeenCalled()
+    expect(saveFn).toHaveBeenCalled()
+  })
+
+  it("degrades to a plain append if the supersede path throws", async () => {
+    const saveFn = vi.fn().mockResolvedValue("appended")
+    const recallClientFn = vi.fn().mockResolvedValue([{ id: "old-1", decision: "different", situation: "s", similarity: 0.99 }])
+    const contradictFn = vi.fn().mockRejectedValue(new Error("supersede boom"))
+    const res = await captureLessonFromTurn(
+      { staffMessage: "no, tell them 2-3 weeks not 6", priorReply: "6 weeks", clientKey: "account:abc", surface: "portal_chat", mode: "correction" },
+      { callFn: GOOD(), saveFn, recallClientFn, contradictFn, recallGlobalFn: vi.fn() },
+    )
+    expect(res.saved).toBe(true)
+    expect(res.memoryId).toBe("appended")
+    expect(res.superseded).toBeUndefined()
   })
 })

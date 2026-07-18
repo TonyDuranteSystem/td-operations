@@ -22,7 +22,35 @@
  */
 
 import { callAI } from "@/lib/portal/ai-provider"
-import { saveDecisionMemory } from "./decision-memory"
+import {
+  saveDecisionMemory,
+  recallDecisionMemory,
+  recallClientDecisionMemory,
+  contradictMemory,
+} from "./decision-memory"
+
+/**
+ * A correction only SUPERSEDES an existing lesson when the match is near-certain —
+ * same scope AND this high a cosine similarity on the situation. Below this, a
+ * correction appends (never silently retires a merely-similar lesson). Deliberately
+ * far above the 0.45 auto-recall floor: retiring a lesson is destructive, recalling
+ * one is not.
+ */
+export const SUPERSEDE_THRESHOLD = 0.93
+
+/** Normalize a decision for equality: two decisions that differ only in casing /
+ *  whitespace are the SAME answer — a re-statement, not a correction. */
+function normalizeDecision(s: string): string {
+  return (s ?? "").toLowerCase().replace(/\s+/g, " ").trim()
+}
+
+/** True when the new decision is a genuinely different answer from the old one.
+ *  Gates supersede so a same-scope near-duplicate situation whose answer DIDN'T
+ *  change never retires the existing lesson (council: decision-conflict, not just
+ *  situation-similarity). */
+export function decisionsConflict(oldDecision: string, newDecision: string): boolean {
+  return normalizeDecision(oldDecision) !== normalizeDecision(newDecision)
+}
 
 /** Why this capture fired — correction supersedes later (P4); additive never does. */
 export type CaptureMode = "correction" | "additive"
@@ -59,6 +87,8 @@ export interface CaptureLessonResult {
   memoryId?: string
   /** Scope the lesson was written at (only present when saved). */
   scope?: "client" | "global"
+  /** When a correction SUPERSEDED an existing lesson, its id (now status=superseded). */
+  superseded?: string
   skipReason?: CaptureSkipReason
 }
 
@@ -233,10 +263,19 @@ export async function distillMarkedMessage(
  */
 export async function captureLessonFromTurn(
   params: CaptureLessonParams,
-  deps: { callFn?: typeof callAI; saveFn?: typeof saveDecisionMemory } = {},
+  deps: {
+    callFn?: typeof callAI
+    saveFn?: typeof saveDecisionMemory
+    recallGlobalFn?: typeof recallDecisionMemory
+    recallClientFn?: typeof recallClientDecisionMemory
+    contradictFn?: typeof contradictMemory
+  } = {},
 ): Promise<CaptureLessonResult> {
   const callFn = deps.callFn ?? callAI
   const saveFn = deps.saveFn ?? saveDecisionMemory
+  const recallGlobalFn = deps.recallGlobalFn ?? recallDecisionMemory
+  const recallClientFn = deps.recallClientFn ?? recallClientDecisionMemory
+  const contradictFn = deps.contradictFn ?? contradictMemory
 
   const staffMessage = (params.staffMessage ?? "").trim()
   const priorReply = (params.priorReply ?? "").trim()
@@ -264,6 +303,43 @@ export async function captureLessonFromTurn(
     }
 
     const mode: CaptureMode = params.mode ?? "correction"
+    const scope: "client" | "global" = clientKey ? "client" : "global"
+
+    // CORRECTION = TRUTH (P4): a genuine correction SUPERSEDES the nearest matching
+    // lesson so the wrong answer stops being recalled — instead of appending a
+    // competing one. Guarded hard against retiring the wrong lesson:
+    //   • only mode="correction" (additive / 🧠 saves never supersede);
+    //   • search the SAME SCOPE only — the client's own rows for a client capture,
+    //     global-only for a global one — never across scopes;
+    //   • require near-certain similarity (SUPERSEDE_THRESHOLD) AND a decision that
+    //     actually differs. Otherwise fall through and append (safe default).
+    // Best-effort: any failure in the supersede path degrades to a plain append.
+    if (mode === "correction") {
+      try {
+        const nearest = clientKey
+          ? await recallClientFn(situation, clientKey, {
+              matchThreshold: SUPERSEDE_THRESHOLD,
+              matchCount: 1,
+              trackRecall: false,
+            })
+          : await recallGlobalFn(situation, {
+              matchThreshold: SUPERSEDE_THRESHOLD,
+              matchCount: 1,
+              trackRecall: false,
+            })
+        const top = nearest?.[0]
+        if (top && decisionsConflict(top.decision, decision)) {
+          const newId = await contradictFn(top.id, decision.slice(0, 1000), {
+            newSituation: situation.slice(0, 500),
+            newReasoning: reasoning ? reasoning.slice(0, 1000) : undefined,
+          })
+          return { saved: true, memoryId: newId, scope, superseded: top.id }
+        }
+      } catch (err) {
+        console.warn(`[lesson-capture] supersede check failed on ${params.surface} (appending):`, err)
+      }
+    }
+
     const memoryId = await saveFn({
       situation: situation.slice(0, 500),
       decision: decision.slice(0, 1000),
@@ -277,7 +353,7 @@ export async function captureLessonFromTurn(
       tags: [mode === "correction" ? "auto_correction" : "explicit_save"],
       clientKey: clientKey || null,
     })
-    return { saved: true, memoryId, scope: clientKey ? "client" : "global" }
+    return { saved: true, memoryId, scope }
   } catch (err) {
     console.warn(`[lesson-capture] capture failed on ${params.surface} (non-fatal):`, err)
     return { saved: false, skipReason: "error" }

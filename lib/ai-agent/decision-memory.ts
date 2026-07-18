@@ -303,10 +303,20 @@ export async function confirmMemory(id: string): Promise<void> {
 
 /**
  * Record that a memory was contradicted: bump its times_contradicted, mark it
- * superseded, and create a fresh memory (same situation/domain/tags/actors)
- * carrying `newDecision`, linked back via superseded_by. Returns the new id.
+ * superseded, and create a fresh memory carrying `newDecision`, linked back via
+ * superseded_by. Returns the new id.
+ *
+ * `opts.newSituation` / `opts.newReasoning` (Business Brain P4): a real correction
+ * often carries a freshly-captured situation and the NEW reasoning (the why). When
+ * given, the replacement uses them instead of copying the old row's — otherwise the
+ * new context/reasoning would be silently discarded. Omitted → keep the old row's
+ * (backwards-compatible with the confirm/void callers).
  */
-export async function contradictMemory(id: string, newDecision: string): Promise<string> {
+export async function contradictMemory(
+  id: string,
+  newDecision: string,
+  opts: { newSituation?: string; newReasoning?: string } = {},
+): Promise<string> {
   if (!id) throw new Error("contradictMemory: id is required")
   if (!newDecision?.trim()) throw new Error("contradictMemory: newDecision is required")
 
@@ -325,12 +335,13 @@ export async function contradictMemory(id: string, newDecision: string): Promise
   if (error) throw new Error(`contradictMemory read failed: ${error.message}`)
   if (!old) throw new Error(`contradictMemory: memory ${id} not found`)
 
-  // Create the replacement memory for the same situation — preserving the client
-  // scope so a client-specific correction stays client-specific.
+  // Create the replacement memory — preserving the client scope so a client-specific
+  // correction stays client-specific, and carrying the fresh situation/reasoning when
+  // the caller captured them.
   const newId = await saveDecisionMemory({
-    situation: old.situation as string,
+    situation: opts.newSituation?.trim() || (old.situation as string),
     decision: newDecision,
-    reasoning: (old.reasoning as string | null) ?? undefined,
+    reasoning: opts.newReasoning?.trim() || (old.reasoning as string | null) || undefined,
     tags: (old.tags as string[] | null) ?? undefined,
     domain: (old.domain as string | null) ?? undefined,
     actors: (old.actors as string[] | null) ?? undefined,
