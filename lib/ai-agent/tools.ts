@@ -188,6 +188,19 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'read_scanned_document',
+    description: 'READ A SCANNED OR IMAGE DOCUMENT — extracts the text from a PDF or image stored in Google Drive (signed forms, fax receipts, IDs, statements). Use this whenever the plain file reader says a file is a scan/image with no text layer, and whenever you need to confirm what a SIGNED document actually says (e.g. whose name is on a signed form) — the CRM often stores only a drawn signature, so the document itself is the only source. Get the drive_file_id from search_documents. Supports PDF, TIFF, GIF, JPEG, PNG, BMP, WEBP, max 15MB. Never tell staff you cannot read a document until you have tried this.',
+    parameters: {
+      type: 'object',
+      properties: {
+        drive_file_id: { type: 'string', description: 'Google Drive file ID (from search_documents).' },
+        page: { type: 'number', description: 'Optional: only this page (1-based). Omit for the whole document.' },
+        max_chars: { type: 'number', description: 'Max characters to return (default 8000).' },
+      },
+      required: ['drive_file_id'],
+    },
+  },
+  {
     name: 'get_client_history',
     description: 'The ACTIVITY HISTORY for a client — what was actually DONE and WHEN (faxes sent, stage advances, documents uploaded, messages sent, fields corrected), newest first, with who did it. This is the audit trail behind the CRM screens. Use it for any "when did we…", "did we already…", or "who changed this…" question, and ALWAYS before saying an event was not recorded. Optionally filter by a keyword (matched against the summary and the details) — useful because a few entries are recorded without an account attached, e.g. a fax sent as a manual upload.',
     parameters: {
@@ -664,6 +677,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_portal_messages': return await searchPortalMessages(params)
       case 'search_conversations': return await searchConversations(params)
       case 'search_documents': return await searchDocuments(params)
+      case 'read_scanned_document': return await readScannedDocument(params)
       case 'get_client_history': return await getClientHistory(params)
       case 'get_client_paperwork': return await getClientPaperwork(params)
       case 'create_task': return await createTask(params)
@@ -995,6 +1009,67 @@ async function searchConversations(p: any) {
 // substituted lead/deal proxies for offers. WS3.2 (council).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 /**
+ * Read a scanned/image document (dev job a6c3d75b, Antonio 2026-07-18).
+ *
+ * The last real blind spot from the council pass, and it bit on the SAME client:
+ * asked who signed the SS-4, the worker correctly said it could not tell — the CRM
+ * stores a DRAWN signature image and no signer name, so the signed PDF itself is
+ * the only source — and asked Antonio to go open it. The OCR capability already
+ * existed in the catalog; the worker simply was never given it.
+ *
+ * Wraps the same extractor the document pipeline uses. Errors surface plainly: a
+ * failed extraction must never read as "the document is empty".
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function readScannedDocument(p: any) {
+  const fileId = typeof p.drive_file_id === 'string' && p.drive_file_id.trim() ? p.drive_file_id.trim() : null
+  const page = Number.isFinite(Number(p.page)) && Number(p.page) > 0 ? Math.floor(Number(p.page)) : null
+  const maxChars = Math.min(Math.max(Number(p.max_chars) || 8000, 500), 20000)
+  if (!fileId) {
+    return JSON.stringify({ error: 'Provide drive_file_id (get it from search_documents).' })
+  }
+
+  try {
+    const { ocrDriveFile } = await import('@/lib/docai')
+    const result = await ocrDriveFile(fileId)
+    const pages: string[] = result.pages ?? []
+
+    let text: string
+    if (page) {
+      if (page > pages.length) {
+        return JSON.stringify({
+          file_name: result.fileName,
+          page_count: result.pageCount,
+          error: `That document has ${result.pageCount} page(s); page ${page} does not exist.`,
+        })
+      }
+      text = pages[page - 1] ?? ''
+    } else {
+      text = pages.join('\n\n')
+    }
+
+    const truncated = text.length > maxChars
+    return JSON.stringify({
+      file_name: result.fileName,
+      page_count: result.pageCount,
+      ...(page ? { page } : {}),
+      text: truncated ? text.slice(0, maxChars) : text,
+      ...(truncated ? { truncated: true, note_truncated: `Showing the first ${maxChars} characters. Ask for a specific page to see more.` } : {}),
+      note: text.trim()
+        ? 'This is the text extracted from the document itself — the most reliable source for what a signed form actually says.'
+        : 'No text could be extracted. That does NOT mean the document is blank — it may be a low-quality scan. Say so plainly rather than reporting it as empty.',
+    })
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : 'OCR failed'
+    return JSON.stringify({
+      lookup_failed: true,
+      error: detail,
+      note: 'Reading the document FAILED — that is NOT the same as the document being empty or absent. Report the failure and, if it matters, ask a person to open the file.',
+    })
+  }
+}
+
+/**
  * Stored documents for a client (dev job a6c3d75b). THE gap behind the AI Venture
  * Labs incident: no tool reached `documents` at all, so the fax receipt — which was
  * sitting right there, in Drive, with its date — was only findable by hand-written
@@ -1040,6 +1115,9 @@ async function searchDocuments(p: any) {
     flow_stage: d.flow_stage,
     created_at: d.created_at,
     in_drive: !!d.drive_file_id,
+    // The id is what makes the chain work: find the file here, then read it with
+    // read_scanned_document when it's a scan/image with no text layer.
+    drive_file_id: d.drive_file_id ?? null,
     drive_link: d.drive_link ?? null,
     portal_visible: d.portal_visible,
     // Scanned files often have no extracted text — say so rather than implying empty.

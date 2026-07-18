@@ -187,3 +187,13 @@ describe("a FAILED lookup is not evidence — the incident's real mechanism", ()
     expect(assertsAbsence(INCIDENT_REPLY_2) && !hasSearchedForAbsence(succeeded)).toBe(false)
   })
 })
+
+describe("reading a scanned document counts as looking", () => {
+  it("OCR is evidence — the signed-form case that stumped it", () => {
+    expect(hasSearchedForAbsence(["read_scanned_document"])).toBe(true)
+    // "I can't tell who signed" + it never opened the document = still unfounded
+    expect(assertsAbsence("I don't have access to the signed document.") && !hasSearchedForAbsence([])).toBe(true)
+    // but once it has actually read the file, the claim is grounded
+    expect(assertsAbsence("I don't have access to the signed document.") && !hasSearchedForAbsence(["read_scanned_document"])).toBe(false)
+  })
+})
