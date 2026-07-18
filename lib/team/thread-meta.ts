@@ -71,3 +71,31 @@ export function computeThreadMeta(
   })
   return out
 }
+
+/** A thread row as the panel needs it for ordering. */
+export interface PanelThread {
+  root_id: string
+  unread: boolean
+  status: 'todo' | 'in_progress' | 'waiting' | 'handled'
+  last_reply_at: string | null
+}
+
+const PANEL_STATUS_ORDER: Record<PanelThread['status'], number> = {
+  in_progress: 0, waiting: 1, todo: 2, handled: 3,
+}
+
+/**
+ * Order the Threads panel: unread ("New") ALWAYS floats to the top regardless of
+ * status — so a Done thread that gets a new reply resurfaces instead of hiding.
+ * Then by status (Working → Pending → Open → Done), newest reply first.
+ * `hideDone` drops only READ done threads (an unread done thread still shows).
+ */
+export function sortPanelThreads<T extends PanelThread>(threads: T[], hideDone: boolean): T[] {
+  return [...threads]
+    .filter(t => !(hideDone && t.status === 'handled' && !t.unread))
+    .sort((a, b) => {
+      if (a.unread !== b.unread) return a.unread ? -1 : 1
+      if (PANEL_STATUS_ORDER[a.status] !== PANEL_STATUS_ORDER[b.status]) return PANEL_STATUS_ORDER[a.status] - PANEL_STATUS_ORDER[b.status]
+      return (b.last_reply_at ?? '').localeCompare(a.last_reply_at ?? '')
+    })
+}

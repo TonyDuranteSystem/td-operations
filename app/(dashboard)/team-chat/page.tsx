@@ -19,9 +19,10 @@ import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
-import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, type TeamWorkStatus } from '@/lib/team/workspace'
+import { sortPanelThreads } from '@/lib/team/thread-meta'
+import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
 import type { ChatAttachment } from '@/lib/types'
-import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta } from './types'
+import type { TeamMsg, TeamThread, TeamMember, Reaction, SlackChannel, SlackMsg, ThreadMeta, ThreadListItem } from './types'
 
 const AVATAR_COLORS = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-orange-500', 'bg-rose-500', 'bg-cyan-500', 'bg-amber-500', 'bg-indigo-500']
 const QUICK_EMOJIS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂', '🎉']
@@ -87,6 +88,11 @@ export default function TeamWorkspacePage() {
   // open thread pane (a root message id, or null when no pane is open).
   const [threadMeta, setThreadMeta] = useState<Record<string, ThreadMeta>>({})
   const [openRootId, setOpenRootId] = useState<string | null>(null)
+  // Threads management panel: the channel's threads with status/assignee, and
+  // whether the panel is open.
+  const [threadsList, setThreadsList] = useState<ThreadListItem[]>([])
+  const [showThreadsPanel, setShowThreadsPanel] = useState(false)
+  const [paneStatusMenu, setPaneStatusMenu] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -156,6 +162,7 @@ export default function TeamWorkspacePage() {
         return d.messages
       })
       setThreadMeta(d.thread_meta ?? {})
+      setThreadsList(d.threads ?? [])
       // Optimistically clear this thread's unread badge locally.
       setThreads(prev => prev.map(t => t.id === threadId ? { ...t, unread_count: 0 } : t))
     } catch {
@@ -203,8 +210,8 @@ export default function TeamWorkspacePage() {
     }
   }, [deepLinkThread, threads])
 
-  // Load messages when a thread is selected (and close any open thread pane).
-  useEffect(() => { if (selectedId) { setOpenRootId(null); loadMessages(selectedId) } }, [selectedId, loadMessages])
+  // Load messages when a thread is selected (and close any open thread pane / panel).
+  useEffect(() => { if (selectedId) { setOpenRootId(null); setShowThreadsPanel(false); loadMessages(selectedId) } }, [selectedId, loadMessages])
 
   // Realtime: messages + thread list
   useEffect(() => {
@@ -243,9 +250,16 @@ export default function TeamWorkspacePage() {
         refreshList()
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_threads' }, () => refreshList())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_thread_state' }, (payload) => {
+        // A status/assignee change (possibly by another user) → refresh the open
+        // channel's thread list so the panel + pills stay in sync (no double-grab).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const row = (payload.new ?? payload.old) as any
+        if (row?.thread_id === selectedIdRef.current) loadMessages(selectedIdRef.current!, { silent: true })
+      })
       .subscribe()
     return () => { if (debounce) clearTimeout(debounce); supabase.removeChannel(channel) }
-  }, [loadThreads])
+  }, [loadThreads, loadMessages])
 
   // Scroll to bottom only when a genuinely-new message arrives (not on every
   // poll refresh, which would fight the user's scroll position).
@@ -473,6 +487,24 @@ export default function TeamWorkspacePage() {
   }, [])
 
   const closeThread = useCallback(() => { setOpenRootId(null); setReplyTo(null) }, [])
+
+  // Set a thread's management status and/or assignee (Threads panel + pane).
+  const setThreadState = useCallback(async (rootId: string, patch: { status?: TeamWorkStatus; assignee_id?: string | null }) => {
+    // Optimistic local update.
+    setThreadsList(prev => prev.map(t => t.root_id === rootId ? { ...t, ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } : t))
+    setThreadMeta(prev => prev[rootId] ? { ...prev, [rootId]: { ...prev[rootId], ...(patch.status !== undefined ? { status: patch.status } : {}), ...(patch.assignee_id !== undefined ? { assignee_id: patch.assignee_id } : {}) } } : prev)
+    const tid = selectedIdRef.current
+    if (!tid) return
+    try {
+      const r = await fetch(`/api/team/threads/${tid}/thread-state`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root_id: rootId, ...patch }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not update the thread.') }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not update the thread.')
+      loadMessages(tid, { silent: true }) // reconcile from the server on failure
+    }
+  }, [loadMessages])
 
   // Deep link to a specific thread pane: /team-chat?thread=<ch>&root=<rootId>.
   // One-shot (a ref guard) so it doesn't re-open on every poll refresh.
@@ -916,6 +948,17 @@ export default function TeamWorkspacePage() {
                 </h2>
                 {selected.description && <p className="text-[11px] text-zinc-500 truncate">{selected.description}</p>}
               </div>
+              {isThreadedChannel && (
+                <button
+                  onClick={() => { setShowThreadsPanel(v => !v); setOpenRootId(null) }}
+                  className={cn('text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5 shrink-0',
+                    showThreadsPanel ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50')}
+                  title="Manage this channel's threads by status"
+                >
+                  <ListIcon className="h-3.5 w-3.5" /> Threads
+                  {threadsList.some(t => t.unread) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                </button>
+              )}
               {selected.thread_type === 'discussion' && (
                 selected.resolution === 'solved' ? (
                   <button onClick={() => setResolution(null)} title="Reopen this conversation" className="text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 bg-emerald-50 border-emerald-200 text-emerald-700">
@@ -996,7 +1039,27 @@ export default function TeamWorkspacePage() {
                 <div className="flex-1 md:flex-none md:w-96 md:border-l border-zinc-200 flex flex-col min-h-0 bg-white">
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
                     <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><MessageSquare className="h-4 w-4" /> Thread</span>
-                    <button onClick={closeThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
+                    <div className="flex items-center gap-2">
+                      {/* Status control — set Working / Pending / Done from inside the thread. */}
+                      <div className="relative">
+                        <button onClick={() => setPaneStatusMenu(v => !v)}
+                          className={cn('text-[10px] font-medium px-2 py-0.5 rounded-full border', TEAM_STATUS_COLORS[(threadMeta[openRootId]?.status ?? 'todo') as TeamWorkStatus].pill)}>
+                          {TEAM_WORK_STATUS_LABELS[(threadMeta[openRootId]?.status ?? 'todo') as TeamWorkStatus]}
+                        </button>
+                        {paneStatusMenu && (
+                          <div className="absolute top-full right-0 mt-1 w-32 bg-white border border-zinc-200 rounded-lg shadow-lg z-40 py-1">
+                            {TEAM_WORK_STATUSES.map(s => (
+                              <button key={s} onClick={() => { if (openRootId) setThreadState(openRootId, { status: s }); setPaneStatusMenu(false) }}
+                                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left hover:bg-zinc-100">
+                                <span className={cn('w-2 h-2 rounded-full', TEAM_STATUS_COLORS[s].dot)} />{TEAM_WORK_STATUS_LABELS[s]}
+                                {(threadMeta[openRootId]?.status ?? 'todo') === s && <Check className="h-3 w-3 ml-auto text-zinc-400" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={closeThread} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Close thread"><X className="h-4 w-4" /></button>
+                    </div>
                   </div>
                   <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
                     {paneRoot ? (
@@ -1124,6 +1187,22 @@ export default function TeamWorkspacePage() {
                 ) : null}
               </div>
             </div>
+
+            {/* Threads management panel — overlays the channel, stays inside Team
+                Workspace. Opening a thread closes it and opens that thread's pane. */}
+            {isThreadedChannel && showThreadsPanel && (
+              <div className="absolute inset-0 z-30 bg-white flex flex-col">
+                <ThreadsPanel
+                  channelName={selected.channel_slug ?? selected.label}
+                  threads={threadsList}
+                  members={members}
+                  onClose={() => setShowThreadsPanel(false)}
+                  onOpen={(rid) => { setShowThreadsPanel(false); openThread(rid) }}
+                  onSetStatus={(rid, status) => setThreadState(rid, { status })}
+                  onSetAssignee={(rid, aid) => setThreadState(rid, { assignee_id: aid })}
+                />
+              </div>
+            )}
             </WorkerDropZone>
           </>
         )}
@@ -1133,6 +1212,79 @@ export default function TeamWorkspacePage() {
       {showNewDm && <NewDmModal members={members.filter(m => m.id !== currentUserId)} onClose={() => setShowNewDm(false)} onPick={startDm} />}
       {showNewConversation && <NewConversationModal channels={channels} generalThread={generalThread ?? null} onClose={() => setShowNewConversation(false)} onCreate={createConversation} />}
     </div>
+  )
+}
+
+function ThreadsPanel({ channelName, threads, members, onClose, onOpen, onSetStatus, onSetAssignee }: {
+  channelName: string
+  threads: ThreadListItem[]
+  members: TeamMember[]
+  onClose: () => void
+  onOpen: (rootId: string) => void
+  onSetStatus: (rootId: string, status: TeamWorkStatus) => void
+  onSetAssignee: (rootId: string, assigneeId: string | null) => void
+}) {
+  const [hideDone, setHideDone] = useState(false)
+  const [menu, setMenu] = useState<string | null>(null)
+  const sorted = sortPanelThreads(threads, hideDone)
+  const nameFor = (id: string | null) => (id ? (members.find(m => m.id === id)?.name ?? 'Unknown') : null)
+
+  return (
+    <>
+      <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-zinc-200">
+        <span className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5"><ListIcon className="h-4 w-4" /> Threads in #{channelName}</span>
+        <div className="flex items-center gap-3">
+          <label className="text-[11px] text-zinc-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={hideDone} onChange={e => setHideDone(e.target.checked)} /> Hide done</label>
+          <button onClick={onClose} className="p-1 rounded-full text-zinc-400 hover:bg-zinc-100" title="Back to messages"><X className="h-4 w-4" /></button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 space-y-1.5" onClick={() => setMenu(null)}>
+        {sorted.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-zinc-400 gap-2"><MessageSquare className="h-9 w-9" /><p className="text-sm">No threads yet. Reply on a message to start one.</p></div>
+        ) : sorted.map(t => {
+          const assignee = nameFor(t.assignee_id)
+          return (
+            <div key={t.root_id} className="flex items-center gap-2 rounded-lg border border-zinc-200 hover:border-zinc-300 bg-white px-2.5 py-2">
+              <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
+                <button onClick={() => setMenu(menu === `${t.root_id}:s` ? null : `${t.root_id}:s`)}
+                  className={cn('text-[10px] font-medium px-2 py-0.5 rounded-full border', TEAM_STATUS_COLORS[t.status].pill)}>
+                  {TEAM_WORK_STATUS_LABELS[t.status]}
+                </button>
+                {menu === `${t.root_id}:s` && (
+                  <div className="absolute top-full left-0 mt-1 w-32 bg-white border border-zinc-200 rounded-lg shadow-lg z-40 py-1">
+                    {TEAM_WORK_STATUSES.map(s => (
+                      <button key={s} onClick={() => { onSetStatus(t.root_id, s); setMenu(null) }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left hover:bg-zinc-100">
+                        <span className={cn('w-2 h-2 rounded-full', TEAM_STATUS_COLORS[s].dot)} />{TEAM_WORK_STATUS_LABELS[s]}{t.status === s && <Check className="h-3 w-3 ml-auto text-zinc-400" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button onClick={() => onOpen(t.root_id)} className="flex-1 min-w-0 text-left">
+                <p className="text-sm text-zinc-800 truncate">{t.title}</p>
+                <p className="text-[11px] text-zinc-400 truncate">{t.sender_name ? `${t.sender_name} · ` : ''}{t.reply_count} {t.reply_count === 1 ? 'reply' : 'replies'}{t.last_reply_at ? ` · ${format(new Date(t.last_reply_at), 'MMM d, HH:mm')}` : ''}</p>
+              </button>
+              {t.unread && <span className="shrink-0 text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded-full px-1.5 py-0.5">New</span>}
+              <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
+                <button onClick={() => setMenu(menu === `${t.root_id}:a` ? null : `${t.root_id}:a`)} className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-200 text-zinc-500 hover:bg-zinc-50">
+                  {assignee ? assignee.split(' ')[0] : '+ Assign'}
+                </button>
+                {menu === `${t.root_id}:a` && (
+                  <div className="absolute top-full right-0 mt-1 w-40 bg-white border border-zinc-200 rounded-lg shadow-lg z-40 py-1 max-h-56 overflow-y-auto">
+                    <button onClick={() => { onSetAssignee(t.root_id, null); setMenu(null) }} className="w-full px-2.5 py-1.5 text-xs text-left hover:bg-zinc-100 text-zinc-500">Unassign</button>
+                    {members.map(m => (
+                      <button key={m.id} onClick={() => { onSetAssignee(t.root_id, m.id); setMenu(null) }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left hover:bg-zinc-100">
+                        {m.name}{t.assignee_id === m.id && <Check className="h-3 w-3 ml-auto text-zinc-400" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 }
 

@@ -56,6 +56,21 @@ export interface ThreadMeta {
   last_reply_at: string
   last_reply_sender: string
   unread: boolean
+  /** Management status (defaults 'todo' = untriaged/Open). */
+  status?: 'todo' | 'in_progress' | 'waiting' | 'handled'
+  assignee_id?: string | null
+}
+
+/** A row in the per-channel Threads management panel (from GET `threads`). */
+export interface ThreadListItem {
+  root_id: string
+  title: string
+  sender_name: string | null
+  reply_count: number
+  last_reply_at: string | null
+  unread: boolean
+  status: 'todo' | 'in_progress' | 'waiting' | 'handled'
+  assignee_id: string | null
 }
 
 export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'

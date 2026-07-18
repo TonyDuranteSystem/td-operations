@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeThreadMeta, type ReplyRow, type RootReadRow } from '@/lib/team/thread-meta'
+import { computeThreadMeta, sortPanelThreads, type ReplyRow, type RootReadRow, type PanelThread } from '@/lib/team/thread-meta'
 
 const ME = 'user-me'
 const OTHER = 'user-other'
@@ -46,5 +46,44 @@ describe('computeThreadMeta', () => {
 
   it('handles an empty thread', () => {
     expect(computeThreadMeta([], [], ME)).toEqual({})
+  })
+})
+
+function pt(root_id: string, status: PanelThread['status'], unread: boolean, last: string | null = '2026-07-17T10:00:00Z'): PanelThread {
+  return { root_id, status, unread, last_reply_at: last }
+}
+
+describe('sortPanelThreads', () => {
+  it('floats unread ("New") to the top regardless of status', () => {
+    const out = sortPanelThreads([
+      pt('working-read', 'in_progress', false),
+      pt('done-unread', 'handled', true),
+    ], false)
+    expect(out[0].root_id).toBe('done-unread') // a Done thread with a new reply resurfaces
+  })
+
+  it('orders read threads Working → Pending → Open → Done', () => {
+    const out = sortPanelThreads([
+      pt('d', 'handled', false), pt('o', 'todo', false), pt('p', 'waiting', false), pt('w', 'in_progress', false),
+    ], false)
+    expect(out.map(t => t.root_id)).toEqual(['w', 'p', 'o', 'd'])
+  })
+
+  it('hideDone drops READ done but keeps unread done', () => {
+    const out = sortPanelThreads([
+      pt('done-read', 'handled', false), pt('done-new', 'handled', true), pt('open', 'todo', false),
+    ], true)
+    const ids = out.map(t => t.root_id)
+    expect(ids).toContain('done-new')
+    expect(ids).toContain('open')
+    expect(ids).not.toContain('done-read')
+  })
+
+  it('newest reply first within the same bucket', () => {
+    const out = sortPanelThreads([
+      pt('older', 'in_progress', false, '2026-07-17T08:00:00Z'),
+      pt('newer', 'in_progress', false, '2026-07-17T12:00:00Z'),
+    ], false)
+    expect(out[0].root_id).toBe('newer')
   })
 })
