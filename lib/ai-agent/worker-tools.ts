@@ -102,6 +102,9 @@ export const WORKER_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // and the worker was steered away from both.
   "search_documents",
   "get_client_history",
+  // Read a SIGNED/scanned document — the CRM stores a drawn signature and no
+  // signer name, so the document itself is the only source (dev job a6c3d75b).
+  "read_scanned_document",
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",

@@ -37,6 +37,7 @@
 // (approval-executor → mcp-bridge → agent-approvals → approval-executor). It routes
 // the existing 14 approvable AGENT tools through executeTool (unchanged) and
 // bridge-proposed tools through the MCP bridge.
+import { NO_APPROVAL_SEND_TOOLS } from "./tool-risk"
 import { computeParamsHash } from "./approvable-tools"
 import { emitApprovalOutcome, runNotificationSweep } from "./approval-notifications"
 import { currentApprovalEnv } from "./approval-env"
@@ -244,6 +245,28 @@ export async function executeApprovalRow(row: ApprovalRow): Promise<ExecResult> 
     return { id: row.id, status: "failed", reason: "integrity" }
   }
 
+  // PIN-DEPENDENT SEND GUARD (dev job a6c3d75b, council Security + SE finding):
+  // this path dispatches straight to the tool with the params frozen at propose
+  // time, so it NEVER re-enters the worker's send executor where the recipient pin
+  // lives. An approved send would therefore run with the recipient the MODEL chose,
+  // silently skipping the strongest control on a surface that reads mail written by
+  // strangers. Refuse — the worker already sends through its pinned path on the
+  // staff member's explicit "go".
+  if (NO_APPROVAL_SEND_TOOLS.has(row.tool_name)) {
+    const why =
+      `"${row.tool_name}" cannot be executed from an approval — its recipient safety check only exists on the ` +
+      `worker's own send path. Send it from the chat instead (the worker will show the draft and send on your "go").`
+    await finalize(row.id, "failed", { error_text: why })
+    await emitApprovalOutcome({
+      id: row.id,
+      tool_name: row.tool_name,
+      status: "failed",
+      summary: `Proposal ${row.tool_name} NOT executed: blocked send (recipient pin cannot be verified from an approval).`,
+      row,
+    })
+    return { id: row.id, status: "failed", reason: "blocked_send" }
+  }
+
   // 2) Execute the real action.
   let raw: string
   try {
@@ -368,6 +391,24 @@ export async function executeClaimedRow(id: string): Promise<ExecResult> {
       })
     }
     return { id, status: "failed", reason: "integrity" }
+  }
+
+  // PIN-DEPENDENT SEND GUARD (dev job a6c3d75b, council Security + SE finding):
+  // this path dispatches straight to the tool with the params frozen at propose
+  // time, so it NEVER re-enters the worker's send executor where the recipient pin
+  // lives. An approved send would therefore run with the recipient the MODEL chose,
+  // silently skipping the strongest control on a surface that reads mail written by
+  // strangers. Refuse — the worker already sends through its pinned path on the
+  // staff member's explicit "go".
+  if (NO_APPROVAL_SEND_TOOLS.has(row.tool_name)) {
+    const why =
+      `"${row.tool_name}" cannot be executed from an approval — its recipient safety check only exists on the ` +
+      `worker's own send path. Send it from the chat instead (the worker will show the draft and send on your "go").`
+    const won = await finalizeClaimed(id, "failed", claimedBy, { error_text: why })
+    if (won) {
+      await emitApprovalOutcome({ id, tool_name: row.tool_name, status: "failed", summary: `Proposal ${row.tool_name} NOT executed: blocked send (recipient pin cannot be verified from an approval).`, row: notifyRow })
+    }
+    return { id, status: "failed", reason: "blocked_send" }
   }
 
   // 3) Execute the real action (same path as the server executor).

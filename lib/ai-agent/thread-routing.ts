@@ -70,6 +70,7 @@ export const CRM_READ_TOOL_NAMES = [
   "get_client_paperwork", // offers/lease/OA/e-sign/wizard status (council WS3.2)
   "search_documents", // stored files — receipts/confirmations live here (dev job a6c3d75b)
   "get_client_history", // audit trail: what was done and when (dev job a6c3d75b)
+  "read_scanned_document", // OCR a signed/scanned file (dev job a6c3d75b)
   "portal_chat_inbox",
   "portal_chat_read",
   "get_dashboard_stats",

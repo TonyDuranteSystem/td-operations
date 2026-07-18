@@ -29,6 +29,51 @@ export const HARD_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Sends that must NEVER fire from a queued approval (dev job a6c3d75b, council
+ * Security + Senior Engineer, 2026-07-18). Two rationales, one guard:
+ *
+ * 1. PIN-SKIPPING. The worker's own send path enforces "only addresses on this
+ *    thread" / "only the client whose chat is open" (checkRecipientsAllowed + the
+ *    pinned portal recipient). The approval executor does NOT go through that path
+ *    — it dispatches straight to the tool by name with params frozen at propose
+ *    time. So an approved send would run with whatever recipient the MODEL chose,
+ *    silently skipping the strongest control on a surface that reads mail written
+ *    by strangers.
+ *
+ * 2. IRREVERSIBLE CLIENT-FACING DOCUMENTS. Offers, leases, operating agreements,
+ *    ITIN forms, invoices and the accountant hand-off all go to a real person and
+ *    cannot be recalled. Firing one from a queue — where the payload was frozen
+ *    minutes or hours earlier and nothing re-verifies the recipient — is the same
+ *    risk in a different shape.
+ *
+ * Blocking these costs nothing today: the rail is off, and the worker already
+ * sends through its pinned path on the staff member's explicit "go", which shows
+ * the draft and cannot be redirected.
+ *
+ * IF approved sends are ever wanted, the fix is NOT to relax this — it is to freeze
+ * the ALLOWED RECIPIENTS into the proposal at propose time and re-verify them at
+ * execute time. Until that exists, this list is the guarantee. A test asserts that
+ * every curated EXTERNAL tool whose name contains "send" appears here, so a new one
+ * cannot be added without either protecting it or consciously excluding it.
+ */
+export const NO_APPROVAL_SEND_TOOLS: ReadonlySet<string> = new Set([
+  // per-call recipient pin lives only on the worker's send path
+  "gmail_send",
+  "portal_chat_send",
+  "portal_team_send",
+  "team_chat_send",
+  "msg_send",
+  "agent_msg_send",
+  // irreversible client-facing document sends
+  "offer_send",
+  "lease_send",
+  "oa_send",
+  "itin_form_send",
+  "portal_invoice_send",
+  "tax_send_to_accountant",
+])
+
+/**
  * Curated EXTERNAL / high-risk tools: leave TD, move money, are irreversible, or
  * trigger client communications. Always EXTERNAL regardless of naming. Seeded from
  * the 2026-06-17 tool-surface audit; review/extend as the surface grows.
