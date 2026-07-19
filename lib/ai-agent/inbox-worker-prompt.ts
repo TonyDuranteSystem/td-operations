@@ -75,17 +75,81 @@ You are NOT in Slack right now. You are the AI assistant in the CRM dashboard's 
 - WHO IS TALKING: may be Antonio OR another team member. Treat THEIR explicit "send it" as the approval — wherever the instructions above say "Antonio", read it as "the staff member here".
 - CLIENT CONTEXT: when the staff member is on a specific client's page, that client is your context — answer about THAT client, and your memory is scoped to them. When there is no client in context, you are answering general/internal questions.
 - WHAT YOU CAN DO: look things up across the whole CRM, read files they drop in, explain, recall past decisions, and draft.
-- SENDING, ON A CLIENT'S PAGE: you CAN send that client an email and post to their portal chat from here. Flow: show the full draft first (recipient + exact text), wait for the staff member's explicit go-ahead ("send it", "send", "go ahead", or clearly equivalent), THEN send ONCE. The recipient is fixed server-side to the client whose page is open — you do NOT need to look up or pass ids, and you cannot reach any other client from here. Never send speculatively or without that explicit go-ahead.
-- SENDING, ANYWHERE ELSE IN THE CRM: with no client page open there is nobody the server can pin the send to, so sending is genuinely unavailable — say so plainly and offer to open the client's page instead. Do NOT claim you sent something, and do NOT offer a workaround; there isn't one.
 - DRAFT LANGUAGE: a client-facing draft MUST be in that client's CRM language — Italian client, Italian draft, automatically, even though the staff member talks to you in English. A server-side check refuses a clearly-English message to an Italian-language client; if it refuses, present a NEW draft in the right language and wait for approval again.
 - EVERYTHING ELSE: you do NOT silently change records from here. For any other change (create a task, edit a record, advance a stage), describe the exact change and let the staff member do it. Never act speculatively.`,
 } as const
 
 export type WorkerSurface = keyof typeof SURFACE_ADDENDA
 
-/** System prompt for an embedded worker: Slack persona + surface override. */
-export function buildWorkerSurfacePrompt(surface: WorkerSurface): string {
-  return `${SLACK_WORKER_SYSTEM_PROMPT}${SURFACE_ADDENDA[surface]}`
+/**
+ * What this call can ACTUALLY do — the same values that gate the tools.
+ *
+ * Pass the resolved rails, not a hand-written summary. The capability block below is
+ * generated from these, so what the worker claims and what it can reach cannot drift.
+ */
+export interface WorkerCapabilities {
+  /** enableEmailSend was set AND a recipient pin exists for this call. */
+  canSendEmail?: boolean
+  /** enableSlackSend was set AND a portal recipient pin exists for this call. */
+  canSendPortal?: boolean
+  /** Display name of the client this call is pinned to, when there is one. */
+  clientName?: string | null
+}
+
+/**
+ * Render a TRUTHFUL statement of this turn's send abilities.
+ *
+ * WHY THIS IS GENERATED RATHER THAN WRITTEN (dev job c956d7ee): a static prompt that
+ * describes abilities is a claim nobody checks. The sidebar shipped with prose saying
+ * "off a client page sending is unavailable — say so plainly", and the worker cheerfully
+ * offered to "fire it off" from the dashboard anyway, because the sentence was just more
+ * text competing with the rest of the prompt. Same failure class as offering a PDF
+ * download that never existed.
+ *
+ * Deriving the sentence from the same booleans that decide whether the send tool is in
+ * the tool list makes the honest version the only version there is. When a rail is off,
+ * the worker is told plainly that it is off AND told not to offer a workaround — because
+ * there genuinely isn't one, and inventing one wastes the staff member's time.
+ */
+export function renderCapabilityBlock(caps: WorkerCapabilities): string {
+  const who = caps.clientName ? `**${caps.clientName}**` : "the client whose page is open"
+  const can: string[] = []
+  if (caps.canSendEmail) can.push(`send an email to ${who}`)
+  if (caps.canSendPortal) can.push(`post a message to ${who}'s portal chat`)
+
+  if (!can.length) {
+    return `
+
+━━━ WHAT YOU CAN ACTUALLY DO RIGHT NOW (server-verified — this overrides any impression you have from the instructions above) ━━━
+- SENDING IS OFF for this conversation. No email, no portal message. The tools are not loaded, so there is nothing to attempt.
+- The reason: nothing here tells the server WHICH client a message would go to. Sending is only possible with a client's page open, where the recipient is fixed server-side.
+- So: do NOT offer to send, do NOT say "say the word and I'll send it", and do NOT claim anything was sent. Say plainly that you cannot send from here and offer to draft it for them to copy, or suggest opening the client's page. There is NO workaround and you must not imply there is one.
+- Drafting is still useful and still welcome — just be honest that delivering it is not yours to do here.`
+  }
+
+  return `
+
+━━━ WHAT YOU CAN ACTUALLY DO RIGHT NOW (server-verified — this overrides any impression you have from the instructions above) ━━━
+- You CAN: ${can.join("; and ")}.
+- Flow, every time: show the full draft first (recipient + exact text), wait for the staff member's explicit go-ahead ("send it", "send", "go ahead", or clearly equivalent), THEN send ONCE.
+- The recipient is fixed server-side to ${who} — you do not need to look up or pass ids, and you cannot reach any other client from here. An attempt aimed elsewhere is refused by the server, not by you.
+- Never send speculatively, and never on anything short of an explicit go-ahead.${caps.canSendEmail && !caps.canSendPortal ? "\n- Portal-chat sending is OFF for this conversation — do not offer it." : ""}${caps.canSendPortal && !caps.canSendEmail ? "\n- Email sending is OFF for this conversation — do not offer it." : ""}`
+}
+
+/**
+ * System prompt for an embedded worker: Slack persona + surface override, plus a
+ * generated statement of what this specific call can actually do.
+ *
+ * `capabilities` is optional only for back-compat with surfaces that have not been
+ * migrated; omitting it leaves the worker with no capability statement at all, which is
+ * the old (drift-prone) behaviour. Pass it.
+ */
+export function buildWorkerSurfacePrompt(
+  surface: WorkerSurface,
+  capabilities?: WorkerCapabilities,
+): string {
+  const caps = capabilities ? renderCapabilityBlock(capabilities) : ""
+  return `${SLACK_WORKER_SYSTEM_PROMPT}${SURFACE_ADDENDA[surface]}${caps}`
 }
 
 /** Back-compat alias (inbox surface). */

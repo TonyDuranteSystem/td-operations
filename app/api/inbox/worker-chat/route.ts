@@ -517,7 +517,16 @@ export async function POST(req: NextRequest) {
     const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
-      systemPromptOverride: `${buildWorkerSurfacePrompt(surface)}${clientCardSuffix}${templatesSuffix}`,
+      // Capability statement GENERATED from the rails actually assigned above, so what
+      // the worker claims and what it can reach cannot drift. Each surface sends through
+      // exactly one channel: the Inbox replies by email (pinned to the thread's
+      // addresses — an EMPTY pin means every address is refused, i.e. it cannot send),
+      // Portal Chats posts to the pinned client. Never both.
+      systemPromptOverride: `${buildWorkerSurfacePrompt(surface, {
+        canSendEmail: surface === "inbox" && (allowedEmailRecipients?.length ?? 0) > 0,
+        canSendPortal: surface === "portal-chats",
+        clientName: body.clientName ?? null,
+      })}${clientCardSuffix}${templatesSuffix}`,
       surface: surface === "portal-chats" ? "portal_chat" : "inbox",
       // Screenshots the staff member pasted, and images attached to the open
       // email, go straight to the model. Scanned PDFs ride along as native

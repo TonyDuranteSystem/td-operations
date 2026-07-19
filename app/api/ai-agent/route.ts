@@ -162,20 +162,25 @@ async function buildSidebarSendRails(clientKey: string | null): Promise<{
   portal: { enableSlackSend?: true; pinnedPortalRecipient?: { account_id?: string; contact_id?: string } }
   email: { enableEmailSend?: true; pinnedEmailRecipients?: string[] }
   clientScope: import('@/lib/ai-agent/client-scope').ClientScope | null
+  clientName: string | null
 }> {
-  const empty = { portal: {}, email: {}, clientScope: null } as const
+  const empty = { portal: {}, email: {}, clientScope: null, clientName: null } as const
   if (!clientKey) return empty
 
   const [kind, id] = clientKey.split(':')
   if ((kind !== 'account' && kind !== 'contact') || !id) return empty
 
-  // Re-resolve. Existence here IS the authorization to pin to this client.
+  // Re-resolve. Existence here IS the authorization to pin to this client, and the name
+  // that comes back is what the worker is told it can reach — both from the same row.
+  let clientName: string | null = null
   if (kind === 'account') {
-    const { data: acct } = await supabaseAdmin.from('accounts').select('id').eq('id', id).maybeSingle()
+    const { data: acct } = await supabaseAdmin.from('accounts').select('id, company_name').eq('id', id).maybeSingle()
     if (!acct) return empty
+    clientName = acct.company_name ?? null
   } else {
-    const { data: contact } = await supabaseAdmin.from('contacts').select('id').eq('id', id).maybeSingle()
+    const { data: contact } = await supabaseAdmin.from('contacts').select('id, full_name').eq('id', id).maybeSingle()
     if (!contact) return empty
+    clientName = contact.full_name ?? null
   }
 
   // Addresses on file for this client. An empty list is DELIBERATELY still a pin — it
@@ -203,6 +208,7 @@ async function buildSidebarSendRails(clientKey: string | null): Promise<{
     },
     email: { enableEmailSend: true, pinnedEmailRecipients: addresses },
     clientScope: buildClientScope(clientKey, relatedIds),
+    clientName,
   }
 }
 
@@ -330,7 +336,16 @@ async function runSidebarWorker(args: {
     const { reply } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
-      systemPromptOverride: `${buildWorkerSurfacePrompt('dashboard')}${clientCardSuffix}`,
+      // The capability statement is GENERATED from the very rails passed below, so what
+      // the worker says it can do and what it can actually reach cannot drift apart.
+      // Note an empty address list counts as CANNOT send: the pin refuses every address,
+      // so offering to email a client with nothing on file would be a promise it cannot
+      // keep — exactly the false-capability pattern this closes.
+      systemPromptOverride: `${buildWorkerSurfacePrompt('dashboard', {
+        canSendEmail: rails.email.enableEmailSend === true && (rails.email.pinnedEmailRecipients?.length ?? 0) > 0,
+        canSendPortal: rails.portal.enableSlackSend === true,
+        clientName: rails.clientName,
+      })}${clientCardSuffix}`,
       surface: 'dashboard',
       // Full read rails — parity with the Inbox, Portal Chats and Team Chat.
       enableDbRead: true,
