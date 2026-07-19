@@ -24,6 +24,34 @@
 
 STACKS_ROOT="${STACKS_ROOT:-$HOME/.td-local-stacks}"
 
+# The stack name for a worktree. THE single source of truth — env-up, env-down
+# and the sweep must all agree, or a session provisions one stack and tears down
+# a different one.
+#
+# Normally the branch, slashes → dashes. That is unique BY CONSTRUCTION: git
+# refuses to check the same branch out in two worktrees ("is already used by
+# worktree at …"), so two live worktrees can never derive the same name.
+#
+# EXCEPT when detached. A worktree parked on a bare commit reports its branch as
+# the literal string "HEAD" — a placeholder, not a name — so EVERY detached
+# worktree would derive the same stack and they would silently share one
+# database: each other's writes, and a teardown by the first destroying the
+# second's data mid-session. (Not hypothetical: a stack literally named "HEAD"
+# was found running on this machine, 2026-07-18.)
+#
+# So for the detached case only, fall back to the worktree's folder name, which
+# is unique per worktree. Deliberately narrow: every already-provisioned stack
+# keeps the name it has, because the branch path is untouched.
+stack_name_for_worktree() {
+  local wt="${1:-$PWD}" branch
+  branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')"
+  if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+    basename "$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null || echo "$wt")"
+  else
+    printf '%s' "$branch"
+  fi
+}
+
 # Compose project name for a stack. env-up sets `project_id = "tdlocal-<name>"`,
 # which Docker records as the compose project label on every container.
 stack_project() { printf 'tdlocal-%s' "$1"; }
@@ -141,17 +169,22 @@ stack_remove_dir_if_stopped() {
 
 # Stack names that map to a worktree that still EXISTS, one per line.
 #
-# env-up derives a stack's name from the branch (slashes → dashes), so the live
-# set is recoverable from git even when a stack's own marker file is gone. A
-# detached worktree reports "HEAD", which is also what it would have been named.
+# Mirrors stack_name_for_worktree exactly: branch with slashes → dashes, and the
+# worktree's FOLDER name when detached. These two must never disagree — if they
+# do, the sweep stops recognising a live stack and reclaims it out from under a
+# running session.
+#
+# Also emits the legacy "HEAD" name for any detached worktree, so a stack
+# provisioned under the old scheme is still recognised as live and protected
+# until it is torn down normally.
 #
 # Empty output means "could not tell" (not a git repo, git missing) — callers
 # MUST treat that as "prove nothing" and fall back to marker-only behaviour.
 live_stack_names() {
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   git worktree list --porcelain 2>/dev/null | awk '
-    /^worktree /   { wt = substr($0, 10); has = 0 }
-    /^branch /     { b = substr($0, 8); sub(/^refs\/heads\//, "", b); gsub(/\//, "-", b); print b; has = 1 }
-    /^detached/    { print "HEAD"; has = 1 }
+    /^worktree /   { wt = substr($0, 10) }
+    /^branch /     { b = substr($0, 8); sub(/^refs\/heads\//, "", b); gsub(/\//, "-", b); print b }
+    /^detached/    { n = split(wt, p, "/"); print p[n]; print "HEAD" }
   ' | sort -u
 }

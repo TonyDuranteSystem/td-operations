@@ -28,13 +28,18 @@ for a in "$@"; do
     *) ARGS+=("$a") ;;
   esac
 done
-NAME="${ARGS[0]:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-' )}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib-local-stacks.sh
+. "$SCRIPT_DIR/lib-local-stacks.sh"
+
+# Shared derivation (see stack_name_for_worktree): the branch, except a DETACHED
+# worktree falls back to its folder name — otherwise every detached worktree
+# would derive the same stack and silently share one database.
+NAME="${ARGS[0]:-$(stack_name_for_worktree "$WORKTREE")}"
 [ -n "$NAME" ] || { echo "❌ could not derive a name; pass one: bash scripts/env-up.sh myenv"; exit 1; }
-STACKS_ROOT="$HOME/.td-local-stacks"
 STACK_DIR="$STACKS_ROOT/$NAME"
 PROD_REF="ydzipybqeebtpcvsbtvs"
 SANDBOX_REF="xjcxlmlpeywtwkhstjlw"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---- preconditions ---------------------------------------------------------
 command -v supabase >/dev/null 2>&1 || { echo "❌ supabase CLI missing — run: bash scripts/local-stack-setup.sh"; exit 1; }

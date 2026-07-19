@@ -16,8 +16,10 @@ WORKTREE="$(pwd)"
 PURGE=0
 ARGS=()
 for a in "$@"; do [ "$a" = "--purge" ] && PURGE=1 || ARGS+=("$a"); done
-NAME="${ARGS[0]:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-' )}"
-STACK_DIR="$HOME/.td-local-stacks/$NAME"
+# Same derivation as env-up (see stack_name_for_worktree) — if these two ever
+# disagree, a session tears down a DIFFERENT stack than the one it provisioned.
+NAME="${ARGS[0]:-$(stack_name_for_worktree "$WORKTREE")}"
+STACK_DIR="$STACKS_ROOT/$NAME"
 
 # ---- stop the stack --------------------------------------------------------
 if [ -d "$STACK_DIR" ]; then
