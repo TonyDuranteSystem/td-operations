@@ -29,7 +29,9 @@ export async function POST(
   const { error } = await (supabaseAdmin as any)
     .from('internal_root_reads')
     .upsert(
-      { root_message_id: rootId, user_id: user.id, last_read_at: now, updated_at: now },
+      // manual_unread MUST be cleared here: opening the thread is exactly what
+      // undoes a hand-marked unread (mirrors the conversation-level read route).
+      { root_message_id: rootId, user_id: user.id, last_read_at: now, manual_unread: false, updated_at: now },
       { onConflict: 'root_message_id,user_id' },
     )
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

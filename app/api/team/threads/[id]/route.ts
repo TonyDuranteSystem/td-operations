@@ -82,7 +82,7 @@ export async function GET(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabaseAdmin as any)
       .from('internal_root_reads')
-      .select('root_message_id, last_read_at')
+      .select('root_message_id, last_read_at, manual_unread')
       .eq('user_id', user.id)
       .in('root_message_id', rootIds)
     rootReads = data ?? []
@@ -135,6 +135,13 @@ export async function GET(
     .select('root_message_id')
     .eq('user_id', user.id)
   const followSet = new Set<string>(((followRows ?? []) as { root_message_id: string }[]).map(f => f.root_message_id))
+  // Personal "bring forward" flags (presence = flagged).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: laterRows } = await (supabaseAdmin as any)
+    .from('internal_root_later')
+    .select('root_message_id')
+    .eq('user_id', user.id)
+  const laterSet = new Set<string>(((laterRows ?? []) as { root_message_id: string }[]).map(l => l.root_message_id))
   // Fold status/assignee into thread_meta (so the in-stream affordance can show
   // a pill too).
   for (const rid of Object.keys(threadMeta)) {
@@ -174,15 +181,18 @@ export async function GET(
   // read as unread.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const panelReadMap = new Map<string, string>()
+  // Threads the caller marked unread by hand — unread even with no new replies.
+  const manualUnreadRoots = new Set<string>()
   if (panelRootIds.length > 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: prr } = await (supabaseAdmin as any)
       .from('internal_root_reads')
-      .select('root_message_id, last_read_at')
+      .select('root_message_id, last_read_at, manual_unread')
       .eq('user_id', user.id)
       .in('root_message_id', panelRootIds)
-    for (const r of (prr ?? []) as { root_message_id: string; last_read_at: string }[]) {
+    for (const r of (prr ?? []) as { root_message_id: string; last_read_at: string; manual_unread: boolean | null }[]) {
       panelReadMap.set(r.root_message_id, r.last_read_at)
+      if (r.manual_unread) manualUnreadRoots.add(r.root_message_id)
     }
   }
 
@@ -209,10 +219,11 @@ export async function GET(
       sender_name: root?.sender_name ?? null,
       reply_count: meta?.reply_count ?? 0,
       last_reply_at: meta?.last_reply_at ?? root?.created_at ?? null,
-      unread: (meta?.unread ?? false) || rootUnread,
+      unread: (meta?.unread ?? false) || rootUnread || manualUnreadRoots.has(rid),
       status: st?.status ?? 'todo',
       assignee_id: st?.assignee_id ?? null,
       following: followSet.has(rid),
+      later: laterSet.has(rid),
       archived: !!st?.archived_at,
       // WHO hid it and WHEN — an archive removes a thread from everyone's view,
       // so the archived list must say who did it (council).
