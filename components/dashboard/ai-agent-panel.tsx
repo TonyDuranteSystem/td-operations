@@ -23,7 +23,6 @@ interface AttachedFile {
   preview?: string  // data URL for images
 }
 
-type Provider = 'auto' | 'claude' | 'openai'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/csv', 'text/plain']
 const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
@@ -39,7 +38,6 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [provider, setProvider] = useState<Provider>('auto')
   const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -160,12 +158,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: msgs.map(m => ({ role: m.role, content: m.content })),
-          provider: provider !== 'auto' ? provider : undefined,
           attachment: attachment
             ? { name: attachment.name, type: attachment.type, base64: attachment.base64 }
             : undefined,
           // Worker path (when enabled): a stable per-conversation thread + the live
-          // per-page client scope. Ignored by the old provider path.
+          // per-page client scope.
           conversationId: (conversationIdRef.current ??= crypto.randomUUID()),
           clientKey: clientKeyFromPath(pathname),
         }),
@@ -177,9 +174,13 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       }
 
       const data = await res.json()
-      const providerTag = data.provider === 'claude' || data.provider === 'worker' ? '' : data.provider === 'openai' ? ' _(GPT-4o fallback)_' : ''
+      // The emergency fallback engine still reports itself, and it is READ-ONLY —
+      // worth flagging so a degraded answer is not mistaken for a normal one.
+      const engineNote = data.provider === 'openai' || data.provider === 'claude'
+        ? ' _(fallback engine — lookups only, no sending)_'
+        : ''
       const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
-      setMessages(prev => [...prev, { role: 'assistant', content: (data.content || 'No response.') + providerTag + toolInfo }])
+      setMessages(prev => [...prev, { role: 'assistant', content: (data.content || 'No response.') + engineNote + toolInfo }])
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
       setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }])
@@ -277,20 +278,13 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {/* Assistant model — the SAME shared setting as every other worker panel. */}
+            {/* Assistant model — the SAME shared setting as every other worker panel.
+                This is the ONLY model control. The old Auto/Claude/GPT-4o provider
+                selector that used to sit here is gone: the sidebar runs the worker,
+                which ignored the choice entirely, so it was a control that looked like
+                a decision and wasn't. Same class of thing as an assistant offering an
+                action it cannot perform. */}
             <WorkerSettingsGear />
-            {/* Provider selector — legacy engine only; ignored once the sidebar runs
-                the worker (removal tracked as a follow-up). */}
-            <select
-              value={provider}
-              onChange={e => setProvider(e.target.value as Provider)}
-              className="text-[11px] bg-white border border-zinc-200 rounded-md px-1.5 py-1 text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-400 cursor-pointer"
-              title="Choose AI provider"
-            >
-              <option value="auto">Auto (Claude → GPT)</option>
-              <option value="claude">Claude only</option>
-              <option value="openai">GPT-4o only</option>
-            </select>
             {messages.length > 0 && (
               <button
                 onClick={clearChat}
