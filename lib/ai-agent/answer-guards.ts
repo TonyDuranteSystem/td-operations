@@ -203,6 +203,62 @@ export function assertsCannotDo(reply: string): boolean {
   return CANNOT_DO_PATTERNS.some((re) => re.test(text))
 }
 
+/**
+ * Shapes of the worker sending someone to a DIFFERENT surface to get an action done.
+ *
+ * Matches "run it from Slack", "use the Slack bot", "try the CRM instead", "from a
+ * surface where the approval flow is active" and similar. Deliberately narrow: it must
+ * name a destination AND be about getting something RUN there, so ordinary references
+ * to Slack or the portal in an answer are not caught.
+ */
+const SURFACE_REDIRECT_PATTERNS: RegExp[] = [
+  /\b(?:from|via|in|use|try|through)\s+(?:the\s+)?slack(?:\s+bot|\s+worker)?\b[^.]{0,60}\b(?:instead|to\s+run|approval|it'?ll\s+go|will\s+go|works?)\b/i,
+  /\bslack\s+bot\b/i,
+  /\b(?:a|another|different)\s+surface\s+where\b/i,
+  /\b(?:run|do|try)\s+(?:it|this|that)\s+(?:from|in|on)\s+(?:the\s+)?(?:slack|team\s*chat|inbox|portal|crm|dashboard)\b/i,
+  /\bwhere\s+the\s+approval\s+(?:flow|rail|mechanism)\s+is\s+(?:active|on|available|enabled)\b/i,
+  /\byour\s+best\s+route\s+is\b[^.]{0,40}\b(?:slack|team\s*chat|bot)\b/i,
+]
+
+/**
+ * True when the reply tells the staff member another screen or bot would run an action
+ * that is switched off everywhere.
+ *
+ * WHY THIS IS A CODE GUARD AND NOT PROMPT TEXT (dev job 74701b48): the capability block
+ * already states, in the system prompt, that this is off on every surface and names the
+ * Slack bot as a thing not to suggest. The worker suggested the Slack bot anyway, on the
+ * very next deploy. That is the third time in this project that a sentence in a prompt
+ * failed to stop a confident false claim — the PDF download, the offer to send from a
+ * screen that cannot send, and now this.
+ *
+ * A wrong redirect is worse than a plain refusal: the staff member spends the trip and
+ * still cannot do the thing. So it is caught in the reply and the worker is made to
+ * answer again, the same way an unevidenced absence claim is.
+ */
+export function claimsAnotherSurfaceCanAct(reply: string): boolean {
+  const text = (reply ?? "").trim()
+  if (!text) return false
+  return SURFACE_REDIRECT_PATTERNS.some((re) => re.test(text))
+}
+
+/** The nudge appended when the worker points at another surface for a dead action. */
+export function buildSurfaceRedirectNudge(): string {
+  return [
+    "STOP — you are about to send the staff member to another screen, chat or bot to run",
+    "an action. That action is switched off on EVERY surface, so wherever you send them",
+    "it will fail there too. They will spend the trip and still not have the thing done,",
+    "which is worse than you simply saying no.",
+    "",
+    "Rewrite your answer:",
+    "  · say plainly that this cannot be run by the assistant anywhere right now;",
+    "  · state exactly what the action would be, with the values, so they can do it;",
+    "  · do NOT name Slack, team chat, the inbox, the portal or any other surface as a",
+    "    place it would work — none of them will;",
+    "  · keep everything you looked up. The lookup is the useful part; only the",
+    "    'go do it over there' part is wrong.",
+  ].join("\n")
+}
+
 /** Shapes of a human pushing back on the worker's previous answer. */
 const CORRECTION_PATTERNS: RegExp[] = [
   /\bI\s+do\s*n[o']?t\s+think\b/i,

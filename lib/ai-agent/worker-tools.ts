@@ -48,6 +48,8 @@ import {
   hasSearchedForAbsence,
   isCorrection,
   buildAbsenceNudge,
+  buildSurfaceRedirectNudge,
+  claimsAnotherSurfaceCanAct,
   buildCorrectionNudge,
   looksLikeFailedLookup,
   assertsCannotDo,
@@ -3152,6 +3154,9 @@ export async function runWorkerLoop(
   // so the worst case is one extra loop iteration — never a loop, never a block.
   let absenceLatched = false
   let correctionLatched = false
+  // One rewrite only — a latch, like the others. If the second answer still redirects,
+  // let it through rather than looping: a slightly wrong answer beats no answer.
+  let surfaceRedirectLatched = false
   // Lookups that actually RETURNED something (not an error). This — not the
   // raw call list — is what counts as proof the worker searched.
   const succeededTools: string[] = []
@@ -3285,6 +3290,22 @@ export async function runWorkerLoop(
               ...currentMessages,
               { role: "assistant", content: data.content },
               { role: "user", content: buildCorrectionNudge() },
+            ]
+            continue
+          }
+          // (c) It pointed at another screen or bot to run an action that is off on
+          //     EVERY surface. The system prompt already says this plainly and even
+          //     names the Slack bot as a thing not to suggest — and the worker
+          //     suggested the Slack bot anyway. Prompt text has now failed three times
+          //     on this class of false claim, so it is caught in the reply instead. A
+          //     wrong redirect costs the staff member the trip AND the action.
+          if (!surfaceRedirectLatched && !workerActionsEnabled() && claimsAnotherSurfaceCanAct(reply)) {
+            surfaceRedirectLatched = true
+            console.warn("[worker] pointed at another surface for a dead action — forcing a rewrite")
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant", content: data.content },
+              { role: "user", content: buildSurfaceRedirectNudge() },
             ]
             continue
           }
