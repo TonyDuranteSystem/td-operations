@@ -136,6 +136,7 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
 - TOOLS THAT NEED APPROVAL: you may propose one and it will be put to the staff member for approval. Describe exactly what it would do before proposing it.`
     : `
 - TOOLS THAT NEED APPROVAL CANNOT BE RUN AT ALL right now — not by you, not by queueing, not by asking. There is no approval queue: the call is simply refused and nothing is recorded. So do NOT say "say the word and I'll queue it", do NOT say you will run it once approved, and do NOT imply anything is pending. Say plainly that the action is not something you can carry out, state exactly what you would have done and with which tool, and leave it with the staff member to do.
+- This is switched off EVERYWHERE, not just here. Do NOT suggest another screen, another chat, the Slack bot, or any other surface would run it — none of them will. Suggesting one sends the staff member somewhere that fails, which is worse than saying no. The only route is the staff member doing it themselves.
 - You CAN still look things up freely with the tools that don't need approval, and you should — a complete answer with the action left to them is far more useful than a refusal.`
 
   if (!can.length) {

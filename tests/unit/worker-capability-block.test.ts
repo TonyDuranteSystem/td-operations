@@ -105,6 +105,13 @@ describe("approval-tier tools — no inventing a queue that is switched off", ()
     expect(block).toMatch(/do NOT imply anything is pending/i)
   })
 
+  it("forbids pointing at another surface — it is off everywhere, so that just wastes a trip", () => {
+    const block = renderCapabilityBlock({ canQueueApprovals: false })
+    expect(block).toMatch(/switched off EVERYWHERE/i)
+    expect(block).toMatch(/Slack bot/i) // names the suggestion it actually made
+    expect(block).toMatch(/do NOT suggest another screen/i)
+  })
+
   it("keeps lookups useful rather than turning into a flat refusal", () => {
     const block = renderCapabilityBlock({ canQueueApprovals: false })
     expect(block).toMatch(/You CAN still look things up freely/i)
