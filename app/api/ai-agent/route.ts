@@ -4,17 +4,30 @@ import { isAdmin, isClient } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { deterministicThreadUuid, buildWorkerSurfacePrompt } from '@/lib/ai-agent/inbox-worker-prompt'
 import { parseSidebarClientKey } from '@/lib/ai-agent/sidebar-scope'
+import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
- * The sidebar assistant IS the worker (Business Brain D2) when this flag is on.
- * OFF by default — the sidebar keeps its old Claude+GPT-4o agent until Antonio
- * flips WORKER_SIDEBAR_ENABLED=true. When on: same engine as Slack/Inbox
- * (callWorker) — full read rails, the shared brain (global + per-page-client
- * recall), discuss-first; the old silent direct-writes are dropped.
+ * The sidebar assistant IS the worker. Same engine as the Inbox, Portal Chats and
+ * Team Chat: one brain, one discipline, one set of controls.
+ *
+ * Antonio, 2026-07-19: "the AI Agent on the sidebar must have the same capabilities.
+ * It will be our AI engine to ask things for inside the CRM as we would do in Claude."
+ * The sidebar is mounted on every dashboard page, so it is the primary surface, not a
+ * lesser one.
+ *
+ * WHY THE OLD ENGINE IS GONE (dev job 17459c25): it dispatched whatever the model
+ * emitted straight to the tool executor — no permission step, no recipient pin, no risk
+ * classifier. `send_email` on that path reached real clients with nobody approving it,
+ * on a panel present on every page. It is now read-only by construction (see
+ * LEGACY_AGENT_BLOCKED_TOOLS) and reachable only via the escape hatch below.
+ *
+ * WORKER_SIDEBAR_LEGACY=true forces the old engine back for one deploy if the worker
+ * path ever breaks in production. It is an emergency lever, not a supported mode — the
+ * old engine cannot send or write any more, so falling back costs capability, not safety.
  */
-function sidebarWorkerEnabled(): boolean {
-  return process.env.WORKER_SIDEBAR_ENABLED === 'true'
+function forceLegacySidebarEngine(): boolean {
+  return process.env.WORKER_SIDEBAR_LEGACY === 'true'
 }
 
 /**
@@ -78,26 +91,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No valid messages provided' }, { status: 400 })
     }
 
-    // WORKER PATH (D2): route the sidebar through the same worker as Slack/Inbox.
-    // Text turns only for now — a turn WITH an attachment falls through to the old
-    // engine (attachment support in the worker path is a fast follow). The worker
-    // rebuilds conversation memory from agent_messages by thread, so we send only
-    // the latest user turn and let the thread carry history.
-    if (sidebarWorkerEnabled() && !attachment) {
-      const lastUser = [...validMessages].reverse().find((m) => m.role === 'user')
-      if (!lastUser) {
-        return NextResponse.json({ error: 'No user message provided' }, { status: 400 })
-      }
-      return await runSidebarWorker({
-        userId: user.id,
-        userEmail: user.email ?? null,
-        userBody: lastUser.content,
-        conversationId: typeof conversationId === 'string' ? conversationId : null,
-        clientKey: parseSidebarClientKey(clientKey),
-      })
-    }
-
-    // Validate attachment if present
+    // Validate attachment if present. Shared by both engines — the worker path reads
+    // it directly now rather than handing the turn to the old engine.
     let validAttachment: { name: string; type: string; base64: string } | undefined
     if (attachment) {
       if (!attachment.base64 || !attachment.type || !attachment.name) {
@@ -111,6 +106,26 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Attachment too large (max 10MB)' }, { status: 400 })
       }
       validAttachment = { name: String(attachment.name), type: attachment.type, base64: attachment.base64 }
+    }
+
+    // WORKER PATH — now the default, and now including attachment turns. Previously a
+    // turn WITH a file fell through to the old engine, which is exactly the turn most
+    // likely to end in "file this for me" on a panel that could act unasked.
+    // The worker rebuilds conversation memory from its thread, so we send only the
+    // latest user turn and let the thread carry the history.
+    if (!forceLegacySidebarEngine()) {
+      const lastUser = [...validMessages].reverse().find((m) => m.role === 'user')
+      if (!lastUser) {
+        return NextResponse.json({ error: 'No user message provided' }, { status: 400 })
+      }
+      return await runSidebarWorker({
+        userId: user.id,
+        userEmail: user.email ?? null,
+        userBody: lastUser.content,
+        conversationId: typeof conversationId === 'string' ? conversationId : null,
+        clientKey: parseSidebarClientKey(clientKey),
+        attachment: validAttachment,
+      })
     }
 
     // Validate provider choice
@@ -133,6 +148,65 @@ export async function POST(request: NextRequest) {
 }
 
 /**
+ * Build this turn's send rails from the page's client — re-resolved server-side.
+ *
+ * `clientKey` is posted by the browser. On a staff-only surface that is low risk, but it
+ * is still the model-adjacent input that would aim a real client-facing send, so it is
+ * never trusted as a pin directly: the id is looked up, and the rails are built from the
+ * row that comes back. A key naming a client that does not exist yields no rails at all.
+ *
+ * Returns empty rails off a client page — no server fact names a recipient there, and an
+ * unpinned send is one the server cannot check.
+ */
+async function buildSidebarSendRails(clientKey: string | null): Promise<{
+  portal: { enableSlackSend?: true; pinnedPortalRecipient?: { account_id?: string; contact_id?: string } }
+  email: { enableEmailSend?: true; pinnedEmailRecipients?: string[] }
+  clientScope: import('@/lib/ai-agent/client-scope').ClientScope | null
+}> {
+  const empty = { portal: {}, email: {}, clientScope: null } as const
+  if (!clientKey) return empty
+
+  const [kind, id] = clientKey.split(':')
+  if ((kind !== 'account' && kind !== 'contact') || !id) return empty
+
+  // Re-resolve. Existence here IS the authorization to pin to this client.
+  if (kind === 'account') {
+    const { data: acct } = await supabaseAdmin.from('accounts').select('id').eq('id', id).maybeSingle()
+    if (!acct) return empty
+  } else {
+    const { data: contact } = await supabaseAdmin.from('contacts').select('id').eq('id', id).maybeSingle()
+    if (!contact) return empty
+  }
+
+  // Addresses on file for this client. An empty list is DELIBERATELY still a pin — it
+  // means "refuse every address", which is the safe reading. Dropping the rail instead
+  // would leave the recipient unpinned, which is the opposite.
+  const { data: contactRows } = await supabaseAdmin
+    .from('contacts')
+    .select('id, email')
+    .or(kind === 'account' ? `account_id.eq.${id}` : `id.eq.${id}`)
+  const addresses = Array.from(
+    new Set(
+      (contactRows ?? [])
+        .map((c: { email: string | null }) => c.email)
+        .filter((e): e is string => Boolean(e && e.includes('@'))),
+    ),
+  )
+
+  const { buildClientScope } = await import('@/lib/ai-agent/client-scope')
+  const relatedIds = (contactRows ?? []).map((c: { id: string }) => c.id)
+
+  return {
+    portal: {
+      enableSlackSend: true,
+      pinnedPortalRecipient: kind === 'account' ? { account_id: id } : { contact_id: id },
+    },
+    email: { enableEmailSend: true, pinnedEmailRecipients: addresses },
+    clientScope: buildClientScope(clientKey, relatedIds),
+  }
+}
+
+/**
  * Run the sidebar turn through the worker (callWorker) with the dashboard prompt,
  * full read rails, and the shared brain. Persists the turn to agent_messages so
  * the worker has conversation memory (same mechanism as the Inbox/Portal panels).
@@ -144,8 +218,10 @@ async function runSidebarWorker(args: {
   userBody: string
   conversationId: string | null
   clientKey: string | null
+  attachment?: { name: string; type: string; base64: string }
 }): Promise<NextResponse> {
-  const { userId, userEmail, userBody, conversationId, clientKey } = args
+  const { userId, userEmail, conversationId, clientKey, attachment } = args
+  let { userBody } = args
   // Per-conversation thread when the panel supplies an id (a "new chat" mints a
   // fresh one → fresh memory); otherwise a stable per-user thread.
   const scope = `dashboard-${userId}${conversationId ? `-${conversationId}` : ''}`
@@ -154,10 +230,40 @@ async function runSidebarWorker(args: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
 
+  // Read the staff member's upload, if any. Images become vision blocks, scanned PDFs
+  // become native document blocks, everything else is extracted to text and appended to
+  // the body — the same treatment the Inbox and Team Chat give a dropped file.
+  const media: { images: WorkerImageBlock[]; documents: WorkerDocumentBlock[] } = { images: [], documents: [] }
+  if (attachment) {
+    try {
+      const { readAttachmentBuffer, capMediaBudget, fenceUntrustedContent } = await import(
+        '@/lib/ai-agent/attachment-reader'
+      )
+      const buffer = Buffer.from(attachment.base64, 'base64')
+      const read = await readAttachmentBuffer(buffer, { id: 'sidebar-upload', name: attachment.name, mimetype: attachment.type })
+      if (read.kind === 'image') media.images.push(read.imageBlock)
+      else if (read.kind === 'document') media.documents.push(read.documentBlock)
+      else if (read.kind === 'text') {
+        // Fenced: an uploaded file is data. A staff member can be forwarded a document
+        // written by anyone, and this panel holds a live send rail.
+        userBody = `${userBody}\n\n${fenceUntrustedContent(attachment.name, read.text)}`
+      } else {
+        userBody = `${userBody}\n\n${read.note}`
+      }
+      const capped = capMediaBudget(media.images, media.documents)
+      media.images = capped.images
+      media.documents = capped.documents
+      if (capped.dropped.length) userBody = `${userBody}\n\n[Not attached: ${capped.dropped.join('; ')}.]`
+    } catch (err) {
+      console.warn('[ai-agent] sidebar attachment unreadable:', err)
+      userBody = `${userBody}\n\n[The attached file "${attachment.name}" could not be read. Say so plainly rather than guessing at its contents.]`
+    }
+  }
+
   // Persist the turn (memory). Degrade to a memoryless turn if the insert fails.
   let rowId: string | null = null
   try {
-    const { data: inserted } = await db
+    const { data: inserted, error: insertError } = await db
       .from('agent_messages')
       .insert({
         sender: 'crm',
@@ -177,21 +283,39 @@ async function runSidebarWorker(args: {
       })
       .select('id')
       .single()
+    // supabase-js RETURNS errors rather than throwing them, so a failed insert used to
+    // slip past this catch and leave rowId null silently. That matters now: the send
+    // idempotency marker is keyed on this row, and without it a retried turn re-sends.
+    if (insertError) {
+      console.error('[ai-agent] sidebar memory insert failed (memoryless turn):', insertError)
+    }
     rowId = inserted?.id ?? null
   } catch (err) {
-    console.warn('[ai-agent] sidebar memory insert failed (memoryless turn):', err)
+    console.warn('[ai-agent] sidebar memory insert threw (memoryless turn):', err)
   }
 
+  // SEND RAILS, pinned server-side (dev job 17459c25 / Antonio 2026-07-19).
+  //
+  // The sidebar is the CRM's main assistant and must be able to act, but every send has
+  // to be aimed by a server fact rather than by the model. The page's client is the only
+  // such fact available here — and `clientKey` arrives from the BROWSER, so it is
+  // re-resolved against the database below and the rails are built from the row that
+  // comes back, never from the string that was posted.
+  //
+  // Off a client page there is no fact naming a recipient, so the send rails stay off.
+  // That is not the finished state: arbitrary sends need the show-it-and-wait step
+  // (parent job 74701b48), and until that exists an unpinned send is one the server
+  // cannot check.
+  const rails = await buildSidebarSendRails(clientKey)
+
   try {
-    const { callWorker } = await import('@/lib/ai-agent/worker-tools')
-    const { reply } = await callWorker(userBody, {
+    const { callWorkerWithAttachments } = await import('@/lib/ai-agent/attachment-reader')
+    const { reply } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       systemPromptOverride: buildWorkerSurfacePrompt('dashboard'),
-      // Full Slack-parity READ rails. No send rail here yet (sidebar is look-up +
-      // draft for now; a gated send rail is a deliberate follow-up). The old
-      // silent direct-writes (create_task/update_contact/…) are gone by
-      // construction — the worker never had them.
+      surface: 'dashboard',
+      // Full read rails — parity with the Inbox, Portal Chats and Team Chat.
       enableDbRead: true,
       enableDocReads: true,
       enableCallReads: true,
@@ -200,6 +324,19 @@ async function runSidebarWorker(args: {
       enableThreadRecall: true,
       enableWebSearch: true,
       maxIterations: 20,
+      // Files the staff member dropped into the panel this turn.
+      ...(media.images.length ? { images: media.images } : {}),
+      ...(media.documents.length ? { documents: media.documents } : {}),
+      // Client-facing sends, aimed by the server (see buildSidebarSendRails).
+      ...rails.portal,
+      ...rails.email,
+      // WHO asked. Without it a send from here is logged as the generic worker and
+      // "who told it to do that" has no answer.
+      sendActor: `crm-sidebar:${userEmail ?? userId}`,
+      // Server-enforced client boundary: on a client page the assistant may not look
+      // up a DIFFERENT client. Note this is the control that was dead until this job —
+      // it only works because the context builder now forwards it.
+      ...(rails.clientScope ? { clientScope: rails.clientScope } : {}),
       // Per-page client scope → the brain recalls this client's own lessons and
       // any save is scoped to them. Derived from the live route each turn.
       ...(clientKey ? { clientKey } : {}),
