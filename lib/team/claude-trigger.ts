@@ -25,6 +25,27 @@ import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worke
 const THINKING_PLACEHOLDER = '…'
 
 /**
+ * Marks a placeholder as CLAIMED by a running processor (dev job 17459c25).
+ *
+ * The rescue cron re-fires any placeholder still showing THINKING_PLACEHOLDER after
+ * STUCK_AFTER_MS. The old guard ("is the message still '…'?") was a read-then-check,
+ * and during a still-running first pass the answer is yes — so a turn slower than 45s
+ * got a SECOND worker running the same prompt. The write-side TOCTOU guard meant only
+ * one reply landed, but both runs executed their tool calls in full. Harmless while
+ * the tools are reads; duplicate client sends and duplicate Drive uploads once they
+ * are not.
+ *
+ * Claiming is therefore an atomic compare-and-set on the message itself, matching how
+ * the rest of this flow already uses message content as state. U+22EF renders
+ * near-identically to the '…' the user is already looking at, so the claim is
+ * invisible in the UI while being a distinct value to the database.
+ */
+const WORKING_PLACEHOLDER = '⋯'
+
+/** Either state means "no answer has been written yet". */
+const PENDING_PLACEHOLDERS = [THINKING_PLACEHOLDER, WORKING_PLACEHOLDER]
+
+/**
  * Insert the Claude placeholder message and fire the async processor.
  * Returns the placeholder message id (or null if @claude wasn't actually
  * mentioned / insert failed — caller can ignore).
@@ -110,16 +131,26 @@ export async function processClaudeReply(params: {
 }): Promise<{ ok: boolean; reason?: string }> {
   const { threadId, promptMessageId, placeholderId } = params
 
-  // Load the placeholder + guard against double-processing and self-trigger.
+  // CLAIM the placeholder atomically. This is a compare-and-set, NOT a read then a
+  // check: the direct fire and the rescue cron can both be holding this id, and a
+  // read-then-check lets both pass while the first is still working — two workers,
+  // one prompt, every tool call executed twice.
+  //
+  // Restricting the update to sender_id = CLAUDE_SENDER_UUID keeps the old
+  // self-trigger guard, and matching on THINKING_PLACEHOLDER means an already-claimed
+  // or already-answered row matches nothing and we bail.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: placeholder } = await (supabaseAdmin as any)
+  const { data: claimedRows } = await (supabaseAdmin as any)
     .from('internal_messages')
-    .select('id, message, sender_id')
+    .update({ message: WORKING_PLACEHOLDER })
     .eq('id', placeholderId)
-    .single()
-  if (!placeholder) return { ok: false, reason: 'placeholder_gone' }
-  if (placeholder.sender_id !== CLAUDE_SENDER_UUID) return { ok: false, reason: 'not_claude_placeholder' }
-  if (placeholder.message !== THINKING_PLACEHOLDER) return { ok: false, reason: 'already_answered' }
+    .eq('sender_id', CLAUDE_SENDER_UUID)
+    .eq('message', THINKING_PLACEHOLDER)
+    .select('id')
+  if (!claimedRows?.length) {
+    // Someone else owns this turn, it is already answered, or the row is gone.
+    return { ok: false, reason: 'already_claimed' }
+  }
 
   // The triggering human message. `attachments` matters: staff drop screenshots
   // and PDFs into team chat and expect @claude to look at them.
@@ -161,6 +192,34 @@ export async function processClaudeReply(params: {
       .single()
     clientKey = `contact:${thread.contact_id}`
     clientName = contact?.full_name ?? null
+  }
+
+  // SEND RAILS for this turn, pinned server-side (dev job 17459c25).
+  //
+  // PORTAL: allowed only when the thread is linked to exactly one client, and hard-pinned
+  // to that client — the worker cannot retarget it. An unlinked thread gets no portal rail
+  // at all, because there is no server fact saying who the message is for.
+  const portalSendRail: { enableSlackSend?: true; pinnedPortalRecipient?: { account_id?: string; contact_id?: string } } =
+    thread?.account_id
+      ? { enableSlackSend: true, pinnedPortalRecipient: { account_id: thread.account_id } }
+      : thread?.contact_id
+        ? { enableSlackSend: true, pinnedPortalRecipient: { contact_id: thread.contact_id } }
+        : {}
+
+  // EMAIL: allowed only when the linked client has addresses on file, pinned to exactly
+  // those. Note the empty-array case is NOT the same as "no rail" — `[]` is a real pin
+  // meaning "refuse every address", so a linked client with no address on file still gets
+  // the rail and every send is refused, rather than falling through to unpinned.
+  let emailSendRail: { enableEmailSend?: true; pinnedEmailRecipients?: string[] } = {}
+  if (thread?.account_id || thread?.contact_id) {
+    const { data: contactRows } = await supabaseAdmin
+      .from('contacts')
+      .select('email')
+      .or(thread.account_id ? `account_id.eq.${thread.account_id}` : `id.eq.${thread.contact_id}`)
+    const addresses = (contactRows ?? [])
+      .map((c: { email: string | null }) => c.email)
+      .filter((e): e is string => Boolean(e && e.includes('@')))
+    emailSendRail = { enableEmailSend: true, pinnedEmailRecipients: Array.from(new Set(addresses)) }
   }
 
   // Recent conversation (exclude the placeholder itself) for context.
@@ -265,10 +324,21 @@ export async function processClaudeReply(params: {
       enableWebSearch: true,
       enableThreadRecall: true,
       enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === 'true',
-      // Send rails — Slack parity: draft in thread, send on explicit "send it"
-      // (discipline enforced by SLACK_WORKER_SYSTEM_PROMPT, same as Slack).
-      enableEmailSend: true,
-      enableSlackSend: true,
+      // Send rails — draft in thread, send on the staff member's explicit "send it".
+      //
+      // SERVER-SIDE PINS (dev job 17459c25). Until this fix these rails ran with no
+      // pin and no actor, which meant: the recipient check was skipped entirely (it
+      // only engages when a pin is present), the portal send used whatever client ids
+      // the MODEL supplied, and — because the Italian/English language guard and the
+      // one-shot send latch are both conditioned on a pin existing — those two were
+      // inert as well. Nothing but prompt text stood between a draft and a real client.
+      //
+      // A team thread is not inherently about one client, so the pin is derived from
+      // the thread's own client link and the rail is SWITCHED OFF when there is none.
+      // Off is the correct default here: an unpinnable send is one the server cannot
+      // check, and this surface has no confirm step of its own yet.
+      ...portalSendRail,
+      ...emailSendRail,
       // Internal team-chat send (staff-only, posts as Claude). Same draft →
       // explicit "send it" discipline. Answering @claude already runs in team
       // chat; this lets it post to OTHER team channels/threads on approval.
@@ -277,6 +347,9 @@ export async function processClaudeReply(params: {
       // launches or ships a coding job — it investigates and reports; Antonio
       // does code himself. (Reverses the earlier Antonio-only gate.)
       enableCodeTasks: false,
+      // WHO asked for this. Without it every send from this surface was written to the
+      // audit trail as the generic worker, so "who told it to send that" had no answer.
+      sendActor: `team-chat:${prompt.sender_name ?? prompt.sender_id}`,
       clientKey,
       clientName,
     })
@@ -298,7 +371,10 @@ export async function processClaudeReply(params: {
     .from('internal_messages')
     .update({ message: reply })
     .eq('id', placeholderId)
-    .eq('message', THINKING_PLACEHOLDER) // TOCTOU guard: only if still pending
+    // Only write over OUR claim. Must match WORKING_PLACEHOLDER, not the original
+    // '…' — this turn set the claim on entry, so matching the old value here would
+    // never fire and the reply would be silently dropped.
+    .eq('message', WORKING_PLACEHOLDER)
 
   await bumpThreadActivity(threadId)
 
@@ -342,7 +418,10 @@ export async function processClaudeReply(params: {
   try {
     const priorReply = (recent ?? []).find(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (m: any) => m.sender_id === CLAUDE_SENDER_UUID && m.message && m.message !== THINKING_PLACEHOLDER,
+      // Must exclude BOTH pending states — a claimed placeholder is still a spinner,
+      // not a reply, and feeding it to lesson capture would teach on an empty turn.
+      (m: any) =>
+        m.sender_id === CLAUDE_SENDER_UUID && m.message && !PENDING_PLACEHOLDERS.includes(m.message),
     )?.message as string | undefined
     if (priorReply) {
       const { captureLessonFromTurn } = await import('@/lib/ai-agent/lesson-capture')
@@ -387,12 +466,36 @@ export async function processClaudeReply(params: {
  * older than STUCK_AFTER_MS and runs them. The prompt is recovered from the
  * placeholder's reply_to_id (set at trigger time); legacy placeholders without
  * it fall back to the nearest earlier human message in the thread.
+ *
+ * TWO WINDOWS, deliberately (dev job 17459c25):
+ *  - UNCLAIMED ('…') after STUCK_AFTER_MS — nothing ever started, so re-firing is
+ *    free. 45s is right here.
+ *  - CLAIMED ('⋯') after ABANDONED_AFTER_MS — a processor took this turn and then
+ *    died (function killed, deploy mid-run). Re-firing is only safe once we are sure
+ *    nobody is still working, so this window is far longer than any real turn. A
+ *    45s window here is exactly the double-run bug this claim was added to fix: a
+ *    20-iteration turn with DB, Drive and web tools routinely runs past 45s.
  */
 const STUCK_AFTER_MS = 45_000
+const ABANDONED_AFTER_MS = 10 * 60_000
 const RESCUE_BATCH = 3
 
 export async function rescueStuckClaudeReplies(): Promise<{ scanned: number; rescued: number }> {
   const cutoff = new Date(Date.now() - STUCK_AFTER_MS).toISOString()
+
+  // Abandoned claims first: hand them back to the unclaimed state so the normal
+  // claim path below can pick them up. Conditioned on age, so a live run is never
+  // reset out from under itself.
+  const abandonedCutoff = new Date(Date.now() - ABANDONED_AFTER_MS).toISOString()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabaseAdmin as any)
+    .from('internal_messages')
+    .update({ message: THINKING_PLACEHOLDER })
+    .eq('sender_id', CLAUDE_SENDER_UUID)
+    .eq('message', WORKING_PLACEHOLDER)
+    .is('deleted_at', null)
+    .lt('created_at', abandonedCutoff)
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: stuck } = await (supabaseAdmin as any)
     .from('internal_messages')
@@ -465,12 +568,15 @@ async function isAntonioUser(userId: string): Promise<boolean> {
 }
 
 async function failPlaceholder(placeholderId: string, message: string) {
+  // Accepts EITHER pending state: most failures happen after this turn claimed the
+  // row (so it reads WORKING_PLACEHOLDER), but a pre-claim caller may still hold the
+  // original. Matching only one of them would leave the placeholder spinning forever.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabaseAdmin as any)
     .from('internal_messages')
     .update({ message })
     .eq('id', placeholderId)
-    .eq('message', THINKING_PLACEHOLDER)
+    .in('message', PENDING_PLACEHOLDERS)
   return { ok: false, reason: 'worker_error' }
 }
 

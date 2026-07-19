@@ -2862,6 +2862,66 @@ export interface WorkerSendContext {
   }
 }
 
+/**
+ * Build the per-call send/scope context handed to executeWorkerTool.
+ *
+ * EXTRACTED AND EXPORTED SO THE WIRING IS TESTABLE. This is not stylistic: every
+ * control in this file (recipient pin, portal pin, language guard, send latch,
+ * client boundary) is reached ONLY through the object this function returns, so a
+ * field silently missing here disables that control everywhere while every
+ * pure-function test on the control itself keeps passing. That is precisely how the
+ * client boundary from dev job a6c3d75b shipped dead — the Portal Chats route built
+ * the scope, passed it through a `sendRails` variable spread (so no excess-property
+ * check flagged the drop), and the inline literal here never copied it across. It
+ * had never once executed in production.
+ *
+ * Any NEW control field added to WorkerSendContext must be copied here AND asserted
+ * in tests/unit/worker-send-context.test.ts.
+ *
+ * NOTE the `!== undefined` on pinnedEmailRecipients: an EMPTY allow-list is a real,
+ * meaningful pin ("refuse every address") and `[]` must not be read as "no pin". A
+ * truthiness check fails open on exactly the path that matters — an Inbox turn where
+ * the thread could not be read.
+ */
+export function buildWorkerSendContext(
+  opts: {
+    sendActor?: string | null
+    pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
+    pinnedEmailAttachments?: PinnedEmailAttachment[] | null
+    pinnedEmailRecipients?: string[]
+    emailSendPrep?: WorkerSendContext["emailSendPrep"]
+    clientScope?: import("./client-scope").ClientScope | null
+    clientKey?: string | null
+  },
+  capturedOffThreadAttempts: string[] = [],
+): WorkerSendContext | undefined {
+  const hasContext =
+    opts.sendActor ||
+    opts.pinnedPortalRecipient ||
+    opts.pinnedEmailAttachments?.length ||
+    opts.pinnedEmailRecipients !== undefined ||
+    opts.emailSendPrep ||
+    // A client-scoped call MUST build a context even with no send pin at all —
+    // otherwise the boundary is off on any read-only client-pinned surface.
+    opts.clientScope ||
+    // Client-scoped calls carry the canonical memory namespace so memory_save
+    // writes client-recallable lessons (the save side wrote NO key before).
+    opts.clientKey
+  if (!hasContext) return undefined
+  return {
+    actor: opts.sendActor ?? null,
+    pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
+    pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
+    capturedOffThreadAttempts,
+    memoryClientKey: opts.clientKey ?? null,
+    clientScope: opts.clientScope ?? null,
+    ...(opts.pinnedEmailRecipients !== undefined
+      ? { pinnedEmailRecipients: opts.pinnedEmailRecipients }
+      : {}),
+    ...(opts.emailSendPrep ? { emailSendPrep: opts.emailSendPrep } : {}),
+  }
+}
+
 /** First non-empty line of the request body, capped — used as the thread title. */
 export function deriveThreadTitle(body: string): string {
   const firstLine = (body ?? "")
@@ -3598,33 +3658,8 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
       ? buildWebServerTools()
       : undefined
 
-  // NOTE the `!== undefined` on pinnedEmailRecipients: an EMPTY allow-list is a
-  // real, meaningful pin ("refuse every address"), and `[]` must not be treated
-  // as "no pin". Truthiness checks here would fail open on the exact path that
-  // matters — an Inbox turn where the thread couldn't be read.
-  const hasPin =
-    opts.sendActor ||
-    opts.pinnedPortalRecipient ||
-    opts.pinnedEmailAttachments?.length ||
-    opts.pinnedEmailRecipients !== undefined ||
-    opts.emailSendPrep ||
-    // Client-scoped calls carry the canonical memory namespace so memory_save
-    // writes client-recallable lessons (the save side wrote NO key before).
-    opts.clientKey
   const capturedOffThreadAttempts: string[] = []
-  const sendContext: WorkerSendContext | undefined = hasPin
-    ? {
-        actor: opts.sendActor ?? null,
-        pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
-        pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
-        capturedOffThreadAttempts,
-        memoryClientKey: opts.clientKey ?? null,
-        ...(opts.pinnedEmailRecipients !== undefined
-          ? { pinnedEmailRecipients: opts.pinnedEmailRecipients }
-          : {}),
-        ...(opts.emailSendPrep ? { emailSendPrep: opts.emailSendPrep } : {}),
-      }
-    : undefined
+  const sendContext = buildWorkerSendContext(opts, capturedOffThreadAttempts)
 
   const result = await runWorkerLoop(userContent, tools, systemPrompt, opts.maxIterations, typeof opts.messageId === "string" ? opts.messageId : null, threadId, serverTools, opts.apiKeyOverride, sendContext, opts.model ?? null)
 

@@ -1,0 +1,112 @@
+/**
+ * WIRING tests for the worker's per-call send/scope context.
+ *
+ * Why this file exists: tests/unit/client-scope.test.ts proves buildClientScope and
+ * checkClientScope are correct — and every one of those tests passed for the entire
+ * period the client boundary was DEAD. The route built the scope, spread it through
+ * a variable (`sendRails`), and the inline context literal in callWorker never copied
+ * it across, so the gate in executeWorkerTool read `undefined` and never fired. A
+ * pure-function test cannot see that; only a test of the wiring can.
+ *
+ * So: these cases assert the CONTEXT CARRIES the control, and that the gate REFUSES
+ * through the real executeWorkerTool entry point. Both halves are required — the
+ * first catches a dropped field, the second catches a gate that stops being called.
+ */
+
+import { describe, it, expect } from "vitest"
+import { buildWorkerSendContext, executeWorkerTool } from "@/lib/ai-agent/worker-tools"
+import { buildClientScope } from "@/lib/ai-agent/client-scope"
+
+const A = "12dadc46-e431-4d11-9fe0-5c561d38737a" // the client whose screen is open
+const B = "30c2cd96-03e4-43cf-9536-81d961b18b1d" // a DIFFERENT client
+const CONTACT_A = "4e0e4026-1bf4-41e8-ba6c-e9db1e4ba2f8" // a contact of A
+
+describe("buildWorkerSendContext — the controls survive the handoff", () => {
+  it("REGRESSION: forwards clientScope (the field whose absence made the boundary dead)", () => {
+    const scope = buildClientScope(`account:${A}`, [CONTACT_A])!
+    const ctx = buildWorkerSendContext({ clientScope: scope })
+    expect(ctx).toBeDefined()
+    expect(ctx!.clientScope).toEqual(scope)
+  })
+
+  it("builds a context for a scope-only call — no send pin, boundary still enforced", () => {
+    // The Portal Chats panel happens to also set a portal pin, so a bug here would
+    // hide there. A read-only client-pinned surface has nothing else to save it.
+    const ctx = buildWorkerSendContext({ clientScope: buildClientScope(`contact:${B}`)! })
+    expect(ctx).toBeDefined()
+    expect(ctx!.clientScope?.id).toBe(B)
+  })
+
+  it("forwards the portal pin, the email pin and the actor", () => {
+    const ctx = buildWorkerSendContext({
+      sendActor: "crm-portal:luca@tonydurante.us",
+      pinnedPortalRecipient: { account_id: A },
+      pinnedEmailRecipients: ["someone@example.com"],
+    })
+    expect(ctx!.actor).toBe("crm-portal:luca@tonydurante.us")
+    expect(ctx!.pinnedPortalRecipient).toEqual({ account_id: A })
+    expect(ctx!.pinnedEmailRecipients).toEqual(["someone@example.com"])
+  })
+
+  it("keeps an EMPTY email allow-list as a real pin — [] must never become undefined", () => {
+    // [] means "refuse every address". Collapsing it to undefined means "unpinned",
+    // which is the fail-OPEN direction on an Inbox turn whose thread could not be read.
+    const ctx = buildWorkerSendContext({ pinnedEmailRecipients: [] })
+    expect(ctx).toBeDefined()
+    expect(ctx!.pinnedEmailRecipients).toEqual([])
+    expect(ctx!.pinnedEmailRecipients).not.toBeUndefined()
+  })
+
+  it("returns undefined only when there is genuinely nothing to enforce", () => {
+    expect(buildWorkerSendContext({})).toBeUndefined()
+    expect(buildWorkerSendContext({ sendActor: null, clientScope: null })).toBeUndefined()
+  })
+})
+
+describe("client boundary — enforced through the real executeWorkerTool entry point", () => {
+  const scope = buildClientScope(`account:${A}`, [CONTACT_A])!
+  const ctx = buildWorkerSendContext({ clientScope: scope })!
+
+  it("REFUSES a lookup naming a different client (the actual exposure)", async () => {
+    const out = await executeWorkerTool(
+      "get_client_360",
+      { account_id: B },
+      new Set(["get_client_360"]),
+      null,
+      null,
+      ctx,
+    )
+    expect(out).toMatch(/❌/)
+    expect(out).toMatch(/DIFFERENT client/i)
+    // The refusal must NOT echo the foreign id back — that would hand the model
+    // (and anything shaping it) confirmation that the id resolves to a real client.
+    expect(out).not.toMatch(new RegExp(B))
+  })
+
+  it("REFUSES raw SQL naming a different client", async () => {
+    const out = await executeWorkerTool(
+      "run_sql_query",
+      { query: `select * from payments where account_id = '${B}'` },
+      new Set(["run_sql_query"]),
+      null,
+      null,
+      ctx,
+    )
+    expect(out).toMatch(/❌/)
+  })
+
+  it("fails OPEN when the surface is genuinely not client-pinned (unchanged behaviour)", async () => {
+    // No scope → no boundary. Asserted so a future change that starts refusing on
+    // unpinned surfaces is a visible decision, not a silent capability regression.
+    const unpinned = buildWorkerSendContext({ sendActor: "slack:antonio" })!
+    const out = await executeWorkerTool(
+      "get_client_360",
+      { account_id: B },
+      new Set([]), // not offered → refused for a DIFFERENT reason than scope
+      null,
+      null,
+      unpinned,
+    )
+    expect(out).not.toMatch(/different client|not on this screen|out of scope/i)
+  })
+})

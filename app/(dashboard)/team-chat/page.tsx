@@ -2076,7 +2076,11 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
           <div className={cn('px-3 py-2 rounded-2xl text-sm leading-relaxed', isClaude ? 'bg-violet-50 border border-violet-200 text-zinc-900' : isMe ? 'bg-zinc-800 text-white' : 'bg-white border border-zinc-200 text-zinc-900', isDeleted && 'opacity-60 italic')} style={{ wordBreak: 'break-word' }}>
             {isDeleted ? <span className="text-zinc-400 text-xs">🗑 Message deleted</span> : (
               <>
-                {m.message === '…' ? <span className="text-zinc-400 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> thinking…</span> : m.message && <p className="whitespace-pre-wrap">{m.message}</p>}
+                {/* Both pending markers render as the spinner: '…' = queued, '⋯' = a
+                    processor has claimed this turn (see PENDING_PLACEHOLDERS in
+                    lib/team/claude-trigger.ts). They are two states of "still thinking",
+                    and the claim is deliberately invisible to the reader. */}
+                {m.message === '…' || m.message === '⋯' ? <span className="text-zinc-400 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> thinking…</span> : m.message && <p className="whitespace-pre-wrap">{m.message}</p>}
                 {m.card && <CardView card={m.card} />}
                 {attachments.length > 0 && (
                   <div className="flex flex-col gap-1 mt-1.5">

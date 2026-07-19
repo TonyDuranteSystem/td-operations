@@ -100,9 +100,58 @@ const DEFAULT_MAX_TOOL_LOOPS = Number(process.env.AGENT_MAX_TOOL_LOOPS) || 8
 // Shared Tool definitions + execution (imported lazily)
 // ============================================================
 
+/**
+ * Tools the LEGACY dashboard-sidebar engine may NOT run (dev job 17459c25).
+ *
+ * This engine has no permission step, no recipient pin and no risk classifier — it
+ * dispatches whatever the model emits straight to executeTool. That is a standing
+ * violation of the rule that the assistant never acts without being asked, and it is
+ * live today: the sidebar is mounted on every dashboard page, and `send_email` here
+ * goes to a real client with nobody approving it.
+ *
+ * Until the sidebar is migrated onto the worker engine (which has the pins and the
+ * confirm flow) this path is READ-ONLY. Two layers, because one is a suggestion:
+ * these names are filtered out of the tool list the model is shown, AND refused at
+ * dispatch — a model can hallucinate a tool name it was never offered.
+ *
+ * Deliberately still allowed: the assistant's own memory writes (save_memory /
+ * memory_save) and log_conversation. They record what the assistant learned rather
+ * than changing client or system state, and losing them degrades the assistant's
+ * recall for no safety gain.
+ *
+ * NOTE the migration is not a flag flip: the worker path is gated on there being no
+ * attachment, and the sidebar worker does not yet forward images/documents, so simply
+ * enabling it would silently remove working attachment support.
+ */
+export const LEGACY_AGENT_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
+  // leaves the building
+  'send_email',
+  'send_team_message',
+  // changes client or system state
+  'create_task',
+  'update_task',
+  'update_account_notes',
+  'update_contact',
+  'update_service',
+  'update_deadline',
+  'advance_service_stage',
+  // writes into the shared document store
+  'drive_move',
+  'drive_upload_file',
+])
+
 async function getTools() {
   const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await import('./tools')
-  return { AGENT_TOOLS, executeTool, loadGlobalMemories }
+  // The model is never shown an action it is not allowed to take — offering a tool
+  // and then refusing it produces confident-sounding claims about work never done.
+  const readOnlyTools = AGENT_TOOLS.filter(t => !LEGACY_AGENT_BLOCKED_TOOLS.has(t.name))
+  const guardedExecuteTool = async (name: string, params: Record<string, unknown>) => {
+    if (LEGACY_AGENT_BLOCKED_TOOLS.has(name)) {
+      return `❌ "${name}" cannot be run from this panel — it would act without asking you first. Say what you want done and it can be carried out from the Inbox or Portal Chats panel, which show you the exact action and wait for your go.`
+    }
+    return executeTool(name, params)
+  }
+  return { AGENT_TOOLS: readOnlyTools, executeTool: guardedExecuteTool, loadGlobalMemories }
 }
 
 // ============================================================
