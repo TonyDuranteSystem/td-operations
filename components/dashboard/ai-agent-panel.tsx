@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
 import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles, Paperclip, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useHoldToSend } from '@/components/chat/use-hold-to-send'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
@@ -189,10 +190,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     }
   }
 
-  const handleSend = async () => {
+  // Runs only once the hold expires (or Enter is pressed a second time). Nothing is
+  // cleared until here — cancelling has to leave the box exactly as it was.
+  const { armed, secondsLeft, arm, cancel } = useHoldToSend<null>(async () => {
     const text = input.trim()
-    if ((!text && !attachedFile) || loading) return
-    if (isRecording) stopRecording()
+    if (!text && !attachedFile) return
 
     // Build display content (what shows in chat history)
     const displayContent = [
@@ -208,9 +210,22 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     setAttachedFile(null)
     if (inputRef.current) inputRef.current.style.height = 'auto'
     await sendMessage(newMessages, fileToSend)
+  })
+
+  const handleSend = () => {
+    if ((!input.trim() && !attachedFile) || loading) return
+    if (isRecording) stopRecording()
+    // While held, a second press means "I'm sure" — the hook fires immediately.
+    arm(null)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Escape while held = "I hit Enter too early".
+    if (e.key === 'Escape' && armed) {
+      e.preventDefault()
+      cancel()
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -486,15 +501,32 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 </button>
               )
             )}
-            {/* Send */}
+            {/* Send — amber while the message is held, so the state is visible at a
+                glance and the same button doubles as "send it now". */}
             <button
               onClick={handleSend}
               disabled={(!input.trim() && !attachedFile) || loading}
-              className="p-3 rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+              className={cn(
+                'p-3 rounded-xl text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0',
+                armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
+              )}
+              title={armed ? 'Send now' : 'Send'}
             >
               {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
             </button>
           </div>
+          {armed && (
+            <div className="flex items-center gap-2 px-1 pt-1.5">
+              <span className="text-[11px] text-amber-700">Sending in {secondsLeft}s…</span>
+              <button
+                onClick={cancel}
+                className="text-[11px] font-medium text-amber-700 underline underline-offset-2 hover:text-amber-900"
+              >
+                Stop
+              </button>
+              <span className="text-[10px] text-zinc-400">or press Esc — your text stays put</span>
+            </div>
+          )}
         </div>
       </div>
     </>

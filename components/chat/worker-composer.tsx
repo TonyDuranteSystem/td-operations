@@ -12,6 +12,7 @@
 import { useRef } from 'react'
 import { Loader2, Paperclip, Send, X, FileText, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useHoldToSend } from '@/components/chat/use-hold-to-send'
 import type { UploadedAttachment, WorkerAttachments } from './use-worker-attachments'
 
 function fileSize(bytes: number): string {
@@ -46,7 +47,20 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
   // look enabled while clicking it did nothing.
   const canSend = !pending && !disabled && !uploading && !stillUploading && (text.length > 0 || readyFiles.length > 0)
 
-  const submit = async () => {
+  // THE ACTUAL SEND — runs only once the hold expires (or the staff member presses
+  // Enter a second time). The composer is cleared HERE, not when the message is
+  // queued: while it is held, cancelling has to put everything back exactly as it
+  // was, and the cheapest way to guarantee that is never to have taken it away.
+  const { armed, secondsLeft, arm, cancel } = useHoldToSend<{
+    message: string
+    attachments: UploadedAttachment[]
+  }>(async ({ message, attachments }) => {
+    onChange('')
+    clear()
+    await onSend(message, attachments)
+  })
+
+  const submit = () => {
     if (!canSend) return
     const attachments = uploaded()
     // A bare file gets an implicit ask, so the worker has something to act on.
@@ -55,15 +69,15 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
 
     // Never let a failed file vanish on send. The staff member has to know the
     // affidavit didn't make it, or they'll trust an answer built without it.
+    // Asked BEFORE the hold starts: a question during the countdown would eat the
+    // seconds it exists to give them.
     const lost = failed()
     if (lost.length) {
       const names = lost.map((f) => f.name).join(', ')
       if (!window.confirm(`${names} could not be uploaded and will NOT be sent.\n\nSend anyway?`)) return
     }
 
-    onChange('')
-    clear()
-    await onSend(message, attachments)
+    arm({ message, attachments })
   }
 
   return (
@@ -133,9 +147,18 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
           onChange={(e) => onChange(e.target.value)}
           onPaste={onPaste}
           onKeyDown={(e) => {
+            // Escape while held = "I hit Enter too early". Keeps the hands on the
+            // keyboard, which is where they already are.
+            if (e.key === 'Escape' && armed) {
+              e.preventDefault()
+              cancel()
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              void submit()
+              // While held, a second Enter means "I'm sure" — sends immediately, so
+              // the hold costs nothing when it isn't wanted.
+              submit()
             }
           }}
           placeholder={placeholder}
@@ -143,15 +166,31 @@ export function WorkerComposer({ placeholder, pending, disabled, onSend, value, 
           className="flex-1 resize-y rounded-xl border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent placeholder:text-zinc-400 min-h-[96px] max-h-64"
         />
         <button
-          onClick={() => void submit()}
-          disabled={!canSend}
-          className="shrink-0 p-2 rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors"
-          title={uploading ? 'Waiting for the upload to finish…' : 'Send'}
+          onClick={() => submit()}
+          disabled={!canSend && !armed}
+          className={cn(
+            'shrink-0 p-2 rounded-xl text-white transition-colors disabled:opacity-40',
+            armed ? 'bg-amber-500 hover:bg-amber-600' : 'bg-violet-600 hover:bg-violet-700',
+          )}
+          title={armed ? 'Send now' : uploading ? 'Waiting for the upload to finish…' : 'Send'}
         >
           <Send className="h-4 w-4" />
         </button>
       </div>
-      <p className="text-[10px] text-zinc-400 pt-1.5">Paste a screenshot or drop a file to have the worker read it.</p>
+      {armed ? (
+        <div className="flex items-center gap-2 pt-1.5">
+          <span className="text-[11px] text-amber-700">Sending in {secondsLeft}s…</span>
+          <button
+            onClick={cancel}
+            className="text-[11px] font-medium text-amber-700 underline underline-offset-2 hover:text-amber-900"
+          >
+            Stop
+          </button>
+          <span className="text-[10px] text-zinc-400">or press Esc — your text stays put</span>
+        </div>
+      ) : (
+        <p className="text-[10px] text-zinc-400 pt-1.5">Paste a screenshot or drop a file to have the worker read it.</p>
+      )}
     </div>
   )
 }
