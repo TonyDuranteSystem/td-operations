@@ -15,9 +15,13 @@ describe("unapproved-write escalation (closure_form_review class)", () => {
     expect(classifyTool("closure_form_review", { mark_reviewed: true }).tier).toBe("EXTERNAL")
   })
 
-  it("the same tool WITHOUT the mutating flag stays a read", () => {
-    expect(classifyTool("closure_form_review", {}).tier).toBe("READ")
-    expect(classifyTool("closure_form_review", { mark_reviewed: false }).tier).toBe("READ")
+  it("the same tool WITHOUT the mutating flag ALSO requires approval now", () => {
+    // Was asserted READ here, because "review" read as a safe verb. The 2026-07-19
+    // catalog sweep found that even with no flag set this prints the client's EIN and
+    // the owner's email and phone — dangerous by what it RETURNS, not what it changes.
+    // It is off the allow-list, so it asks regardless of parameters.
+    expect(classifyTool("closure_form_review", {}).tier).toBe("EXTERNAL")
+    expect(classifyTool("closure_form_review", { mark_reviewed: false }).tier).toBe("EXTERNAL")
   })
 
   it("sibling mutate-on-flag shapes are escalated too", () => {
