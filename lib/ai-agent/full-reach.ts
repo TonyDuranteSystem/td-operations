@@ -35,23 +35,24 @@ const ENV_BY_SURFACE: Record<ReachSurface, string> = {
 }
 
 /**
- * Default when nothing is configured.
+ * Default when nothing is configured: ON everywhere.
  *
- * ON for the three CRM panels — that is the capability Antonio asked for ("our AI engine
- * to ask things for inside the CRM"), and the reach itself grants nothing beyond lookup:
- * every dangerous tool now needs approval by name rather than by a guess at its name.
+ * Antonio, 2026-07-19: the worker has the same capabilities wherever it is. Holding
+ * Slack and Team Chat back was second-guessing a decision he had already made — the
+ * reach itself grants nothing beyond lookup, and every dangerous tool now requires
+ * approval by name rather than by a guess at its name.
  *
- * OFF for Slack and Team Chat, which keep whatever the legacy global gave them. Not
- * because they are more dangerous — Team Chat is staff-only and arguably the safest —
- * but because they are live surfaces working today that nobody asked me to change, and
- * changing a default is a change. Flip either with its own variable when wanted.
+ * The per-surface switches remain, for turning something OFF when it misbehaves in
+ * practice. Portal Chats is the one to cut first if anything looks wrong: it is the only
+ * surface both pinned to a client and reading text that client wrote, next to a live
+ * client-facing send rail.
  */
 const DEFAULT_ON: Record<ReachSurface, boolean> = {
   dashboard: true,
   inbox: true,
   portal_chat: true,
-  team_chat: false,
-  slack: false,
+  team_chat: true,
+  slack: true,
 }
 
 function readBool(raw: string | undefined): boolean | null {

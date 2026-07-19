@@ -488,7 +488,10 @@ describe("processSlackEvent", () => {
       // Phase 3: no client scope here (thread isn't a tagged client conversation).
       clientKey: null,
       clientName: null,
-      enableFullToolReach: false,
+      // Full catalog reach is on by default on every surface (Antonio, 2026-07-19).
+      // Reach is discovery only: what may actually RUN is decided per call by the
+      // reviewed allow-list, and anything not on it asks first.
+      enableFullToolReach: true,
       maxIterations: 20,
     })
 

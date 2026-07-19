@@ -5,6 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { deterministicThreadUuid, buildWorkerSurfacePrompt } from '@/lib/ai-agent/inbox-worker-prompt'
 import { parseSidebarClientKey } from '@/lib/ai-agent/sidebar-scope'
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
+import { workerActionsEnabled } from '@/lib/ai-agent/worker-actions-switch'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -346,6 +347,8 @@ async function runSidebarWorker(args: {
         canSendEmail: rails.email.enableEmailSend === true && (rails.email.pinnedEmailRecipients?.length ?? 0) > 0,
         canSendPortal: rails.portal.enableSlackSend === true,
         clientName: rails.clientName,
+        // The real state of the action rail — so it never offers a queue that is off.
+        canQueueApprovals: workerActionsEnabled(),
       })}${clientCardSuffix}`,
       surface: 'dashboard',
       // Full read rails — parity with the Inbox, Portal Chats and Team Chat.

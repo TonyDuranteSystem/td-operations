@@ -19,6 +19,7 @@ import { harvestEmailAttachments } from "@/lib/inbox/email-attachments"
 import { collectThreadRecipients } from "@/lib/inbox/email-recipients"
 import { buildClientScope } from "@/lib/ai-agent/client-scope"
 import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
+import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
 import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
@@ -527,6 +528,8 @@ export async function POST(req: NextRequest) {
         canSendEmail: surface === "inbox" && (allowedEmailRecipients?.length ?? 0) > 0,
         canSendPortal: surface === "portal-chats",
         clientName: body.clientName ?? null,
+        // The real state of the action rail — so it never offers a queue that is off.
+        canQueueApprovals: workerActionsEnabled(),
       })}${clientCardSuffix}${templatesSuffix}`,
       surface: surface === "portal-chats" ? "portal_chat" : "inbox",
       // Screenshots the staff member pasted, and images attached to the open

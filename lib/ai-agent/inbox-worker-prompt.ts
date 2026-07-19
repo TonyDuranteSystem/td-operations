@@ -94,6 +94,16 @@ export interface WorkerCapabilities {
   canSendPortal?: boolean
   /** Display name of the client this call is pinned to, when there is one. */
   clientName?: string | null
+  /**
+   * Whether an approval-tier catalog tool can actually be actioned at all.
+   *
+   * Mirrors the action rail. With the rail off, a tool that needs approval does not get
+   * queued for later — it is refused outright, and nothing is recorded anywhere. The
+   * worker was telling people "say the word and I'll queue it for approval" about a
+   * queue that does not exist, which is the same lie as offering a PDF download that was
+   * never built. Pass the real switch so the worker says what will really happen.
+   */
+  canQueueApprovals?: boolean
 }
 
 /**
@@ -117,6 +127,17 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
   if (caps.canSendEmail) can.push(`send an email to ${who}`)
   if (caps.canSendPortal) can.push(`post a message to ${who}'s portal chat`)
 
+  // What happens to a catalog tool that is not on the auto-run list. With the action
+  // rail off there is NO queue and NO pending state — the call is simply refused. Saying
+  // "I'll queue it for approval" invents a mechanism and leaves the staff member waiting
+  // for something that will never arrive.
+  const approvals = caps.canQueueApprovals
+    ? `
+- TOOLS THAT NEED APPROVAL: you may propose one and it will be put to the staff member for approval. Describe exactly what it would do before proposing it.`
+    : `
+- TOOLS THAT NEED APPROVAL CANNOT BE RUN AT ALL right now — not by you, not by queueing, not by asking. There is no approval queue: the call is simply refused and nothing is recorded. So do NOT say "say the word and I'll queue it", do NOT say you will run it once approved, and do NOT imply anything is pending. Say plainly that the action is not something you can carry out, state exactly what you would have done and with which tool, and leave it with the staff member to do.
+- You CAN still look things up freely with the tools that don't need approval, and you should — a complete answer with the action left to them is far more useful than a refusal.`
+
   if (!can.length) {
     return `
 
@@ -124,7 +145,7 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
 - SENDING IS OFF for this conversation. No email, no portal message. The tools are not loaded, so there is nothing to attempt.
 - The reason: nothing here tells the server WHICH client a message would go to. Sending is only possible with a client's page open, where the recipient is fixed server-side.
 - So: do NOT offer to send, do NOT say "say the word and I'll send it", and do NOT claim anything was sent. Say plainly that you cannot send from here and offer to draft it for them to copy, or suggest opening the client's page. There is NO workaround and you must not imply there is one.
-- Drafting is still useful and still welcome — just be honest that delivering it is not yours to do here.`
+- Drafting is still useful and still welcome — just be honest that delivering it is not yours to do here.${approvals}`
   }
 
   return `
@@ -133,7 +154,7 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
 - You CAN: ${can.join("; and ")}.
 - Flow, every time: show the full draft first (recipient + exact text), wait for the staff member's explicit go-ahead ("send it", "send", "go ahead", or clearly equivalent), THEN send ONCE.
 - The recipient is fixed server-side to ${who} — you do not need to look up or pass ids, and you cannot reach any other client from here. An attempt aimed elsewhere is refused by the server, not by you.
-- Never send speculatively, and never on anything short of an explicit go-ahead.${caps.canSendEmail && !caps.canSendPortal ? "\n- Portal-chat sending is OFF for this conversation — do not offer it." : ""}${caps.canSendPortal && !caps.canSendEmail ? "\n- Email sending is OFF for this conversation — do not offer it." : ""}`
+- Never send speculatively, and never on anything short of an explicit go-ahead.${approvals}${caps.canSendEmail && !caps.canSendPortal ? "\n- Portal-chat sending is OFF for this conversation — do not offer it." : ""}${caps.canSendPortal && !caps.canSendEmail ? "\n- Email sending is OFF for this conversation — do not offer it." : ""}`
 }
 
 /**

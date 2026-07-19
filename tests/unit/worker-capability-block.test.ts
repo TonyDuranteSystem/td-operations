@@ -95,3 +95,30 @@ describe("buildWorkerSurfacePrompt", () => {
     expect(off).not.toMatch(/You CAN: /)
   })
 })
+
+describe("approval-tier tools — no inventing a queue that is switched off", () => {
+  it("says plainly they cannot be run, and forbids the exact phrase it was using", () => {
+    const block = renderCapabilityBlock({ canQueueApprovals: false })
+    expect(block).toMatch(/CANNOT BE RUN AT ALL/i)
+    expect(block).toMatch(/There is no approval queue/i)
+    expect(block).toMatch(/say the word and I'll queue it/i) // named so it stops saying it
+    expect(block).toMatch(/do NOT imply anything is pending/i)
+  })
+
+  it("keeps lookups useful rather than turning into a flat refusal", () => {
+    const block = renderCapabilityBlock({ canQueueApprovals: false })
+    expect(block).toMatch(/You CAN still look things up freely/i)
+  })
+
+  it("offers the real thing when the rail IS on", () => {
+    const block = renderCapabilityBlock({ canQueueApprovals: true })
+    expect(block).toMatch(/put to the staff member for approval/i)
+    expect(block).not.toMatch(/CANNOT BE RUN AT ALL/i)
+  })
+
+  it("appears whether or not sending is available — both branches carry it", () => {
+    expect(renderCapabilityBlock({ canQueueApprovals: false })).toMatch(/no approval queue/i)
+    expect(renderCapabilityBlock({ canSendEmail: true, clientName: 'Acme LLC', canQueueApprovals: false }))
+      .toMatch(/no approval queue/i)
+  })
+})

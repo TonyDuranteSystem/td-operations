@@ -21,15 +21,13 @@ const VARS = [
 afterEach(() => VARS.forEach((v) => delete process.env[v]))
 
 describe("defaults", () => {
-  it("the three CRM panels are on — the capability that was asked for", () => {
-    expect(fullReachEnabledFor("dashboard")).toBe(true)
-    expect(fullReachEnabledFor("inbox")).toBe(true)
-    expect(fullReachEnabledFor("portal_chat")).toBe(true)
-  })
-
-  it("Slack and Team Chat are unchanged — live surfaces nobody asked to alter", () => {
-    expect(fullReachEnabledFor("slack")).toBe(false)
-    expect(fullReachEnabledFor("team_chat")).toBe(false)
+  it("every surface is on — the worker has the same capability wherever it is", () => {
+    // Antonio, 2026-07-19. Holding Slack and Team Chat back was second-guessing a
+    // decision already made; reach grants only lookup, and every dangerous tool now
+    // needs approval by name rather than by a guess at its name.
+    for (const s of ["dashboard", "inbox", "portal_chat", "team_chat", "slack"] as const) {
+      expect(fullReachEnabledFor(s), s).toBe(true)
+    }
   })
 })
 
@@ -41,20 +39,20 @@ describe("precedence", () => {
   })
 
   it("a per-surface switch overrides the legacy global in BOTH directions", () => {
-    process.env.ASSISTANT_FULL_REACH_ENABLED = "true"
-    process.env.WORKER_FULL_REACH_PORTAL_CHAT = "false"
-    expect(fullReachEnabledFor("portal_chat")).toBe(false)
-    expect(fullReachEnabledFor("slack")).toBe(true)
-
     process.env.ASSISTANT_FULL_REACH_ENABLED = "false"
     process.env.WORKER_FULL_REACH_SLACK = "true"
     expect(fullReachEnabledFor("slack")).toBe(true)
+    expect(fullReachEnabledFor("team_chat")).toBe(false) // global still governs the rest
+
+    process.env.ASSISTANT_FULL_REACH_ENABLED = "true"
+    process.env.WORKER_FULL_REACH_PORTAL_CHAT = "false"
+    expect(fullReachEnabledFor("portal_chat")).toBe(false)
   })
 
-  it("the legacy global still works, so existing deployments keep behaving as they do", () => {
-    process.env.ASSISTANT_FULL_REACH_ENABLED = "true"
-    expect(fullReachEnabledFor("slack")).toBe(true)
-    expect(fullReachEnabledFor("team_chat")).toBe(true)
+  it("the legacy global can still switch surfaces OFF wholesale", () => {
+    process.env.ASSISTANT_FULL_REACH_ENABLED = "false"
+    expect(fullReachEnabledFor("slack")).toBe(false)
+    expect(fullReachEnabledFor("team_chat")).toBe(false)
   })
 
   it("KILL SWITCH: one panel can be cut without touching the others", () => {
