@@ -15,6 +15,7 @@
  */
 
 import { randomUUID, createHmac, timingSafeEqual } from "crypto"
+import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { callWorker, type CallWorkerOptions, type WorkerImageBlock, type WorkerDocumentBlock } from "@/lib/ai-agent/worker-tools"
 import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
@@ -2068,7 +2069,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     // Read-only Calendly: list bookings, event details, active booking pages — Slack-only.
     enableCalendly: true,
     // Flexible action surface (find_tool/use_tool) — OFF unless explicitly enabled.
-    enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
+    enableFullToolReach: fullReachEnabledFor("slack"),
     maxIterations: 20,
   }
   if (imageBlocks.length > 0) workerOpts.images = imageBlocks
@@ -2211,7 +2212,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableClientThreadTag: isSupportChannel,
           clientKey,
           clientName: clientThreadCtx?.clientName ?? null,
-          enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === "true",
+          enableFullToolReach: fullReachEnabledFor("slack"),
           maxIterations: 20,
         }
         ;({ reply } = await callWorker(enrichedBody, textOnlyOpts))

@@ -2076,6 +2076,31 @@ interface ApprovalQueueRow {
  * propose_action is handled here (it queues, never executes); the read-only
  * subset delegates to executeTool; everything else is rejected.
  */
+/**
+ * Unwrap a bridged call so guards see the tool that will ACTUALLY run.
+ *
+ * `use_tool` is a wrapper: the real tool name and params sit one level down. Any guard
+ * that inspects the outer call is inspecting `{ name, params }` and learns nothing about
+ * the call it is meant to be judging. Returns the inner pair for `use_tool`, and the
+ * arguments unchanged for everything else.
+ *
+ * Exported so the unwrapping itself is testable — the bypass it closes was invisible
+ * precisely because no test ever looked past the wrapper.
+ */
+export function resolveNestedToolCall(
+  name: string,
+  params: Record<string, unknown>,
+): { name: string; params: Record<string, unknown> } {
+  if (name !== "use_tool") return { name, params }
+  const inner = typeof params.name === "string" ? params.name : ""
+  if (!inner) return { name, params }
+  const innerParams =
+    params.params && typeof params.params === "object" && !Array.isArray(params.params)
+      ? (params.params as Record<string, unknown>)
+      : {}
+  return { name: inner, params: innerParams }
+}
+
 export async function executeWorkerTool(
   name: string,
   params: Record<string, unknown>,
@@ -2090,9 +2115,19 @@ export async function executeWorkerTool(
   // Fails open when the surface isn't client-pinned. Enforcing it in code is the
   // point: it used to be a sentence in the prompt, sitting next to a live
   // client-facing send rail.
+  //
+  // NESTING (dev job 74701b48): `use_tool` carries the REAL call inside its own params
+  // as { name, params }. Checking the outer call sees top-level keys "name"/"params" —
+  // neither is a client id — so a foreign account_id one level down was invisible, and
+  // the raw-SQL branch keyed off the OUTER name so it never fired either. On a pinned
+  // surface that let `use_tool({name:"crm_get_client_summary", params:{account_id:<other>}})`
+  // return another client's records. Latent until now only because no route enabled the
+  // bridge on a client-pinned panel; enabling it is exactly what would have armed it.
+  // So the check runs against the RESOLVED (tool, params) pair, not the wrapper.
   if (sendContext?.clientScope) {
     const { checkClientScope } = await import("./client-scope")
-    const verdict = checkClientScope(name, params, sendContext.clientScope)
+    const resolved = resolveNestedToolCall(name, params)
+    const verdict = checkClientScope(resolved.name, resolved.params, sendContext.clientScope)
     if (!verdict.allowed) return `❌ ${verdict.reason}`
   }
 

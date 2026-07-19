@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { buildWorkerSendContext, executeWorkerTool } from "@/lib/ai-agent/worker-tools"
+import { buildWorkerSendContext, executeWorkerTool, resolveNestedToolCall } from "@/lib/ai-agent/worker-tools"
 import { buildClientScope } from "@/lib/ai-agent/client-scope"
 
 const A = "12dadc46-e431-4d11-9fe0-5c561d38737a" // the client whose screen is open
@@ -108,5 +108,64 @@ describe("client boundary — enforced through the real executeWorkerTool entry 
       unpinned,
     )
     expect(out).not.toMatch(/different client|not on this screen|out of scope/i)
+  })
+})
+
+describe("nested bridge calls cannot slip past the client boundary", () => {
+  const scope = buildClientScope(`account:${A}`, [CONTACT_A])!
+  const ctx = buildWorkerSendContext({ clientScope: scope })!
+
+  it("unwraps use_tool so guards judge the call that will actually run", () => {
+    expect(resolveNestedToolCall("use_tool", { name: "crm_get_client_summary", params: { account_id: B } }))
+      .toEqual({ name: "crm_get_client_summary", params: { account_id: B } })
+  })
+
+  it("leaves an ordinary call untouched", () => {
+    expect(resolveNestedToolCall("doc_search", { q: "x" })).toEqual({ name: "doc_search", params: { q: "x" } })
+  })
+
+  it("degrades safely on a malformed wrapper rather than inventing a call", () => {
+    expect(resolveNestedToolCall("use_tool", {}).name).toBe("use_tool")
+    expect(resolveNestedToolCall("use_tool", { name: "x", params: "not-an-object" }).params).toEqual({})
+  })
+
+  it("REGRESSION: a foreign client id nested inside use_tool is REFUSED", async () => {
+    // The bypass: the outer call's top-level keys are "name"/"params", neither of which
+    // is a client id, so the boundary saw nothing to object to and let it through.
+    const out = await executeWorkerTool(
+      "use_tool",
+      { name: "crm_get_client_summary", params: { account_id: B } },
+      new Set(["use_tool"]),
+      null,
+      null,
+      ctx,
+    )
+    expect(out).toMatch(/❌/)
+    expect(out).toMatch(/DIFFERENT client/i)
+  })
+
+  it("REGRESSION: foreign-client raw SQL nested inside use_tool is REFUSED", async () => {
+    // The SQL branch keyed off the OUTER name, so it never fired for a wrapped call.
+    const out = await executeWorkerTool(
+      "use_tool",
+      { name: "crm_query", params: { query: `select * from payments where account_id = '${B}'` } },
+      new Set(["use_tool"]),
+      null,
+      null,
+      ctx,
+    )
+    expect(out).toMatch(/❌/)
+  })
+
+  it("still allows the client actually in scope through the wrapper", async () => {
+    const out = await executeWorkerTool(
+      "use_tool",
+      { name: "crm_get_client_summary", params: { account_id: A } },
+      new Set(["use_tool"]),
+      null,
+      null,
+      ctx,
+    )
+    expect(out).not.toMatch(/DIFFERENT client/i)
   })
 })

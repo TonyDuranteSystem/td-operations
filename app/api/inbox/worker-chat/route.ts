@@ -18,6 +18,7 @@ import { gmailGet, getHeader, extractBody, type GmailAPIMessage } from "@/lib/gm
 import { harvestEmailAttachments } from "@/lib/inbox/email-attachments"
 import { collectThreadRecipients } from "@/lib/inbox/email-recipients"
 import { buildClientScope } from "@/lib/ai-agent/client-scope"
+import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
 import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
@@ -547,6 +548,11 @@ export async function POST(req: NextRequest) {
       enableClientThreadRead: true,
       enableThreadRecall: true,
       enableWebSearch: true, // live only if WORKER_WEB_SEARCH_ENABLED
+      // Full catalog reach. Discovery only — what it may RUN is decided per call by
+      // the reviewed allow-list in tool-risk; anything not on it asks first. Portal
+      // Chats is the one surface that is client-pinned AND reads client-authored
+      // text, so it has its own kill switch (see full-reach.ts).
+      enableFullToolReach: fullReachEnabledFor(surface === "portal-chats" ? "portal_chat" : "inbox"),
       maxIterations: 20,
       ...sendRails,
       // Canonical per-client memory namespace: the wire/thread scope stays

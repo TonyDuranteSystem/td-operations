@@ -21,6 +21,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getInternalBaseUrl } from '@/lib/mcp/tools/agent-messages'
 import { CLAUDE_SENDER_UUID, CLAUDE_SENDER_NAME, mentionsClaude } from '@/lib/team/workspace'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
+import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 
 const THINKING_PLACEHOLDER = '…'
 
@@ -323,7 +324,7 @@ export async function processClaudeReply(params: {
       enableClientThreadRead: true,
       enableWebSearch: true,
       enableThreadRecall: true,
-      enableFullToolReach: process.env.ASSISTANT_FULL_REACH_ENABLED === 'true',
+      enableFullToolReach: fullReachEnabledFor('team_chat'),
       // Send rails — draft in thread, send on the staff member's explicit "send it".
       //
       // SERVER-SIDE PINS (dev job 17459c25). Until this fix these rails ran with no

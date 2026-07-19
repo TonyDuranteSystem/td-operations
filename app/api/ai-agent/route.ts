@@ -4,6 +4,7 @@ import { isAdmin, isClient } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { deterministicThreadUuid, buildWorkerSurfacePrompt } from '@/lib/ai-agent/inbox-worker-prompt'
 import { parseSidebarClientKey } from '@/lib/ai-agent/sidebar-scope'
+import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -355,6 +356,9 @@ async function runSidebarWorker(args: {
       enableClientThreadRead: true,
       enableThreadRecall: true,
       enableWebSearch: true,
+      // Full catalog reach. Discovery only — what it may RUN is decided per call by
+      // the reviewed allow-list in tool-risk; anything not on it asks first.
+      enableFullToolReach: fullReachEnabledFor('dashboard'),
       maxIterations: 20,
       // Files the staff member dropped into the panel this turn.
       ...(media.images.length ? { images: media.images } : {}),
