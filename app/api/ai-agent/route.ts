@@ -308,12 +308,29 @@ async function runSidebarWorker(args: {
   // cannot check.
   const rails = await buildSidebarSendRails(clientKey)
 
+  // WHO the client on this page actually is — name, language, services, addresses.
+  // Without this the assistant holds a client-scoped boundary and a client-pinned send
+  // rail while having no idea whose page it is on: it answered "I don't have a client in
+  // context" while sitting on that client's account page, because the scope key is
+  // plumbing the model never sees. Built from the same validated key as the pin, and
+  // injected per-call as a system suffix — never persisted into the thread, so a stale
+  // card cannot replay out of history.
+  let clientCardSuffix = ''
+  if (clientKey) {
+    try {
+      const { buildClientCardSuffix } = await import('@/lib/ai-agent/client-card')
+      clientCardSuffix = await buildClientCardSuffix(clientKey)
+    } catch (err) {
+      console.warn('[ai-agent] client card build failed (answering without card):', err)
+    }
+  }
+
   try {
     const { callWorkerWithAttachments } = await import('@/lib/ai-agent/attachment-reader')
     const { reply } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
-      systemPromptOverride: buildWorkerSurfacePrompt('dashboard'),
+      systemPromptOverride: `${buildWorkerSurfacePrompt('dashboard')}${clientCardSuffix}`,
       surface: 'dashboard',
       // Full read rails — parity with the Inbox, Portal Chats and Team Chat.
       enableDbRead: true,
