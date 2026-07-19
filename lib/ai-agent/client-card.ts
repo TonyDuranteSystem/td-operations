@@ -104,13 +104,48 @@ NOTE: a lease record's "language" field is the signing PAGE's display language, 
  * card failure never blocks the worker reply (same contract as the recall
  * suffixes).
  */
+/**
+ * Split a client key into (kind, id), accepting BOTH conventions in use:
+ * "acct-<id>" / "contact-<id>" (Inbox, Portal Chats) and "account:<id>" /
+ * "contact:<id>" (dashboard sidebar, client-scope). Returns null for anything else —
+ * an unrecognised key must yield NO card rather than a wrong or empty one.
+ *
+ * Exported so the mismatch that caused the empty-card bug is directly testable.
+ */
+export function parseClientKey(clientKey: string): { isAccount: boolean; id: string } | null {
+  const k = (clientKey ?? "").trim()
+  const forms: Array<[string, boolean]> = [
+    ["acct-", true],
+    ["account:", true],
+    ["contact-", false],
+    ["contact:", false],
+  ]
+  for (const [prefix, isAccount] of forms) {
+    if (k.startsWith(prefix)) {
+      const id = k.slice(prefix.length)
+      return id ? { isAccount, id } : null
+    }
+  }
+  return null
+}
+
 export async function buildClientCardSuffix(clientKey: string): Promise<string> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabaseAdmin as any
-    const isAccount = clientKey.startsWith("acct-")
-    const id = isAccount ? clientKey.slice("acct-".length) : clientKey.slice("contact-".length)
-    if (!id) return ""
+
+    // TWO KEY FORMATS EXIST IN THIS SYSTEM and both reach here:
+    //   "acct-<id>" / "contact-<id>"    — the Inbox & Portal Chats panels
+    //   "account:<id>" / "contact:<id>" — the dashboard sidebar (sidebar-scope.ts),
+    //                                     the same shape client-scope.ts uses
+    // Parsing only the first silently produced a garbage id from the second (slicing
+    // "contact-".length off "account:<uuid>" yields "t:<uuid>"), which then matched no
+    // row and returned an EMPTY card — so the assistant sat on a client's page insisting
+    // no client was loaded, while holding a send rail pinned to that very client.
+    // Accept both rather than making every caller remember which one this wants.
+    const parsed = parseClientKey(clientKey)
+    if (!parsed) return ""
+    const { isAccount, id } = parsed
 
     const accountId: string | null = isAccount ? id : null
     let contactId: string | null = isAccount ? null : id
