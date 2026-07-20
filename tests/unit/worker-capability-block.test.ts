@@ -117,10 +117,46 @@ describe("approval-tier tools — no inventing a queue that is switched off", ()
     expect(block).toMatch(/You CAN still look things up freely/i)
   })
 
-  it("offers the real thing when the rail IS on", () => {
+  it("offers the real thing when the rail IS on — a card and one click", () => {
     const block = renderCapabilityBlock({ canQueueApprovals: true })
-    expect(block).toMatch(/put to the staff member for approval/i)
+    expect(block).toMatch(/ONE CLICK/i)
     expect(block).not.toMatch(/CANNOT BE RUN AT ALL/i)
+  })
+
+  it("does not send them off to type a code — the abandoned rail's flow", () => {
+    // The old transport queued the action and made Antonio type a 6-digit code back over
+    // Telegram. It ran three trivial actions in five weeks because the confirmation was
+    // somewhere other than the work. If this sentence reappears, the worker starts
+    // describing a flow that no longer exists.
+    const block = renderCapabilityBlock({ canQueueApprovals: true })
+    expect(block).toMatch(/no code to type/i)
+  })
+
+  it("forbids claiming the action is already done — nothing runs until the click", () => {
+    // The single most damaging thing it could say here. A staff member who reads
+    // "I've moved Banking to Documents Received" stops checking, and the stage never moved.
+    const block = renderCapabilityBlock({ canQueueApprovals: true })
+    expect(block).toMatch(/nothing runs until they click/i)
+    expect(block).toMatch(/do NOT say it is done/i)
+  })
+
+  it("keeps client sends OFF the card path even with the rail on", () => {
+    // A frozen payload cannot reproduce the live recipient check, so sends stay on the
+    // draft-and-send flow. The worker must not offer a confirmation card for an email.
+    const block = renderCapabilityBlock({ canQueueApprovals: true })
+    expect(block).toMatch(/SENDING TO A CLIENT is NOT one of these/i)
+  })
+
+  it("tells it how to make a file whether the rail is on OR off", () => {
+    // REGRESSION GUARD: the FILES instruction used to live only in the rail-off text, so
+    // turning the rail on silently deleted the one thing telling the worker how to
+    // produce a document — and without it, it invented a Python sandbox rather than
+    // admitting it could not make a file.
+    for (const canQueueApprovals of [true, false]) {
+      const block = renderCapabilityBlock({ canQueueApprovals })
+      expect(block, `rail ${canQueueApprovals}`).toMatch(/pdf_create/)
+      expect(block, `rail ${canQueueApprovals}`).toMatch(/NO code execution, no Python, no shell/i)
+    }
   })
 
   it("appears whether or not sending is available — both branches carry it", () => {

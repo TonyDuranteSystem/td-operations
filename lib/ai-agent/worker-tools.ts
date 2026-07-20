@@ -1866,13 +1866,25 @@ export async function proposeAction(
     batch_id?: unknown
     source_message_id?: unknown
   },
-  opts?: { allowBridgeTools?: boolean },
+  opts?: { allowBridgeTools?: boolean; panelSurface?: import("./panel-approvals").PanelSurface },
 ): Promise<string> {
-  // Single choke point for the worker action rail (2026-07-10, Antonio). When the
-  // rail is off (default), NO surface can queue an action — this covers the
-  // propose_action tool path, the use_tool bridge path, and batchPropose, since
-  // all of them funnel through here. Reversible via WORKER_ACTIONS_ENABLED.
-  if (!workerActionsEnabled()) {
+  // TWO TRANSPORTS, TWO SWITCHES.
+  //
+  // Without panelSurface this is the OLD rail — propose, queue, type a 6-digit code back
+  // over Telegram. Antonio abandoned that on 2026-07-10 and it stays abandoned; the
+  // switch below keeps every surface from queueing into it.
+  //
+  // WITH panelSurface the confirmation happens in the same panel, one click, showing the
+  // real frozen payload — a different transport on the same table and executor, with its
+  // own switch so either can be killed without touching the other.
+  if (opts?.panelSurface) {
+    const { panelApprovalsEnabledFor, mayBeConfirmedInPanel } = await import("./panel-approvals")
+    if (!panelApprovalsEnabledFor(opts.panelSurface)) {
+      return WORKER_ACTIONS_OFF_MESSAGE
+    }
+    const gate = mayBeConfirmedInPanel(typeof input.tool_name === "string" ? input.tool_name : "")
+    if (gate.ok === false) return `❌ ${gate.why}`
+  } else if (!workerActionsEnabled()) {
     return WORKER_ACTIONS_OFF_MESSAGE
   }
   const toolName = typeof input.tool_name === "string" ? input.tool_name : ""
@@ -2019,6 +2031,21 @@ export async function proposeAction(
     rationale,
     confirmation_code: data.confirmation_code ?? confirmationCode,
   })
+
+  // PANEL TRANSPORT: the staff member confirms with a button in this conversation, so
+  // there is no code to type and none to leak into the reply. The marker line is what
+  // the worker loop extracts server-side to build the card — the model is not trusted to
+  // relay it, for the same reason the PDF download link is not.
+  if (opts?.panelSurface) {
+    return [
+      `✅ Ready for your confirmation — NOTHING has run yet.`,
+      `PendingAction: ${data.id}`,
+      "",
+      `The staff member sees a card with the exact action and values, and confirms with one`,
+      `click. Do NOT ask them to type a code, and do NOT claim the action is done — it is`,
+      `not, until they confirm. Tell them briefly what it will do and stop.`,
+    ].join("\n")
+  }
 
   return [
     `✅ Action proposed and queued for approval (NOT executed).`,
@@ -2499,6 +2526,16 @@ export async function executeWorkerTool(
     // 6-digit code that would never arrive — our own code manufacturing exactly the
     // false confidence this worker is being hardened against. Only claim a queue
     // when the rail is actually on; otherwise return the refusal unframed.
+    // PANEL CONFIRMATION (Antonio 2026-07-20: "let it actually carry out actions rather
+    // than handing them back to you"). When the call comes from a CRM panel that can
+    // render a card, freeze the action and let the staff member confirm with one click
+    // in this same conversation. Nothing executes here; the card is the gate.
+    if (sendContext?.panelSurface) {
+      return proposeAction(
+        { tool_name: toolName, params: toolParams, rationale: `Proposed via use_tool (${tier})` },
+        { allowBridgeTools: true, panelSurface: sendContext.panelSurface },
+      )
+    }
     const { workerActionsEnabled } = await import("./worker-actions-switch")
     if (!workerActionsEnabled()) {
       return proposeAction(
@@ -2573,6 +2610,8 @@ export interface WorkerResponse {
    * controls — never left to the reply text to mention. See WorkerArtifact.
    */
   artifacts?: WorkerArtifact[]
+  /** Actions frozen this turn, awaiting a click. Rendered by the panel as cards. */
+  pendingActions?: WorkerPendingAction[]
 }
 
 /**
@@ -2834,6 +2873,16 @@ export interface CallWorkerOptions {
     defaultReplyToMessageId?: string | null
     sendable: Array<{ ref: string; path: string; name: string; contentType?: string; size?: number }>
   }
+  /**
+   * Which CRM panel this call is running in, when that panel can render a confirmation
+   * card. Set → an action the worker wants to take is FROZEN and returned as a card the
+   * staff member clicks, instead of being described back to them in prose to redo by hand.
+   *
+   * Unset → unchanged behaviour, so no surface gains a confirmation it cannot draw. Only
+   * surfaces that can render the card AND post the click may set this. Team Workspace
+   * cannot: its reply is delivered asynchronously, with no button to attach the action to.
+   */
+  panelSurface?: import("./panel-approvals").PanelSurface | null
 }
 
 /** One email attachment the worker may open, resolved server-side. */
@@ -2880,6 +2929,12 @@ export interface WorkerSendContext {
    * send rail. Absent = surface isn't client-pinned (fails open).
    */
   clientScope?: import("./client-scope").ClientScope | null
+  /**
+   * Set when this call comes from a CRM panel that can render a confirmation card.
+   * Turns an approval-tier action from a refusal into a one-click confirm in the same
+   * conversation. Absent on Slack/Hermes, which have no card to render.
+   */
+  panelSurface?: import("./panel-approvals").PanelSurface | null
   pinnedEmailAttachments?: PinnedEmailAttachment[] | null
   /** undefined = unpinned; array (even empty) = only these addresses may be emailed. */
   pinnedEmailRecipients?: string[]
@@ -2936,6 +2991,7 @@ export function buildWorkerSendContext(
     emailSendPrep?: WorkerSendContext["emailSendPrep"]
     clientScope?: import("./client-scope").ClientScope | null
     clientKey?: string | null
+    panelSurface?: import("./panel-approvals").PanelSurface | null
   },
   capturedOffThreadAttempts: string[] = [],
 ): WorkerSendContext | undefined {
@@ -2948,6 +3004,7 @@ export function buildWorkerSendContext(
     // A client-scoped call MUST build a context even with no send pin at all —
     // otherwise the boundary is off on any read-only client-pinned surface.
     opts.clientScope ||
+    opts.panelSurface ||
     // Client-scoped calls carry the canonical memory namespace so memory_save
     // writes client-recallable lessons (the save side wrote NO key before).
     opts.clientKey
@@ -2959,6 +3016,7 @@ export function buildWorkerSendContext(
     capturedOffThreadAttempts,
     memoryClientKey: opts.clientKey ?? null,
     clientScope: opts.clientScope ?? null,
+    panelSurface: opts.panelSurface ?? null,
     ...(opts.pinnedEmailRecipients !== undefined
       ? { pinnedEmailRecipients: opts.pinnedEmailRecipients }
       : {}),
@@ -2989,6 +3047,31 @@ export interface WorkerArtifact {
  * only the exact line those tools emit. A loose "find any URL" would happily surface a
  * link that came from a client's email.
  */
+/**
+ * An action frozen and waiting for the staff member's confirmation.
+ *
+ * Carried to the panel as DATA so the card shows the REAL payload — the exact tool and
+ * the exact values that will run — rather than the model's description of it. The
+ * council's finding on the old rail was precisely this: an approval that renders the
+ * assistant's prose lets a person approve one thing and get another.
+ */
+export interface WorkerPendingAction {
+  /** Row id in the approval queue; the confirm endpoint takes only this. */
+  id: string
+}
+
+/**
+ * Pull a frozen action id out of a TOOL RESULT — our own text, not the model's.
+ *
+ * Only the exact marker line the panel proposal path emits counts.
+ */
+export function extractPendingAction(toolName: string, result: unknown): WorkerPendingAction | null {
+  if (toolName !== "use_tool" && toolName !== "propose_action") return null
+  const text = typeof result === "string" ? result : ""
+  const m = text.match(/^PendingAction:\s+([0-9a-f-]{36})$/m)
+  return m ? { id: m[1] } : null
+}
+
 export function extractArtifact(toolName: string, result: unknown): WorkerArtifact | null {
   if (toolName !== "pdf_create" && toolName !== "use_tool") return null
   const text = typeof result === "string" ? result : ""
@@ -3175,6 +3258,8 @@ export async function runWorkerLoop(
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean
   /** Walls worth a #td-worker-bug thread (only code can fix these). */
   wallsHit?: Array<"absence_without_looking" | "cannot_do">
+  /** Actions frozen this turn, awaiting the staff member's click (panel transport). */
+  pendingActions?: WorkerPendingAction[]
   /**
    * Files the worker PRODUCED this turn, captured from the tool result server-side.
    *
@@ -3214,6 +3299,7 @@ export async function runWorkerLoop(
   // (Antonio 2026-07-18: "it's a part of the learning process").
   const wallsHit: Array<"absence_without_looking" | "cannot_do"> = []
   const artifacts: WorkerArtifact[] = []
+  const pendingActions: WorkerPendingAction[] = []
   // The staff member's own words this turn, used to detect a push-back. Derived
   // once from the user content (which may be a string or a block array).
   const staffTurnText =
@@ -3385,7 +3471,7 @@ export async function runWorkerLoop(
       if (reply) {
         // A flat "I can't do this" is a capability gap — no correction can teach it.
         if (assertsCannotDo(reply) && !wallsHit.includes("cannot_do")) wallsHit.push("cannot_do")
-        return { reply, toolsUsed, reachedMaxLoops: false, wallsHit, succeededTools, artifacts }
+        return { reply, toolsUsed, reachedMaxLoops: false, wallsHit, succeededTools, artifacts, pendingActions }
       }
       if (toolUseBlocks.length === 0) {
         return { reply: "(no response generated)", toolsUsed, reachedMaxLoops: false }
@@ -3416,6 +3502,8 @@ export async function runWorkerLoop(
       // the model later writes about it.
       const artifact = extractArtifact(toolBlock.name, result)
       if (artifact) artifacts.push(artifact)
+      const pending = extractPendingAction(toolBlock.name, result)
+      if (pending) pendingActions.push(pending)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -3847,5 +3935,6 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     toolsUsed: result.toolsUsed,
     pendingOffThreadRecipient: capturedOffThreadAttempts[0] ?? null,
     ...(result.artifacts?.length ? { artifacts: result.artifacts } : {}),
+    ...(result.pendingActions?.length ? { pendingActions: result.pendingActions } : {}),
   }
 }

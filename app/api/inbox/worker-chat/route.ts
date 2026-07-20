@@ -20,6 +20,7 @@ import { collectThreadRecipients } from "@/lib/inbox/email-recipients"
 import { buildClientScope } from "@/lib/ai-agent/client-scope"
 import { fullReachEnabledFor } from "@/lib/ai-agent/full-reach"
 import { workerActionsEnabled } from "@/lib/ai-agent/worker-actions-switch"
+import { panelApprovalsEnabledFor, loadPendingActionCards } from "@/lib/ai-agent/panel-approvals"
 import {
   buildWorkerSurfacePrompt,
   buildInboxWorkerUserBody,
@@ -516,7 +517,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { reply, pendingOffThreadRecipient } = await callWorkerWithAttachments(userBody, {
+    // Both panels this route serves can draw a confirmation card and post the click.
+    const panelSurface = surface === "portal-chats" ? ("portal_chat" as const) : ("inbox" as const)
+    const { reply, pendingOffThreadRecipient, pendingActions } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // Capability statement GENERATED from the rails actually assigned above, so what
@@ -529,9 +532,12 @@ export async function POST(req: NextRequest) {
         canSendPortal: surface === "portal-chats",
         clientName: body.clientName ?? null,
         // The real state of the action rail — so it never offers a queue that is off.
-        canQueueApprovals: workerActionsEnabled(),
+        // Either transport counts: the in-panel card (live) or the old rail (off).
+        canQueueApprovals: panelApprovalsEnabledFor(panelSurface) || workerActionsEnabled(),
       })}${clientCardSuffix}${templatesSuffix}`,
       surface: surface === "portal-chats" ? "portal_chat" : "inbox",
+      // Freeze actions for a click here instead of describing them back in prose.
+      panelSurface,
       // Screenshots the staff member pasted, and images attached to the open
       // email, go straight to the model. Scanned PDFs ride along as native
       // document blocks. Everything else is already extracted into userBody.
@@ -664,7 +670,17 @@ export async function POST(req: NextRequest) {
     }
     // messageId lets the panel offer 🧠 on the reply it just received (same id the
     // GET history returns), without a refetch.
-    return NextResponse.json({ reply, threadId, pendingSend, preparedSend, messageId: rowId })
+    // (3) Actions frozen this turn, loaded from the QUEUE ROW rather than from what the
+    // model said it froze — the card must show the payload that will actually run.
+    const actionCards = await loadPendingActionCards((pendingActions ?? []).map((a) => a.id))
+    return NextResponse.json({
+      reply,
+      threadId,
+      pendingSend,
+      preparedSend,
+      messageId: rowId,
+      pendingActions: actionCards,
+    })
   } catch (error) {
     if (rowId) {
       await db

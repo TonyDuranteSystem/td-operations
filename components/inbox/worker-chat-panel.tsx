@@ -20,6 +20,7 @@ import { WorkerComposer } from '@/components/chat/worker-composer'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
+import { PendingActionCard, type PendingActionCardData } from '@/components/chat/pending-action-card'
 import type { InboxConversation } from '@/lib/types'
 
 interface ChatMsg {
@@ -31,6 +32,11 @@ interface ChatMsg {
    * comes from the server (the real refused attempt), never parsed from the reply.
    */
   pendingSendTo?: string
+  /**
+   * Actions frozen this turn, awaiting a click. The payload comes from the server's
+   * queue row — never parsed from the reply, for the same reason as pendingSendTo.
+   */
+  pendingActions?: PendingActionCardData[]
 }
 
 interface PreparedSend {
@@ -170,7 +176,13 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; pendingSend?: { to?: string } | null; preparedSend?: PreparedSend | null } = {}
+      let data: {
+        reply?: string
+        error?: string
+        pendingSend?: { to?: string } | null
+        preparedSend?: PreparedSend | null
+        pendingActions?: PendingActionCardData[]
+      } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -186,6 +198,9 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
         role: 'worker',
         text: data.reply || '(empty reply)',
         ...(data.pendingSend?.to ? { pendingSendTo: data.pendingSend.to } : {}),
+        ...(Array.isArray(data.pendingActions) && data.pendingActions.length
+          ? { pendingActions: data.pendingActions }
+          : {}),
       }])
       // Attachment confirm (Confirm & send box) — this feature.
       if (data.preparedSend) setPreparedSend(data.preparedSend)
@@ -253,6 +268,13 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
                 </button>
               </div>
             )}
+            {m.role === 'worker' && m.pendingActions?.length ? (
+              <div className="max-w-[90%] w-full">
+                {m.pendingActions.map((a) => (
+                  <PendingActionCard key={a.id} action={a} />
+                ))}
+              </div>
+            ) : null}
           </div>
         ))}
         {pending && (

@@ -20,11 +20,18 @@ import { WorkerDropZone } from '@/components/chat/worker-dropzone'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
 import { useWorkerAttachments, type UploadedAttachment } from '@/components/chat/use-worker-attachments'
 
+import { PendingActionCard, type PendingActionCardData } from '@/components/chat/pending-action-card'
+
 interface ChatMsg {
   role: 'user' | 'worker'
   text: string
   /** agent_messages row id — present on worker replies, enables the 🧠 button. */
   id?: string
+  /**
+   * Actions frozen this turn, awaiting a click. Payload comes from the server's queue
+   * row, never parsed from the reply text.
+   */
+  pendingActions?: PendingActionCardData[]
 }
 
 interface ThreadWorkerPanelProps {
@@ -135,7 +142,12 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         }),
       })
       const raw = await res.text()
-      let data: { reply?: string; error?: string; messageId?: string } = {}
+      let data: {
+        reply?: string
+        error?: string
+        messageId?: string
+        pendingActions?: PendingActionCardData[]
+      } = {}
       try { data = JSON.parse(raw) } catch { /* non-JSON = gateway error */ }
       if (!res.ok) {
         throw new Error(
@@ -146,7 +158,14 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
         )
       }
       sentContextRef.current = true
-      setMessages(prev => [...prev, { role: 'worker', text: data.reply || '(empty reply)', id: data.messageId }])
+      setMessages(prev => [...prev, {
+        role: 'worker',
+        text: data.reply || '(empty reply)',
+        id: data.messageId,
+        ...(Array.isArray(data.pendingActions) && data.pendingActions.length
+          ? { pendingActions: data.pendingActions }
+          : {}),
+      }])
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -198,6 +217,15 @@ export function ThreadWorkerPanel({ accountId, contactId, clientName }: ThreadWo
             >
               {m.role === 'worker' ? <WorkerMarkdown text={m.text} /> : m.text}
             </div>
+            {/* Actions waiting on a click — rendered from the frozen queue row, so what
+                is shown is what will run. */}
+            {m.role === 'worker' && m.pendingActions?.length ? (
+              <div className="max-w-[90%] w-full">
+                {m.pendingActions.map((a) => (
+                  <PendingActionCard key={a.id} action={a} />
+                ))}
+              </div>
+            ) : null}
             {/* 🧠 — make THIS reply a rule for everyone (global, client details
                 scrubbed). Only on worker replies we have a row id for. */}
             {m.role === 'worker' && m.id && (

@@ -68,6 +68,30 @@ Several tool params/filters map to real Postgres ENUM columns (`task_priority`, 
 - **Search filters** normalize then **fall back to the original value** on no-match (an exact match returning nothing is harmless — no behavior regression).
 - **Propose path** (`worker-tools.ts::proposeAction`) calls `normalizeToolParams()` BEFORE `validateToolParams` + `computeParamsHash`, so a proposal with `medium`/`todo` is accepted and the stored params (and hash) reflect exactly what executes. The schema `enum:` arrays in `AGENT_TOOLS` are the corrected canonical values (`['Low','Normal','High','Urgent']`, etc.) so propose-time validation still rejects genuine garbage.
 
+## In-panel confirmation — the assistant carries actions out (2026-07-20, Antonio: "do it")
+
+**What changed.** Before this, the assistant could look anything up but could not DO anything: it worked out what needed to happen and wrote it back in prose ("move Banking to Documents Received, add a note, set a follow-up for Thursday") and the staff member did the three things by hand. Now it freezes the action and the panel shows a card with the exact values; one click runs it.
+
+**The three panels** — dashboard sidebar, Inbox worker, Portal Chats worker — all pass `panelSurface` into `callWorker`, and all render the same `components/chat/pending-action-card.tsx`.
+
+**Flow.** `use_tool` → `decideAction` (tool-risk) → not auto-run → `proposeAction({panelSurface})` freezes a `status='pending'` row in `approval_queue` and returns a `PendingAction: <uuid>` marker line → `extractPendingAction()` lifts the id **from our own tool output** → the route calls `loadPendingActionCards()` which reads the FROZEN ROW → the panel renders it → `POST /api/worker/confirm-action` with **only the id** → atomic `pending→approved` → `executeApproval()` (existing reviewed executor: atomic claim, params-hash integrity re-check, send refusal) → `action_log`.
+
+**Why the card is built from the row and not the reply.** The assistant must not be able to describe one action and have another run. Nothing it writes reaches the card, and the click submits only an id. Same lesson as the PDF download button: the model's account of what it did is a separate channel from what actually happened, and the UI has to be driven by the one it cannot author.
+
+**What can NEVER be confirmed from a card:** every tool in `NO_APPROVAL_SEND_TOOLS` (client-facing sends). Their safety is the live recipient re-derivation on the worker's own send path, which a payload frozen minutes earlier cannot reproduce. Refused in TWO places on purpose — `mayBeConfirmedInPanel()` at propose time (so no card is ever shown) and the executor on the way out (so a future transport can't drop the guard). Sends keep the draft-and-send flow: the worker shows the draft and sends on the staff member's "go".
+
+**Switches.** `WORKER_PANEL_APPROVALS` (global) and `WORKER_PANEL_APPROVALS_{DASHBOARD,INBOX,PORTAL_CHAT}` (per surface, wins over global in both directions). **Default ON.** Only `'true'`/`'false'` are recognised — anything else is treated as unset, never as ON.
+
+**This is NOT the abandoned rail.** `WORKER_ACTIONS_ENABLED` (R108/R111, off since 2026-07-10) gates the old propose→queue→type-a-6-digit-code-over-Telegram transport, which ran three trivial actions in five weeks because the confirmation lived somewhere other than the work. The panel path is a different transport on the **same table and executor**, with its own switch, so either can be killed without touching the other. Critically it does **not** inherit `APPROVAL_RAIL_ENABLED`: that switch guards `runApprovalExecutor`, the CRON that sweeps approved rows unattended. Sharing it would mean turning on in-panel confirmation also re-animates autonomous execution — the one thing Antonio ruled out ("it never has to act autonomously"). The panel path only ever runs on a click, one row at a time.
+
+**Gotchas.**
+- `decided_by` is `CHECK char_length <= 100` — a long address would fail the whole update and lose the decision. Truncated at the route.
+- Double-click safety is the atomic compare-and-set, NOT the disabled button: a re-render can lose the disable, the database check cannot. On `crm_create_task` a lost race means two tasks; on an invoice tool it means two invoices.
+- The `FILES:` instruction in `renderCapabilityBlock` must stay OUTSIDE the approvals branch. It lived inside the rail-OFF text, so flipping the rail ON silently deleted the only instruction telling the worker how to produce a document — and without it, it invented a Python sandbox rather than admitting it could not make a file. Pinned by a regression test.
+- The capability sentence is DERIVED from `panelApprovalsEnabledFor() || workerActionsEnabled()`, never hand-written. Every false-capability bug in this job's history came from prose asserting something the switches did not back.
+
+**Verify:** `tests/unit/panel-approvals.test.ts`, `tests/unit/panel-pending-action.test.ts`, `tests/unit/worker-capability-block.test.ts`. Live: `SELECT id, tool_name, status, decided_by, decided_at FROM approval_queue ORDER BY created_at DESC LIMIT 5;`
+
 ## Gotchas, invariants & past bugs
 - **Two different tool worlds** — the AI agent's `lib/ai-agent/tools.ts` (~34 tools) is NOT the MCP server's ~217 tools. A change in one doesn't affect the other; adding an MCP tool does NOT give the dashboard agent that capability (and vice-versa).
 - **Never re-introduce hardcoded enum literals in `tools.ts`** — route every enum-backed param/filter through `enum-normalization.ts`. The `create_task` `'medium'`/`'Admin'` defaults were a live break (invalid enum members → insert threw). Canonical values live in one place by design.

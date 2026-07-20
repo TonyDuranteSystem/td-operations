@@ -6,6 +6,7 @@ import { deterministicThreadUuid, buildWorkerSurfacePrompt } from '@/lib/ai-agen
 import { parseSidebarClientKey } from '@/lib/ai-agent/sidebar-scope'
 import { fullReachEnabledFor } from '@/lib/ai-agent/full-reach'
 import { workerActionsEnabled } from '@/lib/ai-agent/worker-actions-switch'
+import { panelApprovalsEnabledFor, loadPendingActionCards } from '@/lib/ai-agent/panel-approvals'
 import type { WorkerImageBlock, WorkerDocumentBlock } from '@/lib/ai-agent/worker-tools'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -335,7 +336,7 @@ async function runSidebarWorker(args: {
 
   try {
     const { callWorkerWithAttachments } = await import('@/lib/ai-agent/attachment-reader')
-    const { reply, artifacts } = await callWorkerWithAttachments(userBody, {
+    const { reply, artifacts, pendingActions } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // The capability statement is GENERATED from the very rails passed below, so what
@@ -348,9 +349,15 @@ async function runSidebarWorker(args: {
         canSendPortal: rails.portal.enableSlackSend === true,
         clientName: rails.clientName,
         // The real state of the action rail — so it never offers a queue that is off.
-        canQueueApprovals: workerActionsEnabled(),
+        // Either transport counts: the in-panel card (live) or the old rail (off).
+        // Derived, never asserted — a hand-written "I can queue that" was the exact
+        // false promise this pattern exists to prevent.
+        canQueueApprovals: panelApprovalsEnabledFor('dashboard') || workerActionsEnabled(),
       })}${clientCardSuffix}`,
       surface: 'dashboard',
+      // This panel renders confirmation cards, so actions are frozen for a click
+      // instead of being described back for the staff member to redo by hand.
+      panelSurface: 'dashboard',
       // Full read rails — parity with the Inbox, Portal Chats and Team Chat.
       enableDbRead: true,
       enableDocReads: true,
@@ -384,7 +391,16 @@ async function runSidebarWorker(args: {
     // Files the worker produced go back as structured data, NOT left to the reply to
     // mention. The first live run generated the PDF and then dropped the link from its
     // own answer — the panel renders the download regardless of what it says.
-    return NextResponse.json({ content: reply, provider: 'worker', tools_used: [], artifacts: artifacts ?? [] })
+    // Cards are loaded from the QUEUE ROW, never from what the model said it froze — the
+    // staff member must be approving the payload that will actually run.
+    const actionCards = await loadPendingActionCards((pendingActions ?? []).map((a) => a.id))
+    return NextResponse.json({
+      content: reply,
+      provider: 'worker',
+      tools_used: [],
+      artifacts: artifacts ?? [],
+      pendingActions: actionCards,
+    })
   } catch (err) {
     if (rowId) {
       await db

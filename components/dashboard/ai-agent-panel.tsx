@@ -8,6 +8,7 @@ import { useHoldToSend } from '@/components/chat/use-hold-to-send'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { clientKeyFromPath } from '@/lib/ai-agent/sidebar-scope'
 import { WorkerSettingsGear } from '@/components/chat/worker-settings-gear'
+import { PendingActionCard, type PendingActionCardData } from '@/components/chat/pending-action-card'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 
@@ -23,6 +24,12 @@ interface Message {
    * reproduced by the feature meant to fix it.
    */
   artifacts?: { kind: string; url: string; label: string }[]
+  /**
+   * Actions frozen this turn, awaiting a click. Same discipline as artifacts: the server
+   * sends the real payload from the queue row, so the card cannot show one thing while
+   * something else runs.
+   */
+  pendingActions?: PendingActionCardData[]
 }
 
 interface AttachedFile {
@@ -194,6 +201,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         role: 'assistant',
         content: (data.content || 'No response.') + engineNote + toolInfo,
         artifacts: Array.isArray(data.artifacts) ? data.artifacts : undefined,
+        pendingActions: Array.isArray(data.pendingActions) ? data.pendingActions : undefined,
       }])
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
@@ -411,6 +419,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                     ))}
                   </div>
                 ) : null}
+                {/* Actions waiting on a click. Rendered from the frozen queue row, so
+                    what is shown is what will run. */}
+                {msg.pendingActions?.map((a) => (
+                  <PendingActionCard key={a.id} action={a} />
+                ))}
               </div>
             </div>
           ))}
