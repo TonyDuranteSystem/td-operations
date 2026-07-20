@@ -21,16 +21,30 @@
  * Data-driven gate: only runs when "ITIN" is tagged `start_at_wizard` in the
  * services catalog (getStartAtWizardServiceTypes). Flip the tag to disable.
  *
- * Idempotent: a person who already has an ITIN SD for this offer token is
- * skipped. New member contacts are find-or-created by email and stamped with
- * `lead_id` (write-once origin); existing contacts are reused and NEVER
- * re-stamped (an existing client keeps their own origin).
+ * Idempotent PER PERSON (not per offer token — see the guard comment below;
+ * token-shape matching produced a real duplicate on 2026-07-20). A person who
+ * already has a non-cancelled ITIN SD is skipped, and the skip is recorded on
+ * that SD. The DB partial unique index uq_itin_sd_active_per_contact is the
+ * authoritative backstop for concurrent runs. New member contacts are
+ * find-or-created by email (case-insensitively, via findContactIdByEmail) and
+ * stamped with `lead_id` (write-once origin); existing contacts are reused and
+ * NEVER re-stamped (an existing client keeps their own origin).
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createSD } from "@/lib/operations/service-delivery"
 import { getStartAtWizardServiceTypes } from "@/lib/services"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
+import { findContactIdByEmail } from "@/lib/operations/find-contact-by-email"
+
+/** Postgres unique-violation SQLSTATE — raised by uq_itin_sd_active_per_contact
+ *  when a concurrent run wins the insert race (see the guard note below). */
+const UNIQUE_VIOLATION = "23505"
+
+function isUniqueViolation(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return msg.includes(UNIQUE_VIOLATION) || /duplicate key value/i.test(msg)
+}
 
 export interface ItinFromWizardParams {
   /** Owner / primary contact — already exists (created at activation). */
@@ -54,6 +68,33 @@ export interface ItinFromWizardResult {
   created: number
   skipped: number
   people: ItinFromWizardPerson[]
+}
+
+/**
+ * Append a dated line to an existing ITIN SD recording a later offer that also
+ * bundled an ITIN for this person. Best-effort: a note failure must never stop
+ * the wizard chain — the skip itself is already reported to the caller.
+ */
+async function noteSkippedOffer(deliveryId: string, offerToken: string | null): Promise<void> {
+  if (!offerToken) return
+  try {
+    const { data: sd } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("notes")
+      .eq("id", deliveryId)
+      .maybeSingle()
+    const notes = sd?.notes ?? ""
+    // Idempotent: a retried job must not stack the same line twice.
+    if (notes.includes(offerToken)) return
+    const today = new Date().toISOString().split("T")[0]
+    const line = `${today} — Offer ${offerToken} also requested an ITIN for this person; fulfilled by this existing service (no duplicate created).`
+    await supabaseAdmin
+      .from("service_deliveries")
+      .update({ notes: notes ? `${notes}\n${line}` : line })
+      .eq("id", deliveryId)
+  } catch (e) {
+    console.warn("[itin-from-wizard] could not note skipped offer:", e)
+  }
 }
 
 function truthy(v: unknown): boolean {
@@ -138,15 +179,14 @@ export async function createItinDeliveriesFromWizard(
           continue
         }
         const email = a.email.toLowerCase().trim()
-        const { data: existing } = await supabaseAdmin
-          .from("contacts")
-          .select("id")
-          .eq("email", email)
-          .limit(1)
-          .maybeSingle()
-        if (existing) {
+        // Case-insensitive + alias-aware + merged-tombstone-safe. A plain
+        // `.eq('email', …)` missed `Peter@X.com` vs `peter@x.com` and minted a
+        // DUPLICATE CONTACT — which then defeats the per-person ITIN guard
+        // below (a new contact has no ITIN SD, so a second one is created).
+        const existingId = await findContactIdByEmail(email)
+        if (existingId) {
           // Reuse existing contact — never re-stamp lead_id (keeps their origin).
-          personContactId = existing.id
+          personContactId = existingId
         } else {
           const { data: newC } = await supabaseAdmin
             .from("contacts")
@@ -172,29 +212,86 @@ export async function createItinDeliveriesFromWizard(
         continue
       }
 
-      // Idempotency: skip if this contact already has an ITIN SD for this offer.
-      if (offerToken) {
-        const { data: dup } = await supabaseAdmin
-          .from("service_deliveries")
-          .select("id")
-          .eq("service_type", "ITIN")
-          .eq("contact_id", personContactId)
-          .ilike("notes", `%${offerToken}%`)
-          .limit(1)
-        if (dup && dup.length > 0) {
-          result.skipped++
-          result.people.push({ name: a.name, contactId: personContactId, status: "existing" })
-          continue
-        }
+      // ── Idempotency: one live ITIN per PERSON, not per offer token ──
+      //
+      // This used to match `notes ILIKE '%<offerToken>%'`. That broke on
+      // 2026-07-20 (Marcell Bogyora): the submission-token shape gained a
+      // per-subject suffix (lib/portal/submission-token.ts), so a re-submitted
+      // formation wizard minted a token that was no longer a substring of the
+      // notes written under the OLD shape — the guard missed and a duplicate
+      // ITIN SD appeared in the client's portal. Token formats change; a
+      // person's identity does not, so the guard keys on the person.
+      //
+      // Status predicate: NULL-tolerant and excludes ONLY `cancelled`.
+      //   - `status` is nullable, and PostgREST `neq` evaluates to NULL (row
+      //     dropped) for a NULL status — hence the explicit `status.is.null`.
+      //   - `completed` MUST still block: a person gets exactly one ITIN in
+      //     their life. Re-ticking "needs ITIN" on a second company's wizard is
+      //     routine and must not spawn a service they cannot buy again.
+      //     (ITIN Renewal is a separate service_type and is unaffected.)
+      const { data: dup, error: dupErr } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id")
+        .eq("service_type", "ITIN")
+        .eq("contact_id", personContactId)
+        .or("status.is.null,status.neq.cancelled")
+        .limit(1)
+
+      // Fail CLOSED. supabase-js returns errors instead of throwing, so the old
+      // `{ data }`-only destructure turned any transient PostgREST failure into
+      // "no duplicate found" → a duplicate SD. A guard we cannot trust must
+      // stop the applicant, not wave them through; the job retries.
+      if (dupErr) {
+        result.people.push({
+          name: a.name,
+          contactId: personContactId,
+          status: "error",
+          detail: `duplicate check failed, skipped to avoid a duplicate ITIN: ${dupErr.message}`,
+        })
+        continue
       }
 
-      const sd = await createSD({
-        service_type: "ITIN",
-        service_name: `ITIN Application - ${a.name}`,
-        account_id: null,
-        contact_id: personContactId,
-        notes: `Auto-created from offer ${offerToken ?? "(unknown)"} — formation/onboarding wizard (applies for ITIN)`,
-      })
+      if (dup && dup.length > 0) {
+        // Legitimate-but-skipped case: a NEW offer bundles (and bills) an ITIN
+        // for someone who already has a live one. Leave a trace on the existing
+        // SD so staff can reconcile — otherwise the only record is a counter in
+        // a job row nobody reads.
+        await noteSkippedOffer(dup[0].id, offerToken)
+        result.skipped++
+        result.people.push({
+          name: a.name,
+          contactId: personContactId,
+          status: "existing",
+          detail: `already has a live ITIN service (${dup[0].id}) — not duplicated`,
+        })
+        continue
+      }
+
+      let sd: { id: string }
+      try {
+        sd = await createSD({
+          service_type: "ITIN",
+          service_name: `ITIN Application - ${a.name}`,
+          account_id: null,
+          contact_id: personContactId,
+          notes: `Auto-created from offer ${offerToken ?? "(unknown)"} — formation/onboarding wizard (applies for ITIN)`,
+          source_offer_token: offerToken,
+        })
+      } catch (e) {
+        // Race backstop: the SELECT above is a fast path, not a lock. Two
+        // sibling jobs (direct-fire + cron) can both pass it and both insert.
+        // uq_itin_sd_active_per_contact makes the DB the authority; losing the
+        // race means the SD already exists, which is exactly what we wanted.
+        if (!isUniqueViolation(e)) throw e
+        result.skipped++
+        result.people.push({
+          name: a.name,
+          contactId: personContactId,
+          status: "existing",
+          detail: "concurrent run created the ITIN service first",
+        })
+        continue
+      }
 
       // Auto-tasks from the ITIN first stage.
       for (const t of autoTasks) {
