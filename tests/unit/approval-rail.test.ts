@@ -97,9 +97,20 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("approvable-tools — allow-list", () => {
-  it("contains exactly the 14 expected action tools", () => {
-    // 12 original + update_deadline + send_team_message (2026-06-13).
-    expect(APPROVABLE_TOOL_NAMES.size).toBe(14)
+  it("contains exactly the 12 expected action tools", () => {
+    // 12 original + update_deadline + send_team_message (2026-06-13) = 14,
+    // minus the two task tools removed 2026-07-20 (see below).
+    expect(APPROVABLE_TOOL_NAMES.size).toBe(12)
+  })
+
+  it("offers NO task tool — the task system is dead for humans", () => {
+    // Antonio, 2026-07-16: nobody reads tasks any more; follow-ups belong in the team
+    // channel or the chat. Proposing one is dead work, and the confirmation card would
+    // make it one click easier to create. Removed from the allow-list outright so it
+    // cannot be proposed on any surface.
+    expect(APPROVABLE_TOOL_NAMES.has("create_task")).toBe(false)
+    expect(APPROVABLE_TOOL_NAMES.has("update_task")).toBe(false)
+    expect(Array.from(APPROVABLE_TOOL_NAMES).filter((n) => n.includes("task"))).toEqual([])
   })
 
   it("every approvable name resolves to a real AGENT_TOOLS entry", () => {
@@ -178,12 +189,12 @@ describe("approvable-tools — validateToolParams", () => {
   })
 
   it("rejects a wrong param type", () => {
-    const r = validateToolParams("create_task", { task_title: 123 }) // should be string
+    const r = validateToolParams("update_account_notes", { task_title: 123 }) // should be string
     expect(r.ok).toBe(false)
   })
 
   it("rejects an enum violation", () => {
-    const r = validateToolParams("update_task", { task_id: "x", status: "Bogus" })
+    const r = validateToolParams("update_contact", { task_id: "x", status: "Bogus" })
     expect(r.ok).toBe(false)
   })
 
@@ -232,8 +243,8 @@ describe("proposeAction", () => {
 
   it("persists an optional thread_id on the queued row", async () => {
     const out = await proposeAction({
-      tool_name: "create_task",
-      params: { task_title: "Threaded" },
+      tool_name: "update_account_notes",
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Threaded" },
       thread_id: "11111111-2222-3333-4444-555555555555",
     })
     expect(out).toContain("queued for approval")
@@ -242,7 +253,7 @@ describe("proposeAction", () => {
   })
 
   it("stores thread_id = null when omitted", async () => {
-    await proposeAction({ tool_name: "create_task", params: { task_title: "No thread" } })
+    await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "No thread" } })
     expect(h.store[0].thread_id).toBeNull()
   })
 
@@ -288,8 +299,8 @@ describe("approval_list MCP tool", () => {
   }
 
   it("returns pending rows newest-first", async () => {
-    await proposeAction({ tool_name: "create_task", params: { task_title: "First" } })
-    await proposeAction({ tool_name: "create_task", params: { task_title: "Second" } })
+    await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "First" } })
+    await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Second" } })
 
     const handler = captureHandler()
     const res = await handler({ status: "pending", limit: 20 })
@@ -297,7 +308,7 @@ describe("approval_list MCP tool", () => {
     const rows = JSON.parse(text)
     expect(rows).toHaveLength(2)
     // newest-first: "Second" was inserted later (larger created_at)
-    expect(rows[0].params.task_title).toBe("Second")
+    expect(rows[0].params.note).toBe("Second")
     expect(rows.every((r: { status: string }) => r.status === "pending")).toBe(true)
   })
 
@@ -315,14 +326,14 @@ describe("approval_list MCP tool", () => {
 describe("proposeAction — env lane tag (Phase D)", () => {
   it("stamps env from APPROVAL_ENV when set", async () => {
     process.env.APPROVAL_ENV = "staging"
-    await proposeAction({ tool_name: "create_task", params: { task_title: "X" } })
+    await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "X" } })
     expect(h.store[0].env).toBe("staging")
   })
 
   it("falls back to NODE_ENV / 'production' when APPROVAL_ENV is unset", async () => {
     delete process.env.APPROVAL_ENV
     process.env.NODE_ENV = "production"
-    await proposeAction({ tool_name: "create_task", params: { task_title: "Y" } })
+    await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Y" } })
     expect(h.store[0].env).toBe("production")
   })
 })
@@ -330,8 +341,8 @@ describe("proposeAction — env lane tag (Phase D)", () => {
 describe("batchPropose (Phase D)", () => {
   it("mints ONE batch_id shared by every proposal in the batch", async () => {
     const res = await batchPropose([
-      { tool_name: "create_task", params: { task_title: "A" } },
-      { tool_name: "create_task", params: { task_title: "B" } },
+      { tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "A" } },
+      { tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "B" } },
       { tool_name: "update_account_notes", params: { account_id: "acc", note: "n" } },
     ])
     expect(res.count).toBe(3)
@@ -344,14 +355,14 @@ describe("batchPropose (Phase D)", () => {
 
   it("reuses a supplied batch_id", async () => {
     const fixed = "11111111-1111-4111-8111-111111111111"
-    const res = await batchPropose([{ tool_name: "create_task", params: { task_title: "A" } }], { batch_id: fixed })
+    const res = await batchPropose([{ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "A" } }], { batch_id: fixed })
     expect(res.batch_id).toBe(fixed)
     expect(h.store[0].batch_id).toBe(fixed)
   })
 
   it("still validates each proposal — a bad tool_name yields an error string, no row", async () => {
     const res = await batchPropose([
-      { tool_name: "create_task", params: { task_title: "ok" } },
+      { tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "ok" } },
       { tool_name: "not_a_tool", params: {} },
     ])
     expect(res.count).toBe(2)
@@ -372,10 +383,10 @@ describe("approval_list — batch_id filter (Phase D)", () => {
 
   it("restricts results to one batch_id", async () => {
     const batch = await batchPropose([
-      { tool_name: "create_task", params: { task_title: "in-batch-1" } },
-      { tool_name: "create_task", params: { task_title: "in-batch-2" } },
+      { tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "in-batch-1" } },
+      { tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "in-batch-2" } },
     ])
-    await proposeAction({ tool_name: "create_task", params: { task_title: "solo" } })
+    await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "solo" } })
 
     const handler = captureHandler()
     const res = await handler({ status: "pending", batch_id: batch.batch_id, limit: 20 })

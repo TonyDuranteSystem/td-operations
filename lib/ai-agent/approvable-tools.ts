@@ -34,8 +34,11 @@ import { AGENT_TOOLS } from "./tools"
  * need approval, the worker just calls them directly in Phase 1.
  */
 export const APPROVABLE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "create_task",
-  "update_task",
+  // NO TASK TOOLS. Antonio, 2026-07-16: the task system is DEAD for humans — follow-ups
+  // live in the team channel, What's New, or the chat itself. Creating or updating a task
+  // is therefore work nobody will ever look at, and offering it (worse, one click away)
+  // manufactures dead work. Removed 2026-07-20. The workflow/pipeline engine still creates
+  // its own tasks server-side; that is a separate system and is untouched.
   "update_account_notes",
   "update_contact",
   "update_service",
@@ -75,14 +78,6 @@ export interface ApprovableToolConstraint {
 }
 
 export const APPROVABLE_TOOL_CONSTRAINTS: Readonly<Record<string, ApprovableToolConstraint>> = {
-  create_task: {
-    label: "Create CRM task",
-    surface: ["task_title", "assigned_to", "due_date", "account_id"],
-  },
-  update_task: {
-    label: "Update CRM task",
-    surface: ["task_id", "status", "assigned_to", "notes"],
-  },
   update_account_notes: {
     label: "Append note to account",
     surface: ["account_id", "note"],

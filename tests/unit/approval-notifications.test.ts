@@ -113,8 +113,8 @@ const SYSTEM_THREAD_TITLE = "🤖 Approval Rail (system)"
 function seedApproval(over: Record<string, any>) {
   const row = {
     id: over.id ?? `ap-${(h.store.approval_queue ??= []).length + 1}`,
-    tool_name: over.tool_name ?? "create_task",
-    params: over.params ?? { task_title: "x" },
+    tool_name: over.tool_name ?? "update_account_notes",
+    params: over.params ?? { account_id: "a1111111-2222-4333-8444-555555555555", note: "x" },
     rationale: over.rationale ?? null,
     status: over.status ?? "executed",
     notification_sent: over.notification_sent ?? false,
@@ -143,7 +143,7 @@ beforeEach(() => {
 describe("sendApprovalNotification", () => {
   it("creates the system thread and writes a formatted 'proposed' message", async () => {
     const ok = await sendApprovalNotification(
-      { id: "11111111-2222-3333-4444-555555555555", tool_name: "create_task", params: { task_title: "Call client" }, rationale: "asked" },
+      { id: "11111111-2222-3333-4444-555555555555", tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Call client" }, rationale: "asked" },
       "proposed",
     )
     expect(ok).toBe(true)
@@ -159,11 +159,11 @@ describe("sendApprovalNotification", () => {
     expect(msgs[0].thread_id).toBe(threads[0].id)
     expect(msgs[0].sender_name).toBe("Approval Rail")
     expect(msgs[0].message).toContain("New action proposed — awaiting approval")
-    expect(msgs[0].message).toContain("Create CRM task")
+    expect(msgs[0].message).toContain("Append note to account")
   })
 
   it("reuses the SAME system thread across calls (no duplicate threads)", async () => {
-    const row = { id: "aaaaaaaa-0000-0000-0000-000000000000", tool_name: "create_task", params: { task_title: "x" } }
+    const row = { id: "aaaaaaaa-0000-0000-0000-000000000000", tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "x" } }
     await sendApprovalNotification(row, "proposed")
     await sendApprovalNotification(row, "executed", "done")
     await sendApprovalNotification(row, "failed", "boom")
@@ -177,7 +177,7 @@ describe("sendApprovalNotification", () => {
   it("never throws and returns false when the team-chat tables are unavailable", async () => {
     h.ctl.throwTables.add("internal_threads")
     const ok = await sendApprovalNotification(
-      { id: "x", tool_name: "create_task", params: {} },
+      { id: "x", tool_name: "update_account_notes", params: {} },
       "executed",
       "done",
     )
@@ -236,7 +236,7 @@ describe("emitApprovalOutcome", () => {
 
 describe("runNotificationSweep", () => {
   it("re-notifies a terminal row whose first callback never set notification_sent", async () => {
-    const row = seedApproval({ tool_name: "create_task", status: "executed", notification_sent: false })
+    const row = seedApproval({ tool_name: "update_account_notes", status: "executed", notification_sent: false })
 
     const n = await runNotificationSweep()
     expect(n).toBe(1)
@@ -288,8 +288,8 @@ describe("runNotificationSweep", () => {
 describe("proposeAction propose notification (deliverable #4)", () => {
   it("writes a 'New action proposed' message to the CRM team chat on a fresh proposal", async () => {
     const out = await proposeAction({
-      tool_name: "create_task",
-      params: { task_title: "Follow up with client" },
+      tool_name: "update_account_notes",
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Follow up with client" },
       rationale: "client requested a follow-up",
     })
     expect(out).toContain("Action proposed and queued for approval")
@@ -297,7 +297,7 @@ describe("proposeAction propose notification (deliverable #4)", () => {
     const msgs = h.store.internal_messages ?? []
     expect(msgs).toHaveLength(1)
     expect(msgs[0].message).toContain("New action proposed — awaiting approval")
-    expect(msgs[0].message).toContain("Create CRM task")
+    expect(msgs[0].message).toContain("Append note to account")
   })
 
   it("does NOT send a propose notification when the proposal is rejected by validation", async () => {

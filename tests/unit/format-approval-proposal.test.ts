@@ -30,15 +30,13 @@ describe("shortId", () => {
   })
 })
 
-describe("formatApprovalProposal — create_task (all surface params)", () => {
+describe("formatApprovalProposal — update_account_notes (all surface params)", () => {
   const out = formatApprovalProposal({
     id: FULL_UUID,
-    tool_name: "create_task",
+    tool_name: "update_account_notes",
     params: {
-      task_title: "Follow up on EIN",
-      assigned_to: "Luca",
-      due_date: "2026-06-10",
       account_id: "acc-123",
+      note: "Client asked about the EIN",
       // a non-surfaced extra key — must NOT appear
       description: "internal only, should be hidden",
     },
@@ -50,15 +48,13 @@ describe("formatApprovalProposal — create_task (all surface params)", () => {
   })
 
   it("renders the tool label from constraints, not the raw name", () => {
-    expect(out).toContain("🔧 Create CRM task")
-    expect(out).not.toContain("🔧 create_task")
+    expect(out).toContain("🔧 Append note to account")
+    expect(out).not.toContain("🔧 update_account_notes")
   })
 
   it("surfaces every surface param present", () => {
-    expect(out).toContain("task_title: Follow up on EIN")
-    expect(out).toContain("assigned_to: Luca")
-    expect(out).toContain("due_date: 2026-06-10")
     expect(out).toContain("account_id: acc-123")
+    expect(out).toContain("note: Client asked about the EIN")
   })
 
   it("hides params not in the surface list", () => {
@@ -70,7 +66,7 @@ describe("formatApprovalProposal — create_task (all surface params)", () => {
     expect(out).toContain("💡 Client asked when the EIN will arrive.")
   })
 
-  it("has no risk flag line (create_task carries no flags)", () => {
+  it("has no risk flag line (update_account_notes carries no flags)", () => {
     expect(out).not.toContain("⚠️")
   })
 
@@ -144,19 +140,19 @@ describe("formatApprovalProposal — graceful handling of missing data", () => {
   it("renders a placeholder when no surface params are present", () => {
     const out = formatApprovalProposal({
       id: FULL_UUID,
-      tool_name: "create_task",
+      tool_name: "update_account_notes",
       params: {},
       rationale: null,
     })
-    expect(out).toContain("🔧 Create CRM task")
+    expect(out).toContain("🔧 Append note to account")
     expect(out).toContain("(no parameters)")
   })
 
   it("omits the rationale line when rationale is null/empty", () => {
     const out = formatApprovalProposal({
       id: FULL_UUID,
-      tool_name: "create_task",
-      params: { task_title: "x" },
+      tool_name: "update_account_notes",
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "x" },
       rationale: null,
     })
     expect(out).not.toContain("💡")
@@ -165,7 +161,7 @@ describe("formatApprovalProposal — graceful handling of missing data", () => {
   it("handles null params without throwing", () => {
     const out = formatApprovalProposal({
       id: FULL_UUID,
-      tool_name: "update_task",
+      tool_name: "update_contact",
       params: null,
       rationale: "test",
     })
@@ -176,14 +172,14 @@ describe("formatApprovalProposal — graceful handling of missing data", () => {
   it("skips surface params that are absent, shows those present", () => {
     const out = formatApprovalProposal({
       id: FULL_UUID,
-      tool_name: "create_task",
-      // only task_title present; assigned_to/due_date/account_id absent
-      params: { task_title: "Only this one" },
+      tool_name: "update_account_notes",
+      // only the surfaced note/account_id present; other tools' surface keys absent
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Only this one" },
       rationale: "r",
     })
-    expect(out).toContain("task_title: Only this one")
-    expect(out).not.toContain("assigned_to:")
-    expect(out).not.toContain("due_date:")
+    expect(out).toContain("note: Only this one")
+    expect(out).not.toContain("contact_id:")
+    expect(out).not.toContain("channel:")
   })
 
   it("falls back to the raw tool name and surfaces all params for an unknown tool", () => {
@@ -217,21 +213,21 @@ describe("formatApprovalProposal — graceful handling of missing data", () => {
 describe("formatApprovalOutcome (Phase B)", () => {
   it("renders the executed header, tool block, and detail line — no APPROVE/REJECT", () => {
     const out = formatApprovalOutcome(
-      { id: FULL_UUID, tool_name: "create_task", params: { task_title: "Call client" } },
+      { id: FULL_UUID, tool_name: "update_account_notes", params: { account_id: "acc-9", note: "Call client" } },
       "executed",
-      "Proposal create_task executed successfully.",
+      "Proposal update_account_notes executed successfully.",
     )
     expect(out).toContain(`✅ Action executed #${shortId(FULL_UUID)}`)
-    expect(out).toContain("🔧 Create CRM task")
-    expect(out).toContain("task_title: Call client")
-    expect(out).toContain("📄 Proposal create_task executed successfully.")
+    expect(out).toContain("🔧 Append note to account")
+    expect(out).toContain("note: Call client")
+    expect(out).toContain("📄 Proposal update_account_notes executed successfully.")
     // It already happened — no decision instructions.
     expect(out).not.toContain("APPROVE")
     expect(out).not.toContain("REJECT")
   })
 
   it("uses the right header emoji per terminal status", () => {
-    const base = { id: FULL_UUID, tool_name: "create_task", params: { task_title: "x" } }
+    const base = { id: FULL_UUID, tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "x" } }
     expect(formatApprovalOutcome(base, "failed")).toContain("❌ Action failed")
     expect(formatApprovalOutcome(base, "rejected")).toContain("🛑 Action rejected")
     expect(formatApprovalOutcome(base, "expired")).toContain("⌛ Action expired")
@@ -252,13 +248,13 @@ describe("formatProposeNotification (Phase B)", () => {
   it("prefixes the awaiting-approval banner above the full proposal card", () => {
     const out = formatProposeNotification({
       id: FULL_UUID,
-      tool_name: "create_task",
-      params: { task_title: "Call client" },
+      tool_name: "update_account_notes",
+      params: { account_id: "acc-9", note: "Call client" },
       rationale: "client asked",
     })
     expect(out).toContain("🆕 New action proposed — awaiting approval")
     expect(out).toContain(`📋 Action Proposal #${shortId(FULL_UUID)}`)
-    expect(out).toContain("🔧 Create CRM task")
+    expect(out).toContain("🔧 Append note to account")
     // Staff can act from the card.
     expect(out).toContain(`APPROVE ${shortId(FULL_UUID)}`)
   })

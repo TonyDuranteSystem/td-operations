@@ -1882,7 +1882,10 @@ export async function proposeAction(
     if (!panelApprovalsEnabledFor(opts.panelSurface)) {
       return WORKER_ACTIONS_OFF_MESSAGE
     }
-    const gate = mayBeConfirmedInPanel(typeof input.tool_name === "string" ? input.tool_name : "")
+    const gate = mayBeConfirmedInPanel(
+      typeof input.tool_name === "string" ? input.tool_name : "",
+      (input.params ?? {}) as Record<string, unknown>,
+    )
     if (gate.ok === false) return `❌ ${gate.why}`
   } else if (!workerActionsEnabled()) {
     return WORKER_ACTIONS_OFF_MESSAGE

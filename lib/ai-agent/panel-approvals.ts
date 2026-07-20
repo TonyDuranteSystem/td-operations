@@ -75,7 +75,27 @@ export function panelApprovalsEnabledFor(surface: PanelSurface): boolean {
  * change that swapped the executor would silently drop it. A proposal that can never be
  * created is a stronger guarantee than one that is refused on the way out.
  */
-export function mayBeConfirmedInPanel(toolName: string): { ok: true } | { ok: false; why: string } {
+export function mayBeConfirmedInPanel(
+  toolName: string,
+  params?: Record<string, unknown>,
+): { ok: true } | { ok: false; why: string } {
+  // NO TASKS. Antonio, 2026-07-16: the task system is DEAD for humans. A card that creates
+  // one is dead work made one click easier. The agent-side task tools were deleted from
+  // the approvable list outright; these are the CATALOG equivalents, which arrive by the
+  // other route and would otherwise still be offerable — the same two-namespace trap that
+  // let a client email through earlier today.
+  const isTaskWrite =
+    toolName === 'crm_create_task' ||
+    (toolName === 'crm_update_record' && params?.table === 'tasks')
+  if (isTaskWrite) {
+    return {
+      ok: false,
+      why:
+        `tasks are not used any more — nobody reads them, so creating one is work that ` +
+        `disappears. Put the follow-up where it will actually be seen: post it to the team ` +
+        `channel, or say it here in the chat.`,
+    }
+  }
   // TWO NAMING SCHEMES REACH THIS GATE, and missing one was a live hole found by the
   // end-to-end run on 2026-07-20. Actions arrive either as catalog tools (`gmail_send`,
   // via use_tool) or as agent tools (`send_email`, via propose_action). NO_APPROVAL_SEND_TOOLS
@@ -233,7 +253,6 @@ function humanTitle(tool: string): string {
   if (constraint?.label) return constraint.label
   // Catalog tools (reached via use_tool) have no such metadata, so these are ours.
   const KNOWN: Record<string, string> = {
-    crm_create_task: 'Create a task',
     crm_update_record: 'Update a record',
     crm_create_contact: 'Create a contact',
     crm_create_account: 'Create an account',

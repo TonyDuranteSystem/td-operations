@@ -44,14 +44,27 @@ function idFrom(proposeOutput: string): string | null {
   return m ? m[1] : null
 }
 
+let ACCOUNT_ID = ""
+let restoreNotes: string | null | undefined
+
 async function main() {
   process.env.WORKER_PANEL_APPROVALS = "true"
   const stamp = Date.now()
 
+  // A real account to write the note onto — reuse any existing one; the note is removed
+  // again at the end so the fixture leaves nothing behind.
+  const { data: anyAcct } = await db.from("accounts").select("id, notes").limit(1).maybeSingle()
+  if (!anyAcct?.id) {
+    console.error("✋ No account in the local stack to test against.")
+    process.exit(1)
+  }
+  ACCOUNT_ID = anyAcct.id
+  restoreNotes = anyAcct.notes ?? null
+
   // ── 1. Propose from a panel → a real frozen row ──────────────────────────
   const title = `QA Test panel-approval ${stamp}`
   const out = await proposeAction(
-    { tool_name: "create_task", params: { task_title: title, description: "E2E driver", priority: "Normal" } },
+    { tool_name: "update_account_notes", params: { account_id: ACCOUNT_ID, note: title } },
     { panelSurface: "dashboard" },
   )
   const id = idFrom(out)
@@ -66,8 +79,8 @@ async function main() {
   // ── 2. The card is built from the frozen row, not the model's text ───────
   const cards = await loadPendingActionCards([id])
   check("card loads for the pending action", cards.length === 1)
-  check("card shows the REAL frozen values", cards[0]?.params?.task_title === title, String(cards[0]?.params?.task_title))
-  check("card has a readable title", cards[0]?.title === "Create CRM task", cards[0]?.title)
+  check("card shows the REAL frozen values", cards[0]?.params?.note === title, String(cards[0]?.params?.note))
+  check("card has a readable title", cards[0]?.title === "Append note to account", cards[0]?.title)
 
   // ── 3. THE DOUBLE-CLICK RACE — the behaviour only a live run can prove ───
   // Two confirms fired concurrently on the same row, as a double-click does.
@@ -84,10 +97,11 @@ async function main() {
   const { data: after } = await db.from("approval_queue").select("status, executed_at").eq("id", id).maybeSingle()
   check("row reached a terminal executed state", after?.status === "executed", `status=${after?.status}`)
 
-  const { data: tasks } = await db.from("tasks").select("id").eq("task_title", title)
-  check("the task really exists in the CRM", (tasks?.length ?? 0) >= 1, `found=${tasks?.length ?? 0}`)
-  check("created EXACTLY once (no double execution)", tasks?.length === 1, `found=${tasks?.length ?? 0}`)
-  for (const t of tasks ?? []) await db.from("tasks").delete().eq("id", t.id)
+  const { data: acct } = await db.from("accounts").select("notes").eq("id", ACCOUNT_ID).maybeSingle()
+  const noteText: string = acct?.notes ?? ""
+  const occurrences = noteText.split(title).length - 1
+  check("the note really landed on the account", occurrences >= 1, `occurrences=${occurrences}`)
+  check("applied EXACTLY once (no double execution)", occurrences === 1, `occurrences=${occurrences}`)
 
   // ── 5. A settled card cannot be clicked again ────────────────────────────
   const again = await confirmPendingAction(id, "qa-driver@tonydurante.us")
@@ -96,7 +110,7 @@ async function main() {
   // ── 6. Discard runs nothing ──────────────────────────────────────────────
   const dTitle = `QA Test discard ${stamp}`
   const dOut = await proposeAction(
-    { tool_name: "create_task", params: { task_title: dTitle, description: "E2E driver", priority: "Normal" } },
+    { tool_name: "update_account_notes", params: { account_id: ACCOUNT_ID, note: dTitle } },
     { panelSurface: "dashboard" },
   )
   const dId = idFrom(dOut)
@@ -106,8 +120,8 @@ async function main() {
     check("discard reports discarded", discarded.ok === true && discarded.status === "discarded")
     const { data: dRow } = await db.from("approval_queue").select("status").eq("id", dId).maybeSingle()
     check("discarded row is rejected, never executed", dRow?.status === "rejected", `status=${dRow?.status}`)
-    const { data: dTasks } = await db.from("tasks").select("id").eq("task_title", dTitle)
-    check("discard created NOTHING", (dTasks?.length ?? 0) === 0, `found=${dTasks?.length ?? 0}`)
+    const { data: dAcct } = await db.from("accounts").select("notes").eq("id", ACCOUNT_ID).maybeSingle()
+    check("discard changed NOTHING", !(dAcct?.notes ?? "").includes(dTitle))
   } else {
     check("discard fixture proposed", false, dOut.slice(0, 120))
   }
@@ -125,6 +139,26 @@ async function main() {
     check(`${sendTool}: gate agrees independently`, mayBeConfirmedInPanel(sendTool).ok === false)
   }
 
+  // ── 7b. Tasks are dead for humans — neither naming scheme may offer one ──
+  const taskAttempts: Array<[string, Record<string, unknown>]> = [
+    ["crm_create_task", { task_title: "should never be offered" }],
+    ["crm_update_record", { table: "tasks", id: ACCOUNT_ID, updates: { status: "Done" } }],
+  ]
+  for (const [tool, params] of taskAttempts) {
+    const o = await proposeAction({ tool_name: tool, params }, { panelSurface: "dashboard" })
+    check(`${tool}: refused (tasks are dead)`, o.startsWith("❌"), o.slice(0, 80))
+    check(`${tool}: left NO queue row`, idFrom(o) === null)
+  }
+  // ...but the same tool on a LIVE table is still fine — the block is targeted, not blunt.
+  check(
+    "crm_update_record on a non-task table is still allowed",
+    mayBeConfirmedInPanel("crm_update_record", { table: "accounts" }).ok === true,
+  )
+  check("agent-side task tools no longer exist at all", await (async () => {
+    const o = await proposeAction({ tool_name: "create_task", params: { task_title: "x" } }, { panelSurface: "dashboard" })
+    return o.startsWith("❌") && idFrom(o) === null
+  })())
+
   // ── 8. Audit trail ───────────────────────────────────────────────────────
   const { data: log } = await db.from("action_log").select("actor, summary").eq("record_id", id).limit(5)
   check("the confirmed action is in the audit trail", (log?.length ?? 0) >= 1, `entries=${log?.length ?? 0}`)
@@ -134,6 +168,7 @@ async function main() {
 main()
   .then(async () => {
     for (const id of created) await db.from("approval_queue").delete().eq("id", id)
+    if (ACCOUNT_ID && restoreNotes !== undefined) await db.from("accounts").update({ notes: restoreNotes }).eq("id", ACCOUNT_ID)
     console.log(`\n${failures === 0 ? "✅ ALL CHECKS PASSED" : `❌ ${failures} CHECK(S) FAILED`}`)
     process.exit(failures === 0 ? 0 : 1)
   })

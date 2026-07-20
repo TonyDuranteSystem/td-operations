@@ -169,9 +169,9 @@ beforeEach(() => {
 function seedApproval(row: Record<string, any>) {
   const base = {
     id: row.id ?? "00000000-0000-0000-0000-000000000001",
-    tool_name: "create_task",
-    params: { task_title: "X" },
-    params_hash: computeParamsHash(row.params ?? { task_title: "X" }),
+    tool_name: "update_account_notes",
+    params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "X" },
+    params_hash: computeParamsHash(row.params ?? { account_id: "a1111111-2222-4333-8444-555555555555", note: "X" }),
     rationale: "because",
     status: "pending",
     claimed_by: null,
@@ -201,7 +201,7 @@ describe("generateConfirmationCode", () => {
 
 describe("proposeAction — confirmation code (WP1)", () => {
   it("mints a 6-digit confirmation_code on the queued row", async () => {
-    const out = await proposeAction({ tool_name: "create_task", params: { task_title: "Coded" } })
+    const out = await proposeAction({ tool_name: "update_account_notes", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Coded" } })
     expect(out).toContain("queued for approval")
     expect(out).toMatch(/confirmation_code=\d{6}/)
     expect(h.tables.approval_queue).toHaveLength(1)
@@ -217,8 +217,8 @@ describe("formatApprovalProposal — confirmation code (WP1)", () => {
   it("renders the 🔑 code line and APPROVE <short-id> <code>", () => {
     const text = formatApprovalProposal({
       id: "abcdef12-0000-0000-0000-000000000000",
-      tool_name: "create_task",
-      params: { task_title: "Do it" },
+      tool_name: "update_account_notes",
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Do it" },
       rationale: "needed",
       confirmation_code: "123456",
     })
@@ -229,8 +229,8 @@ describe("formatApprovalProposal — confirmation code (WP1)", () => {
   it("falls back to <code> placeholder when the row has no code", () => {
     const text = formatApprovalProposal({
       id: "abcdef12-0000-0000-0000-000000000000",
-      tool_name: "create_task",
-      params: { task_title: "Do it" },
+      tool_name: "update_account_notes",
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Do it" },
     })
     expect(text).not.toContain("🔑 Code:")
     expect(text).toContain("To approve: APPROVE abcdef12 <code>")
@@ -302,14 +302,14 @@ describe("hermes_heartbeat (WP1)", () => {
 
 describe("approval_claim (WP1)", () => {
   it("claims the oldest approved+unclaimed row and sets it executing", async () => {
-    seedApproval({ id: "aaaa1111-1111-4111-8111-111111111111", status: "approved", created_at: "2026-06-04T00:00:02Z", params: { task_title: "newer" } })
-    seedApproval({ id: "bbbb2222-2222-4222-8222-222222222222", status: "approved", created_at: "2026-06-04T00:00:01Z", params: { task_title: "older" } })
+    seedApproval({ id: "aaaa1111-1111-4111-8111-111111111111", status: "approved", created_at: "2026-06-04T00:00:02Z", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "newer" } })
+    seedApproval({ id: "bbbb2222-2222-4222-8222-222222222222", status: "approved", created_at: "2026-06-04T00:00:01Z", params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "older" } })
 
     const res = await handlers().approval_claim({ instance_id: "hermes-1" })
     const claimed = JSON.parse(res.content[0].text)
     // oldest (created earlier) wins
     expect(claimed.id).toBe("bbbb2222-2222-4222-8222-222222222222")
-    expect(claimed.tool_name).toBe("create_task")
+    expect(claimed.tool_name).toBe("update_account_notes")
     expect(claimed.confirmation_code !== undefined).toBe(true)
 
     const row = h.tables.approval_queue.find((r) => r.id === claimed.id)
@@ -328,7 +328,7 @@ describe("approval_claim (WP1)", () => {
     seedApproval({
       id: "cccc3333-3333-4333-8333-333333333333",
       status: "approved",
-      params: { task_title: "tampered" },
+      params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "tampered" },
       params_hash: "deadbeef-not-the-real-hash",
     })
     const res = await handlers().approval_claim({ instance_id: "hermes-1" })
@@ -374,8 +374,8 @@ describe("approval_complete (WP1)", () => {
 // sanity: hash helper used in seeds matches the canonical SHA-256 the rail uses
 describe("seed hash sanity", () => {
   it("computeParamsHash is SHA-256 of canonical JSON", () => {
-    const p = { task_title: "X" }
-    const expected = createHash("sha256").update(JSON.stringify({ task_title: "X" })).digest("hex")
+    const p = { account_id: "a1111111-2222-4333-8444-555555555555", note: "X" }
+    const expected = createHash("sha256").update(JSON.stringify({ account_id: "a1111111-2222-4333-8444-555555555555", note: "X" })).digest("hex")
     expect(computeParamsHash(p)).toBe(expected)
   })
 })

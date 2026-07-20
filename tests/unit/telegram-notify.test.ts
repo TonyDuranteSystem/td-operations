@@ -14,8 +14,8 @@ const ORIGINAL_ENV = { ...process.env }
 
 const ROW = {
   id: "abcdef12-0000-0000-0000-000000000000",
-  tool_name: "create_task",
-  params: { task_title: "Call the client" },
+  tool_name: "update_account_notes",
+  params: { account_id: "a1111111-2222-4333-8444-555555555555", note: "Call the client" },
   rationale: "follow-up needed",
   confirmation_code: "123456",
 }
@@ -46,7 +46,7 @@ describe("sendTelegramApprovalNotification (WP3)", () => {
     const body = JSON.parse(init.body as string)
     expect(body.chat_id).toBe("307359927")
     // The formatted proposal carries the tool label + the confirmation-code grammar.
-    expect(body.text).toContain("Create CRM task")
+    expect(body.text).toContain("Append note to account")
     expect(body.text).toContain("🔑 Code: 123456")
     expect(body.text).toContain("APPROVE abcdef12 123456")
   })
