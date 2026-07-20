@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { panelApprovalsEnabledFor, mayBeConfirmedInPanel } from '@/lib/ai-agent/panel-approvals'
 import { NO_APPROVAL_SEND_TOOLS } from '@/lib/ai-agent/tool-risk'
+import { APPROVABLE_TOOL_CONSTRAINTS } from '@/lib/ai-agent/approvable-tools'
 
 const ENV_KEYS = [
   'WORKER_PANEL_APPROVALS',
@@ -99,10 +100,32 @@ describe('mayBeConfirmedInPanel', () => {
     expect(gate.why.toLowerCase()).toContain('chat')
   })
 
+  it('refuses EVERY agent-side action flagged as leaving TD systems', () => {
+    // REGRESSION GUARD — a live hole, found by the end-to-end run on 2026-07-20 and NOT by
+    // any unit test. Two naming schemes reach this gate: catalog tools ("gmail_send", via
+    // use_tool) and agent tools ("send_email", via propose_action). The refusal list holds
+    // only catalog names, so `send_email` — a real client email — passed this gate AND the
+    // executor's identical check, and would have been confirmable from a card with a
+    // recipient frozen minutes earlier. Driven off the `external` flag so a newly-flagged
+    // agent tool is covered without anyone remembering to update a second list.
+    const external = Object.entries(APPROVABLE_TOOL_CONSTRAINTS).filter(([, c]) => c.external)
+    expect(external.length).toBeGreaterThan(0)
+    for (const [tool] of external) {
+      expect(mayBeConfirmedInPanel(tool).ok, `${tool} leaves TD systems and must not be confirmable`).toBe(false)
+    }
+  })
+
   it('allows an ordinary record change — the case this feature exists for', () => {
     // Antonio's example: move Banking to Documents Received, add a note, set a follow-up.
+    // Both naming schemes, since both are real callers.
+    expect(mayBeConfirmedInPanel('create_task').ok).toBe(true)
+    expect(mayBeConfirmedInPanel('advance_service_stage').ok).toBe(true)
     expect(mayBeConfirmedInPanel('crm_update_record').ok).toBe(true)
-    expect(mayBeConfirmedInPanel('crm_create_task').ok).toBe(true)
-    expect(mayBeConfirmedInPanel('sd_advance_stage').ok).toBe(true)
+  })
+
+  it('keeps the INTERNAL team note confirmable — it is not a client send', () => {
+    // The distinction that matters: staff-only notes stay one-click, client-facing sends
+    // do not. Over-blocking here would quietly gut the feature.
+    expect(mayBeConfirmedInPanel('send_team_message').ok).toBe(true)
   })
 })

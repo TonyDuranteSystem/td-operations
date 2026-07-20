@@ -32,6 +32,7 @@
  */
 
 import { NO_APPROVAL_SEND_TOOLS } from '@/lib/ai-agent/tool-risk'
+import { APPROVABLE_TOOL_CONSTRAINTS } from '@/lib/ai-agent/approvable-tools'
 
 /**
  * Per-surface switch. ON by default for the CRM panels — the whole point is that the
@@ -75,6 +76,23 @@ export function panelApprovalsEnabledFor(surface: PanelSurface): boolean {
  * created is a stronger guarantee than one that is refused on the way out.
  */
 export function mayBeConfirmedInPanel(toolName: string): { ok: true } | { ok: false; why: string } {
+  // TWO NAMING SCHEMES REACH THIS GATE, and missing one was a live hole found by the
+  // end-to-end run on 2026-07-20. Actions arrive either as catalog tools (`gmail_send`,
+  // via use_tool) or as agent tools (`send_email`, via propose_action). NO_APPROVAL_SEND_TOOLS
+  // lists ONLY catalog names, so `send_email` — a real client email — sailed through this
+  // gate AND the executor's identical check. Whichever scheme a caller uses, an action
+  // that leaves the building must be refused, so the agent side is judged by its own
+  // authoritative `external` flag rather than by a second hardcoded list that would drift
+  // out of step the same way.
+  if (APPROVABLE_TOOL_CONSTRAINTS[toolName]?.external) {
+    return {
+      ok: false,
+      why:
+        `"${toolName}" leaves TD's systems and cannot be confirmed from a card — a send has to be ` +
+        `aimed at its recipient at the moment it goes, not at the moment it was written. Draft it in ` +
+        `the chat instead and send it on your go; that path checks the recipient live.`,
+    }
+  }
   if (NO_APPROVAL_SEND_TOOLS.has(toolName)) {
     return {
       ok: false,
@@ -125,6 +143,83 @@ export async function loadPendingActionCards(ids: string[]): Promise<PendingActi
   }))
 }
 
+export type ConfirmOutcome =
+  | { ok: true; status: 'executed' | 'discarded' }
+  | { ok: false; code: 'gone' | 'failed'; error: string }
+
+/**
+ * Decide a frozen action: run it, or drop it.
+ *
+ * THIS IS THE WHOLE DECISION, deliberately separated from the HTTP route so it can be
+ * exercised against a real database — including the double-click race, which is the one
+ * behaviour that cannot be proven by reasoning about the code. The route above it does
+ * auth, parses the body, and calls this; everything that decides what happens is here.
+ *
+ * The atomic compare-and-set IS the concurrency guard. Two clicks (or a click racing a
+ * discard) both attempt pending → approved; exactly one matches a row. The loser is told
+ * plainly rather than silently doing nothing, and — critically — never reaches the
+ * executor. A read-then-write here would let a double-click run the action twice, which
+ * on an invoice tool means two invoices.
+ */
+export async function confirmPendingAction(
+  id: string,
+  actor: string,
+  choice: 'confirm' | 'discard' = 'confirm',
+): Promise<ConfirmOutcome> {
+  const { supabaseAdmin } = await import('@/lib/supabase-admin')
+  const nowIso = new Date().toISOString()
+  // decided_by is CHECK char_length <= 100 — a long address would fail the whole update
+  // and lose the decision rather than just the label.
+  const who = actor.slice(0, 100)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+
+  const nextStatus = choice === 'discard' ? 'rejected' : 'approved'
+  const { data: claimed } = await db
+    .from('approval_queue')
+    .update({ status: nextStatus, decided_by: who, decided_at: nowIso, updated_at: nowIso })
+    .eq('id', id)
+    .eq('status', 'pending')
+    .select('id, tool_name, params')
+    .maybeSingle()
+
+  if (!claimed) {
+    return {
+      ok: false,
+      code: 'gone',
+      error: 'That action is no longer waiting — it was already confirmed or discarded.',
+    }
+  }
+  if (choice === 'discard') return { ok: true, status: 'discarded' }
+
+  // Reuses the reviewed executor: its own atomic approved → executing claim, the
+  // params-hash integrity re-check, and the refusal of client-facing sends.
+  const { executeApproval } = await import('@/lib/ai-agent/approval-executor')
+  const result = await executeApproval(id)
+
+  // AUDIT — this path recorded nothing before, so there was no answer to "who told it to
+  // do that". Fire-and-forget by design: a logging failure must never change whether the
+  // action ran, nor report failure for something that already happened.
+  const { logAction } = await import('@/lib/mcp/action-log')
+  logAction({
+    actor: `crm-panel:${who}`,
+    action_type: 'update',
+    table_name: 'approval_queue',
+    record_id: id,
+    summary: `Confirmed in panel: ${claimed.tool_name} → ${result.status}`,
+    details: { tool: claimed.tool_name, params: claimed.params, outcome: result.status },
+  })
+
+  if (result.status === 'executed') return { ok: true, status: 'executed' }
+  // Ran but did not succeed — say why, so the staff member knows whether to retry or do
+  // it by hand rather than being told a bare "failed".
+  return {
+    ok: false,
+    code: 'failed',
+    error: `The action did not complete (${result.reason ?? result.status}).`,
+  }
+}
+
 /**
  * A readable name for a tool, for the card header.
  *
@@ -132,6 +227,11 @@ export async function loadPendingActionCards(ids: string[]): Promise<PendingActi
  * a confirmation is worse than an ugly one, because the label is what gets approved.
  */
 function humanTitle(tool: string): string {
+  // Agent tools already carry a curated label — use it rather than keeping a second list
+  // that says something slightly different about the same action.
+  const constraint = APPROVABLE_TOOL_CONSTRAINTS[tool]
+  if (constraint?.label) return constraint.label
+  // Catalog tools (reached via use_tool) have no such metadata, so these are ours.
   const KNOWN: Record<string, string> = {
     crm_create_task: 'Create a task',
     crm_update_record: 'Update a record',

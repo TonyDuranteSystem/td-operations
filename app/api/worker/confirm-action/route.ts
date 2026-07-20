@@ -36,8 +36,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
-import { supabaseAdmin } from '@/lib/supabase-admin'
-import { logAction } from '@/lib/mcp/action-log'
+import { confirmPendingAction } from '@/lib/ai-agent/panel-approvals'
 
 export const dynamic = 'force-dynamic'
 // Executing a confirmed action runs a real tool — same budget as the worker itself.
@@ -65,77 +64,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'A valid action id is required.' }, { status: 400 })
   }
 
-  // decided_by carries a CHECK char_length <= 100 — a long address would make the whole
-  // update fail, losing the decision rather than the label.
-  const actor = (user.email ?? user.id).slice(0, 100)
-  const nowIso = new Date().toISOString()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabaseAdmin as any
+  // Everything that decides what happens lives in confirmPendingAction, so the whole
+  // decision — including the double-click race — is exercisable against a real database.
+  const outcome = await confirmPendingAction(id, user.email ?? user.id, action)
 
-  if (action === 'discard') {
-    const { data: rows } = await db
-      .from('approval_queue')
-      .update({ status: 'rejected', decided_by: actor, decided_at: nowIso, updated_at: nowIso })
-      .eq('id', id)
-      .eq('status', 'pending')
-      .select('id')
-    if (!rows?.length) {
-      return NextResponse.json(
-        { error: 'That action is no longer waiting — it was already confirmed or discarded.' },
-        { status: 409 },
-      )
-    }
-    return NextResponse.json({ ok: true, status: 'discarded' })
-  }
-
-  // ATOMIC pending → approved. The compare-and-set IS the double-click guard: a second
-  // click matches no row and is told so, rather than quietly running the action again.
-  const { data: approved } = await db
-    .from('approval_queue')
-    .update({ status: 'approved', decided_by: actor, decided_at: nowIso, updated_at: nowIso })
-    .eq('id', id)
-    .eq('status', 'pending')
-    .select('id, tool_name, params')
-    .maybeSingle()
-
-  if (!approved) {
-    return NextResponse.json(
-      { error: 'That action is no longer waiting — it was already confirmed or discarded.' },
-      { status: 409 },
-    )
-  }
-
-  try {
-    // Reuses the reviewed executor: its own atomic claim, the params-hash integrity
-    // re-check, and the refusal of client-facing sends.
-    const { executeApproval } = await import('@/lib/ai-agent/approval-executor')
-    const result = await executeApproval(id)
-
-    // AUDIT — the catalog path recorded nothing before this, so there was no way to ask
-    // afterwards what the assistant did or on whose say-so. logAction is deliberately
-    // fire-and-forget and never throws: a logging failure must not change whether the
-    // action ran, or report failure for something that already happened.
-    logAction({
-      actor: `crm-panel:${actor}`,
-      action_type: 'update',
-      table_name: 'approval_queue',
-      record_id: id,
-      summary: `Confirmed in panel: ${approved.tool_name} → ${result.status}`,
-      details: { tool: approved.tool_name, params: approved.params, outcome: result.status },
-    })
-
-    if (result.status === 'executed') {
-      return NextResponse.json({ ok: true, status: 'executed' })
-    }
-    // Ran but did not succeed — say why rather than reporting a bare failure, so the
-    // staff member knows whether to retry or do it by hand.
-    return NextResponse.json(
-      { error: `The action did not complete (${result.reason ?? result.status}).` },
-      { status: 422 },
-    )
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'The action could not be run.'
-    console.error('[confirm-action] execute failed:', err)
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
+  if (outcome.ok === true) return NextResponse.json({ ok: true, status: outcome.status })
+  // 409 for "someone already decided it" (the double-click / race case), 422 for an
+  // action that genuinely ran and did not succeed — the panel words them differently.
+  return NextResponse.json({ error: outcome.error }, { status: outcome.code === 'gone' ? 409 : 422 })
 }
