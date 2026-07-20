@@ -90,10 +90,16 @@ export function mayBeConfirmedInPanel(
   if (isTaskWrite) {
     return {
       ok: false,
+      // NAME THE LIVE ALTERNATIVE. A refusal that only says "no" sends the assistant
+      // round the same loop: it retried the task tool, was refused again, and then told
+      // the staff member a card was on screen when none existed. Point it straight at the
+      // two tools that DO record something on a client, so the next step is obvious.
       why:
         `tasks are not used any more — nobody reads them, so creating one is work that ` +
-        `disappears. Put the follow-up where it will actually be seen: post it to the team ` +
-        `channel, or say it here in the chat.`,
+        `disappears. To record something on a client, use "conv_log" (a dated entry in the ` +
+        `client's history — the usual choice) or "crm_update_record" on the accounts table ` +
+        `to write the notes field. Propose one of those instead. For a follow-up someone ` +
+        `must action, post it to the team channel.`,
     }
   }
   // TWO NAMING SCHEMES REACH THIS GATE, and missing one was a live hole found by the

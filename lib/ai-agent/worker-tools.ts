@@ -1896,7 +1896,7 @@ export async function proposeAction(
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
   // hashing, so a proposal with 'medium'/'todo' is accepted (→ 'Normal'/'To Do')
   // and the stored params (and params_hash) reflect exactly what will execute.
-  const params = normalizeToolParams(toolName, input.params ?? {})
+  let params = normalizeToolParams(toolName, input.params ?? {})
   const rationale = typeof input.rationale === "string" ? input.rationale : null
   const idempotencyKey = typeof input.idempotency_key === "string" && input.idempotency_key.length > 0
     ? input.idempotency_key
@@ -1941,7 +1941,14 @@ export async function proposeAction(
   // validate against their AGENT_TOOLS schema; bridge tools against the captured
   // MCP zod schema.
   if (isBridgeTool) {
-    const { validateBridgeToolParams } = await import("./mcp-bridge")
+    const { validateBridgeToolParams, normalizeBridgeParams } = await import("./mcp-bridge")
+    // Catalog tools get the same forgiveness agent tools already had: a fixed-choice
+    // value differing only in capitalisation is rewritten to the exact allowed spelling.
+    // Without it the assistant proposed "inbound", was told to write "Inbound", retried,
+    // ran out of turns and asked the staff member to do it by hand — which read, from
+    // the outside, as the assistant simply refusing to act. Done BEFORE validation and
+    // hashing so the values on the card are the values that run.
+    params = normalizeBridgeParams(toolName, params as Record<string, unknown>)
     const v = validateBridgeToolParams(toolName, params as Record<string, unknown>)
     if (!v.ok) return `❌ Invalid params for "${toolName}": ${v.error}`
   } else {
