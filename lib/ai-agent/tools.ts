@@ -366,6 +366,30 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'update_deal_notes',
+    description: 'Append a note to a deal record. Use this to log actions taken on a deal.',
+    parameters: {
+      type: 'object',
+      properties: {
+        deal_id: { type: 'string', description: 'UUID of the deal' },
+        note: { type: 'string', description: 'Note to append (will be timestamped automatically)' },
+      },
+      required: ['deal_id', 'note'],
+    },
+  },
+  {
+    name: 'update_lead_notes',
+    description: 'Append a note to a lead record (the general notes field). Use this to log actions taken on a lead. Do not use for sales-call notes or offer-generation notes — those are separate fields the assistant does not write to.',
+    parameters: {
+      type: 'object',
+      properties: {
+        lead_id: { type: 'string', description: 'UUID of the lead' },
+        note: { type: 'string', description: 'Note to append (will be timestamped automatically)' },
+      },
+      required: ['lead_id', 'note'],
+    },
+  },
+  {
     name: 'run_sql_query',
     description: 'Run a read-only SQL query for complex questions other tools cannot answer. SELECT only. Tables: accounts, contacts, account_contacts, services, payments, tasks, deals, tax_returns, deadlines, leads, portal_messages, offers.',
     parameters: {
@@ -711,6 +735,8 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'gmail_read_thread': return await gmailReadThread(params)
       case 'update_task': return await updateTask(params)
       case 'update_account_notes': return await updateAccountNotes(params)
+      case 'update_deal_notes': return await updateDealNotes(params)
+      case 'update_lead_notes': return await updateLeadNotes(params)
       case 'run_sql_query': return await runSqlQuery(params)
       case 'search_kb': return await searchKb(params)
       case 'get_sop': return await getSop(params)
@@ -1848,6 +1874,38 @@ async function updateAccountNotes(p: any) {
     .eq('id', p.account_id)
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify({ success: true, message: `Note added to account` })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateDealNotes(p: any) {
+  const { data: existing } = await supabaseAdmin.from('deals').select('notes').eq('id', p.deal_id).single()
+  const timestamp = new Date().toISOString().split('T')[0]
+  const existingNotes = existing?.notes || ''
+  const newNotes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.note}` : `${timestamp}: ${p.note}`
+
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+  const { error } = await supabaseAdmin
+    .from('deals')
+    .update({ notes: newNotes })
+    .eq('id', p.deal_id)
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, message: `Note added to deal` })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateLeadNotes(p: any) {
+  const { data: existing } = await supabaseAdmin.from('leads').select('notes').eq('id', p.lead_id).single()
+  const timestamp = new Date().toISOString().split('T')[0]
+  const existingNotes = existing?.notes || ''
+  const newNotes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.note}` : `${timestamp}: ${p.note}`
+
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+  const { error } = await supabaseAdmin
+    .from('leads')
+    .update({ notes: newNotes })
+    .eq('id', p.lead_id)
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, message: `Note added to lead` })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

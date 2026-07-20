@@ -131,6 +131,8 @@ export const LEGACY_AGENT_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   'create_task',
   'update_task',
   'update_account_notes',
+  'update_deal_notes',
+  'update_lead_notes',
   'update_contact',
   'update_service',
   'update_deadline',
