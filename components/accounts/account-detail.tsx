@@ -913,10 +913,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       )}
       {activeTab === 'documents' && (
         <div className="space-y-4">
-          {/* Source-of-truth list of ALL documents linked to the account —
-              includes Storage-backed formation uploads the Drive-only
-              FileManager can't render. */}
-          <AccountDocumentsList documents={documents} />
+          {/* Documents the Drive tree below CANNOT show — Storage-backed
+              formation/fax uploads and other sentinel pointers. It filters
+              rather than listing everything, so a Drive-backed document no
+              longer appears both here and in its folder (Luca, 2026-07-20).
+              Passing the folder id lets it keep Drive-backed rows when
+              FileManager would render only its empty state. */}
+          <AccountDocumentsList
+            documents={documents}
+            accountHasDriveFolder={Boolean(account.drive_folder_id)}
+          />
           <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
         </div>
       )}
