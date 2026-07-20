@@ -24,17 +24,28 @@ export async function createCompanyFolder(accountId: string): Promise<ActionResu
     if (!account.company_name) throw new Error('Account has no company name')
     if (!account.state_of_formation) throw new Error('Account has no state of formation')
 
-    // Get primary contact for folder naming
-    // @ts-expect-error Type instantiation is excessively deep
-    const { data: contacts } = await supabaseAdmin
-      .from('contacts')
-      .select('first_name, last_name')
+    // Primary contact, for naming the Drive folder. Resolved through `account_contacts`:
+    // `contacts` has NO `account_id` column, so filtering on one errored, the error was
+    // discarded with the row set, and the owner name silently came back empty — every
+    // folder was named without it. Third instance of the same defect found on 2026-07-20;
+    // a repo-wide test now blocks the shape.
+    const { data: link } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contact_id')
       .eq('account_id', accountId)
       .limit(1)
+      .maybeSingle()
 
-    const ownerName = contacts?.[0]
-      ? [contacts[0].first_name, contacts[0].last_name].filter(Boolean).join(' ')
-      : undefined
+    let ownerName: string | undefined
+    if (link?.contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('first_name, last_name')
+        .eq('id', link.contact_id)
+        .maybeSingle()
+      const name = [contact?.first_name, contact?.last_name].filter(Boolean).join(' ')
+      ownerName = name || undefined
+    }
 
     const result = await ensureCompanyFolder(
       accountId,
@@ -66,6 +77,10 @@ export async function linkDriveFolder(accountId: string, driveFolderId: string):
     if (!folderContents?.files) throw new Error('Could not access Drive folder — check the folder ID')
 
     // Update account
+    // PRE-EXISTING write, untouched by the contact-lookup fix in this file. Routing it
+    // through lib/operations is a real refactor with its own risk and belongs in its own
+    // change, not smuggled into a bug fix.
+    // eslint-disable-next-line no-restricted-syntax
     const { error } = await supabaseAdmin
       .from('accounts')
       .update({

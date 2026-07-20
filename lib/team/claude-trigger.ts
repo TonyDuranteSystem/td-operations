@@ -213,12 +213,31 @@ export async function processClaudeReply(params: {
   // the rail and every send is refused, rather than falling through to unpinned.
   let emailSendRail: { enableEmailSend?: true; pinnedEmailRecipients?: string[] } = {}
   if (thread?.account_id || thread?.contact_id) {
-    const { data: contactRows } = await supabaseAdmin
-      .from('contacts')
-      .select('email')
-      .or(thread.account_id ? `account_id.eq.${thread.account_id}` : `id.eq.${thread.contact_id}`)
-    const addresses = (contactRows ?? [])
-      .map((c: { email: string | null }) => c.email)
+    // Contacts link to accounts through `account_contacts` — `contacts` has NO
+    // `account_id` column. This filtered on one anyway; PostgREST errored, the error was
+    // discarded with the row set, and an empty address list means "refuse every address",
+    // so email from here was silently dead for every account-scoped thread. Same defect,
+    // same day, as the CRM sidebar. Verified against production 2026-07-20.
+    let contactRows: Array<{ email: string | null }> = []
+    if (thread.account_id) {
+      const { data: links } = await supabaseAdmin
+        .from('account_contacts')
+        .select('contact_id')
+        .eq('account_id', thread.account_id)
+      const contactIds = (links ?? []).map((l: { contact_id: string }) => l.contact_id).filter(Boolean)
+      if (contactIds.length) {
+        const { data: rows } = await supabaseAdmin.from('contacts').select('email').in('id', contactIds)
+        contactRows = rows ?? []
+      }
+    } else {
+      const { data: rows } = await supabaseAdmin
+        .from('contacts')
+        .select('email')
+        .eq('id', thread.contact_id as string)
+      contactRows = rows ?? []
+    }
+    const addresses = contactRows
+      .map((c) => c.email)
       .filter((e): e is string => Boolean(e && e.includes('@')))
     emailSendRail = { enableEmailSend: true, pinnedEmailRecipients: Array.from(new Set(addresses)) }
   }

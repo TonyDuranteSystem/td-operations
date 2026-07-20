@@ -188,20 +188,67 @@ async function buildSidebarSendRails(clientKey: string | null): Promise<{
   // Addresses on file for this client. An empty list is DELIBERATELY still a pin — it
   // means "refuse every address", which is the safe reading. Dropping the rail instead
   // would leave the recipient unpinned, which is the opposite.
-  const { data: contactRows } = await supabaseAdmin
-    .from('contacts')
-    .select('id, email')
-    .or(kind === 'account' ? `account_id.eq.${id}` : `id.eq.${id}`)
+  //
+  // CONTACTS ARE LINKED THROUGH A JOIN TABLE. This block used to filter `contacts` by an
+  // `account_id` column that DOES NOT EXIST — verified against both production and a
+  // local stack on 2026-07-20. PostgREST returned an error, only `data` was destructured,
+  // so the error was discarded and the code read it as "this client has no contacts".
+  // Live consequences, on production, silently, for every client: the address list came
+  // back empty (which the comment above correctly treats as "refuse every address", so
+  // sidebar email was dead), and the scope allow-list held only the account id, so any
+  // action naming one of that client's own contacts was refused as "a DIFFERENT client".
+  // Everywhere else in the codebase resolves this through `account_contacts`; this is the
+  // same shape, deliberately copied rather than reinvented.
+  let contactRows: Array<{ id: string; email: string | null }> = []
+  let contactLookupFailed = false
+  if (kind === 'account') {
+    const { data: links, error: linkErr } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contact_id')
+      .eq('account_id', id)
+    if (linkErr) contactLookupFailed = true
+    const contactIds = (links ?? []).map((l: { contact_id: string }) => l.contact_id).filter(Boolean)
+    if (contactIds.length) {
+      const { data: rows, error: rowsErr } = await supabaseAdmin
+        .from('contacts')
+        .select('id, email')
+        .in('id', contactIds)
+      if (rowsErr) contactLookupFailed = true
+      contactRows = rows ?? []
+    }
+  } else {
+    const { data: rows, error: rowsErr } = await supabaseAdmin
+      .from('contacts')
+      .select('id, email')
+      .eq('id', id)
+    if (rowsErr) contactLookupFailed = true
+    contactRows = rows ?? []
+  }
+
+  // FAIL LOUDLY, NOT SILENTLY. The original bug survived because a broken query and a
+  // client with genuinely no contacts were indistinguishable. They are not the same
+  // thing: one is a defect, the other is normal. The pin still fails closed either way —
+  // an empty address list refuses every address — but now the failure is recorded.
+  if (contactLookupFailed) {
+    const { reportSystemError } = await import('@/lib/system-errors')
+    await reportSystemError({
+      source: 'server',
+      route: '/api/ai-agent',
+      message: `Client contact lookup failed for ${kind} ${id} — send rails and client scope are degraded (email refused, contacts out of scope).`,
+      context: { kind, id },
+    })
+  }
+
   const addresses = Array.from(
     new Set(
-      (contactRows ?? [])
-        .map((c: { email: string | null }) => c.email)
+      contactRows
+        .map((c) => c.email)
         .filter((e): e is string => Boolean(e && e.includes('@'))),
     ),
   )
 
   const { buildClientScope } = await import('@/lib/ai-agent/client-scope')
-  const relatedIds = (contactRows ?? []).map((c: { id: string }) => c.id)
+  const relatedIds = contactRows.map((c) => c.id)
 
   return {
     portal: {
