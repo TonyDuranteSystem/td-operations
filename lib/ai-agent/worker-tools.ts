@@ -50,6 +50,8 @@ import {
   buildAbsenceNudge,
   buildSurfaceRedirectNudge,
   claimsAnotherSurfaceCanAct,
+  buildPhantomFileNudge,
+  claimsFileProduced,
   buildCorrectionNudge,
   looksLikeFailedLookup,
   assertsCannotDo,
@@ -3202,6 +3204,8 @@ export async function runWorkerLoop(
   // One rewrite only — a latch, like the others. If the second answer still redirects,
   // let it through rather than looping: a slightly wrong answer beats no answer.
   let surfaceRedirectLatched = false
+  // One rewrite only, like the others.
+  let phantomFileLatched = false
   // Lookups that actually RETURNED something (not an error). This — not the
   // raw call list — is what counts as proof the worker searched.
   const succeededTools: string[] = []
@@ -3345,6 +3349,23 @@ export async function runWorkerLoop(
           //     suggested the Slack bot anyway. Prompt text has now failed three times
           //     on this class of false claim, so it is caught in the reply instead. A
           //     wrong redirect costs the staff member the trip AND the action.
+          // (d) It said a file is ready or attached, and produced none. This is the
+          //     complaint that started the whole job — Luca told he could download a
+          //     PDF that had never been made — and it returned the moment the tool
+          //     existed: the model believes it can build files itself, never calls the
+          //     tool, and describes the result. Once even describing a Python sandbox
+          //     that does not exist. The trace is the gate: artifacts is OUR record of
+          //     what was actually produced, not something the model can assert.
+          if (!phantomFileLatched && artifacts.length === 0 && claimsFileProduced(reply)) {
+            phantomFileLatched = true
+            console.warn("[worker] claimed a file it never produced — forcing a real one")
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant", content: data.content },
+              { role: "user", content: buildPhantomFileNudge() },
+            ]
+            continue
+          }
           if (!surfaceRedirectLatched && !workerActionsEnabled() && claimsAnotherSurfaceCanAct(reply)) {
             surfaceRedirectLatched = true
             console.warn("[worker] pointed at another surface for a dead action — forcing a rewrite")

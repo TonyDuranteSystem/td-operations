@@ -13,6 +13,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { extractArtifact } from '@/lib/ai-agent/worker-tools'
+import { claimsFileProduced, buildPhantomFileNudge } from '@/lib/ai-agent/answer-guards'
 
 const RESULT = [
   '📄 PDF ready — 18 KB',
@@ -53,5 +54,49 @@ describe('extractArtifact', () => {
   it('is safe on non-string results', () => {
     expect(extractArtifact('pdf_create', null)).toBeNull()
     expect(extractArtifact('pdf_create', { url: 'https://x' })).toBeNull()
+  })
+})
+
+describe('claiming a file that was never made', () => {
+  it('catches the exact phrasings observed in sandbox', () => {
+    for (const reply of [
+      "**IRS_Name_Change.pdf** is attached above and ready to print.",
+      "Here you go — Test_Letter.pdf is attached above.",
+      "Here's the PDF — ready to print and post.",
+      "I've generated the document for you.",
+      "The PDF is ready.",
+    ]) {
+      expect(claimsFileProduced(reply), reply).toBe(true)
+    }
+  })
+
+  it('does not fire on ordinary talk about documents', () => {
+    // Discussing a PDF, or offering to make one, is not claiming to have made one.
+    for (const ok of [
+      'I can produce that as a PDF if you want — say the word.',
+      'The client uploaded a PDF last week; I read it.',
+      'That letter should be printed and posted to the IRS.',
+      'Their W-7 is filed in Drive under Tax.',
+      '',
+    ]) {
+      expect(claimsFileProduced(ok), ok).toBe(false)
+    }
+  })
+})
+
+describe('buildPhantomFileNudge', () => {
+  const nudge = buildPhantomFileNudge()
+
+  it('states plainly that it cannot create files itself', () => {
+    expect(nudge).toMatch(/CANNOT create files yourself/i)
+    expect(nudge).toMatch(/no code execution/i)
+  })
+
+  it('names the one tool that actually works', () => {
+    expect(nudge).toMatch(/pdf_create/)
+  })
+
+  it('gives an honest fallback rather than only a scolding', () => {
+    expect(nudge).toMatch(/give them the text/i)
   })
 })

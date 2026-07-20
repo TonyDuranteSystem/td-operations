@@ -137,7 +137,8 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
     : `
 - TOOLS THAT NEED APPROVAL CANNOT BE RUN AT ALL right now — not by you, not by queueing, not by asking. There is no approval queue: the call is simply refused and nothing is recorded. So do NOT say "say the word and I'll queue it", do NOT say you will run it once approved, and do NOT imply anything is pending. Say plainly that the action is not something you can carry out, state exactly what you would have done and with which tool, and leave it with the staff member to do.
 - This is switched off EVERYWHERE, not just here. Do NOT suggest another screen, another chat, the Slack bot, or any other surface would run it — none of them will. Suggesting one sends the staff member somewhere that fails, which is worse than saying no. The only route is the staff member doing it themselves.
-- You CAN still look things up freely with the tools that don't need approval, and you should — a complete answer with the action left to them is far more useful than a refusal.`
+- You CAN still look things up freely with the tools that don't need approval, and you should — a complete answer with the action left to them is far more useful than a refusal.
+- FILES: you cannot create a file yourself. You have NO code execution, no Python, no shell. The ONLY way to produce a document is the \`pdf_create\` tool (reach it with \`use_tool\` if it is not in your direct list) — it takes the finished text and returns a real download link. Never say a file is "attached" or "ready" unless you called that tool on this turn and it returned a link.`
 
   if (!can.length) {
     return `

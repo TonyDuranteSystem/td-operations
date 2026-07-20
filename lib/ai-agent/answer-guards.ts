@@ -259,6 +259,55 @@ export function buildSurfaceRedirectNudge(): string {
   ].join("\n")
 }
 
+
+/**
+ * Shapes of the worker claiming it produced a file.
+ *
+ * "attached above", "here's the PDF", "X.pdf is ready", "I've generated the document".
+ */
+const FILE_CLAIM_PATTERNS: RegExp[] = [
+  /\battached\s+(?:above|here|to\s+this)\b/i,
+  /\bis\s+attached\b/i,
+  /\bhere'?s\s+(?:the|your)\s+(?:pdf|document|letter|file)\b/i,
+  /\b[\w-]+\.pdf\b[^.]{0,40}\b(?:is\s+)?(?:ready|attached|generated|created)\b/i,
+  /\bI'?ve\s+(?:generated|created|produced|made)\s+(?:the|a|your)\s+(?:pdf|document|letter|file)\b/i,
+  /\b(?:pdf|document|file)\s+is\s+(?:ready|generated|created)\b/i,
+]
+
+/**
+ * True when the reply claims a file exists.
+ *
+ * Paired with the turn's ACTUAL produced files: claiming one when none was produced is
+ * the original bug reported by Luca on 10 July — told he could download a PDF that had
+ * never been created. It came straight back when the tool finally existed: the worker
+ * believed it could build files itself, never called the tool, and replied "attached
+ * above", once even describing a sandboxed Python environment that does not exist.
+ */
+export function claimsFileProduced(reply: string): boolean {
+  const text = (reply ?? "").trim()
+  if (!text) return false
+  return FILE_CLAIM_PATTERNS.some((re) => re.test(text))
+}
+
+/** The nudge for a claimed file that was never made. */
+export function buildPhantomFileNudge(): string {
+  return [
+    "STOP — you just told the staff member a file is ready or attached, and you did not",
+    "create one. Nothing was produced this turn, so there is nothing for them to open.",
+    "This is the exact complaint that led to this tool existing: being promised a",
+    "download that was never made.",
+    "",
+    "You CANNOT create files yourself. You have no code execution, no Python, no shell.",
+    "The ONLY way to produce a document is the `pdf_create` tool (reach it with",
+    "`use_tool` if it is not in your direct list). It takes the finished text and returns",
+    "a real download link.",
+    "",
+    "So: call `pdf_create` now with the full text you drafted, and then answer. If you",
+    "genuinely cannot, say plainly that you cannot produce a file and give them the text",
+    "to copy — never describe a file that does not exist.",
+  ].join("\n")
+}
+
 /** Shapes of a human pushing back on the worker's previous answer. */
 const CORRECTION_PATTERNS: RegExp[] = [
   /\bI\s+do\s*n[o']?t\s+think\b/i,
