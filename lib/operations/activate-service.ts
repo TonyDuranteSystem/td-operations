@@ -641,16 +641,55 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // Guard 1: count SDs already created for this exact offer + pipeline
         // (tied by offer_token in notes — the canonical link).
         // For quantity > 1, we need exactly `quantity` SDs; skip if we already have them all.
-        const { data: existingByOffer } = await supabase
+        const { data: existingByOffer, error: existingByOfferErr } = await supabase
           .from("service_deliveries")
           .select("id")
           .eq("service_type", pipeline)
           .ilike("notes", `%${activation.offer_token}%`)
 
+        // Fail CLOSED (2026-07-20). Discarding `error` turned a transient
+        // PostgREST failure into "nothing exists for this offer" → duplicate
+        // paid services on an activation retry.
+        if (existingByOfferErr) {
+          sdResults.push({
+            pipeline,
+            status: "error",
+            id: `duplicate check failed (${existingByOfferErr.message}) — not created`,
+          })
+          continue
+        }
+
         const existingOfferCount = existingByOffer?.length ?? 0
         if (existingOfferCount >= quantity) {
           sdResults.push({ pipeline, status: "existing", id: existingByOffer![0]?.id })
           continue
+        }
+
+        // ITIN is once-per-person, and this offer-token guard cannot see an
+        // ITIN bought under a DIFFERENT offer (nor one whose notes were written
+        // under an older token shape — the 2026-07-20 Marcell Bogyora bug).
+        // Guard 2 below only covers account-scoped SDs, and ITIN SDs are
+        // contact-scoped by the Phase 1 rule, so it never fires for them.
+        if (pipeline === "ITIN" && contactId) {
+          const { data: liveItin, error: liveItinErr } = await supabase
+            .from("service_deliveries")
+            .select("id")
+            .eq("service_type", "ITIN")
+            .eq("contact_id", contactId)
+            .or("status.is.null,status.neq.cancelled")
+            .limit(1)
+          if (liveItinErr) {
+            sdResults.push({
+              pipeline,
+              status: "error",
+              id: `ITIN duplicate check failed (${liveItinErr.message}) — not created`,
+            })
+            continue
+          }
+          if (liveItin && liveItin.length > 0) {
+            sdResults.push({ pipeline, status: "existing", id: liveItin[0].id })
+            continue
+          }
         }
 
         // Guard 2: same service_type already active on this account via another path.
@@ -767,7 +806,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
         }
       } catch (e) {
-        sdResults.push({ pipeline, status: "error", id: e instanceof Error ? e.message : String(e) })
+        // A unique violation means the DB backstop won a race (e.g.
+        // uq_itin_sd_active_per_contact / uq_formation_sd_active_per_offer) —
+        // the service already exists, which is the outcome we wanted. Report it
+        // as "existing", never as a failed activation.
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg.includes("23505") || /duplicate key value/i.test(msg)) {
+          sdResults.push({ pipeline, status: "existing", id: "already existed (concurrent create)" })
+        } else {
+          sdResults.push({ pipeline, status: "error", id: msg })
+        }
       }
     }
 

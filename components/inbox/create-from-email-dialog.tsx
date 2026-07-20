@@ -108,7 +108,10 @@ export function CreateFromEmailDialog({ type, conversation, onClose }: CreateFro
               threadId: conversation.id.replace('gmail:', ''),
             }),
           })
-          if (!res.ok) throw new Error('Failed to create task')
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}))
+            throw new Error(d.error || 'Could not create the task — please try again.')
+          }
           toast.success('Task created from email')
         } else if (type === 'service') {
           if (!serviceType) { toast.error('Select a service type'); return }
@@ -124,7 +127,12 @@ export function CreateFromEmailDialog({ type, conversation, onClose }: CreateFro
               threadId: conversation.id.replace('gmail:', ''),
             }),
           })
-          if (!res.ok) throw new Error('Failed to create service')
+          if (!res.ok) {
+            // R099 — surface the server's real reason (e.g. "this client
+            // already has an active ITIN"), not a generic failure toast.
+            const d = await res.json().catch(() => ({}))
+            throw new Error(d.error || 'Could not create the service — please try again.')
+          }
           toast.success('Service delivery created from email')
         } else if (type === 'invoice') {
           if (!selectedAccount) { toast.error('Select a client account'); return }
@@ -133,8 +141,10 @@ export function CreateFromEmailDialog({ type, conversation, onClose }: CreateFro
           return
         }
         onClose()
-      } catch {
-        toast.error(`Failed to create ${type}`)
+      } catch (err) {
+        toast.error(
+          err instanceof Error && err.message ? err.message : `Could not create the ${type} — please try again.`,
+        )
       }
     })
   }

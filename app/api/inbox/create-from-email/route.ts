@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Title is required' }, { status: 400 })
       }
 
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; no generic createTask helper exists yet (lib/operations/task.ts only covers workflow tasks + updates). Deferred per dev_task fda76fd3.
       const { data: task, error } = await supabaseAdmin
         .from('tasks')
         .insert({
@@ -69,26 +70,36 @@ export async function POST(req: NextRequest) {
 
       const serviceName = `${serviceType} — ${account?.company_name || 'Unknown'}`
 
-      const { data: sd, error } = await supabaseAdmin
-        .from('service_deliveries')
-        .insert({
-          account_id: accountId,
+      // Route through createSD (2026-07-20) instead of a raw insert. The raw
+      // insert bypassed every architectural rule the operations layer enforces:
+      // it stamped a literal stage 'New' (not a real pipeline stage) and left
+      // contact_id NULL — so an ITIN created here was account-scoped, contrary
+      // to the Phase 1 contact-scoped rule, and therefore INVISIBLE to the
+      // per-person ITIN duplicate guard and to uq_itin_sd_active_per_contact.
+      // createSD resolves the real first stage and the contact from the account.
+      const { createSD } = await import('@/lib/operations/service-delivery')
+      let sd: { id: string; service_name: string }
+      try {
+        const created = await createSD({
           service_type: serviceType,
           service_name: serviceName,
-          pipeline: serviceType,
-          stage: 'New',
-          stage_order: 0,
-          stage_entered_at: new Date().toISOString(),
-          status: 'active',
-          assigned_to: 'Luca',
+          account_id: accountId,
           notes: notes ? `${notes}${threadId ? ` | Gmail thread: ${threadId}` : ''}` : (threadId ? `Gmail thread: ${threadId}` : null),
         })
-        .select('id, service_name')
-        .single()
-
-      if (error) throw new Error(error.message)
+        sd = { id: created.id, service_name: created.service_name }
+      } catch (e) {
+        // Surface the real reason (R099) — e.g. the DB backstop reporting that
+        // this person already has a live ITIN, or an account with no linked
+        // contact for a service that requires one.
+        const msg = e instanceof Error ? e.message : String(e)
+        const friendly = msg.includes('23505') || /duplicate key value/i.test(msg)
+          ? `This client already has an active ${serviceType} service — open it instead of creating a second one.`
+          : msg
+        return NextResponse.json({ error: friendly }, { status: 400 })
+      }
 
       // Create initial task for the service
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; no generic createTask helper exists yet (lib/operations/task.ts only covers workflow tasks + updates). Deferred per dev_task fda76fd3.
       await supabaseAdmin
         .from('tasks')
         .insert({
