@@ -479,6 +479,7 @@ describe("processSlackEvent", () => {
       enableWebSearch: true,
       enableEmailSend: true,
       enableCallReads: true,
+      enableCrmNotes: true,
       enableDocReads: true,
       enableCalendly: true,
       // Client Threads: read available everywhere; tag OFF here (channel is #td-dev,

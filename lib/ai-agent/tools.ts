@@ -390,6 +390,42 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'update_contact_notes',
+    description: 'Append a note to a contact record. Notes-only — does not touch phone, language, citizenship, passport, or Drive fields. Use update_contact for those.',
+    parameters: {
+      type: 'object',
+      properties: {
+        contact_id: { type: 'string', description: 'UUID of the contact' },
+        note: { type: 'string', description: 'Note to append (will be timestamped automatically)' },
+      },
+      required: ['contact_id', 'note'],
+    },
+  },
+  {
+    name: 'update_service_notes',
+    description: 'Append a note to a service record. Notes-only — does not touch status or current_step. Use update_service for those.',
+    parameters: {
+      type: 'object',
+      properties: {
+        service_id: { type: 'string', description: 'UUID of the service' },
+        note: { type: 'string', description: 'Note to append (will be timestamped automatically)' },
+      },
+      required: ['service_id', 'note'],
+    },
+  },
+  {
+    name: 'update_task_notes',
+    description: 'Append a note to a task record. Notes-only — does not touch status, priority, or assignee. Use update_task for those.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'UUID of the task' },
+        note: { type: 'string', description: 'Note to append (will be timestamped automatically)' },
+      },
+      required: ['task_id', 'note'],
+    },
+  },
+  {
     name: 'run_sql_query',
     description: 'Run a read-only SQL query for complex questions other tools cannot answer. SELECT only. Tables: accounts, contacts, account_contacts, services, payments, tasks, deals, tax_returns, deadlines, leads, portal_messages, offers.',
     parameters: {
@@ -737,6 +773,9 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'update_account_notes': return await updateAccountNotes(params)
       case 'update_deal_notes': return await updateDealNotes(params)
       case 'update_lead_notes': return await updateLeadNotes(params)
+      case 'update_contact_notes': return await updateContactNotesOnly(params)
+      case 'update_service_notes': return await updateServiceNotesOnly(params)
+      case 'update_task_notes': return await updateTaskNotesOnly(params)
       case 'run_sql_query': return await runSqlQuery(params)
       case 'search_kb': return await searchKb(params)
       case 'get_sop': return await getSop(params)
@@ -1906,6 +1945,46 @@ async function updateLeadNotes(p: any) {
     .eq('id', p.lead_id)
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify({ success: true, message: `Note added to lead` })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateContactNotesOnly(p: any) {
+  const { data: existing } = await supabaseAdmin.from('contacts').select('notes').eq('id', p.contact_id).single()
+  const timestamp = new Date().toISOString().split('T')[0]
+  const existingNotes = existing?.notes || ''
+  const newNotes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.note}` : `${timestamp}: ${p.note}`
+
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+  const { error } = await supabaseAdmin
+    .from('contacts')
+    .update({ notes: newNotes, updated_at: new Date().toISOString() })
+    .eq('id', p.contact_id)
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, message: `Note added to contact` })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateServiceNotesOnly(p: any) {
+  const { data: existing } = await supabaseAdmin.from('services').select('notes').eq('id', p.service_id).single()
+  const timestamp = new Date().toISOString().split('T')[0]
+  const existingNotes = existing?.notes || ''
+  const newNotes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.note}` : `${timestamp}: ${p.note}`
+
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+  const { error } = await supabaseAdmin
+    .from('services')
+    .update({ notes: newNotes, updated_at: new Date().toISOString() })
+    .eq('id', p.service_id)
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, message: `Note added to service` })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateTaskNotesOnly(p: any) {
+  const { appendTaskNote } = await import('@/lib/operations/task')
+  const result = await appendTaskNote({ id: p.task_id, note: p.note, actor: 'ai-agent' })
+  if (!result.success) return JSON.stringify({ error: result.error })
+  return JSON.stringify({ success: true, message: `Note added to task` })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

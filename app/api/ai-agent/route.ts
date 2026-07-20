@@ -296,6 +296,7 @@ async function runSidebarWorker(args: {
       enableClientThreadRead: true,
       enableThreadRecall: true,
       enableWebSearch: true,
+      enableCrmNotes: true,
       // Full catalog reach. Discovery only — what it may RUN is decided per call by
       // the reviewed allow-list in tool-risk; anything not on it asks first.
       enableFullToolReach: fullReachEnabledFor('dashboard'),

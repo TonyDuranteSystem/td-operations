@@ -1771,6 +1771,29 @@ export async function findClientThreadsForWorker(input: {
 export const MEMORY_SAVE_TOOL: ToolDef = AGENT_TOOLS.find((t) => t.name === "memory_save")!
 
 /**
+ * CRM note tools (2026-07-20, dev job 85bd7d37, Antonio: "add this feature for
+ * the worker to write notes in the CRM" — the chat worker, not just the
+ * dashboard panel). Six narrow, notes-only writes — each ONLY appends a
+ * timestamped line to one table's `notes` column and touches nothing else
+ * (status, assignee, passport_on_file, etc. all stay off-limits; use the
+ * full update_* AGENT_TOOLS for those, which the worker still never gets).
+ * Reuses the exact tools.ts implementations the dashboard assistant already
+ * runs, so the shape (append+timestamp, never overwrite) can't drift between
+ * the two surfaces. Kept OUT of WORKER_READ_ONLY_TOOL_NAMES (they are writes)
+ * and gated behind CallWorkerOptions.enableCrmNotes — set on every surface
+ * except the Hermes/Telegram research worker (R108: that path stays
+ * read-only, full stop, no exceptions for account-note writes either).
+ */
+export const CRM_NOTE_TOOLS: ToolDef[] = [
+  "update_account_notes",
+  "update_deal_notes",
+  "update_lead_notes",
+  "update_contact_notes",
+  "update_service_notes",
+  "update_task_notes",
+].map((name) => AGENT_TOOLS.find((t) => t.name === name)!)
+
+/**
  * Tools handed to sonnet at request time: the read-only research subset PLUS the
  * read-only codebase tools (so the worker can trace into source) PLUS memory_save
  * (knowledge-only write). memory_recall arrives via the read-only subset.
@@ -2414,6 +2437,16 @@ export async function executeWorkerTool(
     if (name === "get_call") return getCallForWorker(params)
     return searchCallsForWorker(params)
   }
+  // CRM note-writing — gated via enableCrmNotes at the tool-list level. Executor-gate
+  // too (defense-in-depth, R108): never let the Hermes research worker write a note
+  // even if a name leaks. Each is notes-only; delegated to the shared tools.ts
+  // implementation the dashboard assistant already runs (CRM_NOTE_TOOLS names it).
+  if (CRM_NOTE_TOOLS.some((t) => t.name === name)) {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (CRM note-writing not enabled).`
+    }
+    return executeTool(name, params)
+  }
   // Calendly reads — Slack-only (gated via enableCalendly at the tool-list level).
   // Executor-gate too (defense-in-depth, R108): never let the Hermes research worker
   // read Antonio's calendar even if a name leaks. All read-only.
@@ -2736,6 +2769,16 @@ export interface CallWorkerOptions {
    * Slack-only so the Hermes/Telegram research worker never gets call transcripts (R108).
    */
   enableCallReads?: boolean
+  /**
+   * Expose the CRM note-writing tools (update_account_notes / update_deal_notes /
+   * update_lead_notes / update_contact_notes / update_service_notes /
+   * update_task_notes) for this call. Each ONLY appends a timestamped note to
+   * that table's notes column — no status/field changes reach the worker this
+   * way. Set on every worker surface (Slack, dashboard sidebar, Inbox/Portal
+   * Chats) EXCEPT the Hermes/Telegram research path, which never sets this
+   * (R108 — that worker stays pure investigate-and-report).
+   */
+  enableCrmNotes?: boolean
   /**
    * Expose the Slack-only READ-ONLY Calendly tools (cal_list_bookings /
    * cal_get_event_details / cal_get_availability) for this call. Set by the Slack
@@ -3693,6 +3736,16 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // availableNames (defense-in-depth).
   if (opts.enableCallReads) {
     for (const t of [LIST_CALLS_TOOL, GET_CALL_TOOL, SEARCH_CALLS_TOOL]) {
+      if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
+    }
+  }
+
+  // Append the CRM note-writing tools. Gated on enableCrmNotes so they NEVER
+  // reach the Hermes research worker (R108) and never double-add. Each is
+  // notes-only (see CRM_NOTE_TOOLS); the executor also re-checks availableNames
+  // (defense-in-depth) before dispatching any of them.
+  if (opts.enableCrmNotes) {
+    for (const t of CRM_NOTE_TOOLS) {
       if (!tools.some((x) => x.name === t.name)) tools = [...tools, t]
     }
   }

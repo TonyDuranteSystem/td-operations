@@ -551,6 +551,7 @@ export async function POST(req: NextRequest) {
       enableClientThreadRead: true,
       enableThreadRecall: true,
       enableWebSearch: true, // live only if WORKER_WEB_SEARCH_ENABLED
+      enableCrmNotes: true,
       // Full catalog reach. Discovery only — what it may RUN is decided per call by
       // the reviewed allow-list in tool-risk; anything not on it asks first. Portal
       // Chats is the one surface that is client-pinned AND reads client-authored

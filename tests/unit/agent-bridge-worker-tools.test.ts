@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import {
   WORKER_READ_ONLY_TOOL_NAMES,
   WORKER_TOOLS,
+  CRM_NOTE_TOOLS,
   executeWorkerTool,
   resolveWorkerApiKey,
 } from "@/lib/ai-agent/worker-tools"
@@ -102,6 +103,25 @@ describe("Hermes ↔ Claude bridge — worker tool allow-list", () => {
     // above still governs that set, and propose_action is wired separately.
     expect(WORKER_READ_ONLY_TOOL_NAMES.has("propose_action")).toBe(false)
   })
+
+  it("CRM note tools are NOT in the base read-only set or base WORKER_TOOLS (Hermes worker never gets them — R108)", () => {
+    // Notes-only writes reach ONLY surfaces that set enableCrmNotes (Slack, dashboard,
+    // Inbox/Portal Chats) via the call-time tool-list gate. The Hermes/Telegram research
+    // worker never sets that option, so it must never see these in its base tool set.
+    const noteNames = CRM_NOTE_TOOLS.map((t) => t.name)
+    expect(noteNames).toEqual([
+      "update_account_notes",
+      "update_deal_notes",
+      "update_lead_notes",
+      "update_contact_notes",
+      "update_service_notes",
+      "update_task_notes",
+    ])
+    for (const name of noteNames) {
+      expect(WORKER_READ_ONLY_TOOL_NAMES.has(name)).toBe(false)
+      expect(WORKER_TOOLS.some((t) => t.name === name)).toBe(false)
+    }
+  })
 })
 
 describe("Hermes ↔ Claude bridge — executeWorkerTool guard", () => {
@@ -124,6 +144,22 @@ describe("Hermes ↔ Claude bridge — executeWorkerTool guard", () => {
     const result = await executeWorkerTool("recall_thread", {}, new Set<string>())
     expect(result).toContain("not permitted")
     expect(result).toContain("recall_thread")
+  })
+
+  it("rejects update_account_notes for the Hermes worker (not in availableNames — R108)", async () => {
+    // Same defense-in-depth shape as send_email/recall_thread: even if the model
+    // names a CRM note tool, the executor refuses unless this call's availableNames
+    // explicitly offered it (which only happens when enableCrmNotes was set).
+    const result = await executeWorkerTool("update_account_notes", { account_id: "a", note: "x" }, new Set<string>())
+    expect(result).toContain("not permitted")
+    expect(result).toContain("update_account_notes")
+  })
+
+  it("rejects every CRM note tool with no availableNames at all (default-deny)", async () => {
+    for (const name of CRM_NOTE_TOOLS.map((t) => t.name)) {
+      const result = await executeWorkerTool(name, { note: "x" })
+      expect(result, `${name} should be refused with no availableNames`).toContain("not permitted")
+    }
   })
 
   it("recall_thread with no attached thread id reports nothing to recall (no DB hit)", async () => {

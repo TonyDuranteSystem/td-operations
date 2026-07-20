@@ -2063,6 +2063,9 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
     enableEmailSend: true,
     // Read Circleback calls in full (transcript/notes/action items) — Slack-only.
     enableCallReads: true,
+    // Append notes to accounts/contacts/deals/leads/services/tasks — notes-only,
+    // never touches any other field. Every worker surface except Hermes gets this.
+    enableCrmNotes: true,
     // Read internal knowledge sources Claude Code can read — sysdocs (incl.
     // session-context), SOPs by topic, Drive file text — Slack-only.
     enableDocReads: true,
@@ -2206,6 +2209,7 @@ export async function processSlackEvent(row: SlackEventRow): Promise<string> {
           enableWebSearch: true,
           enableEmailSend: true,
           enableCallReads: true,
+          enableCrmNotes: true,
           enableDocReads: true,
           enableCalendly: true,
           enableClientThreadRead: true,

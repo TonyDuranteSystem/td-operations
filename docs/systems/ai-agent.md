@@ -33,7 +33,7 @@ A built-in AI chat assistant **inside the CRM dashboard** for staff — it can s
 ## The agent's tool set (`lib/ai-agent/tools.ts`)
 ~38 tools, each a schema + execute function over real Supabase tables:
 - **Read:** `search_accounts/contacts/leads/deals/payments/services/tasks/tax_returns/deadlines/portal_messages/kb`, `get_account_detail`, `get_dashboard_stats`, `get_sop`, `run_sql_query`, `portal_chat_inbox`, `portal_chat_read` (full portal thread / inbox with unread counts).
-- **Write/act:** `create_task`, `update_task`, `update_contact`, `update_account_notes`, `update_deal_notes`, `update_lead_notes`, `update_service`, `advance_service_stage`, `send_email`, `update_deadline`, `send_team_message` (internal staff-only note — never client-visible).
+- **Write/act:** `create_task`, `update_task`, `update_contact`, `update_service`, `advance_service_stage`, `send_email`, `update_deadline`, `send_team_message` (internal staff-only note — never client-visible). **Notes-only, append-and-timestamp (never touches other fields):** `update_account_notes`, `update_deal_notes`, `update_lead_notes`, `update_contact_notes`, `update_service_notes`, `update_task_notes`.
 - **Gmail/Drive:** `gmail_search/read/read_thread/get_attachments`, `drive_search/list_folder/move/upload_file`, `preview_attachment`.
 - **Conversation/memory:** `log_conversation`, `save_memory`, `recall_memories` — the agent has **persistent memory** (the "Antonio Brain" — see sysdoc `antonio-brain-architecture`).
 
