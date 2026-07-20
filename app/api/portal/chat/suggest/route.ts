@@ -11,6 +11,13 @@ import {
 import type { WorkerImageBlock } from '@/lib/ai-agent/worker-tools'
 import { loadRelevantTemplates, formatTemplatesForPrompt } from '@/lib/ai-agent/templates'
 import { NextRequest, NextResponse } from 'next/server'
+import { detectCrossBorderSignal, runCrossBorderChecks } from '@/lib/ai-agent/cross-border-check'
+
+// This route can now fire up to 3 AI calls in parallel (the draft + up to 2
+// cross-border advisory lenses when the gate fires). Match the timeout every
+// other AI-heavy route in this codebase uses — the route previously had none,
+// which is a real gap even for the single-call path (Council finding, 2026-07-20).
+export const maxDuration = 300
 
 /**
  * POST /api/portal/chat/suggest
@@ -129,6 +136,15 @@ export async function POST(request: NextRequest) {
     const { data: conversation } = await conversationQuery
     const conversationHistory = (conversation ?? []).reverse()
 
+    // Cross-border gate (2026-07-20, dev job 09cc3aec): a free keyword check on
+    // the last few CLIENT messages (not just the newest one — a client can raise
+    // a foreign-tax/visa topic and then just write "ok thanks"). No match → this
+    // route behaves exactly as before.
+    const recentClientMessages = conversationHistory
+      .filter((m) => m.sender_type !== 'admin')
+      .map((m) => m.message || '')
+    const crossBorderGateFired = detectCrossBorderSignal(recentClientMessages)
+
     // 6. Build the context
     const clientContext = [
       `Company: ${account?.company_name || contactInfo?.full_name || 'Unknown'}`,
@@ -197,17 +213,35 @@ export async function POST(request: NextRequest) {
 
     const userMessage = `CLIENT ACCOUNT CONTEXT:\n${clientContext}\n\nCONVERSATION:\n${conversationText}${lastMessageFiles}\n\nThe client just sent the last message. Write Antonio's reply:`
 
-    const { reply } = await callWorkerWithAttachments(userMessage, {
-      systemPromptOverride,
-      // Lets the worker open an attachment from EARLIER in the thread by its link.
-      enableDocReads: true,
-      // Was 4. Reading an attachment costs a step; a draft that has to look at a
-      // file was hitting the ceiling before it got to write anything.
-      maxIterations: 6,
-      ...(media.imageBlocks.length ? { images: media.imageBlocks } : {}),
-    })
+    // Cross-border advisory lenses run IN PARALLEL with the main draft (never
+    // after it — Antonio: draft and notes should appear together). They never
+    // block or degrade the draft: runCrossBorderChecks never throws, and a
+    // failed lens comes back with status "error" instead of disappearing
+    // silently (Senior Engineer finding, 2026-07-20 — a silently-always-failing
+    // check must still be visible, not indistinguishable from "gate didn't fire").
+    const [{ reply }, crossBorderNotes] = await Promise.all([
+      callWorkerWithAttachments(userMessage, {
+        systemPromptOverride,
+        // Lets the worker open an attachment from EARLIER in the thread by its link.
+        enableDocReads: true,
+        // Was 4. Reading an attachment costs a step; a draft that has to look at a
+        // file was hitting the ceiling before it got to write anything.
+        maxIterations: 6,
+        ...(media.imageBlocks.length ? { images: media.imageBlocks } : {}),
+      }),
+      crossBorderGateFired ? runCrossBorderChecks(userMessage) : Promise.resolve([]),
+    ])
 
-    return NextResponse.json({ suggestion: reply, provider: 'anthropic' })
+    // Only surface lenses that actually found something to flag, or that
+    // errored (visible failure, per the finding above) — a clean "NONE" from a
+    // lens is not worth showing staff.
+    const visibleCrossBorderNotes = crossBorderNotes.filter((n) => n.status === 'error' || n.text)
+
+    return NextResponse.json({
+      suggestion: reply,
+      provider: 'anthropic',
+      ...(visibleCrossBorderNotes.length ? { crossBorderNotes: visibleCrossBorderNotes } : {}),
+    })
   } catch (err: unknown) {
     console.error('[suggest] Error:', err)
     return NextResponse.json({ error: 'Failed to generate suggestion' }, { status: 500 })

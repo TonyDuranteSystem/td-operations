@@ -218,6 +218,10 @@ export default function PortalChatsPage() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
+  // Cross-border advisory notes (dev job 09cc3aec) — INTERNAL ONLY, never
+  // auto-inserted into replyText. Arrives together with aiSuggestion (same
+  // response), never separately, per Antonio's "wait for both" decision.
+  const [crossBorderNotes, setCrossBorderNotes] = useState<{ lens: string; label: string; status: string; text: string }[]>([])
   const [polishing, setPolishing] = useState(false)
   const [chatSearch, setChatSearch] = useState('')
   const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string } | null>(null)
@@ -1052,6 +1056,7 @@ export default function PortalChatsPage() {
   useEffect(() => {
     if (!selectedAccountId && !selectedContactId) return
     setAiSuggestion('')
+    setCrossBorderNotes([])
     setReplyToMsg(null)
     const readBody = selectedAccountId
       ? { account_id: selectedAccountId, topic: null }
@@ -1086,6 +1091,7 @@ export default function PortalChatsPage() {
     if ((!selectedAccountId && !selectedContactId) || aiLoading) return
     setAiLoading(true)
     setAiSuggestion('')
+    setCrossBorderNotes([])
     // Pass BOTH IDs when available so the route can union account- and contact-
     // scoped messages (same resolution the send mutation uses). Some messages are
     // stored under account_id, some under contact_id only — sending one misses half.
@@ -1102,6 +1108,7 @@ export default function PortalChatsPage() {
       .then(r => r.json())
       .then(data => {
         if (data.suggestion) setAiSuggestion(data.suggestion)
+        setCrossBorderNotes(Array.isArray(data.crossBorderNotes) ? data.crossBorderNotes : [])
       })
       .catch(() => {})
       .finally(() => setAiLoading(false))
@@ -3418,7 +3425,7 @@ export default function PortalChatsPage() {
                   </div>
                   {aiSuggestion && (
                     <button
-                      onClick={() => setAiSuggestion('')}
+                      onClick={() => { setAiSuggestion(''); setCrossBorderNotes([]) }}
                       className="p-0.5 rounded hover:bg-violet-100 text-violet-400"
                       aria-label="Dismiss suggestion"
                     >
@@ -3436,11 +3443,32 @@ export default function PortalChatsPage() {
                   ) : aiSuggestion ? (
                     <>
                       <p className="text-sm text-zinc-700 whitespace-pre-wrap mb-2">{aiSuggestion}</p>
+                      {/* Cross-border advisory notes (dev job 09cc3aec) — visibly
+                          marked internal-only so staff never mistake this for
+                          client-ready text, even if copy-pasted out of context. */}
+                      {crossBorderNotes.length > 0 && (
+                        <div className="mb-2 rounded-lg border-2 border-amber-400 bg-amber-50 p-2.5">
+                          <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-1.5">
+                            ⚠ Internal only — verify with a local professional before saying this to the client
+                          </p>
+                          {crossBorderNotes.map((note) => (
+                            <div key={note.lens} className="mb-1.5 last:mb-0">
+                              <p className="text-[11px] font-semibold text-amber-700">{note.label}</p>
+                              {note.status === 'error' ? (
+                                <p className="text-xs text-amber-600 italic">Check unavailable — try again.</p>
+                              ) : (
+                                <p className="text-xs text-amber-900 whitespace-pre-wrap">{note.text}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex gap-2 flex-wrap pb-1">
                         <button
                           onClick={() => {
                             setReplyText(aiSuggestion)
                             setAiSuggestion('')
+                            setCrossBorderNotes([])
                             inputRef.current?.focus()
                           }}
                           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
@@ -3452,6 +3480,7 @@ export default function PortalChatsPage() {
                           onClick={() => {
                             setReplyText(aiSuggestion)
                             setAiSuggestion('')
+                            setCrossBorderNotes([])
                             inputRef.current?.focus()
                           }}
                           className="px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors"

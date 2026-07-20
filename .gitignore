@@ -58,3 +58,4 @@ test-results/
 
 # WhatsApp importer output (contains client conversation data — never commit)
 import-report.json
+.env*

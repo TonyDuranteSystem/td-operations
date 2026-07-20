@@ -61,6 +61,7 @@ Match on meaning, not exact keywords — the phrases are cues, not a whitelist. 
 | test coverage, missing unit tests, e2e, regression risk, "is this proven?" | QA-Tester |
 | hard-to-find bugs, edge cases, race conditions, boundary/off-by-one, failure modes, "what could break in production" | (Bug-Hunter is core — already hunting on every task); add QA-Tester for high-stakes coverage/regression |
 | external / third-party integrations (Tesla, banking APIs, other vendor APIs) | Security, Performance-Optimizer (and flag a dedicated integration specialist if the work is deep) |
+| cross-border tax, foreign-country tax exposure, VAT/permanent establishment abroad, foreign tax residency, client relocation, dividends + moving countries, visa status | Foreign-Tax-Treaty-Reviewer, Immigration-Visa-Reviewer (and CPA-IRS if the US side is also touched) |
 
 If the task's domain is NOT covered by any specialist above, that is a **gap** — see "No good match → propose an expert BEFORE final advice".
 

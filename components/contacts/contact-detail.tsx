@@ -1660,6 +1660,9 @@ function ChatTab({
   const [notifOpen, setNotifOpen] = useState(false)
   const [polishing, setPolishing] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
+  // Cross-border advisory notes (dev job 09cc3aec) — INTERNAL ONLY, never
+  // auto-inserted into draft. Same contract as the Portal Chats page.
+  const [crossBorderNotes, setCrossBorderNotes] = useState<{ lens: string; label: string; status: string; text: string }[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -1719,6 +1722,7 @@ function ChatTab({
     const filesToSend = pendingFiles
     const msg = draft.trim()
     setDraft('')
+    setCrossBorderNotes([])
     setPendingFiles([])
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     try {
@@ -1777,6 +1781,7 @@ function ChatTab({
   const handleSuggest = async () => {
     if (suggesting) return
     setSuggesting(true)
+    setCrossBorderNotes([])
     try {
       // Build context from last few messages
       const recentMsgs = messages.slice(-5).map(m => ({
@@ -1791,6 +1796,7 @@ function ChatTab({
       if (!res.ok) throw new Error('Suggest failed')
       const data = await res.json()
       if (data.suggestion) setDraft(data.suggestion)
+      setCrossBorderNotes(Array.isArray(data.crossBorderNotes) ? data.crossBorderNotes : [])
     } catch {
       toast.error('AI suggest failed')
     } finally {
@@ -1966,6 +1972,26 @@ function ChatTab({
                 >
                   <X className="h-3 w-3" />
                 </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Cross-border advisory notes (dev job 09cc3aec) — INTERNAL ONLY,
+            visibly marked so staff never mistake this for client-ready text. */}
+        {crossBorderNotes.length > 0 && (
+          <div className="mx-3 mb-2 rounded-lg border-2 border-amber-400 bg-amber-50 p-2.5">
+            <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wide mb-1.5">
+              ⚠ Internal only — verify with a local professional before saying this to the client
+            </p>
+            {crossBorderNotes.map((note) => (
+              <div key={note.lens} className="mb-1.5 last:mb-0">
+                <p className="text-[11px] font-semibold text-amber-700">{note.label}</p>
+                {note.status === 'error' ? (
+                  <p className="text-xs text-amber-600 italic">Check unavailable — try again.</p>
+                ) : (
+                  <p className="text-xs text-amber-900 whitespace-pre-wrap">{note.text}</p>
+                )}
               </div>
             ))}
           </div>
