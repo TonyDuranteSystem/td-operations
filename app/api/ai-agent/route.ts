@@ -335,7 +335,7 @@ async function runSidebarWorker(args: {
 
   try {
     const { callWorkerWithAttachments } = await import('@/lib/ai-agent/attachment-reader')
-    const { reply } = await callWorkerWithAttachments(userBody, {
+    const { reply, artifacts } = await callWorkerWithAttachments(userBody, {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       // The capability statement is GENERATED from the very rails passed below, so what
@@ -381,7 +381,10 @@ async function runSidebarWorker(args: {
       ...(clientKey ? { clientKey } : {}),
     })
     if (rowId) await db.from('agent_messages').update({ reply, status: 'done' }).eq('id', rowId)
-    return NextResponse.json({ content: reply, provider: 'worker', tools_used: [] })
+    // Files the worker produced go back as structured data, NOT left to the reply to
+    // mention. The first live run generated the PDF and then dropped the link from its
+    // own answer — the panel renders the download regardless of what it says.
+    return NextResponse.json({ content: reply, provider: 'worker', tools_used: [], artifacts: artifacts ?? [] })
   } catch (err) {
     if (rowId) {
       await db

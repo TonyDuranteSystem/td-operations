@@ -2566,6 +2566,11 @@ export interface WorkerResponse {
    * send was attempted. Never sourced from the model's reply text.
    */
   pendingOffThreadRecipient?: string | null
+  /**
+   * Files the worker produced this turn. Rendered by the panel as real download
+   * controls — never left to the reply text to mention. See WorkerArtifact.
+   */
+  artifacts?: WorkerArtifact[]
 }
 
 /**
@@ -2959,6 +2964,37 @@ export function buildWorkerSendContext(
   }
 }
 
+/**
+ * A file the worker produced for the staff member this turn.
+ *
+ * Surfaced by the panel as a real download control. The model is not trusted to relay
+ * it: on the first live run of pdf_create the worker generated the document correctly
+ * and then replied "Here's the PDF" with the link dropped entirely — the same failure
+ * Luca reported on 10 July, reproduced by the very feature built to fix it.
+ */
+export interface WorkerArtifact {
+  kind: "pdf"
+  /** Time-limited signed link. Expires; never a permanent public URL. */
+  url: string
+  /** What to call it in the UI. */
+  label: string
+}
+
+/**
+ * Pull a produced file out of a TOOL RESULT — our own text, not the model's.
+ *
+ * Deliberately strict: it reads only results from tools known to produce a file, and
+ * only the exact line those tools emit. A loose "find any URL" would happily surface a
+ * link that came from a client's email.
+ */
+export function extractArtifact(toolName: string, result: unknown): WorkerArtifact | null {
+  if (toolName !== "pdf_create" && toolName !== "use_tool") return null
+  const text = typeof result === "string" ? result : ""
+  const m = text.match(/^Download:\s+(https:\/\/\S+)$/m)
+  if (!m) return null
+  return { kind: "pdf", url: m[1], label: "Download PDF" }
+}
+
 /** First non-empty line of the request body, capped — used as the thread title. */
 export function deriveThreadTitle(body: string): string {
   const firstLine = (body ?? "")
@@ -3137,6 +3173,15 @@ export async function runWorkerLoop(
 ): Promise<{ reply: string; toolsUsed: string[]; reachedMaxLoops: boolean
   /** Walls worth a #td-worker-bug thread (only code can fix these). */
   wallsHit?: Array<"absence_without_looking" | "cannot_do">
+  /**
+   * Files the worker PRODUCED this turn, captured from the tool result server-side.
+   *
+   * Never parsed out of the model's prose. On the first real run of pdf_create the
+   * worker built the document correctly and then wrote "Here's the PDF" with the link
+   * silently dropped — which is Luca's original complaint reproduced exactly. The panel
+   * renders these itself, so the download exists whatever the reply happens to say.
+   */
+  artifacts?: WorkerArtifact[]
   /** Lookups that actually returned — shown in the thread as 'already tried'. */
   succeededTools?: string[] }> {
   // Dedicated-key override (Slack worker) with fallback to the shared key. Covers
@@ -3164,6 +3209,7 @@ export async function runWorkerLoop(
   // fix. NOT ordinary corrections: a correction that lands is the system working
   // (Antonio 2026-07-18: "it's a part of the learning process").
   const wallsHit: Array<"absence_without_looking" | "cannot_do"> = []
+  const artifacts: WorkerArtifact[] = []
   // The staff member's own words this turn, used to detect a push-back. Derived
   // once from the user content (which may be a string or a block array).
   const staffTurnText =
@@ -3318,7 +3364,7 @@ export async function runWorkerLoop(
       if (reply) {
         // A flat "I can't do this" is a capability gap — no correction can teach it.
         if (assertsCannotDo(reply) && !wallsHit.includes("cannot_do")) wallsHit.push("cannot_do")
-        return { reply, toolsUsed, reachedMaxLoops: false, wallsHit, succeededTools }
+        return { reply, toolsUsed, reachedMaxLoops: false, wallsHit, succeededTools, artifacts }
       }
       if (toolUseBlocks.length === 0) {
         return { reply: "(no response generated)", toolsUsed, reachedMaxLoops: false }
@@ -3345,6 +3391,10 @@ export async function runWorkerLoop(
       if (!looksLikeFailedLookup(result) && !looksLikeIncompleteRead(result)) {
         succeededTools.push(toolBlock.name)
       }
+      // A produced file is captured HERE, from our own tool output, not from whatever
+      // the model later writes about it.
+      const artifact = extractArtifact(toolBlock.name, result)
+      if (artifact) artifacts.push(artifact)
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolBlock.id,
@@ -3775,5 +3825,6 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     reply: result.reply,
     toolsUsed: result.toolsUsed,
     pendingOffThreadRecipient: capturedOffThreadAttempts[0] ?? null,
+    ...(result.artifacts?.length ? { artifacts: result.artifacts } : {}),
   }
 }

@@ -14,6 +14,15 @@ import ReactMarkdown from 'react-markdown'
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  /**
+   * Files the assistant produced this turn, sent by the server as structured data.
+   *
+   * Rendered as a real button rather than relying on the reply to include the link:
+   * on its first live run the assistant built the PDF correctly and then wrote
+   * "Here's the PDF" with the link missing — the same thing Luca reported on 10 July,
+   * reproduced by the feature meant to fix it.
+   */
+  artifacts?: { kind: string; url: string; label: string }[]
 }
 
 interface AttachedFile {
@@ -181,7 +190,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         ? ' _(fallback engine — lookups only, no sending)_'
         : ''
       const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
-      setMessages(prev => [...prev, { role: 'assistant', content: (data.content || 'No response.') + engineNote + toolInfo }])
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: (data.content || 'No response.') + engineNote + toolInfo,
+        artifacts: Array.isArray(data.artifacts) ? data.artifacts : undefined,
+      }])
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
       setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }])
@@ -380,6 +393,24 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 ) : (
                   <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                 )}
+                {/* Produced files, rendered from server data — present whatever the
+                    reply text happens to say about them. */}
+                {msg.artifacts?.length ? (
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {msg.artifacts.map((a, ai) => (
+                      <a
+                        key={ai}
+                        href={a.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 transition-colors"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        {a.label}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
           ))}
