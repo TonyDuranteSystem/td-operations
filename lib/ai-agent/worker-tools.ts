@@ -52,6 +52,8 @@ import {
   claimsAnotherSurfaceCanAct,
   buildPhantomFileNudge,
   claimsFileProduced,
+  promisesInsteadOfProposing,
+  buildProposeNowNudge,
   buildCorrectionNudge,
   looksLikeFailedLookup,
   assertsCannotDo,
@@ -2498,14 +2500,16 @@ export async function executeWorkerTool(
   // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
   if (name === "find_tool") {
     if (!availableNames?.has("find_tool")) return `❌ Tool "find_tool" is not permitted in this worker call (full tool reach not enabled).`
-    const q = (typeof params.query === "string" ? params.query : "").toLowerCase().trim()
+    const q = (typeof params.query === "string" ? params.query : "").trim()
     if (!q) return "find_tool needs a query."
     const { listBridgeTools } = await import("./mcp-bridge")
-    const hits = listBridgeTools()
-      .filter((t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
-      .slice(0, 15)
-    if (!hits.length) return `No tools match "${q}".`
-    return hits.map((t) => `• ${t.name} — ${t.description.split(/\. |\n/)[0]}`).join("\n")
+    // Ranked word overlap, NOT a verbatim substring of the whole query. The old check
+    // asked whether the entire phrase appeared inside a name or description, so a single
+    // word worked and a sentence never did — "add note to account", "log conversation"
+    // and every other natural phrasing returned nothing, and the assistant concluded it
+    // had no way to do the job. See tool-search.ts for the measured failures.
+    const { formatToolSearch } = await import("./tool-search")
+    return formatToolSearch(listBridgeTools(), q)
   }
   if (name === "use_tool") {
     if (!availableNames?.has("use_tool")) return `❌ Tool "use_tool" is not permitted in this worker call (full tool reach not enabled).`
@@ -3294,6 +3298,8 @@ export async function runWorkerLoop(
   let surfaceRedirectLatched = false
   // One rewrite only, like the others.
   let phantomFileLatched = false
+  // Fires at most once per turn — a nudge loop would burn the iteration budget.
+  let proposeNudgeLatched = false
   // Lookups that actually RETURNED something (not an error). This — not the
   // raw call list — is what counts as proof the worker searched.
   const succeededTools: string[] = []
@@ -3452,6 +3458,28 @@ export async function runWorkerLoop(
               ...currentMessages,
               { role: "assistant", content: data.content },
               { role: "user", content: buildPhantomFileNudge() },
+            ]
+            continue
+          }
+          // (e) It ASKED for permission, or promised to propose, and proposed nothing —
+          //     on a surface that can draw a confirmation card. The staff member already
+          //     asked once; bouncing it back is the by-hand loop the card exists to
+          //     remove. Measured 1-of-4 on real requests with the prompt alone, and
+          //     strengthening the prompt made it talk ABOUT proposing instead. Same
+          //     trace-gated shape as (d): pendingActions is OUR record of what was really
+          //     frozen. Only fires where a card can actually be rendered.
+          if (
+            !proposeNudgeLatched &&
+            sendContext?.panelSurface &&
+            pendingActions.length === 0 &&
+            promisesInsteadOfProposing(reply)
+          ) {
+            proposeNudgeLatched = true
+            console.warn("[worker] asked instead of proposing — forcing a real proposal")
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant", content: data.content },
+              { role: "user", content: buildProposeNowNudge() },
             ]
             continue
           }

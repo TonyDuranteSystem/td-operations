@@ -369,3 +369,70 @@ export function buildCorrectionNudge(): string {
     "If you cannot verify, say so plainly and accept the correction.",
   ].join("\n")
 }
+
+/**
+ * Patterns for "I will propose it / shall I go ahead?" — asking in prose for permission
+ * to do something the assistant could simply have offered on a card.
+ *
+ * MEASURED, 2026-07-20. With the confirmation card live and the prompt explicitly saying
+ * "do not ask first, proposing IS the asking", four real staff requests produced ONE card.
+ * The other three came back as "Confirm and I'll propose it", "I can propose the log now
+ * and you confirm", "want me to go ahead?". Strengthening the prompt made it worse, not
+ * better: it started talking ABOUT proposing instead of proposing. That is the same
+ * relocation seen with the phantom PDF and the Slack-bot redirect — prompt text has now
+ * failed on this class of behaviour four times, so it is caught in the reply instead.
+ *
+ * Why it matters: an extra round trip defeats the entire feature. The staff member asked
+ * once; being asked back "shall I?" is exactly the by-hand loop the card removes. And the
+ * card shows the real values before anything runs, which a sentence cannot.
+ */
+const PROPOSE_PROMISE_PATTERNS: RegExp[] = [
+  /\b(?:want|would\s+you\s+like|shall)\s+(?:me|I)\s+to\s+(?:go\s+ahead|log|add|record|note|update|create|propose)\b/i,
+  /\bconfirm\s+(?:and|then)\s+I'?ll\b/i,
+  /\bI\s+(?:can|could|will|'ll)\s+propose\b/i,
+  /\blet\s+me\s+know\s+(?:and|if)\s+I'?ll\b/i,
+  /\bjust\s+say\s+the\s+word\b/i,
+  /\bshould\s+I\s+(?:log|add|record|note|update|create)\b/i,
+  // ...and the mirror image, measured in the same run: asserting a card EXISTS when none
+  // was frozen. "Confirm with one click to save it" with nothing to click is the phantom
+  // PDF all over again — the staff member waits for a button that was never drawn. Same
+  // trace gate catches both, because both are claims about what the assistant just did.
+  /\bconfirm\s+(?:it\s+)?with\s+(?:one\s+click|a\s+click|the\s+card|the\s+button)\b/i,
+  /\bclick\s+confirm\b/i,
+  /\bthe\s+card\s+(?:above|below)\b/i,
+  /\bconfirm\s+with\s+the\s+button\s+above\b/i,
+]
+
+/**
+ * True when the reply asks permission for, or promises, an action instead of proposing it.
+ *
+ * Paired with the turn's ACTUAL frozen proposals: the trace is the gate, because it is our
+ * record of what the assistant really did, not something it can assert. A reply that both
+ * proposes AND says "confirm and I'll…" is fine — the card exists.
+ */
+export function promisesInsteadOfProposing(reply: string): boolean {
+  const text = (reply ?? "").trim()
+  if (!text) return false
+  return PROPOSE_PROMISE_PATTERNS.some((re) => re.test(text))
+}
+
+/** The nudge for asking permission — or promising a card — when none was frozen. */
+export function buildProposeNowNudge(): string {
+  return [
+    "STOP — you either asked the staff member for permission, or told them to confirm a",
+    "card, and you proposed NOTHING this turn. There is no card on their screen. If you",
+    "said 'confirm with one click', you have just pointed at a button that does not exist —",
+    "they will sit waiting for it. If you asked 'shall I?', they already asked you once.",
+    "",
+    "PROPOSING IS THE ASKING. A proposal runs nothing: it puts a card in front of them",
+    "showing the exact action and the exact values, and they confirm with one click. That",
+    "card is where they say yes — and it shows them more than your sentence can.",
+    "",
+    "So: propose the action NOW, on this turn, with your best reading of what they asked.",
+    "If a detail is genuinely unknowable (an address they never gave you), propose what",
+    "you can and say which field you guessed — they can discard it. Only ask a question",
+    "if you truly cannot tell WHICH action they mean.",
+    "",
+    "Do not say 'I can propose' or 'confirm and I will'. Just propose it.",
+  ].join("\n")
+}

@@ -144,6 +144,8 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
 - TOOLS THAT NEED APPROVAL: propose the action and the staff member gets a card in this conversation showing exactly what it will do, which they confirm with ONE CLICK. There is no code to type — never ask them to type or repeat a code, and never send them to another screen.
 - Say briefly what the action will do, then stop. Do NOT say it is done, do NOT say you "have" moved/created/updated anything, and do NOT describe the result as if it already happened: nothing runs until they click. "This will move Banking to Documents Received once you confirm" is right; "I've moved Banking" is a lie until the click.
 - Prefer proposing the action over writing out instructions for them to follow by hand. Handing back a list of steps they must redo themselves is the thing this replaces.
+- DO NOT ASK FIRST. Never reply "want me to go ahead?", "shall I log that?", "let me know and I'll do it" — PROPOSING IS THE ASKING. The card is where they say yes, and it shows them the exact values before anything runs, which a sentence cannot. Asking in words first just adds a round trip and leaves them waiting on you. When the request is clear, propose it on the SAME turn.
+- The discuss-first rule above still holds for SENDS to clients, where you must show the draft and wait. It does NOT apply here: a proposal already runs nothing until they click.
 - If several things are needed, propose each one — they confirm them individually.
 - SENDING TO A CLIENT is NOT one of these. Client emails and portal messages never become a confirmation card; they go through the draft-and-send flow above, where the recipient is checked at the moment of sending.`
     : `
