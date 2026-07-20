@@ -14,19 +14,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { logCron } from "@/lib/cron-log"
+import { wizardLabelFor, buildWizardReminderTitle } from "@/lib/portal/wizard-reminder-copy"
 
 const REMINDER_3D_MS = 3 * 24 * 60 * 60 * 1000
 const REMINDER_7D_MS = 7 * 24 * 60 * 60 * 1000
-
-const WIZARD_LABELS: Record<string, { en: string; it: string }> = {
-  formation: { en: "Formation", it: "Costituzione" },
-  onboarding: { en: "Onboarding", it: "Onboarding" },
-  tax: { en: "Tax Return", it: "Dichiarazione Fiscale" },
-  tax_return: { en: "Tax Return", it: "Dichiarazione Fiscale" },
-  itin: { en: "ITIN Application", it: "Richiesta ITIN" },
-  banking: { en: "Banking Setup", it: "Apertura Conto" },
-  closure: { en: "LLC Closure", it: "Chiusura LLC" },
-}
 
 type WizardRow = {
   id: string
@@ -79,6 +70,20 @@ async function isWizardCompletedElsewhere(w: WizardRow): Promise<boolean> {
   return false
 }
 
+// Looks up the company name for the reminder title so a client who owns more
+// than one company can tell which company a reminder is about (2026-07-20,
+// Luma Beauty Global / THW Global incident — see wizard-reminder-copy.ts).
+// Returns null for contact-only wizards (no account yet) or a lookup miss.
+async function getCompanyName(accountId: string | null): Promise<string | null> {
+  if (!accountId) return null
+  const { data } = await supabaseAdmin
+    .from("accounts")
+    .select("company_name")
+    .eq("id", accountId)
+    .maybeSingle()
+  return data?.company_name ?? null
+}
+
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
   const authHeader = req.headers.get("authorization")
@@ -105,7 +110,7 @@ export async function GET(req: NextRequest) {
   for (const w of wizards) {
     const ageMs = now - new Date(w.created_at).getTime()
     const lastUpdateMs = now - new Date(w.updated_at).getTime()
-    const label = WIZARD_LABELS[w.wizard_type] || { en: w.wizard_type, it: w.wizard_type }
+    const label = wizardLabelFor(w.wizard_type)
 
     // Don't remind someone to fill out a form for something that's already done.
     // The wizard may have been bypassed via another code path (admin entry, CRM action, etc.).
@@ -155,11 +160,13 @@ export async function GET(req: NextRequest) {
         continue
       }
 
+      const companyName = await getCompanyName(w.account_id)
+
       await createPortalNotification({
         account_id: w.account_id || undefined,
         contact_id: w.contact_id || undefined,
         type: "form_reminder_7d",
-        title: `Action needed: Complete your ${label.en} form`,
+        title: buildWizardReminderTitle({ urgency: "7d", wizardType: w.wizard_type, companyName }),
         body: "Your data collection form has been pending for over a week. Please complete it to avoid delays.",
         link: "/portal/wizard",
       })
@@ -211,11 +218,13 @@ export async function GET(req: NextRequest) {
         continue
       }
 
+      const companyName = await getCompanyName(w.account_id)
+
       await createPortalNotification({
         account_id: w.account_id || undefined,
         contact_id: w.contact_id || undefined,
         type: "form_reminder_3d",
-        title: `Reminder: Complete your ${label.en} form`,
+        title: buildWizardReminderTitle({ urgency: "3d", wizardType: w.wizard_type, companyName }),
         body: "Don't forget to complete your data collection form. It only takes a few minutes.",
         link: "/portal/wizard",
       })
