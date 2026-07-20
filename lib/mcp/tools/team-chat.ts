@@ -1,6 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { postTeamMessage } from "@/lib/team/post-message"
+import { parseThreadLink, formatThreadReadout } from "@/lib/team/thread-readout"
+import { resolveThreadTitle } from "@/lib/team/thread-title"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { listAllAuthUsers } from "@/lib/auth-admin-helpers"
 
 /**
  * team_chat_send — post a message into the internal Team Workspace ("team chat")
@@ -43,6 +47,88 @@ Target — provide EXACTLY ONE:
       } catch (e) {
         return {
           content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${e instanceof Error ? e.message : String(e)}` }],
+        }
+      }
+    },
+  )
+
+  server.tool(
+    "team_chat_read_thread",
+    `Read a Team Workspace ("team chat") thread by its link — staff-only, never client data.
+
+Antonio copies a thread's link via "Copy link" in its ⋯ menu (Team Chat → any channel like td-bug/td-dev → a thread's actions menu) and pastes it here. This tool resolves that link straight to the channel + thread and returns its full content: title, status, assignee, and every message in order — so you don't need him to re-explain a bug or request that's already written up in Team Chat.
+
+Give it the ENTIRE pasted link (e.g. https://crm.tonydurante.us/team-chat?thread=<id>&root=<id>) as-is — do not edit or shorten it. READ-ONLY.`,
+    {
+      link: z.string().describe('The full thread link copied from Team Chat\'s "Copy link" thread action.'),
+    },
+    async ({ link }) => {
+      const parsed = parseThreadLink(link)
+      if ("error" in parsed) {
+        return { content: [{ type: "text" as const, text: `❌ ${parsed.error}` }] }
+      }
+      const { channelId, rootId } = parsed
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: channel } = await (supabaseAdmin as any)
+          .from("internal_threads")
+          .select("id, channel_name, channel_slug, thread_type")
+          .eq("id", channelId)
+          .single()
+        if (!channel) {
+          return { content: [{ type: "text" as const, text: "❌ That channel/thread no longer exists." }] }
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: root } = await (supabaseAdmin as any)
+          .from("internal_messages")
+          .select("id, message, sender_name, created_at, deleted_at, attachments")
+          .eq("id", rootId)
+          .eq("thread_id", channelId)
+          .single()
+        if (!root) {
+          return { content: [{ type: "text" as const, text: "❌ That thread's opening message no longer exists in this channel." }] }
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: replies } = await (supabaseAdmin as any)
+          .from("internal_messages")
+          .select("id, message, sender_name, created_at, deleted_at, attachments")
+          .eq("thread_id", channelId)
+          .eq("root_id", rootId)
+          .order("created_at", { ascending: true })
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: state } = await (supabaseAdmin as any)
+          .from("internal_thread_state")
+          .select("status, assignee_id, title")
+          .eq("thread_id", channelId)
+          .eq("root_message_id", rootId)
+          .maybeSingle()
+
+        let assigneeName: string | null = null
+        if (state?.assignee_id) {
+          const users = await listAllAuthUsers()
+          const match = users.find(u => u.id === state.assignee_id)
+          assigneeName = (match?.user_metadata?.full_name as string | undefined) || match?.email || null
+        }
+
+        const title = resolveThreadTitle({ stateTitle: state?.title, rootMessage: root.message, rootDeleted: !!root.deleted_at })
+        const channelLabel = channel.channel_slug || channel.channel_name || "general"
+
+        const text = formatThreadReadout({
+          channelLabel,
+          title,
+          status: state?.status ?? "todo",
+          assigneeName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          messages: [root, ...((replies ?? []) as any[])],
+        })
+
+        return { content: [{ type: "text" as const, text }] }
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Could not read that thread: ${e instanceof Error ? e.message : String(e)}` }],
         }
       }
     },

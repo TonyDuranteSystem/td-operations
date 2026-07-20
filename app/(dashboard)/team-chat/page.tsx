@@ -9,7 +9,7 @@ import {
   CornerUpLeft, Trash2, Plus, Search, Pin, PinOff, Pencil, Check,
   MessageSquare, Bot, Building2, Slack, ExternalLink,
   LayoutGrid, List as ListIcon, MoreHorizontal, Clock, ChevronRight, ChevronDown, ChevronLeft,
-  Bell, BellOff, Archive, ArchiveRestore, Mail,
+  Bell, BellOff, Archive, ArchiveRestore, Mail, Link2,
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
@@ -1485,7 +1485,7 @@ export default function TeamWorkspacePage() {
                       {(() => {
                         const ti = threadsList.find(t => t.root_id === openRootId)
                         return ti ? (
-                          <ThreadActionsMenu thread={ti} currentUserId={currentUserId}
+                          <ThreadActionsMenu thread={ti} channelId={selectedId!} currentUserId={currentUserId}
                             onRename={(rid, title) => renameThread(rid, title)}
                             onArchive={(rid, archived) => setThreadArchived(rid, archived)}
                             onDelete={rid => deleteThread(rid)}
@@ -1632,6 +1632,7 @@ export default function TeamWorkspacePage() {
             {isThreadedChannel && showThreadsPanel && (
               <div className="absolute inset-0 z-30 bg-white flex flex-col">
                 <ThreadsPanel
+                  channelId={selectedId!}
                   channelName={selected.channel_slug ?? selected.label}
                   threads={threadsList}
                   members={members}
@@ -1714,7 +1715,8 @@ function NewThreadModal({ channelName, onClose, onCreate }: {
   )
 }
 
-function ThreadsPanel({ channelName, threads, members, currentUserId, showArchived, onToggleArchived, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow, onRename, onArchive, onDelete, onLater, onMarkUnread }: {
+function ThreadsPanel({ channelId, channelName, threads, members, currentUserId, showArchived, onToggleArchived, onClose, onOpen, onSetStatus, onSetAssignee, onSetFollow, onRename, onArchive, onDelete, onLater, onMarkUnread }: {
+  channelId: string
   channelName: string
   threads: ThreadListItem[]
   members: TeamMember[]
@@ -1831,7 +1833,7 @@ function ThreadsPanel({ channelName, threads, members, currentUserId, showArchiv
                   </div>
                 )}
               </div>
-              <ThreadActionsMenu thread={t} currentUserId={currentUserId}
+              <ThreadActionsMenu thread={t} channelId={channelId} currentUserId={currentUserId}
                 onRename={onRename} onArchive={onArchive} onDelete={onDelete}
                 onLater={onLater} onMarkUnread={onMarkUnread} />
             </div>
@@ -1940,8 +1942,9 @@ function ThreadRow({ t, selected, onClick, icon, label, resolved }: { t: TeamThr
  * reversibly without destroying anyone's words. The server enforces both rules
  * independently — this is the affordance, not the guard.
  */
-function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelete, onLater, onMarkUnread, align = 'right' }: {
+function ThreadActionsMenu({ thread, channelId, currentUserId, onRename, onArchive, onDelete, onLater, onMarkUnread, align = 'right' }: {
   thread: ThreadListItem
+  channelId: string
   currentUserId: string | null
   onRename: (rootId: string, title: string) => void
   onArchive: (rootId: string, archived: boolean) => void
@@ -1957,6 +1960,12 @@ function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelet
 
   const deletable = !!currentUserId && thread.root_sender_id === currentUserId && thread.reply_count === 0
   const close = () => { setOpen(false); setRenaming(false); setConfirmDel(false) }
+  const copyLink = () => {
+    const url = `${window.location.origin}/team-chat?thread=${channelId}&root=${thread.root_id}`
+    navigator.clipboard.writeText(url)
+      .then(() => toast.success('Thread link copied — paste it into a Claude Code session and say "read this link".'))
+      .catch(() => toast.error('Could not copy the link.'))
+  }
 
   return (
     <div className="relative shrink-0" onClick={e => e.stopPropagation()}>
@@ -1998,6 +2007,8 @@ function ThreadActionsMenu({ thread, currentUserId, onRename, onArchive, onDelet
                   onClick={() => { onLater(thread.root_id, !thread.later); close() }} />
                 <TouchAction icon={<Mail className="h-4 w-4" />} label="Mark unread"
                   onClick={() => { onMarkUnread(thread.root_id); close() }} />
+                <TouchAction icon={<Link2 className="h-4 w-4" />} label="Copy link"
+                  onClick={() => { copyLink(); close() }} />
                 <div className="my-1 border-t border-zinc-100" />
                 <TouchAction icon={<Pencil className="h-4 w-4" />} label="Rename topic" onClick={() => setRenaming(true)} />
                 {thread.archived ? (
