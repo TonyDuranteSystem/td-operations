@@ -30,7 +30,9 @@ function registeredToolNames(): Set<string> {
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts")) continue
     const src = readFileSync(join(dir, file), "utf8")
-    const re = /server\.tool\(\s*\n?\s*"([a-z0-9_]+)"/g
+    // BOTH quote styles: a single-quoted registration would otherwise be invisible
+    // to this gate — and a tool the gate cannot see is a tool nobody reviewed.
+    const re = /server\.tool\(\s*\n?\s*['"]([a-z0-9_]+)['"]/g
     let m: RegExpExecArray | null
     while ((m = re.exec(src)) !== null) names.add(m[1])
   }

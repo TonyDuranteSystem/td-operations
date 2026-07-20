@@ -197,6 +197,12 @@ export const READ_TOOLS: ReadonlySet<string> = new Set([
   // card brand/last4 and billing addresses.
   // — Vocabulary catalog, read side only; catalog_update and catalog_pending mutate —
   "catalog_list",
+  // — Produces a document FOR THE STAFF MEMBER and returns a private, expiring link.
+  //   Writes only to the scratch bucket the panels already use; nothing client-visible,
+  //   nothing sent, no client record touched. Filing the result to Drive or a client
+  //   record is a SEPARATE tool and stays behind approval. Requiring a confirmation to
+  //   turn text you just asked for into a PDF would make the feature pointless.
+  "pdf_create",
   // — Pure computation, no I/O —
   "classify_text", "classify_list_rules",
   // — Internal engineering surfaces, repo-scoped and secret-blocked —

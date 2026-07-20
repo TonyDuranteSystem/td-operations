@@ -62,6 +62,7 @@ import { registerTaxTools } from "@/lib/mcp/tools/tax"
 import { registerDeadlineTools } from "@/lib/mcp/tools/deadlines"
 import { registerOperationsTools } from "@/lib/mcp/tools/operations"
 import { registerCheckpointTools } from "@/lib/mcp/tools/checkpoint"
+import { registerDocumentGenerationTools } from "@/lib/mcp/tools/documents-generate"
 import { registerWhopTools } from "@/lib/mcp/tools/whop"
 import { registerFormationTools } from "@/lib/mcp/tools/formation"
 import { registerOnboardingTools } from "@/lib/mcp/tools/onboarding"
@@ -104,6 +105,7 @@ const handler = createMcpHandler(
 
     // Register all tool groups
     registerCheckpointTools(server)
+    registerDocumentGenerationTools(server)
     registerCrmTools(server)
     registerDriveTools(server)
     registerGmailTools(server)
