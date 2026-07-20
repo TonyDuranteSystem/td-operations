@@ -40,6 +40,7 @@ import { registerTaxTools } from "@/lib/mcp/tools/tax"
 import { registerDeadlineTools } from "@/lib/mcp/tools/deadlines"
 import { registerOperationsTools } from "@/lib/mcp/tools/operations"
 import { registerCheckpointTools } from "@/lib/mcp/tools/checkpoint"
+import { registerDocumentGenerationTools } from "@/lib/mcp/tools/documents-generate"
 import { registerWhopTools } from "@/lib/mcp/tools/whop"
 import { registerFormationTools } from "@/lib/mcp/tools/formation"
 import { registerOnboardingTools } from "@/lib/mcp/tools/onboarding"
@@ -80,7 +81,7 @@ const REGISTERERS = [
   registerCalendlyTools, registerDocTools, registerStorageTools, registerSqlTools, registerHermesReadTools,
   registerCodebaseReadTools, registerMessagingTools, registerOfferTools, registerSysdocTools, registerKnowledgeTools,
   registerCirclebackTools, registerLeadTools, registerTaxTools, registerDeadlineTools, registerOperationsTools,
-  registerCheckpointTools, registerWhopTools, registerFormationTools, registerOnboardingTools, registerLeaseTools,
+  registerCheckpointTools, registerDocumentGenerationTools, registerWhopTools, registerFormationTools, registerOnboardingTools, registerLeaseTools,
   registerOaTools, registerSs4Tools, registerWelcomePackageTools, registerBankingFormTools, registerJobTools,
   registerPortalTools, registerITINFormTools, registerClosureTools, registerTaxQuoteTools, registerBankStatementTools,
   registerSignatureTools, registerTestingTools, registerHarborComplianceTools, registerDevTaskTools, registerCalendarTools,

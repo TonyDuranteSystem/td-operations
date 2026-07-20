@@ -138,3 +138,38 @@ describe("parameter escalation", () => {
     expect(classifyTool("doc_search", { send_email: ["x"] }).tier).toBe("EXTERNAL")
   })
 })
+
+describe("the two registration points must agree", () => {
+  // A tool is registered TWICE in this codebase: with the MCP server (what the connector
+  // and a code session see) and in the bridge registrar list (what the in-CRM assistant
+  // can actually reach). pdf_create shipped in the first and not the second, so the
+  // assistant could not call it — and instead of saying so it invented a "sandboxed code
+  // execution environment" and claimed a file was attached. A tool present in one list
+  // and absent from the other is worse than a missing tool: it produces confident lies.
+  it("every registered tool file is also wired into the bridge", () => {
+    const routeSrc = readFileSync(join(process.cwd(), "app/api/[transport]/route.ts"), "utf8")
+    const bridgeSrc = readFileSync(join(process.cwd(), "lib/ai-agent/mcp-bridge.ts"), "utf8")
+
+    const registrarsIn = (src: string) => {
+      const names = new Set<string>()
+      const re = /\bregister([A-Za-z0-9]+)Tools\b/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(src)) !== null) names.add(m[1])
+      return names
+    }
+    const onServer = registrarsIn(routeSrc.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n"))
+    const onBridge = registrarsIn(bridgeSrc)
+
+    // Deliberately NOT on the bridge. Each needs a reason, so an accidental omission
+    // cannot hide behind this list.
+    const BRIDGE_EXEMPT = new Set([
+      // team_chat_send already reaches the worker as a dedicated tool with its own
+      // enableTeamChatSend gate. Exposing it through the generic bridge as well would
+      // give one send two routes with different gating — the shape that lets a control
+      // be bypassed by taking the other door.
+      "TeamChat",
+    ])
+    const missing = Array.from(onServer).filter((n) => !onBridge.has(n) && !BRIDGE_EXEMPT.has(n))
+    expect(missing, `registered with the server but unreachable via the bridge: ${missing.join(", ")}`).toEqual([])
+  })
+})
