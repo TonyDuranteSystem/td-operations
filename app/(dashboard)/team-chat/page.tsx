@@ -1735,16 +1735,16 @@ function ThreadsPanel({ channelName, threads, members, currentUserId, showArchiv
   const [stage, setStage] = useState<string>('all')
   const [followingOnly, setFollowingOnly] = useState(false)
   const [menu, setMenu] = useState<string | null>(null)
-  // Stage filter: 'all' = everything, 'new' = unread only, a status = that status
-  // OR unread (a new reply is NEVER hidden by the filter). Plus a Following-only
-  // view. Archived threads are out unless the archive view is on — and then they
-  // are ALL you see, so restoring one is a short list, not a hunt.
+  // Stage filter: 'all' = everything, 'new' = unread only, a status = only
+  // threads actually in that status. Plus a Following-only view. Archived
+  // threads are out unless the archive view is on — and then they are ALL
+  // you see, so restoring one is a short list, not a hunt.
   const filtered = sortPanelThreads(threads, false).filter(t => {
     if (showArchived !== !!t.archived) return false
     if (followingOnly && !t.following) return false
     if (stage === 'all') return true
     if (stage === 'new') return t.unread
-    return t.status === stage || t.unread
+    return t.status === stage
   })
   const nameFor = (id: string | null) => (id ? (members.find(m => m.id === id)?.name ?? 'Unknown') : null)
 
