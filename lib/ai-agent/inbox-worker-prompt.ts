@@ -131,14 +131,21 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
   // rail off there is NO queue and NO pending state — the call is simply refused. Saying
   // "I'll queue it for approval" invents a mechanism and leaves the staff member waiting
   // for something that will never arrive.
+  // FILES is TRUE ON EVERY SURFACE regardless of the action rail, so it lives OUTSIDE the
+  // branch below. It used to sit inside the rail-off text, which means switching the rail
+  // ON would silently delete the only instruction telling the worker how to produce a
+  // document — and without it, it has previously invented a Python sandbox rather than
+  // admit it could not make a file. Nothing else about the wording changes.
+  const files = `
+- FILES: you cannot create a file yourself. You have NO code execution, no Python, no shell. The ONLY way to produce a document is the \`pdf_create\` tool (reach it with \`use_tool\` if it is not in your direct list) — it takes the finished text and returns a real download link. Never say a file is "attached" or "ready" unless you called that tool on this turn and it returned a link.`
+
   const approvals = caps.canQueueApprovals
     ? `
 - TOOLS THAT NEED APPROVAL: you may propose one and it will be put to the staff member for approval. Describe exactly what it would do before proposing it.`
     : `
 - TOOLS THAT NEED APPROVAL CANNOT BE RUN AT ALL right now — not by you, not by queueing, not by asking. There is no approval queue: the call is simply refused and nothing is recorded. So do NOT say "say the word and I'll queue it", do NOT say you will run it once approved, and do NOT imply anything is pending. Say plainly that the action is not something you can carry out, state exactly what you would have done and with which tool, and leave it with the staff member to do.
 - This is switched off EVERYWHERE, not just here. Do NOT suggest another screen, another chat, the Slack bot, or any other surface would run it — none of them will. Suggesting one sends the staff member somewhere that fails, which is worse than saying no. The only route is the staff member doing it themselves.
-- You CAN still look things up freely with the tools that don't need approval, and you should — a complete answer with the action left to them is far more useful than a refusal.
-- FILES: you cannot create a file yourself. You have NO code execution, no Python, no shell. The ONLY way to produce a document is the \`pdf_create\` tool (reach it with \`use_tool\` if it is not in your direct list) — it takes the finished text and returns a real download link. Never say a file is "attached" or "ready" unless you called that tool on this turn and it returned a link.`
+- You CAN still look things up freely with the tools that don't need approval, and you should — a complete answer with the action left to them is far more useful than a refusal.`
 
   if (!can.length) {
     return `
@@ -147,7 +154,7 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
 - SENDING IS OFF for this conversation. No email, no portal message. The tools are not loaded, so there is nothing to attempt.
 - The reason: nothing here tells the server WHICH client a message would go to. Sending is only possible with a client's page open, where the recipient is fixed server-side.
 - So: do NOT offer to send, do NOT say "say the word and I'll send it", and do NOT claim anything was sent. Say plainly that you cannot send from here and offer to draft it for them to copy, or suggest opening the client's page. There is NO workaround and you must not imply there is one.
-- Drafting is still useful and still welcome — just be honest that delivering it is not yours to do here.${approvals}`
+- Drafting is still useful and still welcome — just be honest that delivering it is not yours to do here.${approvals}${files}`
   }
 
   return `
@@ -156,7 +163,7 @@ export function renderCapabilityBlock(caps: WorkerCapabilities): string {
 - You CAN: ${can.join("; and ")}.
 - Flow, every time: show the full draft first (recipient + exact text), wait for the staff member's explicit go-ahead ("send it", "send", "go ahead", or clearly equivalent), THEN send ONCE.
 - The recipient is fixed server-side to ${who} — you do not need to look up or pass ids, and you cannot reach any other client from here. An attempt aimed elsewhere is refused by the server, not by you.
-- Never send speculatively, and never on anything short of an explicit go-ahead.${approvals}${caps.canSendEmail && !caps.canSendPortal ? "\n- Portal-chat sending is OFF for this conversation — do not offer it." : ""}${caps.canSendPortal && !caps.canSendEmail ? "\n- Email sending is OFF for this conversation — do not offer it." : ""}`
+- Never send speculatively, and never on anything short of an explicit go-ahead.${approvals}${files}${caps.canSendEmail && !caps.canSendPortal ? "\n- Portal-chat sending is OFF for this conversation — do not offer it." : ""}${caps.canSendPortal && !caps.canSendEmail ? "\n- Email sending is OFF for this conversation — do not offer it." : ""}`
 }
 
 /**

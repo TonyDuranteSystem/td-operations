@@ -1879,7 +1879,7 @@ export async function proposeAction(
   // Normalize enum-backed params to their canonical DB value BEFORE validation +
   // hashing, so a proposal with 'medium'/'todo' is accepted (→ 'Normal'/'To Do')
   // and the stored params (and params_hash) reflect exactly what will execute.
-  const params = normalizeToolParams(toolName, input.params ?? {})
+  let params = normalizeToolParams(toolName, input.params ?? {})
   const rationale = typeof input.rationale === "string" ? input.rationale : null
   const idempotencyKey = typeof input.idempotency_key === "string" && input.idempotency_key.length > 0
     ? input.idempotency_key
@@ -1924,7 +1924,14 @@ export async function proposeAction(
   // validate against their AGENT_TOOLS schema; bridge tools against the captured
   // MCP zod schema.
   if (isBridgeTool) {
-    const { validateBridgeToolParams } = await import("./mcp-bridge")
+    const { validateBridgeToolParams, normalizeBridgeParams } = await import("./mcp-bridge")
+    // Catalog tools get the same forgiveness agent tools already had: a fixed-choice
+    // value differing only in capitalisation is rewritten to the exact allowed spelling.
+    // Without it the assistant proposed "inbound", was told to write "Inbound", retried,
+    // ran out of turns and asked the staff member to do it by hand — which read, from
+    // the outside, as the assistant simply refusing to act. Done BEFORE validation and
+    // hashing so the values shown and the values that run cannot diverge.
+    params = normalizeBridgeParams(toolName, params as Record<string, unknown>)
     const v = validateBridgeToolParams(toolName, params as Record<string, unknown>)
     if (!v.ok) return `❌ Invalid params for "${toolName}": ${v.error}`
   } else {
@@ -2468,14 +2475,16 @@ export async function executeWorkerTool(
   // enableFullToolReach). Executor-gate too (defense-in-depth, R108).
   if (name === "find_tool") {
     if (!availableNames?.has("find_tool")) return `❌ Tool "find_tool" is not permitted in this worker call (full tool reach not enabled).`
-    const q = (typeof params.query === "string" ? params.query : "").toLowerCase().trim()
+    const q = (typeof params.query === "string" ? params.query : "").trim()
     if (!q) return "find_tool needs a query."
     const { listBridgeTools } = await import("./mcp-bridge")
-    const hits = listBridgeTools()
-      .filter((t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
-      .slice(0, 15)
-    if (!hits.length) return `No tools match "${q}".`
-    return hits.map((t) => `• ${t.name} — ${t.description.split(/\. |\n/)[0]}`).join("\n")
+    // Ranked word overlap, NOT a verbatim substring of the whole query. The old check
+    // asked whether the entire phrase appeared inside a name or description, so a single
+    // word worked and a sentence never did — "add note to account", "log conversation"
+    // and every other natural phrasing returned nothing, and the assistant concluded it
+    // had no way to do the job. See tool-search.ts for the measured failures.
+    const { formatToolSearch } = await import("./tool-search")
+    return formatToolSearch(listBridgeTools(), q)
   }
   if (name === "use_tool") {
     if (!availableNames?.has("use_tool")) return `❌ Tool "use_tool" is not permitted in this worker call (full tool reach not enabled).`

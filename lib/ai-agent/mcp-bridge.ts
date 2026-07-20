@@ -17,6 +17,7 @@
  */
 
 import { z } from "zod"
+import { coerceBridgeParams } from "./bridge-param-coercion"
 import { executeTool, AGENT_TOOLS } from "./tools"
 
 import { registerCrmTools } from "@/lib/mcp/tools/crm"
@@ -119,6 +120,20 @@ export function buildMcpToolRegistry(): Map<string, ToolEntry> {
 /** Lightweight catalog (name + description) for the find_tool discovery helper. */
 export function listBridgeTools(): Array<{ name: string; description: string }> {
   return Array.from(buildMcpToolRegistry().entries()).map(([name, e]) => ({ name, description: e.description }))
+}
+
+/**
+ * Rewrite a catalog tool's fixed-choice params to their exact allowed spelling.
+ *
+ * Agent tools have normalised their values before validation for a long time; catalog
+ * tools never did, so a proposal saying "inbound" was rejected for wanting "Inbound" and
+ * the assistant retried, gave up, and asked the staff member to do it by hand. Applied
+ * BEFORE validation and hashing so the stored values are the ones that run.
+ */
+export function normalizeBridgeParams(name: string, params: Record<string, unknown>): Record<string, unknown> {
+  const entry = buildMcpToolRegistry().get(name)
+  if (!entry?.schema) return params
+  return coerceBridgeParams(entry.schema as Record<string, unknown>, params)
 }
 
 /** Validate params against a bridge tool's own zod schema — used at propose time. */
