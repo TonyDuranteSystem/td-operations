@@ -5,10 +5,11 @@
  * Reuses the SAME visibility rule as the floating layer (the server decides; this only groups).
  */
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check } from 'lucide-react'
+import { Loader2, Lock, Share2, Users, Building2, Clock, RotateCcw, Check, List, CalendarDays } from 'lucide-react'
 import { noteClientName } from '@/components/dashboard/sticky-notes-layer'
+import { NotesCalendar } from '@/components/dashboard/notes-calendar'
 
 interface Note {
   id: string
@@ -53,8 +54,28 @@ function whenText(iso: string) {
   return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })
 }
 
+function ViewSwitch({ view, setView }: { view: 'list' | 'calendar'; setView: (v: 'list' | 'calendar') => void }) {
+  return (
+    <div className="inline-flex overflow-hidden rounded border border-zinc-300 text-sm">
+      <button
+        onClick={() => setView('list')}
+        className={`flex items-center gap-1.5 px-3 py-1.5 ${view === 'list' ? 'bg-zinc-900 text-white' : 'bg-white hover:bg-zinc-50'}`}
+      >
+        <List className="h-4 w-4" />List
+      </button>
+      <button
+        onClick={() => setView('calendar')}
+        className={`flex items-center gap-1.5 border-l border-zinc-300 px-3 py-1.5 ${view === 'calendar' ? 'bg-zinc-900 text-white' : 'bg-white hover:bg-zinc-50'}`}
+      >
+        <CalendarDays className="h-4 w-4" />Calendar
+      </button>
+    </div>
+  )
+}
+
 export function NotesBoard() {
   const qc = useQueryClient()
+  const [view, setView] = useState<'list' | 'calendar'>('list')
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['staff-notes-all'],
     queryFn: fetchAll,
@@ -97,8 +118,19 @@ export function NotesBoard() {
     return <p className="py-10 text-sm text-red-700">{error instanceof Error ? error.message : 'Could not load your notes.'}</p>
   }
 
+  if (view === 'calendar') {
+    return (
+      <div>
+        <ViewSwitch view={view} setView={setView} />
+        <NotesCalendar notes={notes} />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      <ViewSwitch view={view} setView={setView} />
+
       <Section title="On your screen" count={active.length} empty="Nothing on screen right now.">
         {active.map((n) => <Card key={n.id} n={n} onAct={act} showDone />)}
       </Section>
