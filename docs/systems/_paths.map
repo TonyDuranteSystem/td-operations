@@ -21,7 +21,7 @@ docs/systems/tax-returns.md|lib/tax/,lib/mcp/tools/tax.ts,lib/mcp/tools/tax-quot
 docs/systems/portal.md|lib/portal/open-year.ts,lib/portal/tier-config.ts,lib/portal/auto-create.ts,lib/portal/queries.ts,lib/portal/payment-visibility.ts,lib/portal/notifications.ts,lib/operations/sync-tier.ts,lib/mcp/tools/portal.ts,app/portal/,components/portal/wizard/
 docs/systems/referrals-circleback.md|lib/operations/referral.ts,lib/referral-utils.ts,lib/bank-referrals.ts,lib/portal/credit-notes.ts,lib/calendly/,lib/mcp/tools/referrals.ts,app/api/webhooks/calendly/
 docs/systems/workflow-engine.md|lib/catalog/,lib/tasks/,lib/mcp/tools/catalog.ts,app/(dashboard)/workflows/
-docs/systems/flows.md|lib/flows/,components/flows/,app/api/flows/,app/(dashboard)/flows/
+docs/systems/flows.md|lib/flows/,components/flows/,app/api/flows/,app/(dashboard)/flows/,lib/operations/itin-from-wizard.ts,app/api/itin-form-completed/,lib/itin/
 docs/systems/crm-core.md|lib/mcp/tools/crm.ts,lib/operations/contact.ts,lib/operations/task.ts,lib/operations/account.ts,lib/per-record-activity/,lib/sync-airtable.ts
 docs/systems/hooks-guardrails.md|.claude/hooks/,.claude/settings.json,.husky/,scripts/check-system-docs-freshness.sh,scripts/dev-setup.sh,scripts/lib-local-stacks.sh,scripts/worktree-stack-sweep.sh,scripts/env-up.sh,scripts/env-down.sh,scripts/worktree-auto-isolate.sh,lib/supabase-admin.ts,lib/db-contract.ts,lib/db-contract-snapshot.ts,lib/db-contract-read.ts,lib/db-contract-monitor.ts,db/constraints.prod.json,scripts/check-db-constraints.ts,scripts/snapshot-db-constraints.ts
 docs/systems/auth-oauth.md|middleware.ts,lib/auth.ts,lib/oauth.ts,app/api/oauth/,app/api/[transport]/

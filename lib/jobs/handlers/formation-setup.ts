@@ -24,7 +24,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { createSD } from "@/lib/operations/service-delivery"
+import { createSD, OPEN_TASK_STATUSES } from "@/lib/operations/service-delivery"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
@@ -147,6 +147,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // Phase 1: Create contact-level Drive folder (Contacts/{Name}/)
   // Documents will migrate to company folder when LLC name is selected (Phase 2)
   let contactDriveFolderId: string | null = null
+  /** The formation SD for this run — hoisted so the Luca follow-up task (§5)
+   *  can stamp `delivery_id`. Without it that task is unreachable from
+   *  deactivateSD, which only cancels tasks linked to the service. */
+  let formationSdId: string | null = null
   if (p.contact_id) {
     try {
       const { ensureContactFolder } = await import("@/lib/drive-folder-utils")
@@ -259,13 +263,24 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     const sdContactId = p.contact_id
     if (sdContactId) {
       // Check if SD already exists for this contact
-      const { data: existingSd } = await supabaseAdmin
+      const { data: existingSd, error: existingSdErr } = await supabaseAdmin
         .from("service_deliveries")
         .select("id, stage")
         .eq("contact_id", sdContactId)
         .eq("service_type", "Company Formation")
         .eq("status", "active")
         .limit(1)
+
+      // Fail CLOSED (2026-07-20). supabase-js returns errors instead of
+      // throwing, so discarding `error` turned any transient PostgREST failure
+      // into "no formation exists" → a DUPLICATE Company Formation on a job
+      // retry. Same class of bug as the ITIN duplicate; a guard we cannot trust
+      // must stop, not wave the creation through. The job retries.
+      if (existingSdErr) {
+        throw new Error(
+          `formation SD duplicate-check failed (${existingSdErr.message}) — not creating, to avoid a duplicate formation`,
+        )
+      }
 
       // Resolve the SD id + current stage from either branch so the
       // wizard-submit stage advance below runs uniformly.
@@ -305,6 +320,9 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
         }
       }
+
+      // Expose the resolved SD to later sections (the Luca follow-up task).
+      formationSdId = sdId
 
       // ─── 2c-bis. ADVANCE Payment Confirmed → Wizard Submitted ───
       // This handler runs because the formation wizard was submitted, but the
@@ -463,9 +481,47 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       ? `${submitted.owner_first_name} ${submitted.owner_last_name || ""}`
       : p.token
 
+    const taskTitle = `WhatsApp follow-up: ${clientName} (formation form completed)`
+
+    // Idempotency (2026-07-20). A client re-submitting the formation wizard
+    // re-runs this whole handler, and this insert had no guard — Marcell
+    // Bogyora produced a second identical WhatsApp task for Luca 10 days after
+    // the first. Skip when an OPEN one already exists for this person.
+    let alreadyOpen = false
+    if (p.contact_id) {
+      // Key on the PERSON + category, never on the title. The title embeds the
+      // client's own typed name, so a re-submit that corrects a spelling, fills
+      // in a missing surname, or fixes an accent produces a different title and
+      // the guard misses — minting exactly the duplicate it exists to stop.
+      const { data: existingTask, error: existingTaskErr } = await supabaseAdmin
+        .from("tasks")
+        .select("id")
+        .eq("contact_id", p.contact_id)
+        .eq("category", "Formation")
+        .ilike("task_title", "WhatsApp follow-up:%")
+        // Must cover EVERY open state. "Waiting" is the normal state for a
+        // follow-up task Luca has actioned but is awaiting the client on —
+        // omitting it would let a wizard re-submit mint a duplicate, which is
+        // the exact bug this guard exists to stop.
+        .in("status", [...OPEN_TASK_STATUSES])
+        .limit(1)
+      // Fail CLOSED, consistent with the SD guards: an unverifiable check must
+      // not mint a duplicate. A missed follow-up task is recoverable; a
+      // duplicate one wastes Luca's time and confuses the client-contact trail.
+      if (existingTaskErr) {
+        result.steps.push(
+          step("luca_whatsapp_task", "skipped", `duplicate check failed (${existingTaskErr.message}) — not created`),
+        )
+        alreadyOpen = true
+      } else if (existingTask && existingTask.length > 0) {
+        result.steps.push(step("luca_whatsapp_task", "skipped", `Already open: ${existingTask[0].id}`))
+        alreadyOpen = true
+      }
+    }
+
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: taskErr } = await supabaseAdmin.from("tasks").insert({
-      task_title: `WhatsApp follow-up: ${clientName} (formation form completed)`,
+    const { error: taskErr } = alreadyOpen ? { error: null } : await supabaseAdmin.from("tasks").insert({
+      task_title: taskTitle,
       description: [
         `Il cliente ${clientName} ha completato il formation form.`,
         ``,
@@ -481,11 +537,16 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       category: "Formation",
       status: "To Do",
       ...(accountId ? { account_id: accountId } : {}),
+      // Link the task to the person AND the service. It carried neither, so it
+      // was invisible to deactivateSD (which cancels by delivery_id) and had to
+      // be cancelled by hand when the duplicate formation run was cleaned up.
+      ...(p.contact_id ? { contact_id: p.contact_id } : {}),
+      ...(formationSdId ? { delivery_id: formationSdId } : {}),
     })
 
     if (taskErr) {
       result.steps.push(step("luca_whatsapp_task", "error", taskErr.message))
-    } else {
+    } else if (!alreadyOpen) {
       result.steps.push(step("luca_whatsapp_task", "ok", `WhatsApp task created for Luca`))
     }
   } catch (e) {

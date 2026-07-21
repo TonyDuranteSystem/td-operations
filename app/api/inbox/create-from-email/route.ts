@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Title is required' }, { status: 400 })
       }
 
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write on this legacy route; untouched by the ITIN split. Hardening lives on claude/inbox-create-service-hardening. Deferred per dev_task fda76fd3.
       const { data: task, error } = await supabaseAdmin
         .from('tasks')
         .insert({
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
 
       const serviceName = `${serviceType} — ${account?.company_name || 'Unknown'}`
 
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write on this legacy route; untouched by the ITIN split. Hardening lives on claude/inbox-create-service-hardening. Deferred per dev_task fda76fd3.
       const { data: sd, error } = await supabaseAdmin
         .from('service_deliveries')
         .insert({
@@ -89,6 +91,7 @@ export async function POST(req: NextRequest) {
       if (error) throw new Error(error.message)
 
       // Create initial task for the service
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write on this legacy route; untouched by the ITIN split. Hardening lives on claude/inbox-create-service-hardening. Deferred per dev_task fda76fd3.
       await supabaseAdmin
         .from('tasks')
         .insert({

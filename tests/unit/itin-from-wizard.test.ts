@@ -3,23 +3,34 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // ── Mocks ──
 vi.mock('@/lib/services', () => ({ getStartAtWizardServiceTypes: vi.fn() }))
 vi.mock('@/lib/operations/service-delivery', () => ({ createSD: vi.fn() }))
+vi.mock('@/lib/operations/find-contact-by-email', () => ({ findContactIdByEmail: vi.fn() }))
 vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: vi.fn() } }))
 
 import { createItinDeliveriesFromWizard } from '@/lib/operations/itin-from-wizard'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { createSD } from '@/lib/operations/service-delivery'
+import { findContactIdByEmail } from '@/lib/operations/find-contact-by-email'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 // Per-table chainable mock. Terminal reads resolve to configured values.
-// cfg: { pipelineStages, contactFind, contactInsertId, sdDup }
+// cfg: { pipelineStages, contactInsertId, sdDup, sdDupError }
 function installFrom(cfg: {
   pipelineStages?: unknown[]
-  contactFind?: { id: string } | null
   contactInsertId?: string
+  /** Rows the per-person ITIN dedup SELECT returns. */
   sdDup?: unknown[]
+  /** Force the dedup SELECT to fail (must fail CLOSED, never create). */
+  sdDupError?: { message: string }
 }) {
   const contactInserts: Array<Record<string, unknown>> = []
   const taskInserts: Array<Record<string, unknown>> = []
+  const sdUpdates: Array<Record<string, unknown>> = []
+  /** Filters the service_deliveries dedup SELECT actually applied. The mock
+   *  returns rows regardless of filters, so without recording these a revert to
+   *  the old `notes ILIKE '%token%'` guard would still pass the tests. */
+  const sdFilters: { eq: Array<[string, unknown]>; or: string[]; ilike: Array<[string, unknown]> } = {
+    eq: [], or: [], ilike: [],
+  }
 
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
     if (table === 'pipeline_stages') {
@@ -33,7 +44,6 @@ function installFrom(cfg: {
     if (table === 'contacts') {
       const chain: Record<string, unknown> = {
         select: () => chain, eq: () => chain, limit: () => chain,
-        maybeSingle: () => Promise.resolve({ data: cfg.contactFind ?? null, error: null }),
         insert: (row: Record<string, unknown>) => {
           contactInserts.push(row)
           return {
@@ -46,9 +56,23 @@ function installFrom(cfg: {
       return chain
     }
     if (table === 'service_deliveries') {
-      const p = Promise.resolve({ data: cfg.sdDup ?? [], error: null })
+      // Dedup SELECT terminates on .limit(); noteSkippedOffer's read terminates
+      // on .maybeSingle() and then issues an .update().eq().
+      const p = Promise.resolve({
+        data: cfg.sdDupError ? null : (cfg.sdDup ?? []),
+        error: cfg.sdDupError ?? null,
+      })
       const chain: Record<string, unknown> = {
-        select: () => chain, eq: () => chain, ilike: () => chain, limit: () => p,
+        select: () => chain,
+        eq: (col: string, val: unknown) => { sdFilters.eq.push([col, val]); return chain },
+        or: (expr: string) => { sdFilters.or.push(expr); return chain },
+        ilike: (col: string, val: unknown) => { sdFilters.ilike.push([col, val]); return chain },
+        limit: () => p,
+        maybeSingle: () => Promise.resolve({ data: { notes: 'existing notes' }, error: null }),
+        update: (row: Record<string, unknown>) => {
+          sdUpdates.push(row)
+          return { eq: () => Promise.resolve({ error: null }) }
+        },
       }
       return chain
     }
@@ -58,7 +82,7 @@ function installFrom(cfg: {
     return { select: () => ({}) }
   }) as never)
 
-  return { contactInserts, taskInserts }
+  return { contactInserts, taskInserts, sdUpdates, sdFilters }
 }
 
 const OWNER = 'owner-contact-1'
@@ -68,6 +92,7 @@ describe('createItinDeliveriesFromWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(getStartAtWizardServiceTypes).mockResolvedValue(['ITIN'])
+    vi.mocked(findContactIdByEmail).mockResolvedValue(null) // default: not found
     vi.mocked(createSD).mockImplementation(async (params) => ({
       id: 'sd-' + (params.contact_id ?? 'x'),
       service_type: params.service_type,
@@ -113,9 +138,9 @@ describe('createItinDeliveriesFromWizard', () => {
   it('new member flagged → find-or-creates contact stamped with lead_id, creates ITIN SD', async () => {
     const { contactInserts } = installFrom({
       pipelineStages: [{ stage_order: 0, auto_tasks: [] }],
-      contactFind: null,              // not found → insert
       contactInsertId: 'peter-contact',
     })
+    vi.mocked(findContactIdByEmail).mockResolvedValue(null) // not found → insert
     const res = await createItinDeliveriesFromWizard({
       contactId: OWNER, leadId: LEAD, offerToken: 'tok',
       submitted: {
@@ -137,8 +162,8 @@ describe('createItinDeliveriesFromWizard', () => {
   it('existing member contact → reused, NOT re-stamped with lead_id', async () => {
     const { contactInserts } = installFrom({
       pipelineStages: [{ stage_order: 0, auto_tasks: [] }],
-      contactFind: { id: 'hamza-existing' }, // found → reuse, no insert
     })
+    vi.mocked(findContactIdByEmail).mockResolvedValue('hamza-existing') // found → reuse
     const res = await createItinDeliveriesFromWizard({
       contactId: OWNER, leadId: LEAD, offerToken: 'tok',
       submitted: {
@@ -152,7 +177,7 @@ describe('createItinDeliveriesFromWizard', () => {
     expect(vi.mocked(createSD).mock.calls[0][0].contact_id).toBe('hamza-existing')
   })
 
-  it('idempotent — skips a person who already has an ITIN SD for this offer', async () => {
+  it('idempotent — skips a person who already has a live ITIN SD', async () => {
     installFrom({ pipelineStages: [{ stage_order: 0, auto_tasks: [] }], sdDup: [{ id: 'existing-sd' }] })
     const res = await createItinDeliveriesFromWizard({
       contactId: OWNER, leadId: LEAD, offerToken: 'tok',
@@ -161,5 +186,78 @@ describe('createItinDeliveriesFromWizard', () => {
     expect(res.created).toBe(0)
     expect(res.skipped).toBe(1)
     expect(createSD).not.toHaveBeenCalled()
+  })
+
+  // ── Regression: Marcell Bogyora, 2026-07-20 ──
+  // The guard used to match `notes ILIKE '%<offerToken>%'`. When the submission
+  // token gained a per-subject suffix, a re-submitted wizard minted a token that
+  // no longer matched the existing SD's notes → duplicate ITIN in the client's
+  // portal. The guard must now ignore the token entirely.
+  it('skips an existing ITIN even when the offer token has changed shape', async () => {
+    const { sdFilters } = installFrom({
+      pipelineStages: [{ stage_order: 0, auto_tasks: [] }],
+      sdDup: [{ id: 'existing-sd' }], // exists, but under the OLD token
+    })
+    const res = await createItinDeliveriesFromWizard({
+      contactId: OWNER, leadId: LEAD,
+      offerToken: 'portal-marcell-bogyora-2026-f53451cf', // NEW shape
+      submitted: { owner_needs_itin: true, owner_first_name: 'Marcell', owner_email: 'm@x.com' },
+    })
+    expect(res.created).toBe(0)
+    expect(res.skipped).toBe(1)
+    expect(createSD).not.toHaveBeenCalled()
+    // Reported to the caller — and deliberately NOT written into the SD's
+    // freetext notes, which is the pattern that caused this bug.
+    expect(res.people[0]?.detail).toContain('already has a live ITIN')
+
+    // The mock returns rows regardless of filters, so the assertions above pass
+    // under the OLD token-matching guard too. These pin the actual semantics:
+    // the dedup must key on the PERSON and must never touch `notes`.
+    expect(sdFilters.ilike).toHaveLength(0)
+    expect(sdFilters.eq).toContainEqual(['service_type', 'ITIN'])
+    expect(sdFilters.eq).toContainEqual(['contact_id', OWNER])
+    expect(sdFilters.or.join(' ')).toContain('status')
+  })
+
+  it('fails CLOSED — a dedup-check error skips the person instead of creating', async () => {
+    installFrom({
+      pipelineStages: [{ stage_order: 0, auto_tasks: [] }],
+      sdDupError: { message: 'statement timeout' },
+    })
+    const res = await createItinDeliveriesFromWizard({
+      contactId: OWNER, leadId: LEAD, offerToken: 'tok',
+      submitted: { owner_needs_itin: true, owner_first_name: 'Adam', owner_email: 'a@x.com' },
+    })
+    expect(res.created).toBe(0)
+    expect(createSD).not.toHaveBeenCalled()
+    expect(res.people[0].status).toBe('error')
+    expect(res.people[0].detail).toContain('statement timeout')
+  })
+
+  it('treats a unique-violation from the DB backstop as "already exists"', async () => {
+    installFrom({ pipelineStages: [{ stage_order: 0, auto_tasks: [] }] })
+    vi.mocked(createSD).mockRejectedValueOnce(
+      new Error('duplicate key value violates unique constraint "uq_itin_sd_active_per_contact" (23505)'),
+    )
+    const res = await createItinDeliveriesFromWizard({
+      contactId: OWNER, leadId: LEAD, offerToken: 'tok',
+      submitted: { owner_needs_itin: true, owner_first_name: 'Adam', owner_email: 'a@x.com' },
+    })
+    expect(res.created).toBe(0)
+    expect(res.skipped).toBe(1)
+    expect(res.people[0].status).toBe('existing')
+  })
+
+  it('re-throws a non-unique createSD failure (never silently swallowed)', async () => {
+    installFrom({ pipelineStages: [{ stage_order: 0, auto_tasks: [] }] })
+    vi.mocked(createSD).mockRejectedValueOnce(new Error('some other DB failure'))
+    const res = await createItinDeliveriesFromWizard({
+      contactId: OWNER, leadId: LEAD, offerToken: 'tok',
+      submitted: { owner_needs_itin: true, owner_first_name: 'Adam', owner_email: 'a@x.com' },
+    })
+    // caught by the per-applicant try/catch and reported, not created
+    expect(res.created).toBe(0)
+    expect(res.people[0].status).toBe('error')
+    expect(res.people[0].detail).toContain('some other DB failure')
   })
 })

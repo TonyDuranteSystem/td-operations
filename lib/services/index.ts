@@ -234,6 +234,41 @@ export async function getStartAtWizardServiceTypes(): Promise<string[]> {
     .map(([serviceType]) => serviceType)
 }
 
+/**
+ * Pipeline / `service_type` names tagged `per_person` — services a single
+ * PERSON can only ever hold ONE live instance of, because the real-world thing
+ * being delivered is unique to that person. ITIN is the canonical case:
+ * a person receives exactly one ITIN in their life and cannot apply for a
+ * second (Antonio, 2026-07-20).
+ *
+ * Why this is a catalog tag and not an `if (serviceType === "ITIN")`: an offer
+ * line of "ITIN ×2" means two ITINs for two DIFFERENT PEOPLE, never two for one
+ * person — so any code that multiplies units onto a single contact is wrong by
+ * construction for these services. Tagging makes that a property of the
+ * service, so the next per-person service (ITIN Renewal, an individual return)
+ * inherits the protection instead of reproducing the bug from scratch.
+ *
+ * Enforced in three places: this tag (business layer), the per-person guard in
+ * lib/operations/itin-from-wizard.ts, and the DB partial unique index
+ * uq_itin_sd_active_per_contact (race backstop).
+ */
+export async function getPerPersonServiceTypes(): Promise<string[]> {
+  const all = await loadEntries()
+  const slugs = new Set(
+    all
+      .filter((e) => e.status === "active" && e.tags.includes("per_person"))
+      .map((e) => e.slug),
+  )
+  return Object.entries(SERVICE_TYPE_TO_SLUG)
+    .filter(([, slug]) => slugs.has(slug))
+    .map(([serviceType]) => serviceType)
+}
+
+/** True when a single person can hold at most ONE live instance of this service. */
+export async function isPerPersonServiceType(serviceType: string): Promise<boolean> {
+  return (await getPerPersonServiceTypes()).includes(serviceType)
+}
+
 /** True if the SD-type display name corresponds to a row tagged both `sd` and `sellable`. */
 export async function isStandaloneSD(sdType: string): Promise<boolean> {
   const entry = await getSDByType(sdType)
@@ -309,7 +344,12 @@ export const SERVICES_STATIC: readonly StaticServiceEntry[] = [
     display_name: "ITIN Application",
     display_name_translations: { it: "Richiesta ITIN" },
     status: "active",
-    tags: ["service", "sd", "sellable"],
+    // `per_person` mirrors migration 20260720-2330 (one ITIN per person, ever).
+    // Kept in sync by hand: the drift test compares this list against the
+    // in-repo seed fixture, NOT the live DB, so a tag added by migration is
+    // invisible to it. Any client component reading these static tags would
+    // otherwise be blind to per_person.
+    tags: ["service", "sd", "sellable", "per_person"],
   },
   {
     slug: "ein",

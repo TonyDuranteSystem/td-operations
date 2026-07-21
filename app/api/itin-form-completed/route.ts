@@ -215,6 +215,15 @@ export async function POST(req: NextRequest) {
         .eq("service_type", "ITIN")
         .or(orFilters.join(","))
         .eq("status", "active")
+        // DETERMINISTIC pick (2026-07-20). Without an explicit order this
+        // `.limit(1)` returned an arbitrary row, so a contact who somehow holds
+        // two active ITIN SDs could have their W-7 / 1040-NR / Schedule OI and
+        // the staff review task filed against the WRONG one — while the real
+        // application sat untouched at a later stage. Oldest-first pins it to
+        // the original application. The duplicate itself is prevented upstream
+        // (lib/operations/itin-from-wizard.ts + uq_itin_sd_active_per_contact);
+        // this ordering is the defence-in-depth for any that slip through.
+        .order("created_at", { ascending: true })
         .limit(1)
 
       if (existingSdError) {
