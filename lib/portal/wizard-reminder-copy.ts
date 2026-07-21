@@ -14,22 +14,15 @@
  *   belonged to.
  */
 
-export const WIZARD_LABELS: Record<string, { en: string; it: string }> = {
-  formation: { en: "Formation", it: "Costituzione" },
-  onboarding: { en: "Onboarding", it: "Onboarding" },
-  tax: { en: "Tax Return", it: "Dichiarazione Fiscale" },
-  tax_return: { en: "Tax Return", it: "Dichiarazione Fiscale" },
-  itin: { en: "ITIN Application", it: "Richiesta ITIN" },
-  banking: { en: "Banking Setup", it: "Apertura Conto" },
-  banking_relay: { en: "Relay Bank Account", it: "Conto Bancario Relay" },
-  banking_payset: { en: "Payset Bank Account", it: "Conto Bancario Payset" },
-  closure: { en: "LLC Closure", it: "Chiusura LLC" },
-}
-
-/** Falls back to the raw wizard_type only for a type this map has never seen. */
-export function wizardLabelFor(wizardType: string): { en: string; it: string } {
-  return WIZARD_LABELS[wizardType] ?? { en: wizardType, it: wizardType }
-}
+/**
+ * Labels moved to lib/portal/wizard-labels.ts on 2026-07-21. This file kept its
+ * own private map, which is why fixing the 07-20 leak here left the portal home
+ * leaking the same way the next day. Re-exported so existing importers and the
+ * cron's tests are unaffected — but there is now exactly one map, and it is
+ * compiler-checked against VALID_WIZARD_TYPES.
+ */
+export { WIZARD_LABELS, wizardLabelFor } from "./wizard-labels"
+import { wizardLabelFor } from "./wizard-labels"
 
 /**
  * Builds the client-facing reminder title. Appends the company name when
