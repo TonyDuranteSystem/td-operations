@@ -156,6 +156,11 @@ export const SERVICE_CONTENT = {
 export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return' }: StandaloneServiceAgreementProps) {
   const ct = SERVICE_CONTENT[contractType]
   const [signing, setSigning] = useState(false)
+  // Blocking on a failed write makes RETRY a real path. The PDF-capture step
+  // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
+  // second attempt found `canvas.parentElement` null and threw a raw TypeError
+  // onto a legal-signing screen. Freeze once; a retry reuses the frozen DOM.
+  const frozenForPdfRef = useRef(false)
   const [statusMsg, setStatusMsg] = useState('Enter your name, email, and sign below.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
@@ -237,6 +242,8 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
     try {
       const html2pdf = (await import('html2pdf.js')).default
 
+      if (!frozenForPdfRef.current) {
+        frozenForPdfRef.current = true
       // Freeze form fields
       const formEl = document.getElementById('tax-client-form')
       if (formEl) {
@@ -252,6 +259,8 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         const wrap = canvas.parentElement!
         const dataUrl = sigPadRef.current.toDataURL('image/png')
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
+      }
+
       }
 
       // Hide action bar

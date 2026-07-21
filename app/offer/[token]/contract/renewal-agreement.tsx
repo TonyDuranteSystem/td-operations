@@ -28,6 +28,11 @@ interface RenewalAgreementProps {
 
 export default function RenewalAgreement({ offer, token }: RenewalAgreementProps) {
   const [signing, setSigning] = useState(false)
+  // Blocking on a failed write makes RETRY a real path. The PDF-capture step
+  // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
+  // second attempt found `canvas.parentElement` null and threw a raw TypeError
+  // onto a legal-signing screen. Freeze once; a retry reuses the frozen DOM.
+  const frozenForPdfRef = useRef(false)
   const [signed, setSigned] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Enter your name, email, and sign below.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
@@ -124,6 +129,8 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
     try {
       const html2pdf = (await import('html2pdf.js')).default
 
+      if (!frozenForPdfRef.current) {
+        frozenForPdfRef.current = true
       // Freeze form fields
       const formEl = document.getElementById('renewal-client-form')
       if (formEl) {
@@ -139,6 +146,8 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         const wrap = canvas.parentElement!
         const dataUrl = sigPadRef.current.toDataURL('image/png')
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
+      }
+
       }
 
       // Generate PDF

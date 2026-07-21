@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -92,6 +93,10 @@ function OperatingAgreementContent() {
 
   // Signing
   const [signing, setSigning] = useState(false)
+  // In-page signing error. Replaces alert(): a native popup on a legal-signing
+  // screen reads as a broken site and its text was hardcoded English on a
+  // bilingual record.
+  const [signError, setSignError] = useState('')
   const [signed, setSigned] = useState(false)
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
   const sigPadRef = useRef<any>(null)
@@ -193,6 +198,7 @@ function OperatingAgreementContent() {
 
   // ─── SIGN ───
   async function handleSign() {
+    setSignError('')
     if (!oa || !sigPadRef.current) return
     if (sigPadRef.current.isEmpty()) {
       alert('Please sign above before submitting.')
@@ -245,7 +251,10 @@ function OperatingAgreementContent() {
         },
         body: pdfBlob,
       })
-      if (!uploadRes.ok) throw new Error('PDF upload failed')
+      if (storageWriteFailed(uploadRes)) {
+        console.error('[oa] signed PDF upload failed:', uploadRes?.status, await uploadRes.text().catch(() => ''))
+        throw new SigningFailure('document_upload', signingLang(oa.language))
+      }
 
       // 6. Update OA record
       const sigData: Record<string, unknown> = {
@@ -258,7 +267,7 @@ function OperatingAgreementContent() {
         sigData.member_name = oa.member_name
       }
 
-      await supabasePublic
+      const { error: oaErr } = await supabasePublic
         .from('oa_agreements')
         .update({
           status: 'signed',
@@ -267,6 +276,12 @@ function OperatingAgreementContent() {
           pdf_storage_path: pdfPath,
         })
         .eq('id', oa.id)
+      if (oaErr) {
+        // The PDF is stored; only the record failed. Do NOT tell the client the
+        // document is unsigned — ask them to confirm with us.
+        console.error('[oa] signed-status update failed:', oaErr.message)
+        throw new SigningFailure('status', signingLang(oa.language))
+      }
 
       // Notify backend (email to support@, SD history update, task creation)
       try {
@@ -282,7 +297,9 @@ function OperatingAgreementContent() {
       setSigned(true)
     } catch (err) {
       console.error('Signing failed:', err)
-      alert('An error occurred while signing. Please try again.')
+      setSignError(isClientFacingError(err)
+        ? err.message
+        : new SigningFailure('document_upload', signingLang(oa?.language)).message)
     } finally {
       setSigning(false)
     }
@@ -476,6 +493,22 @@ function OperatingAgreementContent() {
           </div>
         )}
       </div>
+
+      {/* Rendered OUTSIDE the action bar: the sign handler hides that bar before
+          uploading, and React does not rewrite an imperative inline style, so an
+          error rendered inside it would be invisible to the client. */}
+      {signError && (
+        <div
+          role="alert"
+          style={{
+            border: '2px solid #b91c1c', background: '#fef2f2', color: '#7f1d1d',
+            borderRadius: 6, padding: '14px 16px', margin: '16px auto', maxWidth: 800,
+            textAlign: 'left', fontSize: 15, lineHeight: 1.5,
+          }}
+        >
+          {signError}
+        </div>
+      )}
 
       {/* Action bar — outside the PDF capture area */}
       {!signed && (

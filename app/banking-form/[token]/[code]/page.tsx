@@ -266,7 +266,7 @@ function BankingFormCodeContent() {
         const path = `${submission.token}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('banking-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: false })
+          .upload(path, file, { cacheControl: '3600', upsert: true })
         if (upErr) {
           console.error(`[form] upload failed for ${key}:`, upErr.message)
           uploadFailures.push({ key, fileName: file.name })

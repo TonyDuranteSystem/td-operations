@@ -230,7 +230,7 @@ export default function TaxFormCodePage() {
         const path = `${submission.token}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('tax-form-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: false })
+          .upload(path, file, { cacheControl: '3600', upsert: true })
         if (upErr) {
           console.error(`[form] upload failed for ${key}:`, upErr.message)
           uploadFailures.push({ key, fileName: file.name })
@@ -245,7 +245,7 @@ export default function TaxFormCodePage() {
         const path = `${submission.token}/bank_statement_${i}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('tax-form-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: false })
+          .upload(path, file, { cacheControl: '3600', upsert: true })
         if (upErr) {
           console.error(`[form] upload failed for bank_statement_${i}:`, upErr.message)
           uploadFailures.push({ key: `bank_statement_${i}`, fileName: file.name })

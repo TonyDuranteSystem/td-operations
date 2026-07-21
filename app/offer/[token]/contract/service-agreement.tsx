@@ -83,6 +83,11 @@ interface Props {
 export default function ServiceAgreement({ offer, token: _token }: Props) {
   const cl = CL[offer.language || 'en']
   const [signing, setSigning] = useState(false)
+  // Blocking on a failed write makes RETRY a real path. The PDF-capture step
+  // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
+  // second attempt found `canvas.parentElement` null and threw a raw TypeError
+  // onto a legal-signing screen. Freeze once; a retry reuses the frozen DOM.
+  const frozenForPdfRef = useRef(false)
   const [statusMsg, setStatusMsg] = useState('Complete all required fields and sign both sections above.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
@@ -282,6 +287,8 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     try {
       const html2pdf = (await import('html2pdf.js')).default
 
+      if (!frozenForPdfRef.current) {
+        frozenForPdfRef.current = true
       // Freeze form fields
       const formEl = document.getElementById('client-form-svc')
       if (formEl) {
@@ -307,6 +314,8 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
         const dataUrl = sigPadsRef.current[key].toDataURL('image/png')
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
       })
+
+      }
 
       // Hide action bar
       const actionBar = document.getElementById('action-bar-svc')

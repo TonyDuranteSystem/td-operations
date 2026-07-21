@@ -348,6 +348,11 @@ function OperatingAgreementCodeContent() {
             'apikey': SB_ANON,
             'Authorization': `Bearer ${SB_ANON}`,
             'Content-Type': 'image/png',
+            // This path is deterministic (sig-<index>.png). Without upsert a
+            // retry after ANY downstream failure collides and tells the signer
+            // "your signature was not saved" forever. Re-signing the same slot
+            // should replace the image.
+            'x-upsert': 'true',
           },
           body: sigBlob,
         })
@@ -372,10 +377,19 @@ function OperatingAgreementCodeContent() {
         }
 
         // Atomic increment signed_count
-        const { data: updatedOa } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
+        const { data: updatedOa, error: incErr } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
+        if (incErr || updatedOa === null || updatedOa === undefined) {
+          // This value decides whether the combined PDF is generated. The old
+          // fallback `(oa.signed_count||0)+1` used a count read when the page
+          // loaded, so a failed increment made EVERY member look "not last":
+          // everyone signs, no final document is ever produced, and nobody is
+          // told. Fail loudly instead of guessing.
+          console.error('[oa] increment_oa_signed_count failed:', incErr?.message ?? 'no value returned')
+          throw new SigningFailure('record', signingLang(oa.language))
+        }
 
         // Check if we're the last signer
-        const newSignedCount = updatedOa ?? ((oa.signed_count || 0) + 1)
+        const newSignedCount = updatedOa
         const isLastSigner = newSignedCount >= totalSigners
 
         if (isLastSigner) {
@@ -534,7 +548,7 @@ function OperatingAgreementCodeContent() {
           sigData.member_name = oa.member_name
         }
 
-        await supabasePublic
+        const { error: smllcErr } = await supabasePublic
           .from('oa_agreements')
           .update({
             status: 'signed',
@@ -544,6 +558,12 @@ function OperatingAgreementCodeContent() {
             signed_count: 1,
           })
           .eq('id', oa.id)
+        if (smllcErr) {
+          // PDF is stored; only the record failed. Do NOT tell the client it is
+          // unsigned — ask them to confirm with us.
+          console.error('[oa] SMLLC signed-status update failed:', smllcErr.message)
+          throw new SigningFailure('status', signingLang(oa.language))
+        }
 
         try {
           await fetch('/api/oa-signed', {
@@ -569,6 +589,10 @@ function OperatingAgreementCodeContent() {
       setSignError(isClientFacingError(err)
         ? err.message
         : new SigningFailure('document_upload', signingLang(oa?.language)).message)
+      // The handler hides the action bar before uploading; bring it back so the
+      // client can actually retry (every other signing page does this).
+      const bar = document.getElementById('oa-action-bar')
+      if (bar) bar.style.display = 'block'
     } finally {
       setSigning(false)
     }
@@ -868,20 +892,26 @@ function OperatingAgreementCodeContent() {
       </div>
 
       {/* Action bar — outside the PDF capture area */}
+      {/* Rendered OUTSIDE #oa-action-bar and outside `canSign`: the sign handler
+          sets that bar to display:none before uploading, and React will not
+          rewrite an imperative inline style, so an error rendered inside it is
+          invisible to the client. */}
+      {signError && (
+        <div
+          role="alert"
+          style={{
+            maxWidth: 800, margin: '24px auto',
+            border: '2px solid #b91c1c', background: '#fef2f2', color: '#7f1d1d',
+            borderRadius: 6, padding: '14px 16px',
+            textAlign: 'left', fontSize: 15, lineHeight: 1.5,
+          }}
+        >
+          {signError}
+        </div>
+      )}
+
       {canSign && (
         <div id="oa-action-bar" style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
-          {signError && (
-            <div
-              role="alert"
-              style={{
-                border: '2px solid #b91c1c', background: '#fef2f2', color: '#7f1d1d',
-                borderRadius: 6, padding: '14px 16px', marginBottom: 16,
-                textAlign: 'left', fontSize: 15, lineHeight: 1.5,
-              }}
-            >
-              {signError}
-            </div>
-          )}
           <button
             onClick={handleSign}
             disabled={signing}

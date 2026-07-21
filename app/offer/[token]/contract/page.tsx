@@ -194,6 +194,12 @@ export default function ContractPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [signing, setSigning] = useState(false)
+  // Blocking on a failed write makes RETRY a real path. The PDF-capture step
+  // below DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs),
+  // so a second attempt found `canvas.parentElement` null and threw a raw
+  // TypeError onto a legal-signing screen. Freeze once; a retry reuses the
+  // already-frozen DOM, which captures identically.
+  const frozenForPdfRef = useRef(false)
   const [statusMsg, setStatusMsg] = useState('Complete all required fields and sign both sections above.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
@@ -443,6 +449,8 @@ export default function ContractPage() {
       // Dynamic import html2pdf
       const html2pdf = (await import('html2pdf.js')).default
 
+      if (!frozenForPdfRef.current) {
+        frozenForPdfRef.current = true
       // Freeze form fields for PDF
       const formEl = document.getElementById('client-form')
       if (formEl) {
@@ -468,6 +476,8 @@ export default function ContractPage() {
         const dataUrl = sigPadsRef.current[key].toDataURL('image/png')
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
       })
+
+      }
 
       // Hide action bar
       const actionBar = document.getElementById('action-bar')
@@ -833,6 +843,7 @@ export default function ContractPage() {
       // Re-show action bar
       const actionBar = document.getElementById('action-bar')
       if (actionBar) actionBar.style.display = 'block'
+      document.querySelectorAll('.contract-clear-btn').forEach(b => (b as HTMLElement).style.display = '')
     }
   }
 

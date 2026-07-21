@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { shouldBlockSubmission, uploadFailureMessage, uploadLang, type FailedUpload } from '@/lib/public-forms/upload-failures'
 import {
   LABELS,
   TOOLTIPS,
@@ -254,16 +255,16 @@ export default function FormationFormCodePage() {
     try {
       // 1. Upload files
       const uploadPaths: string[] = []
-      const uploadErrors: string[] = []
+      const uploadFailures: FailedUpload[] = []
       for (const [key, file] of Object.entries(uploadFiles)) {
         if (!file) continue
         const path = `${submission.token}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('formation-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: false })
+          .upload(path, file, { cacheControl: '3600', upsert: true })
         if (upErr) {
           console.error(`Upload failed for ${key}:`, upErr.message)
-          uploadErrors.push(`${file.name}: ${upErr.message}`)
+          uploadFailures.push({ key, fileName: file.name })
         } else {
           uploadPaths.push(path)
         }
@@ -273,8 +274,11 @@ export default function FormationFormCodePage() {
       // ANY file succeeded went through as completed — a 2-of-3 passport upload
       // filed with a passport missing, right after the code had validated that
       // passport as mandatory. The `&&` defeated the validation.
-      if (uploadErrors.length > 0) {
-        setSubmitError(lang === 'it' ? `Errore nel caricamento dei file: ${uploadErrors.join(', ')}. Riprova.` : `File upload failed: ${uploadErrors.join(', ')}. Please try again.`)
+      if (shouldBlockSubmission(uploadFailures)) {
+        // Shared, client-safe copy: the old string pasted the RAW storage error
+        // onto a client-facing page and lacked the "your answers are safe" and
+        // support-email wording the other forms now use.
+        setSubmitError(uploadFailureMessage(uploadFailures, uploadLang(lang)))
         setSubmitting(false)
         return
       }
