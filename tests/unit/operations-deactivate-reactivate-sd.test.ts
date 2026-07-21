@@ -109,6 +109,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         is: () => chain,
         in: () => chain,
         neq: () => chain,
+        or: () => chain,
         limit: () =>
           Promise.resolve(
             resolveFor(table, table === "service_deliveries" ? "perPersonLookup" : "looseTasks"),
@@ -393,7 +394,7 @@ describe("reactivateSD", () => {
 
     expect(res.success).toBe(false)
     expect(res.outcome).toBe("conflict")
-    expect(res.error).toMatch(/already has an active ITIN/i)
+    expect(res.error).toMatch(/already has a ITIN/i)
     // it must NOT have attempted the status flip
     expect(capturedSDUpdate.patch).toBeNull()
   })

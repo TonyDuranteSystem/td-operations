@@ -25,6 +25,12 @@ function installFrom(cfg: {
   const contactInserts: Array<Record<string, unknown>> = []
   const taskInserts: Array<Record<string, unknown>> = []
   const sdUpdates: Array<Record<string, unknown>> = []
+  /** Filters the service_deliveries dedup SELECT actually applied. The mock
+   *  returns rows regardless of filters, so without recording these a revert to
+   *  the old `notes ILIKE '%token%'` guard would still pass the tests. */
+  const sdFilters: { eq: Array<[string, unknown]>; or: string[]; ilike: Array<[string, unknown]> } = {
+    eq: [], or: [], ilike: [],
+  }
 
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
     if (table === 'pipeline_stages') {
@@ -58,9 +64,9 @@ function installFrom(cfg: {
       })
       const chain: Record<string, unknown> = {
         select: () => chain,
-        eq: () => chain,
-        or: () => chain,
-        ilike: () => chain,
+        eq: (col: string, val: unknown) => { sdFilters.eq.push([col, val]); return chain },
+        or: (expr: string) => { sdFilters.or.push(expr); return chain },
+        ilike: (col: string, val: unknown) => { sdFilters.ilike.push([col, val]); return chain },
         limit: () => p,
         maybeSingle: () => Promise.resolve({ data: { notes: 'existing notes' }, error: null }),
         update: (row: Record<string, unknown>) => {
@@ -76,7 +82,7 @@ function installFrom(cfg: {
     return { select: () => ({}) }
   }) as never)
 
-  return { contactInserts, taskInserts, sdUpdates }
+  return { contactInserts, taskInserts, sdUpdates, sdFilters }
 }
 
 const OWNER = 'owner-contact-1'
@@ -188,7 +194,7 @@ describe('createItinDeliveriesFromWizard', () => {
   // no longer matched the existing SD's notes → duplicate ITIN in the client's
   // portal. The guard must now ignore the token entirely.
   it('skips an existing ITIN even when the offer token has changed shape', async () => {
-    installFrom({
+    const { sdFilters } = installFrom({
       pipelineStages: [{ stage_order: 0, auto_tasks: [] }],
       sdDup: [{ id: 'existing-sd' }], // exists, but under the OLD token
     })
@@ -203,6 +209,14 @@ describe('createItinDeliveriesFromWizard', () => {
     // Reported to the caller — and deliberately NOT written into the SD's
     // freetext notes, which is the pattern that caused this bug.
     expect(res.people[0]?.detail).toContain('already has a live ITIN')
+
+    // The mock returns rows regardless of filters, so the assertions above pass
+    // under the OLD token-matching guard too. These pin the actual semantics:
+    // the dedup must key on the PERSON and must never touch `notes`.
+    expect(sdFilters.ilike).toHaveLength(0)
+    expect(sdFilters.eq).toContainEqual(['service_type', 'ITIN'])
+    expect(sdFilters.eq).toContainEqual(['contact_id', OWNER])
+    expect(sdFilters.or.join(' ')).toContain('status')
   })
 
   it('fails CLOSED — a dedup-check error skips the person instead of creating', async () => {

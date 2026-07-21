@@ -1177,21 +1177,36 @@ export async function reactivateSD(
   // contract is bypassed and the CRM button dies silently with no toast.
   // Refusing is correct; refusing invisibly is not.
   if (sd.contact_id && (await isPerPersonServiceType(sd.service_type))) {
-    const { data: liveSame } = await supabaseAdmin
+    // Predicate must match the LIFETIME rule the rest of the system enforces
+    // (`status.is.null,status.neq.cancelled`), NOT the narrower `active`-only
+    // scope of the DB index. The index is a race backstop; a person receives
+    // exactly one ITIN in their life, so a `completed` / `on_hold` / NULL-status
+    // one blocks a reactivation too — and the index would not catch it.
+    const { data: liveSame, error: liveSameErr } = await supabaseAdmin
       .from("service_deliveries")
       .select("id")
       .eq("service_type", sd.service_type)
       .eq("contact_id", sd.contact_id)
-      .eq("status", "active")
+      .or("status.is.null,status.neq.cancelled")
       .neq("id", sd.id)
       .limit(1)
+    // Fail closed: an unverifiable check must not wave a reactivation through.
+    if (liveSameErr) {
+      return {
+        success: false,
+        outcome: "error",
+        delivery_id: params.delivery_id,
+        service_type: sd.service_type,
+        error: `Could not verify whether this person already has a ${sd.service_type} (${liveSameErr.message}) — not reactivated.`,
+      }
+    }
     if (liveSame && liveSame.length > 0) {
       return {
         success: false,
         outcome: "conflict",
         delivery_id: params.delivery_id,
         service_type: sd.service_type,
-        error: `This person already has an active ${sd.service_type} service — one person can only ever hold one. Cancel the active one first if you meant to swap them.`,
+        error: `This person already has a ${sd.service_type} service — one person can only ever hold one. Cancel that one first if you meant to swap them.`,
       }
     }
   }
