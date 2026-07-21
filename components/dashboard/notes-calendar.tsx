@@ -56,7 +56,7 @@ function timeOf(n: CalendarNote): string {
   return new Date(n.snoozed_until).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-export function NotesCalendar({ notes }: { notes: CalendarNote[] }) {
+export function NotesCalendar({ notes, onOpen }: { notes: CalendarNote[]; onOpen?: (n: CalendarNote) => void }) {
   const today = useMemo(() => new Date(), [])
   const now = today
   const [cursor, setCursor] = useState(() => ({ year: today.getFullYear(), monthIndex: today.getMonth() }))
@@ -169,7 +169,7 @@ export function NotesCalendar({ notes }: { notes: CalendarNote[] }) {
           {selectedNotes.length === 0
             ? <p className="text-sm text-zinc-400">Nothing coming back on this day.</p>
             : <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                {selectedNotes.map((n) => <NoteMini key={n.id} n={n} now={now} />)}
+                {selectedNotes.map((n) => <NoteMini key={n.id} n={n} now={now} onOpen={onOpen} />)}
               </div>}
         </div>
       </div>
@@ -185,7 +185,7 @@ export function NotesCalendar({ notes }: { notes: CalendarNote[] }) {
                     {new Date(n.snoozed_until as string).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}
                     {' · '}{timeOf(n)}
                   </p>
-                  <NoteMini n={n} now={now} />
+                  <NoteMini n={n} now={now} onOpen={onOpen} />
                 </div>
               ))}
             </div>}
@@ -200,12 +200,16 @@ export function NotesCalendar({ notes }: { notes: CalendarNote[] }) {
   )
 }
 
-function NoteMini({ n, now }: { n: CalendarNote; now: Date }) {
+function NoteMini({ n, now, onOpen }: { n: CalendarNote; now: Date; onOpen?: (n: CalendarNote) => void }) {
   const client = clientOf(n)
   const late = isOverdue(n, now)
   return (
     <div className={`rounded border p-2 ${CARD[n.color] || CARD.yellow} ${late ? 'ring-1 ring-red-400' : ''}`}>
-      <p className="whitespace-pre-wrap break-words text-sm leading-snug">{n.body}</p>
+      <p
+        onClick={() => onOpen?.(n)}
+        title="Open"
+        className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
+      >{n.body}</p>
       {client && (
         <p className="mt-1 flex items-center gap-1 text-xs font-medium opacity-80">
           <Building2 className="h-3 w-3 shrink-0" /><span className="truncate">{client}</span>
