@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { purgeAllCaches } from '@/lib/portal/sw-scope'
 import {
   LayoutDashboard,
   FileText,
@@ -286,6 +287,14 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     // every refresh token for the user, logging them out of their phone and
     // other devices too (real-client hazard found 2026-07-07).
     await supabase.auth.signOut({ scope: 'local' })
+    // Drop any Cache Storage left on this device before leaving. Older portal
+    // service workers cached server-rendered authenticated pages (ITIN, EIN,
+    // address, invoices — and signing URLs that authenticate on their own), and
+    // sign-out never cleared them, so they outlived the session on shared or
+    // resold devices (council review 2026-07-21, dev job 454514f5). The current
+    // worker caches nothing; this stays as the belt-and-braces purge for any
+    // device still carrying a legacy bucket. Best-effort — never block logout.
+    await purgeAllCaches()
     router.push('/portal/login')
     router.refresh()
   }
