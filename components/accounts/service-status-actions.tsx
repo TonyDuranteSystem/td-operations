@@ -51,6 +51,17 @@ export function DeactivateServiceButton({
       if (res.tasks_cancelled) parts.push(`${res.tasks_cancelled} task${res.tasks_cancelled === 1 ? '' : 's'} cancelled`)
       if (res.renewal_date_cleared) parts.push('renewal date cleared')
       toast.success(`${serviceName} deactivated${parts.length ? ` (${parts.join(', ')})` : ''}`)
+      // Loose ends this cancel could not reach: open tasks on the same person
+      // that no service owns. Shown here because the CRM is where staff
+      // actually deactivate — computing it only for the MCP surface would mean
+      // nobody sees it.
+      const loose = res.unlinked_open_tasks ?? []
+      if (loose.length > 0) {
+        toast.warning(
+          `${loose.length} open task${loose.length === 1 ? '' : 's'} on this contact ${loose.length === 1 ? 'is' : 'are'} not linked to any service, so ${loose.length === 1 ? 'it was' : 'they were'} NOT cancelled: ${loose.map(t => t.title).join(', ')}`,
+          { duration: 10000 },
+        )
+      }
       setOpen(false)
       setReason('')
       router.refresh()

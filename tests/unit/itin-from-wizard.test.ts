@@ -188,7 +188,7 @@ describe('createItinDeliveriesFromWizard', () => {
   // no longer matched the existing SD's notes → duplicate ITIN in the client's
   // portal. The guard must now ignore the token entirely.
   it('skips an existing ITIN even when the offer token has changed shape', async () => {
-    const { sdUpdates } = installFrom({
+    installFrom({
       pipelineStages: [{ stage_order: 0, auto_tasks: [] }],
       sdDup: [{ id: 'existing-sd' }], // exists, but under the OLD token
     })
@@ -200,9 +200,9 @@ describe('createItinDeliveriesFromWizard', () => {
     expect(res.created).toBe(0)
     expect(res.skipped).toBe(1)
     expect(createSD).not.toHaveBeenCalled()
-    // and the skip is recorded on the existing SD so staff can reconcile
-    expect(sdUpdates).toHaveLength(1)
-    expect(String(sdUpdates[0].notes)).toContain('portal-marcell-bogyora-2026-f53451cf')
+    // Reported to the caller — and deliberately NOT written into the SD's
+    // freetext notes, which is the pattern that caused this bug.
+    expect(res.people[0]?.detail).toContain('already has a live ITIN')
   })
 
   it('fails CLOSED — a dedup-check error skips the person instead of creating', async () => {

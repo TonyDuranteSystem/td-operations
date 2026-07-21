@@ -70,33 +70,6 @@ export interface ItinFromWizardResult {
   people: ItinFromWizardPerson[]
 }
 
-/**
- * Append a dated line to an existing ITIN SD recording a later offer that also
- * bundled an ITIN for this person. Best-effort: a note failure must never stop
- * the wizard chain — the skip itself is already reported to the caller.
- */
-async function noteSkippedOffer(deliveryId: string, offerToken: string | null): Promise<void> {
-  if (!offerToken) return
-  try {
-    const { data: sd } = await supabaseAdmin
-      .from("service_deliveries")
-      .select("notes")
-      .eq("id", deliveryId)
-      .maybeSingle()
-    const notes = sd?.notes ?? ""
-    // Idempotent: a retried job must not stack the same line twice.
-    if (notes.includes(offerToken)) return
-    const today = new Date().toISOString().split("T")[0]
-    const line = `${today} — Offer ${offerToken} also requested an ITIN for this person; fulfilled by this existing service (no duplicate created).`
-    await supabaseAdmin
-      .from("service_deliveries")
-      .update({ notes: notes ? `${notes}\n${line}` : line })
-      .eq("id", deliveryId)
-  } catch (e) {
-    console.warn("[itin-from-wizard] could not note skipped offer:", e)
-  }
-}
-
 function truthy(v: unknown): boolean {
   if (v === true) return true
   if (typeof v === "string") return /^(true|yes|si|sì|1|on)$/i.test(v.trim())
@@ -252,11 +225,12 @@ export async function createItinDeliveriesFromWizard(
       }
 
       if (dup && dup.length > 0) {
-        // Legitimate-but-skipped case: a NEW offer bundles (and bills) an ITIN
-        // for someone who already has a live one. Leave a trace on the existing
-        // SD so staff can reconcile — otherwise the only record is a counter in
-        // a job row nobody reads.
-        await noteSkippedOffer(dup[0].id, offerToken)
+        // Deliberately NO write to the existing SD's notes here. A person can
+        // only ever hold one ITIN, so "they already have one" is the CORRECT
+        // outcome, not a lost service — and appending to the freetext notes
+        // field would re-create the very pattern that caused this bug (a guard
+        // built on substring-matching freetext). The skip is reported to the
+        // caller in `detail` below, which is where it belongs.
         result.skipped++
         result.people.push({
           name: a.name,

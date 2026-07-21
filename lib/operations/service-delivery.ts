@@ -47,7 +47,7 @@ import {
   isValidServiceType,
   type ValidServiceType,
 } from "@/lib/operations/service-types"
-import { getEntryByServiceType } from "@/lib/services"
+import { getEntryByServiceType, isPerPersonServiceType } from "@/lib/services"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { updateTasksBulk } from "@/lib/operations/task"
 import { updateAccount } from "@/lib/operations/account"
@@ -885,7 +885,11 @@ const RENEWAL_DATE_COLUMN: Record<string, "ra_renewal_date" | "annual_report_due
 }
 
 /** Task statuses considered "open" — closed on deactivate. */
-const OPEN_TASK_STATUSES = ["To Do", "In Progress", "Waiting"] as const
+/** Every task status that counts as still-open. Exported so callers writing
+ *  their own "is there already an open task?" guard cannot omit one — a guard
+ *  that missed "Waiting" is exactly how a duplicate follow-up task slipped
+ *  through (2026-07-20). Never hand-roll this list. */
+export const OPEN_TASK_STATUSES = ["To Do", "In Progress", "Waiting"] as const
 
 function isRenewalServiceType(serviceType: string): boolean {
   return serviceType in RENEWAL_DATE_COLUMN
@@ -1094,7 +1098,7 @@ export interface ReactivateSDParams {
 
 export interface ReactivateSDResult {
   success: boolean
-  outcome: "reactivated" | "not_cancelled" | "stale" | "not_found" | "error"
+  outcome: "reactivated" | "not_cancelled" | "stale" | "not_found" | "conflict" | "error"
   delivery_id: string
   service_type?: string
   task_created?: boolean
@@ -1153,6 +1157,32 @@ export async function reactivateSD(
     }
   }
 
+  // Per-person services (ITIN): reactivating into a second live instance is
+  // impossible — a person holds exactly one. Check it HERE and return a plain
+  // message, because the DB backstop uq_itin_sd_active_per_contact would
+  // otherwise raise 23505 inside dbWrite, which THROWS: the typed result
+  // contract is bypassed and the CRM button dies silently with no toast.
+  // Refusing is correct; refusing invisibly is not.
+  if (sd.contact_id && (await isPerPersonServiceType(sd.service_type))) {
+    const { data: liveSame } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("id")
+      .eq("service_type", sd.service_type)
+      .eq("contact_id", sd.contact_id)
+      .eq("status", "active")
+      .neq("id", sd.id)
+      .limit(1)
+    if (liveSame && liveSame.length > 0) {
+      return {
+        success: false,
+        outcome: "conflict",
+        delivery_id: params.delivery_id,
+        service_type: sd.service_type,
+        error: `This person already has an active ${sd.service_type} service — one person can only ever hold one. Cancel the active one first if you meant to swap them.`,
+      }
+    }
+  }
+
   let statusQuery = supabaseAdmin
     .from("service_deliveries")
     .update({ status: "active", end_date: null, updated_at: new Date().toISOString() })
@@ -1161,7 +1191,24 @@ export async function reactivateSD(
   if (params.expected_updated_at) {
     statusQuery = statusQuery.eq("updated_at", params.expected_updated_at)
   }
-  const updated = await dbWrite(statusQuery.select("id").maybeSingle(), "service_deliveries.update.reactivate")
+  // dbWriteSafe (not dbWrite): a unique-violation must come back as a value we
+  // can turn into a message, never an exception that escapes the server action.
+  const { data: updated, error: updateErr } = await dbWriteSafe(
+    statusQuery.select("id").maybeSingle(),
+    "service_deliveries.update.reactivate",
+  )
+  if (updateErr) {
+    const isUnique = updateErr.includes("23505") || /duplicate key value/i.test(updateErr)
+    return {
+      success: false,
+      outcome: isUnique ? "conflict" : "error",
+      delivery_id: params.delivery_id,
+      service_type: sd.service_type,
+      error: isUnique
+        ? `This person already has an active ${sd.service_type} service — one person can only ever hold one.`
+        : updateErr,
+    }
+  }
   if (!updated) {
     return {
       success: false,

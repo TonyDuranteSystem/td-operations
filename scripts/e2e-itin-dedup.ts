@@ -111,8 +111,13 @@ async function main() {
     const afterResubmit = await liveItinSds(ownerId)
     check("still exactly ONE live ITIN — client sees one card", afterResubmit.length === 1, `found ${afterResubmit.length}`)
     check(
-      "the later offer is recorded on the existing service",
-      String(afterResubmit[0]?.notes ?? "").includes(`portal-e2e-dedup-2026-${ownerId.slice(0, 8)}`),
+      "the skip is reported to the caller",
+      String(r2.people[0]?.detail ?? "").includes("already has a live ITIN"),
+      r2.people[0]?.detail ?? "(no detail)",
+    )
+    check(
+      "the existing service's notes were NOT touched (no freetext-matching pattern re-introduced)",
+      !String(afterResubmit[0]?.notes ?? "").includes(`portal-e2e-dedup-2026-${ownerId.slice(0, 8)}`),
     )
 
     // ── 3. Case-different member email must not mint a duplicate contact ──
@@ -161,11 +166,31 @@ async function main() {
     // ── 5. A cancelled ITIN must not block a fresh one ──
     console.log("\nSTEP 5 — a cancelled ITIN must not block a legitimate new application")
     const live = await liveItinSds(ownerId)
-    await SUP.from("service_deliveries").update({ status: "cancelled" }).eq("id", live[0].id)
+    const cancelledId = live[0].id
+    await SUP.from("service_deliveries").update({ status: "cancelled" }).eq("id", cancelledId)
     const r3 = await createItinDeliveriesFromWizard({
       contactId: ownerId, leadId: null, submitted, offerToken: "portal-e2e-after-cancel-2026",
     })
     check("new ITIN allowed once the previous one is cancelled", r3.created === 1, `created=${r3.created}`)
+
+    // ── 6. Reactivating the cancelled one must REFUSE, and say why ──
+    // This is Marcell's exact live state: one active + one cancelled. Before the
+    // fix this hit the unique index inside a throwing writer, so the CRM button
+    // died with no toast at all.
+    console.log("\nSTEP 6 — reactivating a cancelled ITIN while an active one exists")
+    const { reactivateSD } = await import("@/lib/operations/service-delivery")
+    const react = await reactivateSD({ delivery_id: cancelledId, actor: "e2e" })
+    check("refused, not crashed", react.success === false, `outcome=${react.outcome}`)
+    check("outcome is a conflict", react.outcome === "conflict", String(react.outcome))
+    check(
+      "explains itself in plain English",
+      /already has an active ITIN/i.test(react.error ?? ""),
+      react.error ?? "(no message)",
+    )
+    check(
+      "the cancelled service really did stay cancelled",
+      (await liveItinSds(ownerId)).filter(s => s.id === cancelledId).length === 0,
+    )
   } finally {
     console.log("\nCleaning up fixtures…")
     await cleanup(created)

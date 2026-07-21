@@ -24,7 +24,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { createSD } from "@/lib/operations/service-delivery"
+import { createSD, OPEN_TASK_STATUSES } from "@/lib/operations/service-delivery"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
@@ -494,7 +494,11 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         .select("id")
         .eq("contact_id", p.contact_id)
         .eq("task_title", taskTitle)
-        .in("status", ["To Do", "In Progress"])
+        // Must cover EVERY open state. "Waiting" is the normal state for a
+        // follow-up task Luca has actioned but is awaiting the client on —
+        // omitting it would let a wizard re-submit mint a duplicate, which is
+        // the exact bug this guard exists to stop.
+        .in("status", [...OPEN_TASK_STATUSES])
         .limit(1)
       // Fail CLOSED, consistent with the SD guards: an unverifiable check must
       // not mint a duplicate. A missed follow-up task is recoverable; a

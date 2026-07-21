@@ -27,10 +27,18 @@
 --   * ITIN Renewal is a SEPARATE service_type — unaffected.
 --   * Scoped to status='active', so cancelled/completed history is unconstrained
 --     and a genuinely new application can be started after one is closed out.
---   * Scoped to contact_id IS NOT NULL: ITIN SDs are contact-scoped by the
---     Phase 1 rule (createSD forces account_id=null), but the Inbox
---     "create service" path can still insert a contact-less ITIN row, and those
---     must not collide with each other on a NULL key.
+--   * Scoped to contact_id IS NOT NULL: defensive/no-op. ITIN SDs are
+--     contact-scoped by the Phase 1 rule and createSD REFUSES an ITIN it cannot
+--     attach to a contact, so contact-less ITIN rows should not exist. (NULLs
+--     are distinct in a unique index anyway; the clause documents the intent.)
+--
+-- SCOPE OF THIS INDEX vs THE APP GUARDS — do not "fix" one to match the other:
+--   * This index constrains status='active' ONLY. It is the RACE backstop, and
+--     it must not constrain historical rows.
+--   * The LIFETIME rule is wider and lives in the application guards: a
+--     `completed` ITIN also blocks a new one, because a person receives exactly
+--     one ITIN in their life. See lib/operations/itin-from-wizard.ts and the
+--     `per_person` catalog tag (getPerPersonServiceTypes in lib/services).
 --
 -- Verified before applying: zero contacts in production hold more than one
 -- active ITIN SD, so the index builds cleanly.

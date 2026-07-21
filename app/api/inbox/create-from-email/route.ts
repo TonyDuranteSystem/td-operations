@@ -92,25 +92,26 @@ export async function POST(req: NextRequest) {
         // this person already has a live ITIN, or an account with no linked
         // contact for a service that requires one.
         const msg = e instanceof Error ? e.message : String(e)
-        const friendly = msg.includes('23505') || /duplicate key value/i.test(msg)
-          ? `This client already has an active ${serviceType} service — open it instead of creating a second one.`
-          : msg
+        let friendly = msg
+        if (msg.includes('23505') || /duplicate key value/i.test(msg)) {
+          friendly = `This client already has an active ${serviceType} service — open it instead of creating a second one.`
+        } else if (/No pipeline_stages defined/i.test(msg)) {
+          // Not every sellable service has a delivery pipeline configured yet
+          // (Public Notary / Shipping / Support have none). The old raw insert
+          // hid this by stamping a fake stage; say it plainly instead of
+          // leaking the internal error text to staff.
+          friendly = `"${serviceType}" has no delivery pipeline set up yet, so a service can't be created for it here. Ask for its stages to be configured first, or track this by creating a task instead.`
+        } else if (/requires contact_id|has no linked contacts/i.test(msg)) {
+          friendly = `${serviceType} is a personal service and needs a contact. Link a contact to this client account first, then try again.`
+        }
         return NextResponse.json({ error: friendly }, { status: 400 })
       }
 
-      // Create initial task for the service
-      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; no generic createTask helper exists yet (lib/operations/task.ts only covers workflow tasks + updates). Deferred per dev_task fda76fd3.
-      await supabaseAdmin
-        .from('tasks')
-        .insert({
-          task_title: `${serviceType} — ${account?.company_name || 'Unknown'}`,
-          description: notes || `New ${serviceType} service created from email`,
-          assigned_to: 'Luca',
-          status: 'To Do',
-          priority: 'Normal',
-          account_id: accountId,
-          delivery_id: sd.id,
-        })
+      // NOTE: no task insert here. createSD already creates one — the workflow
+      // task when the service type has a workflow, otherwise its universal
+      // tracked-task fallback. The raw insert this route used to do ran BEFORE
+      // it went through createSD, so keeping it would give Luca two
+      // near-identical tasks for every service created from an email.
 
       // Link thread to account
       if (threadId) {

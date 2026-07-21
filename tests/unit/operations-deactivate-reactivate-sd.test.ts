@@ -12,7 +12,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }))
 vi.mock("@/lib/service-delivery", () => ({ advanceServiceDelivery: vi.fn() }))
-vi.mock("@/lib/services", () => ({ getEntryByServiceType: vi.fn() }))
+vi.mock("@/lib/services", () => ({
+  getEntryByServiceType: vi.fn(),
+  isPerPersonServiceType: vi.fn(async () => false),
+}))
 vi.mock("@/lib/tasks/default-assignee", () => ({ defaultTaskAssignee: () => "Luca" }))
 
 // ─── Collaborator mocks ────────────────────────────────
@@ -61,9 +64,13 @@ let capturedSDUpdate: { patch: Record<string, unknown> | null; filters: Record<s
 let capturedTaskInsert: Record<string, unknown> | null = null
 /** Rows returned by deactivateSD's unlinked-open-tasks lookup. */
 let looseTaskRows: Array<{ id: string; task_title: string }> = []
+/** Rows returned by reactivateSD's "another active per-person SD?" lookup. */
+let perPersonConflictRows: Array<{ id: string }> = []
 
 function resolveFor(table: string, op: string) {
   if (table === "service_deliveries") {
+    // reactivateSD's per-person conflict lookup terminates on .limit()
+    if (op === "perPersonLookup") return { data: perPersonConflictRows, error: null }
     return op === "update" ? { data: sdUpdateResult, error: null } : { data: sdRow, error: null }
   }
   if (table === "accounts") return { data: acctRow, error: null }
@@ -101,7 +108,11 @@ vi.mock("@/lib/supabase-admin", () => ({
         // (.eq(contact).is(delivery_id, null).in(status).limit(20)).
         is: () => chain,
         in: () => chain,
-        limit: () => Promise.resolve(resolveFor(table, "looseTasks")),
+        neq: () => chain,
+        limit: () =>
+          Promise.resolve(
+            resolveFor(table, table === "service_deliveries" ? "perPersonLookup" : "looseTasks"),
+          ),
         maybeSingle: () => Promise.resolve(resolveFor(table, ctx.op)),
         single: () => Promise.resolve(resolveFor(table, ctx.op)),
         then: (res: (v: unknown) => void) => res(resolveFor(table, ctx.op)),
@@ -112,15 +123,21 @@ vi.mock("@/lib/supabase-admin", () => ({
 }))
 
 import { deactivateSD, reactivateSD } from "@/lib/operations/service-delivery"
+import { isPerPersonServiceType } from "@/lib/services"
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Default: not a per-person service. clearAllMocks wipes the factory default,
+  // so re-arm it here or every reactivate test sees `undefined` (falsy but
+  // not a promise) and the awaited call misbehaves.
+  vi.mocked(isPerPersonServiceType).mockResolvedValue(false)
   sdRow = null
   sdUpdateResult = { id: "sd-1" }
   acctRow = null
   capturedSDUpdate = { patch: null, filters: {} }
   capturedTaskInsert = null
   looseTaskRows = []
+  perPersonConflictRows = []
   updateTasksBulk.mockResolvedValue({ success: true, outcome: "updated", count: 0 })
   updateAccount.mockResolvedValue({ success: true, outcome: "updated" })
 })
@@ -354,6 +371,54 @@ describe("deactivateSD", () => {
 // ─── reactivateSD ──────────────────────────────────────
 
 describe("reactivateSD", () => {
+  // Regression: reactivating a cancelled ITIN while the person holds an active
+  // one used to hit the DB unique index inside dbWrite, which THROWS — the
+  // typed result contract was bypassed and the CRM button died with no toast.
+  // Refusing is correct; refusing invisibly is not.
+  it("refuses with a plain message when the person already has an active per-person service", async () => {
+    vi.mocked(isPerPersonServiceType).mockResolvedValue(true)
+    sdRow = {
+      id: "sd-cancelled",
+      service_type: "ITIN",
+      service_name: "ITIN",
+      status: "cancelled",
+      account_id: null,
+      contact_id: "contact-1",
+      updated_at: "2026-07-20T00:00:00Z",
+      notes: null,
+    }
+    perPersonConflictRows = [{ id: "other-active-itin" }]
+
+    const res = await reactivateSD({ delivery_id: "sd-cancelled" })
+
+    expect(res.success).toBe(false)
+    expect(res.outcome).toBe("conflict")
+    expect(res.error).toMatch(/already has an active ITIN/i)
+    // it must NOT have attempted the status flip
+    expect(capturedSDUpdate.patch).toBeNull()
+  })
+
+  it("still reactivates a per-person service when no other active one exists", async () => {
+    vi.mocked(isPerPersonServiceType).mockResolvedValue(true)
+    sdRow = {
+      id: "sd-cancelled",
+      service_type: "ITIN",
+      service_name: "ITIN",
+      status: "cancelled",
+      account_id: null,
+      contact_id: "contact-1",
+      updated_at: "2026-07-20T00:00:00Z",
+      notes: null,
+    }
+    perPersonConflictRows = [] // no competing active ITIN
+
+    const res = await reactivateSD({ delivery_id: "sd-cancelled" })
+
+    expect(res.success).toBe(true)
+    expect(res.outcome).toBe("reactivated")
+    expect(capturedSDUpdate.patch?.status).toBe("active")
+  })
+
   it("reactivates a cancelled service and creates a fresh tracked task", async () => {
     sdRow = {
       id: "sd-1",
