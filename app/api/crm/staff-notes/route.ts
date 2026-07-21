@@ -12,11 +12,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser, getUserDisplayName } from "@/lib/auth"
-import { supabaseAdmin } from "@/lib/supabase-admin"
 import { emitUiEvent } from "@/lib/ui-events"
 import { sendPushToAdminUsers } from "@/lib/portal/web-push"
 import { listTeamMembers } from "@/lib/team/directory"
 import {
+  notesTable,
   NOTE_COLUMNS,
   listActiveNotesForUser,
   listNotesForAccount,
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
     origin_url: origin,
   }
 
-  const { data, error } = await supabaseAdmin.from("staff_notes").insert(insert).select(NOTE_COLUMNS).single()
+  const { data, error } = await notesTable().insert(insert).select(NOTE_COLUMNS).single()
   if (error) return fail(error.message || "Could not save the note.", 500)
 
   emitUiEvent("notes") // NO payload — the bus reaches every staff tab
@@ -114,8 +114,7 @@ export async function PATCH(req: NextRequest) {
   if (!id) return fail("Which note?")
 
   // Only the author or the current shared-with recipient may touch a note. Load it first.
-  const { data: note, error: loadErr } = await supabaseAdmin
-    .from("staff_notes").select(NOTE_COLUMNS).eq("id", id).single()
+  const { data: note, error: loadErr } = await notesTable().select(NOTE_COLUMNS).eq("id", id).single()
   if (loadErr || !note) return fail("That note is gone.", 404)
   const mayTouch = note.author_user_id === user.id || note.shared_with_user_id === user.id
   if (!mayTouch) return fail("That isn't your note.", 403)
@@ -128,8 +127,7 @@ export async function PATCH(req: NextRequest) {
     if (error || !body) return fail(error ?? "A note needs some text.")
     // stale-edit guard: only write if the row hasn't changed since the client loaded it
     if (typeof p.expectedUpdatedAt === "string") {
-      const { data: fresh } = await supabaseAdmin
-        .from("staff_notes").select("updated_at").eq("id", id).single()
+      const { data: fresh } = await notesTable().select("updated_at").eq("id", id).single()
       if (fresh && fresh.updated_at !== p.expectedUpdatedAt) {
         return fail("Someone else just edited this note — reopen it to see their change.", 409)
       }
@@ -163,8 +161,7 @@ export async function PATCH(req: NextRequest) {
     return fail("Unknown action.")
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("staff_notes").update(patch).eq("id", id).select(NOTE_COLUMNS).single()
+  const { data, error } = await notesTable().update(patch).eq("id", id).select(NOTE_COLUMNS).single()
   if (error) return fail(error.message || "Could not update the note.", 500)
 
   // Push to the person a note was just handed to — fire-and-forget, never blocks the response.

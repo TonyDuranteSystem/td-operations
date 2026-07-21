@@ -11,6 +11,11 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
+// staff_notes is not in the generated Database types yet (the types are regenerated from
+// production after the prod DDL). Same escape hatch as lib/ui-events.ts / lib/system-errors.ts.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const notesTable = () => (supabaseAdmin as any).from("staff_notes")
+
 export type NoteVisibility = "private" | "shared" | "team"
 
 export interface StaffNoteInput {
@@ -106,8 +111,7 @@ export function computeSnoozeUntil(
 
 /** Notes visible to U that are live (not archived) and not currently snoozed — the floating feed. */
 export async function listActiveNotesForUser(userId: string, nowIso: string) {
-  return supabaseAdmin
-    .from("staff_notes")
+  return notesTable()
     .select(NOTE_COLUMNS)
     .is("archived_at", null)
     .or(visibleToOrClause(userId))
@@ -118,8 +122,7 @@ export async function listActiveNotesForUser(userId: string, nowIso: string) {
 
 /** Notes visible to U that are attached to a given account (the on-company-page widget). */
 export async function listNotesForAccount(userId: string, accountId: string) {
-  return supabaseAdmin
-    .from("staff_notes")
+  return notesTable()
     .select(NOTE_COLUMNS)
     .is("archived_at", null)
     .eq("account_id", accountId)
@@ -130,8 +133,7 @@ export async function listNotesForAccount(userId: string, accountId: string) {
 
 /** Notes visible to U attached to a given contact. */
 export async function listNotesForContact(userId: string, contactId: string) {
-  return supabaseAdmin
-    .from("staff_notes")
+  return notesTable()
     .select(NOTE_COLUMNS)
     .is("archived_at", null)
     .eq("contact_id", contactId)
