@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Title is required' }, { status: 400 })
       }
 
-      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; no generic createTask helper exists yet (lib/operations/task.ts only covers workflow tasks + updates). Deferred per dev_task fda76fd3.
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write on this legacy route; untouched by the ITIN split. Hardening lives on claude/inbox-create-service-hardening. Deferred per dev_task fda76fd3.
       const { data: task, error } = await supabaseAdmin
         .from('tasks')
         .insert({
@@ -70,48 +70,39 @@ export async function POST(req: NextRequest) {
 
       const serviceName = `${serviceType} — ${account?.company_name || 'Unknown'}`
 
-      // Route through createSD (2026-07-20) instead of a raw insert. The raw
-      // insert bypassed every architectural rule the operations layer enforces:
-      // it stamped a literal stage 'New' (not a real pipeline stage) and left
-      // contact_id NULL — so an ITIN created here was account-scoped, contrary
-      // to the Phase 1 contact-scoped rule, and therefore INVISIBLE to the
-      // per-person ITIN duplicate guard and to uq_itin_sd_active_per_contact.
-      // createSD resolves the real first stage and the contact from the account.
-      const { createSD } = await import('@/lib/operations/service-delivery')
-      let sd: { id: string; service_name: string }
-      try {
-        const created = await createSD({
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write on this legacy route; untouched by the ITIN split. Hardening lives on claude/inbox-create-service-hardening. Deferred per dev_task fda76fd3.
+      const { data: sd, error } = await supabaseAdmin
+        .from('service_deliveries')
+        .insert({
+          account_id: accountId,
           service_type: serviceType,
           service_name: serviceName,
-          account_id: accountId,
+          pipeline: serviceType,
+          stage: 'New',
+          stage_order: 0,
+          stage_entered_at: new Date().toISOString(),
+          status: 'active',
+          assigned_to: 'Luca',
           notes: notes ? `${notes}${threadId ? ` | Gmail thread: ${threadId}` : ''}` : (threadId ? `Gmail thread: ${threadId}` : null),
         })
-        sd = { id: created.id, service_name: created.service_name }
-      } catch (e) {
-        // Surface the real reason (R099) — e.g. the DB backstop reporting that
-        // this person already has a live ITIN, or an account with no linked
-        // contact for a service that requires one.
-        const msg = e instanceof Error ? e.message : String(e)
-        let friendly = msg
-        if (msg.includes('23505') || /duplicate key value/i.test(msg)) {
-          friendly = `This client already has an active ${serviceType} service — open it instead of creating a second one.`
-        } else if (/No pipeline_stages defined/i.test(msg)) {
-          // Not every sellable service has a delivery pipeline configured yet
-          // (Public Notary / Shipping / Support have none). The old raw insert
-          // hid this by stamping a fake stage; say it plainly instead of
-          // leaking the internal error text to staff.
-          friendly = `"${serviceType}" has no delivery pipeline set up yet, so a service can't be created for it here. Ask for its stages to be configured first, or track this by creating a task instead.`
-        } else if (/requires contact_id|has no linked contacts/i.test(msg)) {
-          friendly = `${serviceType} is a personal service and needs a contact. Link a contact to this client account first, then try again.`
-        }
-        return NextResponse.json({ error: friendly }, { status: 400 })
-      }
+        .select('id, service_name')
+        .single()
 
-      // NOTE: no task insert here. createSD already creates one — the workflow
-      // task when the service type has a workflow, otherwise its universal
-      // tracked-task fallback. The raw insert this route used to do ran BEFORE
-      // it went through createSD, so keeping it would give Luca two
-      // near-identical tasks for every service created from an email.
+      if (error) throw new Error(error.message)
+
+      // Create initial task for the service
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write on this legacy route; untouched by the ITIN split. Hardening lives on claude/inbox-create-service-hardening. Deferred per dev_task fda76fd3.
+      await supabaseAdmin
+        .from('tasks')
+        .insert({
+          task_title: `${serviceType} — ${account?.company_name || 'Unknown'}`,
+          description: notes || `New ${serviceType} service created from email`,
+          assigned_to: 'Luca',
+          status: 'To Do',
+          priority: 'Normal',
+          account_id: accountId,
+          delivery_id: sd.id,
+        })
 
       // Link thread to account
       if (threadId) {
