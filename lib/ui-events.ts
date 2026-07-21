@@ -12,6 +12,7 @@
  * KINDS (add here as surfaces are wired):
  *  - 'todo'  — To-Do / action-board cards or columns changed
  *  - 'tasks' — CRM tasks changed
+ *  - 'notes' — staff sticky notes created/edited/shared/snoozed/archived
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -21,7 +22,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-export type UiEventKind = "todo" | "tasks"
+export type UiEventKind = "todo" | "tasks" | "notes"
 
 export async function emitUiEvent(
   kind: UiEventKind,

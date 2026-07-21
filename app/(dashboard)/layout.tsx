@@ -13,6 +13,7 @@ import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
+import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -160,6 +161,7 @@ export default async function DashboardLayout({
         </main>
         <CommandPalette />
         <AiAgentPanel enabled={showAiAgent} />
+        <StickyNotesLayer />
       </div>
     </Providers>
   )

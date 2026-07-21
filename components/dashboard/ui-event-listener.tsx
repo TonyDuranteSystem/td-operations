@@ -24,6 +24,7 @@ import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/clie
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
   todo: ['open-message-actions', 'action-board-columns', 'portal-chat-whats-new-counts'],
   tasks: ['portal-chat-thread-tasks'],
+  notes: ['staff-notes-active'],
 }
 
 /** kinds that also refresh server-rendered pages (throttled) */
