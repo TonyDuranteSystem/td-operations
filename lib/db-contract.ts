@@ -32,6 +32,8 @@
 import { createHash } from "node:crypto"
 import { FEED_STATUSES, MATCH_CONFIDENCES, FEED_SOURCES } from "@/lib/finance/feed-vocabulary"
 import { PAYMENT_CATEGORIES } from "@/lib/billing/payment-classification"
+import { PAYMENT_ITEM_TYPES } from "@/lib/finance/payment-item-vocabulary"
+import { TEAM_WORK_STATUSES } from "@/lib/team/workspace"
 
 /** name → `pg_get_constraintdef()` text, exactly as Postgres prints it. */
 export type ConstraintDefs = Record<string, string>
@@ -73,6 +75,14 @@ export const CONSTRAINT_CONTRACTS = [
   // database and live code both used a value the list omitted. A promise in a comment is a
   // note; this is the gate.
   { table: "payments", column: "payment_category", constraint: "payments_payment_category_check", values: PAYMENT_CATEGORIES },
+  // Registered 2026-07-21. Both had existed on production, unregistered, long
+  // enough for the gate to be red on EVERY run — which is worse than no gate:
+  // a real failure reads as "the usual one" and gets waved through. That is
+  // exactly how the file's own comments say the previous gate died.
+  { table: "internal_thread_state", column: "status", constraint: "internal_thread_state_status_check", values: TEAM_WORK_STATUSES },
+  // A MONEY column: `fee` lines are excluded from an invoice's base amount, so
+  // a value the database rejects here silently breaks a total.
+  { table: "payment_items", column: "item_type", constraint: "payment_items_item_type_check", values: PAYMENT_ITEM_TYPES },
 ] as const
 
 /**
