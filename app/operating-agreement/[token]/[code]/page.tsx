@@ -359,6 +359,20 @@ function OperatingAgreementCodeContent() {
           throw new SigningFailure('document_upload', signingLang(oa.language))
         }
 
+        // Read this signer's CURRENT status BEFORE we mark it signed. This is the
+        // only moment that can distinguish "signing now" from "already signed on
+        // a previous attempt": the update below sets it to 'signed', so any read
+        // afterwards always says 'signed'. And the local `currentSig` cannot be
+        // used — it is page-load state that is never refetched, and the Sign
+        // button only renders while it is NOT 'signed', so a check against it is
+        // dead code that never fires. (Both of those were shipped and blocked.)
+        const { data: preSig } = await supabasePublic
+          .from('oa_signatures')
+          .select('status')
+          .eq('id', currentSig.id)
+          .maybeSingle()
+        const alreadyCounted = preSig?.status === 'signed'
+
         // Update oa_signatures row
         const { error: sigErr } = await supabasePublic
           .from('oa_signatures')
@@ -374,20 +388,11 @@ function OperatingAgreementCodeContent() {
           throw new SigningFailure('record', signingLang(oa.language))
         }
 
-        // Atomic increment signed_count
-        // RETRY GUARD. `currentSig` is page-load state and is never refetched, so
-        // after a failure the signer can click Sign again with the same stale
-        // row. The increment is NOT idempotent, so a retry would count them
-        // twice and finalize a multi-member OA that only one member signed.
-        // Re-read the row: if this signer is already recorded as signed, this
-        // is a retry — take the CURRENT count rather than incrementing again.
-        const { data: freshSig } = await supabasePublic
-          .from('oa_signatures')
-          .select('status')
-          .eq('id', currentSig.id)
-          .maybeSingle()
-        const alreadyCounted = freshSig?.status === 'signed' && currentSig.status === 'signed'
-
+        // signed_count. The increment is NOT idempotent, so counting a retry twice
+        // would push a multi-member OA to "all signed" on one member's signature,
+        // generate the combined PDF from that single signature and publish it.
+        // `alreadyCounted` was captured BEFORE the update above, so a retry takes
+        // the current count instead of incrementing again.
         let updatedOa: number | null = null
         let incErr: { message: string } | null = null
         if (alreadyCounted) {
