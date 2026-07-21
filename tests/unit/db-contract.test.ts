@@ -146,7 +146,12 @@ describe("checksumDefs", () => {
     // The snapshot was not hand-verified by eye; the database fingerprinted its own rules and
     // we recomputed the same fingerprint over the file. This test pins that agreement, so a
     // future edit of the file cannot quietly diverge from the database it claims to describe.
-    expect(checksumDefs(prodConstraints())).toBe("665364ba9d4e7746d9f3fd558dc6ff55")
+    // Re-pinned 2026-07-21 after regenerating the snapshot from PRODUCTION via
+    // `npm run snapshot:constraints` (which refuses to run against any other
+    // database). The value below is the digest PRODUCTION computed over its own
+    // constraints, not one recomputed to make a red test pass — the previous
+    // pin was 665364ba9d4e7746d9f3fd558dc6ff55 over 190 constraints.
+    expect(checksumDefs(prodConstraints())).toBe("4d0d3a3813a7e69f8570474ac398ee1e")
   })
 })
 
@@ -156,8 +161,10 @@ describe("the committed production snapshot", () => {
   })
 
   it("holds production's full constraint set", () => {
-    expect(prodSnapshotMeta().count).toBe(190)
-    expect(Object.keys(prodConstraints())).toHaveLength(190)
+    // 190 -> 194: production gained four CHECK constraints since the last
+    // snapshot. Re-pinned in the same change that regenerated the file.
+    expect(prodSnapshotMeta().count).toBe(194)
+    expect(Object.keys(prodConstraints())).toHaveLength(194)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {

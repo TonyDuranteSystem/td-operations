@@ -45,6 +45,7 @@ import {
   diffAgainstSnapshot,
   CONSTRAINT_QUERY,
   rowsToDefs,
+  CONSTRAINT_CONTRACTS,
   type ConstraintDefs,
 } from "../lib/db-contract"
 import { prodConstraints, prodSnapshotMeta, verifySnapshotIntegrity } from "../lib/db-contract-snapshot"
@@ -125,9 +126,12 @@ async function main() {
 
       // A drift in a REGISTERED contract is not informational — it is the trap itself: the
       // environment we test against no longer enforces what production enforces.
-      const registeredDrift = drift.filter(d =>
-        ["td_bank_feeds_status_check", "td_bank_feeds_match_confidence_check", "td_bank_feeds_source_check", "payments_payment_category_check"].includes(d.constraint),
-      )
+      // DERIVED from CONSTRAINT_CONTRACTS, never hand-listed. This used to be a
+      // second hardcoded copy of the registered names, so registering a new
+      // contract left this half of the check silently unenforced — a duplicated
+      // list that rots is how the gate loses its teeth without anyone noticing.
+      const registeredNames = new Set<string>(CONSTRAINT_CONTRACTS.map(c => c.constraint))
+      const registeredDrift = drift.filter(d => registeredNames.has(d.constraint))
       if (registeredDrift.length > 0) {
         console.log()
         for (const d of registeredDrift) {
