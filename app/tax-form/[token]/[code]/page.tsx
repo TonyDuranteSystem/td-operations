@@ -225,12 +225,21 @@ export default function TaxFormCodePage() {
       // submission can be blocked below — this used to be `if (!upErr) push`,
       // which dropped the failure and then reported the form as completed.
       const uploadFailures: FailedUpload[] = []
+      // Each submit attempt writes to its OWN folder. Blocking on a failed upload
+      // makes RETRY the expected path, and the previous fix (upsert) CANNOT work:
+      // production has NO update policy on storage at all, for any role — so an
+      // overwrite is refused and the client deadlocks on the file that already
+      // succeeded. A fresh folder per attempt needs no update permission,
+      // overwrites nothing, and keeps the Drive filename unchanged because the
+      // downstream copier takes only the LAST path segment.
+      // Cost, accepted: a failed attempt leaves its files behind as orphans.
+      const attemptId = `a${Date.now().toString(36)}`
       for (const [key, file] of Object.entries(uploadFiles)) {
         if (!file) continue
-        const path = `${submission.token}/${key}_${file.name}`
+        const path = `${submission.token}/${attemptId}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('tax-form-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: true })
+          .upload(path, file, { cacheControl: '3600', upsert: false })
         if (upErr) {
           console.error(`[form] upload failed for ${key}:`, upErr.message)
           uploadFailures.push({ key, fileName: file.name })
@@ -242,10 +251,10 @@ export default function TaxFormCodePage() {
       // 1b. Upload bank statements
       for (let i = 0; i < bankStatementFiles.length; i++) {
         const file = bankStatementFiles[i]
-        const path = `${submission.token}/bank_statement_${i}_${file.name}`
+        const path = `${submission.token}/${attemptId}/bank_statement_${i}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('tax-form-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: true })
+          .upload(path, file, { cacheControl: '3600', upsert: false })
         if (upErr) {
           console.error(`[form] upload failed for bank_statement_${i}:`, upErr.message)
           uploadFailures.push({ key: `bank_statement_${i}`, fileName: file.name })

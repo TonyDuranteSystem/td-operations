@@ -339,7 +339,10 @@ function OperatingAgreementCodeContent() {
 
       if (isMultiSigner && currentSignerIndex !== null && currentSig) {
         // ─── MMLLC: Save signature PNG to storage ───
-        const sigPngPath = `${token}/sig-${currentSignerIndex}.png`
+        // Per-attempt filename. The old deterministic `sig-<index>.png` collided on
+        // any retry, and x-upsert cannot rescue it: production has NO update
+        // policy on storage for any role. The row below records the actual path.
+        const sigPngPath = `${token}/sig-${currentSignerIndex}-${Date.now().toString(36)}.png`
         const sigBlob = await (await fetch(sigDataUrl)).blob()
 
         const sigRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
@@ -348,11 +351,6 @@ function OperatingAgreementCodeContent() {
             'apikey': SB_ANON,
             'Authorization': `Bearer ${SB_ANON}`,
             'Content-Type': 'image/png',
-            // This path is deterministic (sig-<index>.png). Without upsert a
-            // retry after ANY downstream failure collides and tells the signer
-            // "your signature was not saved" forever. Re-signing the same slot
-            // should replace the image.
-            'x-upsert': 'true',
           },
           body: sigBlob,
         })
@@ -377,7 +375,34 @@ function OperatingAgreementCodeContent() {
         }
 
         // Atomic increment signed_count
-        const { data: updatedOa, error: incErr } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
+        // RETRY GUARD. `currentSig` is page-load state and is never refetched, so
+        // after a failure the signer can click Sign again with the same stale
+        // row. The increment is NOT idempotent, so a retry would count them
+        // twice and finalize a multi-member OA that only one member signed.
+        // Re-read the row: if this signer is already recorded as signed, this
+        // is a retry — take the CURRENT count rather than incrementing again.
+        const { data: freshSig } = await supabasePublic
+          .from('oa_signatures')
+          .select('status')
+          .eq('id', currentSig.id)
+          .maybeSingle()
+        const alreadyCounted = freshSig?.status === 'signed' && currentSig.status === 'signed'
+
+        let updatedOa: number | null = null
+        let incErr: { message: string } | null = null
+        if (alreadyCounted) {
+          const { data: freshOa, error: readErr } = await supabasePublic
+            .from('oa_agreements')
+            .select('signed_count')
+            .eq('id', oa.id)
+            .maybeSingle()
+          updatedOa = (freshOa?.signed_count as number | undefined) ?? null
+          incErr = readErr
+        } else {
+          const r = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
+          updatedOa = r.data as number | null
+          incErr = r.error
+        }
         if (incErr || updatedOa === null || updatedOa === undefined) {
           // This value decides whether the combined PDF is generated. The old
           // fallback `(oa.signed_count||0)+1` used a count read when the page
@@ -536,7 +561,10 @@ function OperatingAgreementCodeContent() {
           },
           body: pdfBlob,
         })
-        if (!uploadRes.ok) throw new Error('PDF upload failed')
+        if (storageWriteFailed(uploadRes)) {
+        console.error('[oa] SMLLC signed PDF upload failed:', uploadRes?.status, await uploadRes.text().catch(() => ''))
+        throw new SigningFailure('document_upload', signingLang(oa.language))
+      }
 
         const sigData: Record<string, unknown> = {
           manager_name: managerName,

@@ -300,6 +300,11 @@ function OperatingAgreementContent() {
       setSignError(isClientFacingError(err)
         ? err.message
         : new SigningFailure('document_upload', signingLang(oa?.language)).message)
+      // Restore the action bar the handler hid before uploading. React will not
+      // clear an imperative inline style it did not set, so without this the
+      // client sees "Please try again" and no Sign button.
+      const bar = document.getElementById('oa-action-bar')
+      if (bar) bar.style.display = 'block'
     } finally {
       setSigning(false)
     }
