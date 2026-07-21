@@ -26,9 +26,13 @@ export interface StaffNoteInput {
   origin_url?: string | null
 }
 
-/** The columns every note reader returns (never selects nothing-sensitive extra). */
+/**
+ * The columns every note reader returns. The nested account/contact selects resolve the client's
+ * NAME at read time (via the foreign keys) so the card can show "Aumianna LLC" without storing a
+ * copy that would go stale when a company is renamed.
+ */
 export const NOTE_COLUMNS =
-  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at"
+  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, accounts(company_name), contacts(full_name)"
 
 /**
  * Canonical "visible to U" predicate as a PostgREST .or() string. Pair with the live/snooze
@@ -118,6 +122,19 @@ export async function listActiveNotesForUser(userId: string, nowIso: string) {
     .or(notSnoozedOrClause(nowIso))
     .order("created_at", { ascending: false })
     .limit(200)
+}
+
+/**
+ * EVERY note visible to U, whatever its state — the Notes page. Includes snoozed and archived,
+ * so a snoozed note is never lost and a cleared one can be brought back. The page groups them
+ * client-side by state (active / snoozed / done).
+ */
+export async function listAllNotesForUser(userId: string) {
+  return notesTable()
+    .select(NOTE_COLUMNS)
+    .or(visibleToOrClause(userId))
+    .order("created_at", { ascending: false })
+    .limit(500)
 }
 
 /** Notes visible to U that are attached to a given account (the on-company-page widget). */

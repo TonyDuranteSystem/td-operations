@@ -12,12 +12,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser, getUserDisplayName } from "@/lib/auth"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 import { emitUiEvent } from "@/lib/ui-events"
 import { sendPushToAdminUsers } from "@/lib/portal/web-push"
 import { listTeamMembers } from "@/lib/team/directory"
 import {
   notesTable,
   NOTE_COLUMNS,
+  listAllNotesForUser,
   listActiveNotesForUser,
   listNotesForAccount,
   listNotesForContact,
@@ -59,8 +61,11 @@ export async function GET(req: NextRequest) {
       if (res.error) return fail(res.error.message || "Could not load notes.", 500)
       return NextResponse.json({ notes: res.data ?? [] })
     }
-    // active (floating) feed — also return who I am + who I can share with (staff only)
-    const res = await listActiveNotesForUser(user.id, new Date().toISOString())
+    // scope=all → the Notes page (everything visible to me, incl. snoozed + done)
+    // otherwise → the floating feed (live, not snoozed)
+    const res = sp.get("scope") === "all"
+      ? await listAllNotesForUser(user.id)
+      : await listActiveNotesForUser(user.id, new Date().toISOString())
     if (res.error) return fail(res.error.message || "Could not load notes.", 500)
     const members = (await listTeamMembers())
       .filter((m) => (m.role === "admin" || m.role === "team") && m.id !== user.id)
@@ -153,6 +158,24 @@ export async function PATCH(req: NextRequest) {
     patch = { visibility: "team", shared_with_user_id: null, shared_with_name: null }
   } else if (action === "private") {
     patch = { visibility: "private", shared_with_user_id: null, shared_with_name: null }
+  } else if (action === "set_client") {
+    // Attach / change / clear the client this note is about. Accepts an account id, a contact
+    // id, or neither (clear). Ids are verified to exist so a typo can't orphan the note.
+    const accountId = typeof p.account_id === "string" && p.account_id ? p.account_id : null
+    const contactId = typeof p.contact_id === "string" && p.contact_id ? p.contact_id : null
+    if (accountId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: acct } = await (supabaseAdmin as any)
+        .from("accounts").select("id").eq("id", accountId).maybeSingle()
+      if (!acct) return fail("That company isn't in the CRM.")
+    }
+    if (contactId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: c } = await (supabaseAdmin as any)
+        .from("contacts").select("id").eq("id", contactId).maybeSingle()
+      if (!c) return fail("That person isn't in the CRM.")
+    }
+    patch = { account_id: accountId, contact_id: contactId }
   } else if (action === "archive") {
     patch = { archived_at: new Date().toISOString() }
   } else if (action === "unarchive") {

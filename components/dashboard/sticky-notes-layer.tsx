@@ -12,8 +12,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock } from 'lucide-react'
+import { StickyNote, Plus, X, Clock, Share2, Check, Loader2, Users, Lock, Building2 } from 'lucide-react'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac } from '@/lib/notes/note-position'
+import { AccountCombobox } from '@/components/shared/account-combobox'
 
 interface Note {
   id: string
@@ -31,6 +32,14 @@ interface Note {
   archived_at: string | null
   created_at: string
   updated_at: string
+  // resolved at read time from the foreign keys — never stored, so a renamed company is never stale
+  accounts?: { company_name: string | null } | null
+  contacts?: { full_name: string | null } | null
+}
+
+/** The client a note is about, as a display string (or null if it isn't about anyone). */
+export function noteClientName(n: Note): string | null {
+  return n.accounts?.company_name || n.contacts?.full_name || null
 }
 interface Member { id: string; name: string }
 interface ActiveResponse { notes: Note[]; me: { id: string; name: string }; members: Member[] }
@@ -242,6 +251,13 @@ function NoteCardBody({ note, members, onChange }: { note: Note; members: Member
         </button>
       </div>
 
+      {noteClientName(note) && (
+        <p className="mt-1 flex items-center gap-1 text-xs font-medium opacity-80">
+          <Building2 className="h-3 w-3 shrink-0" />
+          <span className="truncate">{noteClientName(note)}</span>
+        </p>
+      )}
+
       <div className="mt-2 flex items-center gap-1 text-xs opacity-70">
         {note.visibility === 'private' && <Lock className="h-3 w-3" />}
         {note.visibility === 'shared' && <><Share2 className="h-3 w-3" />{note.shared_with_name}</>}
@@ -261,6 +277,22 @@ function NoteCardBody({ note, members, onChange }: { note: Note; members: Member
           <button onClick={() => act({ action: 'snooze', preset: '10min' })} className="rounded bg-black/10 px-2 py-1">10 min</button>
           <button onClick={() => act({ action: 'snooze', preset: '1hour' })} className="rounded bg-black/10 px-2 py-1">1 hour</button>
           <button onClick={() => act({ action: 'snooze', preset: 'tomorrow' })} className="col-span-2 rounded bg-black/10 px-2 py-1">Tomorrow 9am</button>
+          {/* Pick your own moment. datetime-local gives a native picker on desktop AND phone;
+              the value is local time, converted to a real instant before it's sent. */}
+          <label className="col-span-2 mt-1 flex flex-col gap-1">
+            <span className="opacity-70">Or pick a date &amp; time</span>
+            <input
+              type="datetime-local"
+              className="w-full rounded border border-black/20 bg-white/60 px-2 py-1"
+              onChange={(e) => {
+                const v = e.target.value
+                if (!v) return
+                const when = new Date(v)
+                if (isNaN(when.getTime())) return
+                act({ action: 'snooze', preset: 'custom', custom: when.toISOString() })
+              }}
+            />
+          </label>
         </div>
       )}
 
@@ -286,15 +318,21 @@ function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () =
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Pre-fill with the company whose page you're on; you can change or clear it.
+  const fromPage = subjectFromPath()
+  const [accountId, setAccountId] = useState<string | undefined>(fromPage.account_id)
+  const [accountName, setAccountName] = useState<string | undefined>(undefined)
 
   const save = async () => {
     if (!body.trim()) { onClose(); return }
     setBusy(true); setErr(null)
     try {
+      // an explicitly picked company wins; otherwise fall back to whatever the page implied
+      const subject = accountId ? { account_id: accountId } : fromPage
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, origin_url: window.location.pathname, ...subjectFromPath() }),
+        body: JSON.stringify({ body, origin_url: window.location.pathname, ...subject }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -319,6 +357,15 @@ function Composer({ onClose, onCreated }: { onClose: () => void; onCreated: () =
           placeholder="e.g. call IRS about the EIN"
           className="h-28 w-full resize-none rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
         />
+        <div className="mt-2">
+          <label className="mb-1 block text-xs font-medium text-amber-900">About a client (optional)</label>
+          <AccountCombobox
+            value={accountId}
+            displayValue={accountName}
+            onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
+            placeholder="Search company or person…"
+          />
+        </div>
         {err && <p className="mt-1 text-xs text-red-700">{err}</p>}
         <div className="mt-2 flex justify-end gap-2">
           <button onClick={onClose} className="rounded px-3 py-1.5 text-sm text-amber-900 hover:bg-black/10">Cancel</button>

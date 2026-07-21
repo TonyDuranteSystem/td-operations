@@ -38,6 +38,7 @@ import {
   MapPin,
   LayoutGrid,
   Radio,
+  StickyNote,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -92,6 +93,7 @@ const STORAGE_KEY_V2 = 'td-sidebar-order-v3'
 
 const defaultNavigation: NavItem[] = [
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
+  { id: 'notes', name: 'Notes', href: '/notes', icon: StickyNote, tooltip: 'Your post-its — active, snoozed (with when they come back), and done. Private by default; share one with a teammate or the whole team.' },
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
   { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
