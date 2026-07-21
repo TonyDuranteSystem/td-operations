@@ -125,3 +125,34 @@ describe("run_sql_query tool wiring", () => {
     expect(RUN_SQL_QUERY_TOOL.parameters.required).toContain("query")
   })
 })
+
+describe("assertWorkerReadOnlySql — KNOWN LIMIT of the regex layer (closed by the DB role, not here)", () => {
+  // The consolidated dashboard/sidebar SQL tool now runs behind this guard + the
+  // exec_sql_readonly RPC. But name-obfuscation (concat/query_to_xml) hides the target
+  // table from ANY text match, so the app-layer regex CANNOT be the confidentiality
+  // boundary. These pass the guard on purpose — documenting that the durable fix is the
+  // low-privilege DB role (fix/ai-sql-hardening DB piece), which denies these at the
+  // planner regardless of spelling. If a future change makes the regex claim to block
+  // these, that is false assurance — the role is the boundary.
+  it("does NOT catch a concat-obfuscated auth.users read (regex is not the boundary)", () => {
+    const r = assertWorkerReadOnlySql(
+      "SELECT query_to_xml(concat('SEL','ECT email FROM au','th.users'), false, true, '')",
+    )
+    // Guard lets it through — only the DB role stops it. This assertion pins the
+    // limitation so nobody mistakes the regex for the security control.
+    expect(r.error).toBeNull()
+  })
+})
+
+describe("runReadOnlySqlForWorker — audit source label", () => {
+  it("accepts a source-label arg (so the consolidated sidebar path is not mislabelled as Slack)", async () => {
+    // Signature contract only (no DB in unit tests): the second arg is the audit actor.
+    // Default is the Slack worker; the sidebar entry passes 'claude.sidebar'.
+    const { runReadOnlySqlForWorker } = await import("@/lib/ai-agent/worker-tools")
+    expect(runReadOnlySqlForWorker.length).toBeGreaterThanOrEqual(1)
+    // A rejected query returns a JSON error string without ever touching the DB, so this
+    // exercises the guard path with the actor arg present and confirms it never throws.
+    const out = await runReadOnlySqlForWorker({ query: "DELETE FROM accounts" }, "claude.sidebar")
+    expect(out).toContain("error")
+  })
+})

@@ -1989,18 +1989,17 @@ async function updateTaskNotesOnly(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runSqlQuery(p: any) {
-  const sql = (p.query as string).trim()
-  // Safety: only SELECT allowed
-  if (!/^SELECT\s/i.test(sql)) {
-    return JSON.stringify({ error: 'Only SELECT queries are allowed' })
-  }
-  if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b/i.test(sql)) {
-    return JSON.stringify({ error: 'Write operations are not allowed' })
-  }
-  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-  const { data, error } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql })
-  if (error) return JSON.stringify({ error: error.message })
-  return JSON.stringify(data ?? [])
+  // Consolidated onto the hardened worker executor (fix/ai-sql-hardening). The old
+  // implementation ran raw `exec_sql` behind a `^SELECT` + write-keyword regex only —
+  // no single-statement check, no auth/token block, no DB-enforced read-only, no audit
+  // log — so it could be steered (e.g. via query_to_xml(concat(...))) to read auth.users
+  // or token tables. runReadOnlySqlForWorker adds: single-statement SELECT/WITH guard,
+  // the auth/token/password blocklist, the DB-enforced exec_sql_readonly RPC
+  // (transaction_read_only + credential block + row cap + timeout), and an audit-log row.
+  // Dynamic import breaks the tools.ts <-> worker-tools.ts static import cycle (worker-tools
+  // uses AGENT_TOOLS from this module at load time).
+  const { runReadOnlySqlForWorker } = await import('./worker-tools')
+  return runReadOnlySqlForWorker({ query: p?.query }, 'claude.sidebar')
 }
 
 // ============================================================

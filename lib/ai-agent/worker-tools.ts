@@ -281,16 +281,23 @@ export function assertWorkerReadOnlySql(
  * rows, and applies an 8s statement timeout. Audit-logs the query; caps the returned
  * JSON. Never throws — returns a JSON string (rows or { error }). Exported for unit tests.
  */
-export async function runReadOnlySqlForWorker(params: Record<string, unknown>): Promise<string> {
+export async function runReadOnlySqlForWorker(
+  params: Record<string, unknown>,
+  // Audit-source label so the action_log row reflects the TRUE surface that ran the
+  // query. The dashboard/sidebar AI consolidated onto this executor (fix/ai-sql-hardening)
+  // must NOT be mislabelled as Slack-originated. Defaults to the Slack worker (its
+  // original and most common caller).
+  actor = "claude.slack",
+): Promise<string> {
   const { sql, error: guardError } = assertWorkerReadOnlySql(params.query)
   if (guardError || !sql) return JSON.stringify({ error: guardError ?? "Invalid query." })
 
   // Audit every accepted worker query (fire-and-forget; logAction never throws).
   logAction({
-    actor: "claude.slack",
+    actor,
     action_type: "read",
     table_name: "(sql)",
-    summary: `Worker read-only SQL: ${sql.slice(0, 200)}${sql.length > 200 ? "…" : ""}`,
+    summary: `Read-only SQL: ${sql.slice(0, 200)}${sql.length > 200 ? "…" : ""}`,
   })
 
   // exec_sql_readonly enforces read-only AT THE DB (transaction_read_only=on) + its own
