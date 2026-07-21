@@ -203,6 +203,22 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ actions: snoozed })
     }
 
+    // Per-entity tag lookup. MUST be scoped: this branch previously filtered only by
+    // message_id or account_id, so a contact-scoped request (portal-chats sends
+    // ?contact_id= for a thread with no account) matched NEITHER branch and fell through
+    // to an UNFILTERED query — shipping the 200 most-recent cards across EVERY client to
+    // the browser. Nothing rendered them (the consumer maps by message_id and staff cards
+    // have none), which is why it went unnoticed, but the data still left the server.
+    // A request that names no entity is a caller bug: 400 it, the way the sibling
+    // whats-new route does, so it can never silently mean "everything".
+    const contactIdParam = req.nextUrl.searchParams.get("contact_id")
+    if (!messageId && !accountId && !contactIdParam) {
+      return NextResponse.json(
+        { error: "message_id, account_id or contact_id is required." },
+        { status: 400 },
+      )
+    }
+
     let query = supabaseAdmin
       .from("message_actions")
       .select(
@@ -214,6 +230,8 @@ export async function GET(req: NextRequest) {
       query = query.eq("message_id", messageId)
     } else if (accountId) {
       query = query.eq("account_id", accountId)
+    } else {
+      query = query.eq("contact_id", contactIdParam as string)
     }
 
     const { data, error } = await query.limit(200)

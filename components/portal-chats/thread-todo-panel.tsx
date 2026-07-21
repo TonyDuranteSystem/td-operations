@@ -55,9 +55,15 @@ export function ThreadTodoPanel({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const { data: allOpen, isLoading } = useQuery<TodoCard[]>({
+  // Scope the fetch SERVER-side. This used to pull every client's open cards and filter
+  // them in the browser — which (a) shipped other clients' cards to this page for no
+  // reason, and (b) was WRONG once the system passed 200 open cards, because this
+  // client's own cards could fall outside the 200 most-recent the server returns and the
+  // panel would show empty for a client who actually has to-dos.
+  const scopeParam = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : ''
+  const { data: scopedOpen, isLoading } = useQuery<TodoCard[]>({
     queryKey: ['thread-todos', accountId ?? contactId],
-    queryFn: () => fetch(`${API}?open=true`).then((r) => r.json()).then((d) => d.actions || []),
+    queryFn: () => fetch(`${API}?open=true&${scopeParam}`).then((r) => r.json()).then((d) => d.actions || []),
     refetchInterval: 30_000,
     enabled: !!(accountId || contactId),
   })
@@ -67,13 +73,14 @@ export function ThreadTodoPanel({
     refetchInterval: 120_000,
   })
 
-  // Cards belonging to THIS client (account- or contact-scoped).
+  // Already scoped by the server (see the query above) — this is just a belt-and-braces
+  // re-check, not the filter that makes the list correct.
   const cards = useMemo(() => {
-    const list = allOpen ?? []
+    const list = scopedOpen ?? []
     return list.filter((c) =>
       accountId ? c.account_id === accountId : contactId ? c.contact_id === contactId : false,
     )
-  }, [allOpen, accountId, contactId])
+  }, [scopedOpen, accountId, contactId])
 
   const refreshAll = useCallback(() => {
     qc.invalidateQueries({ queryKey: ['thread-todos'] })
