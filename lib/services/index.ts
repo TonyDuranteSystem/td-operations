@@ -344,7 +344,12 @@ export const SERVICES_STATIC: readonly StaticServiceEntry[] = [
     display_name: "ITIN Application",
     display_name_translations: { it: "Richiesta ITIN" },
     status: "active",
-    tags: ["service", "sd", "sellable"],
+    // `per_person` mirrors migration 20260720-2330 (one ITIN per person, ever).
+    // Kept in sync by hand: the drift test compares this list against the
+    // in-repo seed fixture, NOT the live DB, so a tag added by migration is
+    // invisible to it. Any client component reading these static tags would
+    // otherwise be blind to per_person.
+    tags: ["service", "sd", "sellable", "per_person"],
   },
   {
     slug: "ein",

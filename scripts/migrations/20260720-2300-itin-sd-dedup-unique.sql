@@ -1,3 +1,29 @@
+-- ############################################################################
+-- ## DEPLOYMENT ORDER IS MANDATORY — READ BEFORE APPLYING
+-- ##
+-- ##   1. SHIP THE CODE FIRST.
+-- ##   2. THEN apply 20260720-2300 (this unique index).
+-- ##   3. THEN apply 20260720-2330 (the per_person catalog tag).
+-- ##
+-- ## WHY THE ORDER MATTERS (Project Director, 2026-07-20):
+-- ##  * Index BEFORE code: the old createItinDeliveriesFromWizard has no
+-- ##    try/catch around createSD, so a 23505 from this index escapes
+-- ##    uncaught and the formation-setup job FAILS and retries. You would
+-- ##    turn a portal display bug into broken new-client setup.
+-- ##  * Code WITHOUT the tag: getPerPersonServiceTypes() returns [], so the
+-- ##    activation cap, the shortfall warning and the reactivate guard all
+-- ##    silently no-op. Safe, but half the protection is switched off — do
+-- ##    not stop after step 1.
+-- ##
+-- ## BEFORE APPLYING THIS INDEX, RE-RUN THE PRE-CHECK ON LIVE DATA:
+-- ##   SELECT contact_id, count(*) FROM service_deliveries
+-- ##   WHERE service_type='ITIN' AND status='active' AND contact_id IS NOT NULL
+-- ##   GROUP BY contact_id HAVING count(*) > 1;
+-- ## It must return ZERO rows. It did on 2026-07-20, but production moves —
+-- ## if a duplicate has appeared since, the index build FAILS and you are left
+-- ## half-deployed.
+-- ############################################################################
+
 -- Kill the duplicate-ITIN race (Marcell Bogyora, 2026-07-20).
 --
 -- Problem: createItinDeliveriesFromWizard (lib/operations/itin-from-wizard.ts)

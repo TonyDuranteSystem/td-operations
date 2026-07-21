@@ -305,11 +305,19 @@ interface SeedEntry {
  * fixture data and as drift-detector for the hand-maintained ServiceSlug
  * union in `lib/services/index.ts`.
  */
+/**
+ * Mirror of the DB seed. NOTE THE LIMITATION: the drift test below compares
+ * SERVICES_STATIC against THIS fixture — code against code. It cannot see a tag
+ * a MIGRATION added to the live catalog. So when a migration changes tags
+ * (e.g. 20260720-2330 adding `per_person` to itin), BOTH this fixture and
+ * SERVICES_STATIC must be updated by hand or the static list silently drifts
+ * from production while the test stays green.
+ */
 const SERVICES_SEED: SeedEntry[] = [
   { slug: "llc_formation", display_name: "LLC Formation", status: "active", tags: ["service", "sellable", "entry_to_management"], display_name_translations: { it: "Costituzione LLC" } },
   { slug: "onboarding", display_name: "Onboarding", status: "active", tags: ["service", "sellable", "entry_to_management"], display_name_translations: { it: "Onboarding LLC esistente" } },
   { slug: "tax_return", display_name: "Tax Return", status: "active", tags: ["service", "sd", "sellable", "auto_bundled_with_management"], display_name_translations: { it: "Dichiarazione Fiscale" } },
-  { slug: "itin", display_name: "ITIN Application", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Richiesta ITIN" } },
+  { slug: "itin", display_name: "ITIN Application", status: "active", tags: ["service", "sd", "sellable", "per_person"], display_name_translations: { it: "Richiesta ITIN" } },
   { slug: "ein", display_name: "EIN Application", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Richiesta EIN" } },
   { slug: "banking", display_name: "Banking", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Apertura conto bancario" } },
   { slug: "cmra", display_name: "CMRA Mailing Address", status: "active", tags: ["service", "sd", "sellable", "auto_bundled_with_management"], display_name_translations: { it: "Indirizzo postale (CMRA)" } },

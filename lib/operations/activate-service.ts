@@ -24,6 +24,7 @@ import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partne
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { getPerPersonServiceTypes } from "@/lib/services"
+import { describePerPersonShortfall } from "@/lib/operations/per-person-quantity"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
@@ -691,13 +692,12 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         const perPersonTypes = await getPerPersonServiceTypes()
         const isPerPerson = perPersonTypes.includes(pipeline)
 
-        if (isPerPerson && quantity > 1) {
-          perPersonQuantityWarnings.push(
-            `${pipeline}: the offer bills ${quantity} units, but one person can only ever hold one ${pipeline}. ` +
-              `Created 1 for the buyer — the other ${quantity - 1} belong to different people and must each be ` +
-              `created on their own contact.`,
-          )
-        }
+        // NOTE: the shortfall warning is deliberately NOT raised here. It must
+        // describe what ACTUALLY happened, and at this point nothing has been
+        // created yet — an earlier version announced "Created 1 for the buyer"
+        // before the checks below could skip creation entirely, so a case where
+        // ZERO were created reported one delivered. It is raised at the exit
+        // points below, from the real created count.
 
         if (isPerPerson && contactId) {
           const { data: livePerPerson, error: livePerPersonErr } = await supabase
@@ -717,6 +717,17 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
           if (livePerPerson && livePerPerson.length > 0) {
             sdResults.push({ pipeline, status: "existing", id: livePerPerson[0].id })
+            // The buyer already holds this service, so NONE of the billed units
+            // can be delivered to them. Fires at quantity 1 too — "client
+            // already has an ITIN, buys one for their spouse" used to be
+            // skipped and reported as clean success.
+            const w = describePerPersonShortfall({
+              pipeline,
+              quantity,
+              createdCount: 0,
+              buyerAlreadyHasOne: true,
+            })
+            if (w) perPersonQuantityWarnings.push(w)
             continue
           }
         }
@@ -838,6 +849,24 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               )
             }
           }
+        }
+
+        // Shortfall check, from the REAL created count for this pipeline.
+        // Raised here (after creation) rather than up front, so the message can
+        // never claim a creation that did not happen — an earlier version
+        // announced "Created 1 for the buyer" before the guards above could
+        // skip creation entirely.
+        if (isPerPerson) {
+          const createdForPipeline = sdResults.filter(
+            r => r.pipeline === pipeline && r.status === "created",
+          ).length
+          const w = describePerPersonShortfall({
+            pipeline,
+            quantity,
+            createdCount: createdForPipeline,
+            buyerAlreadyHasOne: false,
+          })
+          if (w) perPersonQuantityWarnings.push(w)
         }
       } catch (e) {
         // A unique violation from a DB backstop (uq_itin_sd_active_per_contact /

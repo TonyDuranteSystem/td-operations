@@ -1024,15 +1024,28 @@ export async function deactivateSD(
   // why we do NOT cancel them automatically.
   let unlinkedOpenTasks: Array<{ id: string; title: string }> | undefined
   if (sd.contact_id) {
-    const { data: loose } = await supabaseAdmin
+    const LOOSE_TASK_CAP = 20
+    const { data: loose, error: looseErr } = await supabaseAdmin
       .from("tasks")
       .select("id, task_title")
       .eq("contact_id", sd.contact_id)
       .is("delivery_id", null)
       .in("status", [...OPEN_TASK_STATUSES])
-      .limit(20)
-    if (loose && loose.length > 0) {
+      .limit(LOOSE_TASK_CAP)
+    if (looseErr) {
+      // Say "couldn't check", never imply "nothing there". Silence here reads
+      // as "no loose ends" — the swallowed-error class this change set out to
+      // remove. The deactivation itself already succeeded, so this is a
+      // reporting warning, not a failure.
+      unlinkedOpenTasks = [
+        { id: "", title: `(could not check for unlinked tasks: ${looseErr.message})` },
+      ]
+    } else if (loose && loose.length > 0) {
       unlinkedOpenTasks = loose.map((t) => ({ id: t.id, title: t.task_title ?? "" }))
+      // A full page means there may be more — don't let "20" read as the total.
+      if (loose.length === LOOSE_TASK_CAP) {
+        unlinkedOpenTasks.push({ id: "", title: `(and possibly more — showing the first ${LOOSE_TASK_CAP})` })
+      }
     }
   }
 
