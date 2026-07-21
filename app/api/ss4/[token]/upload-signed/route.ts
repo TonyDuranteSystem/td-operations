@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { isStaffPreview } from "@/lib/auth/staff-preview"
 
 export async function POST(
   req: NextRequest,
@@ -38,8 +39,12 @@ export async function POST(
       return NextResponse.json({ error: "SS-4 not found" }, { status: 404 })
     }
 
-    // Verify access code (skip for admin preview)
-    if (preview !== "td" && ss4.access_code !== code) {
+    // Verify access code. Admin preview requires a REAL staff session — the
+    // flag alone proves nothing. This upload overwrites the stored signed SS-4
+    // (upsert:true below), so a bypass here is document substitution on an IRS
+    // filing. See lib/auth/staff-preview.ts (2026-07-21 incident).
+    const isAdmin = await isStaffPreview(preview === "td")
+    if (!isAdmin && ss4.access_code !== code) {
       return NextResponse.json({ error: "Invalid access code" }, { status: 403 })
     }
 

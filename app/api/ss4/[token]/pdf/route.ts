@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { fillSS4, type SS4FillData } from "@/lib/pdf/ss4-fill"
 
 export async function GET(
@@ -16,7 +17,9 @@ export async function GET(
 ) {
   const { token } = await params
   const code = request.nextUrl.searchParams.get("code")
-  const isAdmin = request.nextUrl.searchParams.get("preview") === "td"
+  // Admin preview requires a REAL staff session — the flag alone proves nothing.
+  // See lib/auth/staff-preview.ts (2026-07-21 incident).
+  const isAdmin = await isStaffPreview(request.nextUrl.searchParams.get("preview") === "td")
 
   // Fetch the SS-4 application
   const { data: ss4, error } = await supabaseAdmin

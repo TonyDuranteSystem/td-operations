@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { isStaffPreview } from "@/lib/auth/staff-preview"
 
 export async function POST(
   req: NextRequest,
@@ -33,7 +34,11 @@ export async function POST(
       return NextResponse.json({ error: "Form 8832 not found" }, { status: 404 })
     }
 
-    if (preview !== "td" && form.access_code !== code) {
+    // Admin preview requires a REAL staff session — the flag alone proves
+    // nothing, and this upload overwrites a signed IRS form.
+    // See lib/auth/staff-preview.ts (2026-07-21 incident).
+    const isAdmin = await isStaffPreview(preview === "td")
+    if (!isAdmin && form.access_code !== code) {
       return NextResponse.json({ error: "Invalid access code" }, { status: 403 })
     }
 

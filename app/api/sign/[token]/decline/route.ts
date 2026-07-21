@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { clientIp, userAgent } from "@/lib/esign/request-meta"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { isTerminalEnvelopeStatus } from "@/lib/esign/envelope-status"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -21,7 +22,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const { token } = await params
   const body = await req.json().catch(() => ({}))
   const code = typeof body.code === "string" ? body.code : ""
-  const isPreview = body.preview === "td"
+  // Admin preview requires a REAL staff session — the flag alone proves nothing.
+  // See lib/auth/staff-preview.ts (2026-07-21 incident).
+  const isPreview = await isStaffPreview(body.preview === "td")
   const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : ""
 
   const { data: signer } = await db
