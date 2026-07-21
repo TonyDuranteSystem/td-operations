@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
-import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 
@@ -105,11 +104,6 @@ function OperatingAgreementCodeContent() {
 
   // Signing
   const [signing, setSigning] = useState(false)
-  // Persistent in-page signing error. Replaces a browser alert(): a native
-  // popup on a legal-signing screen reads as a broken site, is dismissable with
-  // one tap leaving no trace, and the old string was hardcoded English on a
-  // bilingual record.
-  const [signError, setSignError] = useState('')
   const [signed, setSigned] = useState(false)
   const [allSigned, setAllSigned] = useState(false)
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -326,7 +320,6 @@ function OperatingAgreementCodeContent() {
 
   // --- SIGN ---
   async function handleSign() {
-    setSignError('')
     if (!oa || !sigPadRef.current) return
     if (sigPadRef.current.isEmpty()) {
       alert('Please sign above before submitting.')
@@ -339,13 +332,10 @@ function OperatingAgreementCodeContent() {
 
       if (isMultiSigner && currentSignerIndex !== null && currentSig) {
         // ─── MMLLC: Save signature PNG to storage ───
-        // Per-attempt filename. The old deterministic `sig-<index>.png` collided on
-        // any retry, and x-upsert cannot rescue it: production has NO update
-        // policy on storage for any role. The row below records the actual path.
-        const sigPngPath = `${token}/sig-${currentSignerIndex}-${Date.now().toString(36)}.png`
+        const sigPngPath = `${token}/sig-${currentSignerIndex}.png`
         const sigBlob = await (await fetch(sigDataUrl)).blob()
 
-        const sigRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
+        await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
           method: 'POST',
           headers: {
             'apikey': SB_ANON,
@@ -354,27 +344,9 @@ function OperatingAgreementCodeContent() {
           },
           body: sigBlob,
         })
-        if (storageWriteFailed(sigRes)) {
-          console.error('[oa] signature image upload failed:', sigRes?.status, await sigRes.text().catch(() => ''))
-          throw new SigningFailure('document_upload', signingLang(oa.language))
-        }
-
-        // Read this signer's CURRENT status BEFORE we mark it signed. This is the
-        // only moment that can distinguish "signing now" from "already signed on
-        // a previous attempt": the update below sets it to 'signed', so any read
-        // afterwards always says 'signed'. And the local `currentSig` cannot be
-        // used — it is page-load state that is never refetched, and the Sign
-        // button only renders while it is NOT 'signed', so a check against it is
-        // dead code that never fires. (Both of those were shipped and blocked.)
-        const { data: preSig } = await supabasePublic
-          .from('oa_signatures')
-          .select('status')
-          .eq('id', currentSig.id)
-          .maybeSingle()
-        const alreadyCounted = preSig?.status === 'signed'
 
         // Update oa_signatures row
-        const { error: sigErr } = await supabasePublic
+        await supabasePublic
           .from('oa_signatures')
           .update({
             status: 'signed',
@@ -383,43 +355,12 @@ function OperatingAgreementCodeContent() {
             updated_at: new Date().toISOString(),
           })
           .eq('id', currentSig.id)
-        if (sigErr) {
-          console.error('[oa] signature row update failed:', sigErr.message)
-          throw new SigningFailure('record', signingLang(oa.language))
-        }
 
-        // signed_count. The increment is NOT idempotent, so counting a retry twice
-        // would push a multi-member OA to "all signed" on one member's signature,
-        // generate the combined PDF from that single signature and publish it.
-        // `alreadyCounted` was captured BEFORE the update above, so a retry takes
-        // the current count instead of incrementing again.
-        let updatedOa: number | null = null
-        let incErr: { message: string } | null = null
-        if (alreadyCounted) {
-          const { data: freshOa, error: readErr } = await supabasePublic
-            .from('oa_agreements')
-            .select('signed_count')
-            .eq('id', oa.id)
-            .maybeSingle()
-          updatedOa = (freshOa?.signed_count as number | undefined) ?? null
-          incErr = readErr
-        } else {
-          const r = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
-          updatedOa = r.data as number | null
-          incErr = r.error
-        }
-        if (incErr || updatedOa === null || updatedOa === undefined) {
-          // This value decides whether the combined PDF is generated. The old
-          // fallback `(oa.signed_count||0)+1` used a count read when the page
-          // loaded, so a failed increment made EVERY member look "not last":
-          // everyone signs, no final document is ever produced, and nobody is
-          // told. Fail loudly instead of guessing.
-          console.error('[oa] increment_oa_signed_count failed:', incErr?.message ?? 'no value returned')
-          throw new SigningFailure('record', signingLang(oa.language))
-        }
+        // Atomic increment signed_count
+        const { data: updatedOa } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
 
         // Check if we're the last signer
-        const newSignedCount = updatedOa
+        const newSignedCount = updatedOa ?? ((oa.signed_count || 0) + 1)
         const isLastSigner = newSignedCount >= totalSigners
 
         if (isLastSigner) {
@@ -457,7 +398,7 @@ function OperatingAgreementCodeContent() {
 
             // Upload combined PDF
             const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
-            const combinedRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
+            await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
               method: 'POST',
               headers: {
                 'apikey': SB_ANON,
@@ -466,16 +407,9 @@ function OperatingAgreementCodeContent() {
               },
               body: pdfBlob,
             })
-            if (storageWriteFailed(combinedRes)) {
-              console.error('[oa] combined PDF upload failed:', combinedRes?.status, await combinedRes.text().catch(() => ''))
-              throw new SigningFailure('document_upload', signingLang(oa.language))
-            }
 
-            // Update OA record to fully signed. Every signature and the combined
-            // PDF are already stored at this point, so a failure here is the
-            // 'status' stage — the client must NOT be told the document is
-            // unsigned, only that we need to confirm it.
-            const { error: oaErr } = await supabasePublic
+            // Update OA record to fully signed
+            await supabasePublic
               .from('oa_agreements')
               .update({
                 status: 'signed',
@@ -488,25 +422,17 @@ function OperatingAgreementCodeContent() {
                 },
               })
               .eq('id', oa.id)
-            if (oaErr) {
-              console.error('[oa] final signed-status update failed:', oaErr.message)
-              throw new SigningFailure('status', signingLang(oa.language))
-            }
           }
 
           setAllSigned(true)
         } else {
           // Not last signer — update OA to partially_signed
-          const { error: partialErr } = await supabasePublic
+          await supabasePublic
             .from('oa_agreements')
             .update({
               status: 'partially_signed',
             })
             .eq('id', oa.id)
-          if (partialErr) {
-            console.error('[oa] partially_signed status update failed:', partialErr.message)
-            throw new SigningFailure('status', signingLang(oa.language))
-          }
         }
 
         // Notify backend
@@ -566,10 +492,7 @@ function OperatingAgreementCodeContent() {
           },
           body: pdfBlob,
         })
-        if (storageWriteFailed(uploadRes)) {
-        console.error('[oa] SMLLC signed PDF upload failed:', uploadRes?.status, await uploadRes.text().catch(() => ''))
-        throw new SigningFailure('document_upload', signingLang(oa.language))
-      }
+        if (!uploadRes.ok) throw new Error('PDF upload failed')
 
         const sigData: Record<string, unknown> = {
           manager_name: managerName,
@@ -581,7 +504,7 @@ function OperatingAgreementCodeContent() {
           sigData.member_name = oa.member_name
         }
 
-        const { error: smllcErr } = await supabasePublic
+        await supabasePublic
           .from('oa_agreements')
           .update({
             status: 'signed',
@@ -591,12 +514,6 @@ function OperatingAgreementCodeContent() {
             signed_count: 1,
           })
           .eq('id', oa.id)
-        if (smllcErr) {
-          // PDF is stored; only the record failed. Do NOT tell the client it is
-          // unsigned — ask them to confirm with us.
-          console.error('[oa] SMLLC signed-status update failed:', smllcErr.message)
-          throw new SigningFailure('status', signingLang(oa.language))
-        }
 
         try {
           await fetch('/api/oa-signed', {
@@ -616,16 +533,7 @@ function OperatingAgreementCodeContent() {
       }
     } catch (err) {
       console.error('Signing failed:', err)
-      // A failed signature is a legal event: say plainly it is NOT signed and
-      // give a human to contact. Keep the drawn signature on the canvas — making
-      // someone re-sign after a network error is gratuitous.
-      setSignError(isClientFacingError(err)
-        ? err.message
-        : new SigningFailure('document_upload', signingLang(oa?.language)).message)
-      // The handler hides the action bar before uploading; bring it back so the
-      // client can actually retry (every other signing page does this).
-      const bar = document.getElementById('oa-action-bar')
-      if (bar) bar.style.display = 'block'
+      alert('An error occurred while signing. Please try again.')
     } finally {
       setSigning(false)
     }
@@ -925,24 +833,6 @@ function OperatingAgreementCodeContent() {
       </div>
 
       {/* Action bar — outside the PDF capture area */}
-      {/* Rendered OUTSIDE #oa-action-bar and outside `canSign`: the sign handler
-          sets that bar to display:none before uploading, and React will not
-          rewrite an imperative inline style, so an error rendered inside it is
-          invisible to the client. */}
-      {signError && (
-        <div
-          role="alert"
-          style={{
-            maxWidth: 800, margin: '24px auto',
-            border: '2px solid #b91c1c', background: '#fef2f2', color: '#7f1d1d',
-            borderRadius: 6, padding: '14px 16px',
-            textAlign: 'left', fontSize: 15, lineHeight: 1.5,
-          }}
-        >
-          {signError}
-        </div>
-      )}
-
       {canSign && (
         <div id="oa-action-bar" style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
           <button
