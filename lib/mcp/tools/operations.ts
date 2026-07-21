@@ -1352,17 +1352,11 @@ export function registerOperationsTools(server: McpServer) {
         const parts: string[] = []
         if (res.tasks_cancelled) parts.push(`${res.tasks_cancelled} task(s) cancelled`)
         if (res.renewal_date_cleared) parts.push("renewal date cleared")
-        // Loose ends the cancel could not reach (tasks on this person with no
-        // service link). Shown so staff don't have to discover them by hand.
-        const loose = res.unlinked_open_tasks?.length
-          ? `\n\n⚠️ ${res.unlinked_open_tasks.length} open task(s) on this contact are not linked to any service, so they were NOT cancelled — review them:\n` +
-            res.unlinked_open_tasks.map((t) => `  • ${t.title} (${t.id})`).join("\n")
-          : ""
         return {
           content: [
             {
               type: "text" as const,
-              text: `✅ Service deactivated: ${res.service_type}${parts.length ? ` (${parts.join(", ")})` : ""}${loose}`,
+              text: `✅ Service deactivated: ${res.service_type}${parts.length ? ` (${parts.join(", ")})` : ""}`,
             },
           ],
         }

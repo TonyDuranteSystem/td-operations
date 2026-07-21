@@ -489,11 +489,16 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // the first. Skip when an OPEN one already exists for this person.
     let alreadyOpen = false
     if (p.contact_id) {
+      // Key on the PERSON + category, never on the title. The title embeds the
+      // client's own typed name, so a re-submit that corrects a spelling, fills
+      // in a missing surname, or fixes an accent produces a different title and
+      // the guard misses — minting exactly the duplicate it exists to stop.
       const { data: existingTask, error: existingTaskErr } = await supabaseAdmin
         .from("tasks")
         .select("id")
         .eq("contact_id", p.contact_id)
-        .eq("task_title", taskTitle)
+        .eq("category", "Formation")
+        .ilike("task_title", "WhatsApp follow-up:%")
         // Must cover EVERY open state. "Waiting" is the normal state for a
         // follow-up task Luca has actioned but is awaiting the client on —
         // omitting it would let a wizard re-submit mint a duplicate, which is

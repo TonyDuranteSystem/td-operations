@@ -917,15 +917,6 @@ export interface DeactivateSDResult {
   service_type?: string
   tasks_cancelled?: number
   renewal_date_cleared?: boolean
-  /**
-   * Open tasks for the same PERSON that carry no `delivery_id`, so this
-   * deactivation could not cancel them. Reported, never auto-cancelled — a
-   * contact's tasks are not necessarily this service's tasks, and wrongly
-   * cancelling real work is worse than leaving a visible loose end. Surfaced
-   * after the 2026-07-20 duplicate-ITIN cleanup, where a duplicate WhatsApp
-   * follow-up task had to be found and cancelled by hand.
-   */
-  unlinked_open_tasks?: Array<{ id: string; title: string }>
   error?: string
 }
 
@@ -1018,37 +1009,6 @@ export async function deactivateSD(
     tasksCancelled = taskResult.count ?? 0
   }
 
-  // Loose ends: open tasks on the same person that no service owns. These
-  // survive the cancel above (it keys on delivery_id) and previously had to be
-  // spotted by hand. Best-effort report only — see the field's doc comment for
-  // why we do NOT cancel them automatically.
-  let unlinkedOpenTasks: Array<{ id: string; title: string }> | undefined
-  if (sd.contact_id) {
-    const LOOSE_TASK_CAP = 20
-    const { data: loose, error: looseErr } = await supabaseAdmin
-      .from("tasks")
-      .select("id, task_title")
-      .eq("contact_id", sd.contact_id)
-      .is("delivery_id", null)
-      .in("status", [...OPEN_TASK_STATUSES])
-      .limit(LOOSE_TASK_CAP)
-    if (looseErr) {
-      // Say "couldn't check", never imply "nothing there". Silence here reads
-      // as "no loose ends" — the swallowed-error class this change set out to
-      // remove. The deactivation itself already succeeded, so this is a
-      // reporting warning, not a failure.
-      unlinkedOpenTasks = [
-        { id: "", title: `(could not check for unlinked tasks: ${looseErr.message})` },
-      ]
-    } else if (loose && loose.length > 0) {
-      unlinkedOpenTasks = loose.map((t) => ({ id: t.id, title: t.task_title ?? "" }))
-      // A full page means there may be more — don't let "20" read as the total.
-      if (loose.length === LOOSE_TASK_CAP) {
-        unlinkedOpenTasks.push({ id: "", title: `(and possibly more — showing the first ${LOOSE_TASK_CAP})` })
-      }
-    }
-  }
-
   // Renewal types on an account: optionally clear the account date so the
   // nightly cron won't re-create the SD.
   let renewalDateCleared = false
@@ -1098,7 +1058,6 @@ export async function deactivateSD(
     service_type: sd.service_type,
     tasks_cancelled: tasksCancelled,
     renewal_date_cleared: renewalDateCleared,
-    ...(unlinkedOpenTasks ? { unlinked_open_tasks: unlinkedOpenTasks } : {}),
   }
 }
 
@@ -1206,7 +1165,7 @@ export async function reactivateSD(
         outcome: "conflict",
         delivery_id: params.delivery_id,
         service_type: sd.service_type,
-        error: `This person already has a ${sd.service_type} service — one person can only ever hold one. Cancel that one first if you meant to swap them.`,
+        error: `This person already has a live ${sd.service_type} service — one person can only ever hold one. Cancel that one first if you meant to swap them.`,
       }
     }
   }
@@ -1233,7 +1192,7 @@ export async function reactivateSD(
       delivery_id: params.delivery_id,
       service_type: sd.service_type,
       error: isUnique
-        ? `This person already has an active ${sd.service_type} service — one person can only ever hold one.`
+        ? `This person already has a live ${sd.service_type} service — one person can only ever hold one.`
         : updateErr,
     }
   }

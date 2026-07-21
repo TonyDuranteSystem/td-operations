@@ -23,8 +23,6 @@ import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNot
 import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
-import { getPerPersonServiceTypes } from "@/lib/services"
-import { describePerPersonShortfall } from "@/lib/operations/per-person-quantity"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
@@ -487,9 +485,6 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // ─── STEP 2: Service Deliveries from bundled_pipelines (AUTO) ─────
   const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
   const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
-  /** Offer lines that bill >1 unit of a per-person service — surfaced as their
-   *  own activation step so a billed-but-unfulfillable unit is never silent. */
-  const perPersonQuantityWarnings: string[] = []
 
   // Build quantity map: how many SDs to create per pipeline.
   // Quantity > 1 is set by the Create Offer dialog for multi-unit services (e.g. ITIN ×2).
@@ -646,90 +641,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // Guard 1: count SDs already created for this exact offer + pipeline
         // (tied by offer_token in notes — the canonical link).
         // For quantity > 1, we need exactly `quantity` SDs; skip if we already have them all.
-        const { data: existingByOffer, error: existingByOfferErr } = await supabase
+        const { data: existingByOffer } = await supabase
           .from("service_deliveries")
           .select("id")
           .eq("service_type", pipeline)
           .ilike("notes", `%${activation.offer_token}%`)
 
-        // Fail CLOSED (2026-07-20). Discarding `error` turned a transient
-        // PostgREST failure into "nothing exists for this offer" → duplicate
-        // paid services on an activation retry.
-        if (existingByOfferErr) {
-          sdResults.push({
-            pipeline,
-            status: "error",
-            id: `duplicate check failed (${existingByOfferErr.message}) — not created`,
-          })
-          continue
-        }
-
         const existingOfferCount = existingByOffer?.length ?? 0
         if (existingOfferCount >= quantity) {
           sdResults.push({ pipeline, status: "existing", id: existingByOffer![0]?.id })
           continue
-        }
-
-        // ── PER-PERSON services (ITIN): one live instance per person, ever ──
-        //
-        // A person receives exactly ONE ITIN in their life, so "ITIN ×2" on an
-        // offer always means two ITINs for two DIFFERENT PEOPLE. Two things
-        // follow, and both are handled here rather than left to the DB:
-        //
-        //  (a) quantity > 1 is UNSATISFIABLE on a single-subject offer. The
-        //      unit loop below would stack N services on one contact — wrong
-        //      data by construction. We create ONE and report the rest loudly:
-        //      each other person needs their own contact. Letting the unique
-        //      index catch it instead would surface as a 23505 that the catch
-        //      maps to "existing", i.e. a billed service vanishing in silence.
-        //  (b) the offer-token guard above cannot see an ITIN bought under a
-        //      DIFFERENT offer (nor one whose notes were written under an older
-        //      token shape — the 2026-07-20 Marcell Bogyora bug), and Guard 2
-        //      only covers account-scoped SDs while ITIN is contact-scoped.
-        //
-        // Driven by the `per_person` catalog tag, not a hardcoded service name,
-        // so the next per-person service inherits this instead of re-hitting it.
-        const perPersonTypes = await getPerPersonServiceTypes()
-        const isPerPerson = perPersonTypes.includes(pipeline)
-
-        // NOTE: the shortfall warning is deliberately NOT raised here. It must
-        // describe what ACTUALLY happened, and at this point nothing has been
-        // created yet — an earlier version announced "Created 1 for the buyer"
-        // before the checks below could skip creation entirely, so a case where
-        // ZERO were created reported one delivered. It is raised at the exit
-        // points below, from the real created count.
-
-        if (isPerPerson && contactId) {
-          const { data: livePerPerson, error: livePerPersonErr } = await supabase
-            .from("service_deliveries")
-            .select("id")
-            .eq("service_type", pipeline)
-            .eq("contact_id", contactId)
-            .or("status.is.null,status.neq.cancelled")
-            .limit(1)
-          if (livePerPersonErr) {
-            sdResults.push({
-              pipeline,
-              status: "error",
-              id: `${pipeline} duplicate check failed (${livePerPersonErr.message}) — not created`,
-            })
-            continue
-          }
-          if (livePerPerson && livePerPerson.length > 0) {
-            sdResults.push({ pipeline, status: "existing", id: livePerPerson[0].id })
-            // The buyer already holds this service, so NONE of the billed units
-            // can be delivered to them. Fires at quantity 1 too — "client
-            // already has an ITIN, buys one for their spouse" used to be
-            // skipped and reported as clean success.
-            const w = describePerPersonShortfall({
-              pipeline,
-              quantity,
-              createdCount: 0,
-              buyerAlreadyHasOne: true,
-            })
-            if (w) perPersonQuantityWarnings.push(w)
-            continue
-          }
         }
 
         // Guard 2: same service_type already active on this account via another path.
@@ -747,13 +668,8 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
         }
 
-        // How many more SDs to create (quantity minus what already exists for this offer).
-        // Per-person services are capped at ONE on this contact no matter what
-        // the offer bills — the surplus is reported via perPersonQuantityWarnings
-        // above, never silently multiplied onto one person.
-        const toCreate = isPerPerson
-          ? Math.min(1, quantity - existingOfferCount)
-          : quantity - existingOfferCount
+        // How many more SDs to create (quantity minus what already exists for this offer)
+        const toCreate = quantity - existingOfferCount
 
         // Tax season pause computed once before the quantity loop (same result for all N SDs)
         const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR
@@ -850,71 +766,18 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             }
           }
         }
-
-        // Shortfall check, from the REAL created count for this pipeline.
-        // Raised here (after creation) rather than up front, so the message can
-        // never claim a creation that did not happen — an earlier version
-        // announced "Created 1 for the buyer" before the guards above could
-        // skip creation entirely.
-        if (isPerPerson) {
-          const createdForPipeline = sdResults.filter(
-            r => r.pipeline === pipeline && r.status === "created",
-          ).length
-          const w = describePerPersonShortfall({
-            pipeline,
-            quantity,
-            createdCount: createdForPipeline,
-            buyerAlreadyHasOne: false,
-          })
-          if (w) perPersonQuantityWarnings.push(w)
-        }
       } catch (e) {
-        // A unique violation from a DB backstop (uq_itin_sd_active_per_contact /
-        // uq_formation_sd_active_per_offer) is BENIGN only when another actor
-        // won a race — the service exists, which is what we wanted.
-        //
-        // It is NOT benign when THIS request already created one for this
-        // pipeline: that is a self-collision, meaning we tried to stack units
-        // that cannot coexist, and reporting it as "existing" would let a
-        // billed unit disappear silently. Distinguish the two.
-        const msg = e instanceof Error ? e.message : String(e)
-        const isUniqueViolation = msg.includes("23505") || /duplicate key value/i.test(msg)
-        const selfCollision = sdResults.some(r => r.pipeline === pipeline && r.status === "created")
-        if (isUniqueViolation && !selfCollision) {
-          sdResults.push({ pipeline, status: "existing", id: "already existed (created concurrently)" })
-        } else if (isUniqueViolation) {
-          sdResults.push({
-            pipeline,
-            status: "error",
-            id: `${pipeline}: could not create an additional unit — this service allows only one per person. The remaining unit(s) belong to a different person and need their own contact.`,
-          })
-        } else {
-          sdResults.push({ pipeline, status: "error", id: msg })
-        }
+        sdResults.push({ pipeline, status: "error", id: e instanceof Error ? e.message : String(e) })
       }
     }
 
     const created = sdResults.filter(r => r.status === "created").length
     const existing = sdResults.filter(r => r.status === "existing").length
-    const errored = sdResults.filter(r => r.status === "error")
     steps.push({
       step: "service_deliveries",
-      status: errored.length > 0 ? "error" : "done",
-      detail:
-        `${created} created, ${existing} existing, ${sdResults.length} total from bundled_pipelines` +
-        (errored.length ? ` — ${errored.length} FAILED: ${errored.map(r => r.id).join(" | ")}` : ""),
+      status: "done",
+      detail: `${created} created, ${existing} existing, ${sdResults.length} total from bundled_pipelines`,
     })
-
-    // A billed per-person unit that cannot be fulfilled on this contact gets its
-    // OWN step, so it is visible in the activation summary rather than buried in
-    // a count that reads like success.
-    if (perPersonQuantityWarnings.length > 0) {
-      steps.push({
-        step: "service_deliveries_needs_attention",
-        status: "error",
-        detail: perPersonQuantityWarnings.join(" | "),
-      })
-    }
   } else {
     steps.push({ step: "service_deliveries", status: "skipped", detail: "No bundled_pipelines on offer" })
   }

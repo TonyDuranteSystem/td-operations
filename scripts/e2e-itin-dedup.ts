@@ -184,7 +184,7 @@ async function main() {
     check("outcome is a conflict", react.outcome === "conflict", String(react.outcome))
     check(
       "explains itself in plain English",
-      /already has an active ITIN/i.test(react.error ?? ""),
+      /already has a live ITIN/i.test(react.error ?? ""),
       react.error ?? "(no message)",
     )
     check(

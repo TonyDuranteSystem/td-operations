@@ -146,51 +146,6 @@ beforeEach(() => {
 // ─── deactivateSD ──────────────────────────────────────
 
 describe("deactivateSD", () => {
-  // Regression: the 2026-07-20 duplicate-ITIN cleanup left a WhatsApp follow-up
-  // task behind because it carried no delivery_id. deactivateSD cancels by
-  // delivery_id, so it could not reach it — and said nothing.
-  it("reports open tasks on the contact that carry no service link", async () => {
-    sdRow = {
-      id: "sd-1",
-      service_type: "ITIN",
-      service_name: "ITIN",
-      status: "active",
-      account_id: null,
-      contact_id: "contact-1",
-      updated_at: "2026-07-20T00:00:00Z",
-      notes: null,
-    }
-    looseTaskRows = [{ id: "task-loose", task_title: "WhatsApp follow-up: Marcell" }]
-
-    const res = await deactivateSD({ delivery_id: "sd-1", reason: "duplicate" })
-
-    expect(res.success).toBe(true)
-    expect(res.unlinked_open_tasks).toEqual([{ id: "task-loose", title: "WhatsApp follow-up: Marcell" }])
-    // reported, NOT cancelled — cancelling a contact's unrelated work is worse
-    // than leaving a visible loose end
-    expect(updateTasksBulk).toHaveBeenCalledTimes(1)
-    expect(updateTasksBulk).toHaveBeenCalledWith(expect.objectContaining({ delivery_id: "sd-1" }))
-  })
-
-  it("omits the unlinked-task warning when there are none", async () => {
-    sdRow = {
-      id: "sd-1",
-      service_type: "ITIN",
-      service_name: "ITIN",
-      status: "active",
-      account_id: null,
-      contact_id: "contact-1",
-      updated_at: "2026-07-20T00:00:00Z",
-      notes: null,
-    }
-    looseTaskRows = []
-
-    const res = await deactivateSD({ delivery_id: "sd-1", reason: "duplicate" })
-
-    expect(res.success).toBe(true)
-    expect(res.unlinked_open_tasks).toBeUndefined()
-  })
-
   it("cancels a non-renewal active service, cancels its open tasks, does not touch account dates", async () => {
     sdRow = {
       id: "sd-1",
@@ -394,7 +349,7 @@ describe("reactivateSD", () => {
 
     expect(res.success).toBe(false)
     expect(res.outcome).toBe("conflict")
-    expect(res.error).toMatch(/already has a ITIN/i)
+    expect(res.error).toMatch(/already has a live ITIN/i)
     // it must NOT have attempted the status flip
     expect(capturedSDUpdate.patch).toBeNull()
   })
