@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 
@@ -104,6 +105,11 @@ function OperatingAgreementCodeContent() {
 
   // Signing
   const [signing, setSigning] = useState(false)
+  // Persistent in-page signing error. Replaces a browser alert(): a native
+  // popup on a legal-signing screen reads as a broken site, is dismissable with
+  // one tap leaving no trace, and the old string was hardcoded English on a
+  // bilingual record.
+  const [signError, setSignError] = useState('')
   const [signed, setSigned] = useState(false)
   const [allSigned, setAllSigned] = useState(false)
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -320,6 +326,7 @@ function OperatingAgreementCodeContent() {
 
   // --- SIGN ---
   async function handleSign() {
+    setSignError('')
     if (!oa || !sigPadRef.current) return
     if (sigPadRef.current.isEmpty()) {
       alert('Please sign above before submitting.')
@@ -335,7 +342,7 @@ function OperatingAgreementCodeContent() {
         const sigPngPath = `${token}/sig-${currentSignerIndex}.png`
         const sigBlob = await (await fetch(sigDataUrl)).blob()
 
-        await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
+        const sigRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
           method: 'POST',
           headers: {
             'apikey': SB_ANON,
@@ -344,9 +351,13 @@ function OperatingAgreementCodeContent() {
           },
           body: sigBlob,
         })
+        if (storageWriteFailed(sigRes)) {
+          console.error('[oa] signature image upload failed:', sigRes?.status, await sigRes.text().catch(() => ''))
+          throw new SigningFailure('document_upload', signingLang(oa.language))
+        }
 
         // Update oa_signatures row
-        await supabasePublic
+        const { error: sigErr } = await supabasePublic
           .from('oa_signatures')
           .update({
             status: 'signed',
@@ -355,6 +366,10 @@ function OperatingAgreementCodeContent() {
             updated_at: new Date().toISOString(),
           })
           .eq('id', currentSig.id)
+        if (sigErr) {
+          console.error('[oa] signature row update failed:', sigErr.message)
+          throw new SigningFailure('record', signingLang(oa.language))
+        }
 
         // Atomic increment signed_count
         const { data: updatedOa } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
@@ -398,7 +413,7 @@ function OperatingAgreementCodeContent() {
 
             // Upload combined PDF
             const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
-            await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
+            const combinedRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
               method: 'POST',
               headers: {
                 'apikey': SB_ANON,
@@ -407,9 +422,16 @@ function OperatingAgreementCodeContent() {
               },
               body: pdfBlob,
             })
+            if (storageWriteFailed(combinedRes)) {
+              console.error('[oa] combined PDF upload failed:', combinedRes?.status, await combinedRes.text().catch(() => ''))
+              throw new SigningFailure('document_upload', signingLang(oa.language))
+            }
 
-            // Update OA record to fully signed
-            await supabasePublic
+            // Update OA record to fully signed. Every signature and the combined
+            // PDF are already stored at this point, so a failure here is the
+            // 'status' stage — the client must NOT be told the document is
+            // unsigned, only that we need to confirm it.
+            const { error: oaErr } = await supabasePublic
               .from('oa_agreements')
               .update({
                 status: 'signed',
@@ -422,17 +444,25 @@ function OperatingAgreementCodeContent() {
                 },
               })
               .eq('id', oa.id)
+            if (oaErr) {
+              console.error('[oa] final signed-status update failed:', oaErr.message)
+              throw new SigningFailure('status', signingLang(oa.language))
+            }
           }
 
           setAllSigned(true)
         } else {
           // Not last signer — update OA to partially_signed
-          await supabasePublic
+          const { error: partialErr } = await supabasePublic
             .from('oa_agreements')
             .update({
               status: 'partially_signed',
             })
             .eq('id', oa.id)
+          if (partialErr) {
+            console.error('[oa] partially_signed status update failed:', partialErr.message)
+            throw new SigningFailure('status', signingLang(oa.language))
+          }
         }
 
         // Notify backend
@@ -533,7 +563,12 @@ function OperatingAgreementCodeContent() {
       }
     } catch (err) {
       console.error('Signing failed:', err)
-      alert('An error occurred while signing. Please try again.')
+      // A failed signature is a legal event: say plainly it is NOT signed and
+      // give a human to contact. Keep the drawn signature on the canvas — making
+      // someone re-sign after a network error is gratuitous.
+      setSignError(isClientFacingError(err)
+        ? err.message
+        : new SigningFailure('document_upload', signingLang(oa?.language)).message)
     } finally {
       setSigning(false)
     }
@@ -835,6 +870,18 @@ function OperatingAgreementCodeContent() {
       {/* Action bar — outside the PDF capture area */}
       {canSign && (
         <div id="oa-action-bar" style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
+          {signError && (
+            <div
+              role="alert"
+              style={{
+                border: '2px solid #b91c1c', background: '#fef2f2', color: '#7f1d1d',
+                borderRadius: 6, padding: '14px 16px', marginBottom: 16,
+                textAlign: 'left', fontSize: 15, lineHeight: 1.5,
+              }}
+            >
+              {signError}
+            </div>
+          )}
           <button
             onClick={handleSign}
             disabled={signing}

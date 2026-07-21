@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
+import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
@@ -327,11 +328,15 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
       // Upload PDF
       setStatusMsg('Uploading signed contract...')
       const pdfPath = `${offer.token}/service-agreement-signed-${Date.now()}.pdf`
-      await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
+      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
         method: 'POST',
         headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
         body: pdfBlob
       })
+      if (storageWriteFailed(pdfRes)) {
+        console.error('[service-agreement] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
+        throw new SigningFailure('document_upload', signingLang(offer.language))
+      }
 
       // Save contract record
       const contractData: Record<string, any> = {
@@ -357,14 +362,25 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           ? JSON.stringify({ jan: parseFloat(String(installmentLines[0].amount).replace(/[^0-9.]/g, '')), jun: parseFloat(String(installmentLines[1].amount).replace(/[^0-9.]/g, '')) })
           : null,
       }
-      await supabasePublic.from('contracts').insert(contractData)
+      const { error: contractErr } = await supabasePublic.from('contracts').insert(contractData)
+      if (contractErr) {
+        console.error('[service-agreement] contract row insert failed:', contractErr.message)
+        throw new SigningFailure('record', signingLang(offer.language))
+      }
 
       // Update offer status
+      let statusUpdated = false
+      let lastStatusErr: string | null = null
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed' }).eq('token', offer.token)
-          if (!pErr) break
-        } catch { /* retry */ }
+          if (!pErr) { statusUpdated = true; break }
+          lastStatusErr = pErr.message
+        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
+      }
+      if (!statusUpdated) {
+        console.error('[service-agreement] status update failed after 3 attempts:', lastStatusErr)
+        throw new SigningFailure('status', signingLang(offer.language))
       }
 
       // Notify backend
@@ -505,7 +521,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
       }
     } catch (e: any) {
       setSigning(false)
-      setStatusMsg('Error: ' + e.message + '. Please try again.')
+      setStatusMsg(isClientFacingError(e) ? e.message : 'Error: ' + e.message + '. Please try again.')
       setStatusType('error')
       const actionBar = document.getElementById('action-bar-svc')
       if (actionBar) actionBar.style.display = 'block'

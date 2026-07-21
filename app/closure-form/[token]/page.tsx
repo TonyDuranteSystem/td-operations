@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { shouldBlockSubmission, uploadFailureMessage, uploadLang, type FailedUpload } from '@/lib/public-forms/upload-failures'
 import {
   LABELS,
   TOOLTIPS,
@@ -210,13 +210,31 @@ export default function ClosureFormPage() {
     try {
       // 1. Upload files
       const uploadPaths: string[] = []
+      // A file the client ATTACHED that did not reach storage. Collected so the
+      // submission can be blocked below — this used to be `if (!upErr) push`,
+      // which dropped the failure and then reported the form as completed.
+      const uploadFailures: FailedUpload[] = []
       for (const [key, file] of Object.entries(uploadFiles)) {
         if (!file) continue
         const path = `${submission.token}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('closure-uploads')
           .upload(path, file, { cacheControl: '3600', upsert: false })
-        if (!upErr) uploadPaths.push(path)
+        if (upErr) {
+          console.error(`[form] upload failed for ${key}:`, upErr.message)
+          uploadFailures.push({ key, fileName: file.name })
+        } else {
+          uploadPaths.push(path)
+        }
+      }
+
+      // Block ONLY when a file the client attached failed. Not when they chose
+      // to attach nothing — that is an ordinary business gap the review loop
+      // already handles. Their answers stay on screen; this costs one retry.
+      if (shouldBlockSubmission(uploadFailures)) {
+        setSubmitError(uploadFailureMessage(uploadFailures, uploadLang(lang)))
+        setSubmitting(false)
+        return
       }
 
       // 2. Build submitted data

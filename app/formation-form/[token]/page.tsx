@@ -263,8 +263,12 @@ export default function FormationFormPage() {
           uploadPaths.push(path)
         }
       }
-      // Block submission if passport upload failed
-      if (uploadErrors.length > 0 && uploadPaths.length === 0) {
+      // Block whenever an ATTACHED file failed. This used to read
+      // `uploadErrors.length > 0 && uploadPaths.length === 0`, so a batch where
+      // ANY file succeeded went through as completed — a 2-of-3 passport upload
+      // filed with a passport missing, right after the code had validated that
+      // passport as mandatory. The `&&` defeated the validation.
+      if (uploadErrors.length > 0) {
         setSubmitError(lang === 'it' ? `Errore nel caricamento dei file: ${uploadErrors.join(', ')}. Riprova.` : `File upload failed: ${uploadErrors.join(', ')}. Please try again.`)
         setSubmitting(false)
         return
